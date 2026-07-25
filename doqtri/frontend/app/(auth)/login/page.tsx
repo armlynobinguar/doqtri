@@ -1,6 +1,6 @@
 import { LoginForm } from "@/components/auth/login-form";
 
-export const metadata = { title: "Sign in · Mindmap" };
+export const metadata = { title: "Connect wallet · Doqtri" };
 
 export default function LoginPage() {
   return (

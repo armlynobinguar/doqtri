@@ -27,9 +27,13 @@ export default async function VaultLayout({
   if (error) throw new Error(`Failed to load vault: ${error.message}`);
 
   const notes: NoteSummary[] = data ?? [];
+  const wallet =
+    typeof user.user_metadata?.wallet_address === "string"
+      ? user.user_metadata.wallet_address
+      : user.email ?? "";
 
   return (
-    <VaultShell notes={notes} email={user.email ?? ""}>
+    <VaultShell notes={notes} email={wallet}>
       {children}
     </VaultShell>
   );

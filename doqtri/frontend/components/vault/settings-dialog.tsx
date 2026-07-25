@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { disconnectWallet, shortenAddress } from "@/lib/wallet";
 
 export function SettingsDialog({
   email,
@@ -28,9 +29,15 @@ export function SettingsDialog({
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const identity = email.startsWith("G") ? shortenAddress(email) : email;
 
   async function signOut() {
     setBusy(true);
+    try {
+      await disconnectWallet();
+    } catch {
+      // wallet may already be disconnected
+    }
     const supabase = createSupabaseBrowserClient();
     await supabase.auth.signOut();
     router.refresh();
@@ -43,14 +50,16 @@ export function SettingsDialog({
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            This vault is private to your account.
+            This vault is private to your connected wallet.
           </DialogDescription>
         </DialogHeader>
 
         <dl className="flex flex-col gap-2 text-[13px]">
           <div className="flex justify-between gap-4">
-            <dt className="text-muted-foreground">Signed in as</dt>
-            <dd className="truncate">{email}</dd>
+            <dt className="text-muted-foreground">Wallet</dt>
+            <dd className="truncate font-mono" title={email}>
+              {identity}
+            </dd>
           </div>
           <Separator />
           <div className="flex justify-between gap-4">
@@ -67,7 +76,7 @@ export function SettingsDialog({
         <DialogFooter>
           <Button variant="outline" onClick={signOut} disabled={busy}>
             <LogOutIcon />
-            Sign out
+            Disconnect
           </Button>
         </DialogFooter>
       </DialogContent>
