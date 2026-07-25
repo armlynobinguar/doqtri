@@ -1,0 +1,236 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+
+  /* App-specific tokens (see lib/theme.ts for the canvas-side mirrors). */
+  --color-label: var(--label);
+  --color-ghost: var(--ghost);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/*
+ * Cursor dark palette, converted from the spec's HSL channels to oklch.
+ * The app is dark-only, so :root and .dark carry identical values — this
+ * prevents a light flash before the `dark` class on <html> is honored.
+ */
+:root,
+.dark {
+  --background: oklch(0.235 0 0); /* #1e1e1e editor / app */
+  --foreground: oklch(0.8699 0 0); /* #d4d4d4 primary text */
+  --card: oklch(0.235 0 0);
+  --card-foreground: oklch(0.8699 0 0);
+  --popover: oklch(0.1913 0 0); /* #141414 */
+  --popover-foreground: oklch(0.8699 0 0);
+  --primary: oklch(0.6918 0.1647 254.97); /* #4d9dff accent */
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.2562 0 0); /* #232323 active row */
+  --secondary-foreground: oklch(0.8699 0 0);
+  --muted: oklch(0.209 0 0); /* #181818 sidebars */
+  --muted-foreground: oklch(0.5999 0 0); /* #808080 */
+  --accent: oklch(0.7809 0.1346 302.19); /* #c8a2ff secondary / AI actions */
+  --accent-foreground: oklch(0.235 0 0);
+  --destructive: oklch(0.6368 0.2078 25.33);
+  --border: oklch(0.285 0 0); /* #2a2a2a hairlines */
+  --input: oklch(0.285 0 0);
+  --ring: oklch(0.6918 0.1647 254.97);
+
+  --label: oklch(0.4676 0 0); /* #5a5a5a section labels */
+  --ghost: oklch(0.4676 0 0); /* unresolved-link stroke */
+
+  --chart-1: oklch(0.6918 0.1647 254.97);
+  --chart-2: oklch(0.7809 0.1346 302.19);
+  --chart-3: oklch(0.5999 0 0);
+  --chart-4: oklch(0.4676 0 0);
+  --chart-5: oklch(0.285 0 0);
+
+  --radius: 0.375rem;
+
+  --sidebar: oklch(0.209 0 0); /* #181818 */
+  --sidebar-foreground: oklch(0.683 0 0); /* 0 0% 60% */
+  --sidebar-primary: oklch(0.6918 0.1647 254.97);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.2562 0 0); /* #232323 */
+  --sidebar-accent-foreground: oklch(0.8699 0 0);
+  --sidebar-border: oklch(0.285 0 0);
+  --sidebar-ring: oklch(0.6918 0.1647 254.97);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* Thin, low-contrast scrollbars — Obsidian/Cursor style. */
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--border);
+    border: 3px solid transparent;
+    border-radius: 9999px;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--muted-foreground);
+  }
+}
+
+/*
+ * @uiw/react-md-editor overrides. The editor ships its own light theme and a
+ * `data-color-mode="dark"` variant; both are repointed at our tokens so the
+ * editor is indistinguishable from the rest of the app.
+ */
+html[data-color-mode] .w-md-editor {
+  --color-canvas-default: var(--background);
+  --color-canvas-subtle: var(--muted);
+  --color-border-default: var(--border);
+  --color-border-muted: var(--border);
+  --color-fg-default: var(--foreground);
+  --color-fg-muted: var(--muted-foreground);
+  --color-fg-subtle: var(--label);
+  --color-accent-fg: var(--primary);
+  background-color: var(--background);
+  color: var(--foreground);
+  box-shadow: none;
+}
+
+.w-md-editor-toolbar {
+  background-color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.w-md-editor-toolbar li > button {
+  color: var(--muted-foreground);
+}
+
+.w-md-editor-toolbar li > button:hover,
+.w-md-editor-toolbar li > button:focus-visible {
+  background-color: var(--secondary);
+  color: var(--foreground);
+}
+
+.w-md-editor-text-pre > code,
+.w-md-editor-text-input,
+.w-md-editor-text {
+  font-family: var(--font-mono), ui-monospace, monospace !important;
+  font-size: 13px !important;
+  line-height: 1.7 !important;
+}
+
+.w-md-editor-preview {
+  box-shadow: inset 1px 0 0 0 var(--border);
+  background-color: var(--background);
+}
+
+/*
+ * The preview's own dark theme is scoped under `[data-color-mode*='dark']`
+ * (specificity 0,2,0), so these overrides are prefixed to outrank it. The
+ * library stylesheet is imported before globals.css in app/layout.tsx.
+ */
+html[data-color-mode] .wmde-markdown {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-size: 14px;
+}
+
+html[data-color-mode] .wmde-markdown h1,
+html[data-color-mode] .wmde-markdown h2,
+html[data-color-mode] .wmde-markdown h3,
+html[data-color-mode] .wmde-markdown h4 {
+  border-bottom: none;
+  color: var(--foreground);
+}
+
+html[data-color-mode] .wmde-markdown a {
+  color: var(--primary);
+}
+
+html[data-color-mode] .wmde-markdown code {
+  background-color: var(--secondary);
+}
+
+/*
+ * Wikilinks are the one place the accent appears inside prose. The editor's
+ * syntax highlighter does not know about [[...]], so the raw token in the
+ * textarea keeps the default color and only rendered previews are styled.
+ */
+.wikilink {
+  color: var(--primary);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.wikilink:hover {
+  text-decoration: underline;
+}
+
+.wikilink-ghost {
+  color: var(--ghost);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.wikilink-ghost:hover {
+  text-decoration: underline dotted;
+}
