@@ -164,6 +164,7 @@ fn test_auth_is_required() {
 }
 
 /// Events always carry `doc_id` so the web vault can sync from the indexer.
+/// (Host keeps events per invocation — assert after each write.)
 #[test]
 fn test_events_emit_doc_id() {
     use soroban_sdk::testutils::Events;
@@ -176,8 +177,29 @@ fn test_events_emit_doc_id() {
     let doc_id = String::from_str(&env, "doc-events");
     let node_id = String::from_str(&env, "milestone");
 
+    let assert_last = |action: Symbol| {
+        let events = env.events().all();
+        assert!(!events.is_empty());
+        let ev = events.last().unwrap();
+        let topics = &ev.1;
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap(),
+            symbol_short!("doqtri")
+        );
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get(1).unwrap()).unwrap(),
+            action
+        );
+        let emitted = String::try_from_val(&env, &ev.2).unwrap();
+        assert_eq!(emitted, doc_id);
+    };
+
     client.register_document(&owner, &doc_id, &hash(&env, 1));
+    assert_last(symbol_short!("register"));
+
     client.update_document(&doc_id, &hash(&env, 2));
+    assert_last(symbol_short!("update"));
+
     client.set_node_status(
         &doc_id,
         &node_id,
@@ -185,31 +207,7 @@ fn test_events_emit_doc_id() {
         &String::from_str(&env, "n8n"),
         &String::from_str(&env, "wf_1"),
     );
-
-    let events = env.events().all();
-    assert_eq!(events.len(), 3);
-
-    let expected_actions = [
-        symbol_short!("register"),
-        symbol_short!("update"),
-        symbol_short!("node"),
-    ];
-
-    for (i, ev) in events.iter().enumerate() {
-        let topics = ev.1;
-        let topic0 = topics.get(0).unwrap();
-        let topic1 = topics.get(1).unwrap();
-        assert_eq!(
-            Symbol::try_from_val(&env, &topic0).unwrap(),
-            symbol_short!("doqtri")
-        );
-        assert_eq!(
-            Symbol::try_from_val(&env, &topic1).unwrap(),
-            expected_actions[i]
-        );
-        let emitted = String::try_from_val(&env, &ev.2).unwrap();
-        assert_eq!(emitted, doc_id);
-    }
+    assert_last(symbol_short!("node"));
 }
 
 /// Mirrors the UI write path: register → update hash → set_node_status.
