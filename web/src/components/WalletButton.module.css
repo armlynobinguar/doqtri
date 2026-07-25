@@ -6,6 +6,7 @@
 .btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0.4rem;
   padding: 0.4rem 0.85rem;
   border-radius: 6px;
@@ -15,6 +16,11 @@
   font-weight: 550;
   letter-spacing: -0.02em;
   transition: opacity 0.15s var(--ease), transform 0.15s var(--ease);
+}
+
+.hero {
+  padding: 0.65rem 1.15rem;
+  font-size: 0.9rem;
 }
 
 .btn:hover:not(:disabled) {

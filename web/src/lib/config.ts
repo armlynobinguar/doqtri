@@ -13,7 +13,7 @@ function required(name: string, fallback?: string): string {
 
 /** Dev-only fallback — production requires NEXT_PUBLIC_CONTRACT_ID */
 const DEV_CONTRACT =
-  "CCUNGHIVB5Y4Z3VQFGE4JB2K2ZKEALZYFDEH2AXWRFHJ4UEKGYDV66NQ";
+  "CBWQV275C4MXYKRTFGAUD6FUJX2UHOE7D6LSKTTYYQ7ZBPM3KJSAQZWH";
 
 export const RPC_URL = required(
   "NEXT_PUBLIC_SOROBAN_RPC_URL",

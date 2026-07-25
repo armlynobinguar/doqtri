@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="https://lab.stellar.org/r/testnet/contract/CCUNGHIVB5Y4Z3VQFGE4JB2K2ZKEALZYFDEH2AXWRFHJ4UEKGYDV66NQ"><img src="https://img.shields.io/badge/Stellar-Testnet_Contract-7D00FF?style=for-the-badge&logo=stellar&logoColor=white" alt="Stellar testnet" /></a>
+  <a href="https://lab.stellar.org/r/testnet/contract/CBWQV275C4MXYKRTFGAUD6FUJX2UHOE7D6LSKTTYYQ7ZBPM3KJSAQZWH"><img src="https://img.shields.io/badge/Stellar-Testnet_Contract-7D00FF?style=for-the-badge&logo=stellar&logoColor=white" alt="Stellar testnet" /></a>
   <a href="#license"><img src="https://img.shields.io/badge/License-MIT-1FA971?style=for-the-badge" alt="MIT" /></a>
 </p>
 
@@ -85,7 +85,7 @@ worlds drift apart.
 - **Node build status** — `Planned → Building → Built → Verified` with tool name + artifact ref
 - **Owner auth** — every write requires `require_auth()` on the document owner
 - **Persistent storage + TTL** — 30-day threshold, extend to 90 days on write
-- **Events** — `register`, `update`, and `node` topics via `symbol_short!`
+- **Events** — `(doqtri, register|update|node)` with **`doc_id` payload** (matches web vault sync)
 
 ### Web app (`web/`)
 
@@ -107,15 +107,15 @@ worlds drift apart.
 | Field | Value |
 | --- | --- |
 | **Network** | Stellar Testnet |
-| **Contract ID** | [`CCUNGHIVB5Y4Z3VQFGE4JB2K2ZKEALZYFDEH2AXWRFHJ4UEKGYDV66NQ`](https://lab.stellar.org/r/testnet/contract/CCUNGHIVB5Y4Z3VQFGE4JB2K2ZKEALZYFDEH2AXWRFHJ4UEKGYDV66NQ) |
+| **Contract ID** | [`CBWQV275C4MXYKRTFGAUD6FUJX2UHOE7D6LSKTTYYQ7ZBPM3KJSAQZWH`](https://lab.stellar.org/r/testnet/contract/CBWQV275C4MXYKRTFGAUD6FUJX2UHOE7D6LSKTTYYQ7ZBPM3KJSAQZWH) |
 | **CLI alias** | `doqtri` |
-| **WASM hash** | `30171e542f579f6eef71365587cd797c29081ae263b37afd8f863c74e3a83789` |
+| **WASM hash** | `ef0124a4a22b60ba1f4e0e41823d31b175d90d38b1ba034970e58e0cf4e0e252` |
 
 **Explorer links**
 
-- [Open in Stellar Lab](https://lab.stellar.org/r/testnet/contract/CCUNGHIVB5Y4Z3VQFGE4JB2K2ZKEALZYFDEH2AXWRFHJ4UEKGYDV66NQ)
-- [Deploy transaction (Expert)](https://stellar.expert/explorer/testnet/tx/3ccbf69d08a6ceb6b0dd1222f6c2bd113946a9b1cc23ac5f914f631bba9d56af)
-- [WASM upload transaction (Expert)](https://stellar.expert/explorer/testnet/tx/0cb1103faec72be5d4e8fb69fdf443ba44192bad330d3a5a03f79194fa576348)
+- [Open in Stellar Lab](https://lab.stellar.org/r/testnet/contract/CBWQV275C4MXYKRTFGAUD6FUJX2UHOE7D6LSKTTYYQ7ZBPM3KJSAQZWH)
+- [Deploy transaction (Expert)](https://stellar.expert/explorer/testnet/tx/5bdea82068e45bf2da6f84c969e8ce9eafeb892eab852a214b8a420a193098f9)
+- [WASM upload transaction (Expert)](https://stellar.expert/explorer/testnet/tx/5da4263b7e01b3c5be44b093bc6105aec07f20e4157b5231516c980dd4933cbd)
 
 ---
 
@@ -252,7 +252,7 @@ stellar contract deploy \
 ### Invoke (live contract)
 
 ```bash
-CONTRACT=CCUNGHIVB5Y4Z3VQFGE4JB2K2ZKEALZYFDEH2AXWRFHJ4UEKGYDV66NQ
+CONTRACT=CBWQV275C4MXYKRTFGAUD6FUJX2UHOE7D6LSKTTYYQ7ZBPM3KJSAQZWH
 
 stellar contract invoke \
   --id $CONTRACT --source alice --network testnet -- \
