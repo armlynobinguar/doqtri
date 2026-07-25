@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String};
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Symbol};
 
 fn setup(env: &Env) -> (DoqtriRegistryClient<'_>, Address) {
     let contract_id = env.register(DoqtriRegistry, ());
@@ -167,7 +167,7 @@ fn test_auth_is_required() {
 #[test]
 fn test_events_emit_doc_id() {
     use soroban_sdk::testutils::Events;
-    use soroban_sdk::{symbol_short, IntoVal, Val};
+    use soroban_sdk::{symbol_short, TryFromVal};
 
     let env = Env::default();
     env.mock_all_auths();
@@ -189,11 +189,25 @@ fn test_events_emit_doc_id() {
     let events = env.events().all();
     assert_eq!(events.len(), 3);
 
-    for ev in events.iter() {
+    let expected_actions = [
+        symbol_short!("register"),
+        symbol_short!("update"),
+        symbol_short!("node"),
+    ];
+
+    for (i, ev) in events.iter().enumerate() {
         let topics = ev.1;
-        assert_eq!(topics.get(0).unwrap(), symbol_short!("doqtri").into_val(&env));
-        let data: Val = ev.2;
-        let emitted: String = data.try_into_val(&env).unwrap();
+        let topic0 = topics.get(0).unwrap();
+        let topic1 = topics.get(1).unwrap();
+        assert_eq!(
+            Symbol::try_from_val(&env, &topic0).unwrap(),
+            symbol_short!("doqtri")
+        );
+        assert_eq!(
+            Symbol::try_from_val(&env, &topic1).unwrap(),
+            expected_actions[i]
+        );
+        let emitted = String::try_from_val(&env, &ev.2).unwrap();
         assert_eq!(emitted, doc_id);
     }
 }
