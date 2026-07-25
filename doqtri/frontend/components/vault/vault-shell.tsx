@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -47,6 +47,7 @@ function VaultShellInner({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   const { wordCount, saveState, setRightTab } = useVaultStatus();
 
   const [explorerOpen, setExplorerOpen] = useState(true);
@@ -56,10 +57,12 @@ function VaultShellInner({
   const [ribbonActive, setRibbonActive] = useState<RibbonAction>("files");
 
   // The shell lives in the layout, so the active note comes from the URL
-  // rather than from props.
-  const activeId = pathname.startsWith("/vault/")
+  // rather than from props. `/vault/mindmap` is the global mindmap, not a note.
+  const segment = pathname.startsWith("/vault/")
     ? pathname.split("/")[2] || undefined
     : undefined;
+  const onGlobalMindmap = segment === "mindmap";
+  const activeId = onGlobalMindmap ? undefined : segment;
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -86,18 +89,28 @@ function VaultShellInner({
           setRightTab("graph");
           setRibbonActive("graph");
           break;
+        case "mindmap":
+          // A route rather than a panel tab: the global mindmap needs the whole
+          // pane, and the ribbon's active state follows the URL below.
+          router.push("/vault/mindmap");
+          break;
         case "settings":
           setSettingsOpen(true);
           break;
       }
     },
-    [setRightTab],
+    [router, setRightTab],
   );
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex min-h-0 flex-1">
-        <Ribbon active={ribbonActive} onAction={handleRibbonAction} />
+        <Ribbon
+          // On the global mindmap the URL is the truth; elsewhere the last
+          // ribbon click is, since those actions only toggle panels.
+          active={onGlobalMindmap ? "mindmap" : ribbonActive}
+          onAction={handleRibbonAction}
+        />
 
         <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
           {explorerOpen && (

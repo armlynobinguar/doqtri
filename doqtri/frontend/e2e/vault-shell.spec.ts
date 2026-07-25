@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
-import { deleteNote, seedNote, uniqueTitle } from "./helpers";
+import { shortenAddress } from "@/lib/wallet";
+import { E2E_WALLET, deleteNote, seedNote, uniqueTitle } from "./helpers";
 
 test.describe("vault shell", () => {
   let noteId: string;
@@ -108,8 +109,10 @@ test.describe("vault shell", () => {
     await page.getByRole("button", { name: "Settings" }).click();
 
     await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
-    await expect(page.getByText("alice.mindmap@gmail.com")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+    // Login is wallet-based, so the account line is the shortened public key
+    // rather than an email address.
+    await expect(page.getByText(shortenAddress(E2E_WALLET))).toBeVisible();
+    await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
   });
 
   test("upload dialog opens and explains the conversion", async ({ page }) => {

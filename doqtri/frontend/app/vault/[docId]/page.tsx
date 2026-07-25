@@ -1,7 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { loadVaultDocs } from "@/lib/load-docs";
 import { DocWorkspace } from "@/components/vault/doc-workspace";
-import type { Doc } from "@/lib/types";
 
 export default async function DocPage(props: PageProps<"/vault/[docId]">) {
   const { docId } = await props.params;
@@ -18,14 +18,7 @@ export default async function DocPage(props: PageProps<"/vault/[docId]">) {
    * own rows. If a vault ever grows past what is reasonable to ship to the
    * client, the fix is pagination — not a stored graph table.
    */
-  const { data, error } = await supabase
-    .from("documents")
-    .select("id, title, markdown")
-    .order("title", { ascending: true });
-
-  if (error) throw new Error(`Failed to load vault: ${error.message}`);
-
-  const docs: Doc[] = data ?? [];
+  const docs = await loadVaultDocs(supabase);
   const active = docs.find((doc) => doc.id === docId);
   if (!active) notFound();
 

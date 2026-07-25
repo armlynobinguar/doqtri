@@ -1,45 +1,72 @@
 "use client";
 
-import { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit/sdk";
-import { defaultModules } from "@creit.tech/stellar-wallets-kit/modules/utils";
-import {
-  KitEventType,
-  Networks,
-  SwkAppDarkTheme,
-} from "@creit.tech/stellar-wallets-kit/types";
+/**
+ * Stellar wallet access.
+ *
+ * The kit is imported lazily inside each function rather than at module scope
+ * because `@creit.tech/stellar-wallets-kit` reads `localStorage` while it is
+ * being evaluated. "use client" does not mean "browser only" — Next still
+ * renders client components on the server for the initial HTML — so a top-level
+ * import crashed every route that reached this module with
+ * `localstorage?.getItem is not a function`.
+ *
+ * Everything that touches the kit is therefore async, and the browser-only
+ * check stays inside the functions.
+ */
 
-let ready = false;
+type Kit = typeof import("@creit.tech/stellar-wallets-kit/sdk").StellarWalletsKit;
 
-export function initWalletKit() {
-  if (ready || typeof window === "undefined") return;
-  StellarWalletsKit.init({
-    modules: defaultModules(),
-    network: Networks.TESTNET,
-    theme: SwkAppDarkTheme,
-  });
-  ready = true;
+let initialized = false;
+
+async function kit(): Promise<Kit | null> {
+  if (typeof window === "undefined") return null;
+
+  const [{ StellarWalletsKit }, { defaultModules }, { Networks, SwkAppDarkTheme }] =
+    await Promise.all([
+      import("@creit.tech/stellar-wallets-kit/sdk"),
+      import("@creit.tech/stellar-wallets-kit/modules/utils"),
+      import("@creit.tech/stellar-wallets-kit/types"),
+    ]);
+
+  if (!initialized) {
+    StellarWalletsKit.init({
+      modules: defaultModules(),
+      network: Networks.TESTNET,
+      theme: SwkAppDarkTheme,
+    });
+    initialized = true;
+  }
+
+  return StellarWalletsKit;
 }
 
 export async function connectWallet(): Promise<string> {
-  initWalletKit();
-  const { address } = await StellarWalletsKit.authModal();
+  const wallets = await kit();
+  if (!wallets) throw new Error("Wallet connection needs a browser.");
+  const { address } = await wallets.authModal();
   return address;
 }
 
 export async function disconnectWallet(): Promise<void> {
-  initWalletKit();
-  await StellarWalletsKit.disconnect();
+  const wallets = await kit();
+  await wallets?.disconnect();
 }
 
-export function onWalletState(
+export async function onWalletState(
   cb: (address: string | undefined) => void,
-): () => void {
-  initWalletKit();
-  return StellarWalletsKit.on(KitEventType.STATE_UPDATED, (event) => {
+): Promise<() => void> {
+  const [wallets, { KitEventType }] = await Promise.all([
+    kit(),
+    import("@creit.tech/stellar-wallets-kit/types"),
+  ]);
+  if (!wallets) return () => {};
+
+  return wallets.on(KitEventType.STATE_UPDATED, (event) => {
     cb(event.payload.address);
   });
 }
 
+/** Pure string formatting — deliberately does not touch the kit. */
 export function shortenAddress(address: string): string {
   if (address.length < 10) return address;
   return `${address.slice(0, 4)}…${address.slice(-4)}`;

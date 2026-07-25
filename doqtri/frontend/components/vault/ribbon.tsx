@@ -1,15 +1,22 @@
 "use client";
 
-import { FilesIcon, SearchIcon, NetworkIcon, SettingsIcon } from "lucide-react";
+import {
+  FilesIcon,
+  SearchIcon,
+  NetworkIcon,
+  BrainIcon,
+  SettingsIcon,
+} from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
-export type RibbonAction = "files" | "search" | "graph" | "settings";
+export type RibbonAction = "files" | "search" | "graph" | "mindmap" | "settings";
 
 const ITEMS: { id: RibbonAction; label: string; Icon: typeof FilesIcon }[] = [
   { id: "files", label: "Files", Icon: FilesIcon },
   { id: "search", label: "Quick switcher  ⌘K", Icon: SearchIcon },
   { id: "graph", label: "Graph view", Icon: NetworkIcon },
+  { id: "mindmap", label: "Global mindmap", Icon: BrainIcon },
   { id: "settings", label: "Settings", Icon: SettingsIcon },
 ];
 

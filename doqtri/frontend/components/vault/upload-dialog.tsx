@@ -59,7 +59,18 @@ export function UploadDialog({
           : null;
       if (!id) throw new Error("Ingest returned no document id");
 
-      toast.success(`Converted “${file.name}”`);
+      // The note is saved either way; a failed mindmap is worth saying out
+      // loud, since the view will fall back to the heading outline.
+      const mindmapped =
+        payload && typeof payload === "object" && "mindmapped" in payload
+          ? (payload as { mindmapped: unknown }).mindmapped !== false
+          : true;
+
+      if (mindmapped) {
+        toast.success(`Converted “${file.name}”`);
+      } else {
+        toast.warning(`Converted “${file.name}” — mindmap could not be built`);
+      }
       close();
       router.refresh();
       router.push(`/vault/${id}`);
@@ -87,7 +98,8 @@ export function UploadDialog({
             <code className="text-primary font-mono text-[12px]">
               [[wikilinks]]
             </code>
-            , which you then own and edit.
+            , which you then own and edit, and a mindmap of its concepts is built
+            at the same time.
           </DialogDescription>
         </DialogHeader>
 

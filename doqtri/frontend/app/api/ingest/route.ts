@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient, createSupabaseAdminClient } from "@/lib/supabase/server";
 import { classifyUpload, markdownFromDocument } from "@/lib/openai";
+import { generateAndStoreMindmap } from "@/lib/mindmap-store";
 import { deriveTitle, uniqueTitle } from "@/lib/title";
 
 // officeparser needs Node APIs, and PDF ingestion is not edge-friendly.
@@ -118,5 +119,23 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: insertError.message }, { status: 500 });
   }
 
-  return NextResponse.json({ id: inserted.id, title });
+  // 4. Build the document mindmap inline, so it exists the moment the note
+  //    opens and no pending state is needed anywhere in the UI. Best-effort:
+  //    the note is already saved, and a missing mindmap falls back to the
+  //    heading tree and can be rebuilt from the mindmap view.
+  let mindmapped = true;
+  try {
+    await generateAndStoreMindmap(admin, {
+      id: inserted.id,
+      userId: user.id,
+      title,
+      markdown,
+    });
+  } catch (error) {
+    mindmapped = false;
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[ingest] mindmap not generated for ${inserted.id}: ${message}`);
+  }
+
+  return NextResponse.json({ id: inserted.id, title, mindmapped });
 }

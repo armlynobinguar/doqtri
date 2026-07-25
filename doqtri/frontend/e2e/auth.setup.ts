@@ -1,13 +1,19 @@
 import { test as setup, expect } from "@playwright/test";
+import { createServerClient } from "@supabase/ssr";
+import { E2E_WALLET } from "./helpers";
 
 const AUTH_FILE = "e2e/.auth/user.json";
 
-/** Fixed testnet-format key used only for e2e session seeding. */
-const E2E_WALLET = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
-
 /**
- * Asserts Connect wallet UI, then seeds a session via /api/auth/wallet
+ * Asserts the Connect wallet UI, then seeds a session via /api/auth/wallet
  * (no Freighter in CI).
+ *
+ * The session has to land in *cookies*, not localStorage: proxy.ts and every
+ * server component read the session through `@supabase/ssr`, which is
+ * cookie-based. Rather than hand-roll that cookie format — it is base64-prefixed
+ * and chunked once a session exceeds the size limit — this drives a real
+ * `createServerClient` against an in-memory jar and hands whatever it writes to
+ * the browser context.
  */
 setup("wallet login surface + session seed", async ({ page }) => {
   await page.goto("/login");
@@ -25,27 +31,34 @@ setup("wallet login surface + session seed", async ({ page }) => {
     refresh_token: string;
   };
 
-  const ref = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL!).hostname.split(
-    ".",
-  )[0];
-  const storageKey = `sb-${ref}-auth-token`;
-
-  await page.evaluate(
-    ({ storageKey, access_token, refresh_token }) => {
-      const session = {
-        access_token,
-        refresh_token,
-        token_type: "bearer",
-        expires_in: 3600,
-        expires_at: Math.floor(Date.now() / 1000) + 3600,
-      };
-      window.localStorage.setItem(storageKey, JSON.stringify(session));
-    },
+  const jar = new Map<string, string>();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
-      storageKey,
-      access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token,
+      cookies: {
+        getAll: () => [...jar].map(([name, value]) => ({ name, value })),
+        setAll: (cookies) => {
+          for (const { name, value } of cookies) jar.set(name, value);
+        },
+      },
     },
+  );
+
+  const { error } = await supabase.auth.setSession({
+    access_token: tokens.access_token,
+    refresh_token: tokens.refresh_token,
+  });
+  expect(error, error?.message).toBeNull();
+  expect(jar.size, "setSession wrote no auth cookies").toBeGreaterThan(0);
+
+  await page.context().addCookies(
+    [...jar].map(([name, value]) => ({
+      name,
+      value,
+      domain: "localhost",
+      path: "/",
+    })),
   );
 
   await page.goto("/vault");

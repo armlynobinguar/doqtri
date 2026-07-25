@@ -171,6 +171,8 @@ export function DocWorkspace({
             activeId={active.id}
             title={active.title}
             markdown={markdown}
+            mindmap={active.mindmap ?? null}
+            mindmapStale={active.mindmapStale ?? false}
           />
         </ResizablePanel>
       </ResizablePanelGroup>

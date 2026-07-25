@@ -1,8 +1,13 @@
-export const TEST_USER = {
-  email: "alice.mindmap@gmail.com",
-  password: "test-passw0rd-123",
-  id: "1c206b4f-1fd5-46e5-bc92-8c5d19b7dcb4",
-};
+import { hashMarkdown } from "@/lib/mindmap-hash";
+import { toDocMindmap, type DocMindmap } from "@/lib/mindmap-types";
+import { walletEmail } from "@/lib/wallet-auth";
+
+/**
+ * The wallet the e2e session belongs to. Login is wallet-based, so the browser
+ * signs in as the Supabase user derived from this address — and seeded notes
+ * have to be owned by that same user or RLS hides them.
+ */
+export const E2E_WALLET = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -22,20 +27,90 @@ function headers() {
   };
 }
 
+let cachedUserId: string | undefined;
+
+/**
+ * The id of the user the browser session belongs to.
+ *
+ * Resolved from the wallet address rather than hardcoded: the id is created by
+ * /api/auth/wallet the first time the setup project runs, so a fresh Supabase
+ * project gets a different one and a literal here would silently seed notes
+ * that no test can see.
+ */
+export async function testUserId(): Promise<string> {
+  if (cachedUserId) return cachedUserId;
+
+  const email = walletEmail(E2E_WALLET);
+  const res = await fetch(
+    `${SUPABASE_URL}/auth/v1/admin/users?page=1&per_page=1000`,
+    { headers: headers() },
+  );
+  if (!res.ok) {
+    throw new Error(`could not list users: ${res.status} ${await res.text()}`);
+  }
+
+  const { users } = (await res.json()) as { users: { id: string; email?: string }[] };
+  const user = users.find((candidate) => candidate.email?.toLowerCase() === email);
+  if (!user) {
+    throw new Error(
+      `no Supabase user for the e2e wallet (${email}). The setup project creates it — run the full suite, not a single spec.`,
+    );
+  }
+
+  cachedUserId = user.id;
+  return user.id;
+}
+
 /**
  * Seeds a note straight into Postgres. Tests deliberately do not go through
  * /api/ingest: that costs a real OpenAI call per test and the ingest path is
  * covered separately.
+ *
+ * `mindmap` seeds the stored concept map too, hashed against this markdown so
+ * the note reads as fresh. Without it the note has no map, which is the
+ * fallback case — both are worth testing, so both are reachable from here.
  */
-export async function seedNote(title: string, markdown: string): Promise<string> {
+export async function seedNote(
+  title: string,
+  markdown: string,
+  mindmap?: DocMindmap,
+): Promise<string> {
+  const row: Record<string, unknown> = {
+    user_id: await testUserId(),
+    title,
+    markdown,
+  };
+  if (mindmap) {
+    row.mindmap = mindmap;
+    row.mindmap_hash = hashMarkdown(markdown);
+  }
+
   const res = await fetch(REST, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify({ user_id: TEST_USER.id, title, markdown }),
+    body: JSON.stringify(row),
   });
   if (!res.ok) throw new Error(`seedNote failed: ${res.status} ${await res.text()}`);
-  const [row] = (await res.json()) as { id: string }[];
-  return row.id;
+  const [created] = (await res.json()) as { id: string }[];
+  return created.id;
+}
+
+/**
+ * A stored concept map, built the same way the extraction path builds one, so
+ * tests exercise the real shape rather than hand-written JSON that could drift
+ * from what `toDocMindmap` produces.
+ */
+export function fakeMindmap(
+  title: string,
+  themes: { label: string; children?: string[] }[],
+): DocMindmap {
+  return toDocMindmap(title, {
+    label: title,
+    children: themes.map((theme) => ({
+      label: theme.label,
+      children: (theme.children ?? []).map((label) => ({ label })),
+    })),
+  });
 }
 
 export async function readNote(id: string): Promise<{ title: string; markdown: string }> {

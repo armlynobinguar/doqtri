@@ -5,6 +5,7 @@ import { GraphPanel } from "@/components/vault/graph-panel";
 import { MindmapPanel } from "@/components/vault/mindmap-panel";
 import { BacklinksList } from "@/components/vault/backlinks-list";
 import { useVaultStatus, type RightTab } from "@/components/vault/vault-status";
+import type { DocMindmap } from "@/lib/mindmap-types";
 import type { Doc } from "@/lib/types";
 
 export function RightPanel({
@@ -12,12 +13,17 @@ export function RightPanel({
   activeId,
   title,
   markdown,
+  mindmap,
+  mindmapStale,
 }: {
   /** All notes, with the active one carrying the live editor text. */
   docs: Doc[];
   activeId: string;
   title: string;
   markdown: string;
+  /** The active note's stored concept map, null when it has none. */
+  mindmap: DocMindmap | null;
+  mindmapStale: boolean;
 }) {
   const { rightTab, setRightTab } = useVaultStatus();
 
@@ -52,7 +58,13 @@ export function RightPanel({
       {rightTab === "graph" ? (
         <GraphPanel docs={docs} activeId={activeId} />
       ) : (
-        <MindmapPanel title={title} markdown={markdown} />
+        <MindmapPanel
+          docId={activeId}
+          title={title}
+          markdown={markdown}
+          mindmap={mindmap}
+          stale={mindmapStale}
+        />
       )}
 
       <BacklinksList docs={docs} activeId={activeId} />

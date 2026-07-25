@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient, createSupabaseAdminClient } from "@/lib/supabase/server";
 import { improveMarkdown } from "@/lib/openai";
+import { generateAndStoreMindmap } from "@/lib/mindmap-store";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -81,6 +82,21 @@ export async function POST(request: Request) {
 
   if (updateError) {
     return NextResponse.json({ error: updateError.message }, { status: 500 });
+  }
+
+  // The markdown just changed underneath the stored mindmap, so rebuild it
+  // rather than leave the note reporting itself stale the moment it reloads.
+  // Best-effort, as at ingest: the note itself is already saved.
+  try {
+    await generateAndStoreMindmap(admin, {
+      id: doc.id,
+      userId: user.id,
+      title: doc.title,
+      markdown,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[regenerate] mindmap not rebuilt for ${doc.id}: ${message}`);
   }
 
   return NextResponse.json({ markdown });

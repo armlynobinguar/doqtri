@@ -64,7 +64,10 @@ test.describe("derived views", () => {
     await page.waitForURL(`**/vault/${hubId}`);
   });
 
-  test("the mindmap tab renders the heading tree", async ({ page }) => {
+  // These notes are seeded without a stored concept map, so the panel falls
+  // back to the heading tree. The stored-map path is covered in
+  // mindmap-views.spec.ts.
+  test("the mindmap tab falls back to the heading tree", async ({ page }) => {
     await page.goto(`/vault/${hubId}`);
     await page.getByRole("tab", { name: "Mindmap" }).click();
 
