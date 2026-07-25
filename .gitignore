@@ -1,5 +1,5 @@
 /target
 /contract/target
-/web/node_modules
-/web/.next
-/web/out
+
+# Legacy Stellar frontend — use doqtri/frontend instead
+/web/
