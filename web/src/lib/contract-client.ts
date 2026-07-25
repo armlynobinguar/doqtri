@@ -93,6 +93,9 @@ function unwrapResult<T>(result: unknown, fallbackMsg: string): T {
       if (msg.includes("DocumentNotFound") || msg === Errors[2].message) {
         throw new DoqtriError("NOT_FOUND", "Document not found on-chain");
       }
+      if (msg.includes("NodeNotFound") || msg === Errors[3].message) {
+        throw new DoqtriError("NODE_NOT_FOUND", "Node not found on-chain");
+      }
       throw new DoqtriError("CONTRACT", msg);
     }
     return r.unwrap();

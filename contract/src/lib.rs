@@ -87,6 +87,7 @@ impl DoqtriRegistry {
             .persistent()
             .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND);
 
+        // Value is always `doc_id` so the web vault can index from events.
         env.events()
             .publish((symbol_short!("doqtri"), symbol_short!("register")), doc_id);
         Ok(1)
@@ -117,8 +118,9 @@ impl DoqtriRegistry {
             .persistent()
             .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND);
 
+        // Emit doc_id (not version) — matches register/node and web chain-sync.
         env.events()
-            .publish((symbol_short!("doqtri"), symbol_short!("update")), doc.version);
+            .publish((symbol_short!("doqtri"), symbol_short!("update")), doc_id);
         Ok(doc.version)
     }
 
@@ -142,7 +144,7 @@ impl DoqtriRegistry {
 
         doc.owner.require_auth();
 
-        let node_key = DataKey::Node(doc_id, node_id.clone());
+        let node_key = DataKey::Node(doc_id.clone(), node_id);
         let is_new = !env.storage().persistent().has(&node_key);
 
         let record = NodeRecord {
@@ -164,8 +166,9 @@ impl DoqtriRegistry {
                 .extend_ttl(&doc_key, TTL_THRESHOLD, TTL_EXTEND);
         }
 
+        // Emit doc_id so vault sync can refresh the parent plan (node details via get_node).
         env.events()
-            .publish((symbol_short!("doqtri"), symbol_short!("node")), node_id);
+            .publish((symbol_short!("doqtri"), symbol_short!("node")), doc_id);
         Ok(())
     }
 

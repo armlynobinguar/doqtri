@@ -32,18 +32,6 @@ export function mapWalletError(err: unknown): DoqtriError {
     );
   }
   if (
-    m.includes("insufficient") ||
-    m.includes("underfunded") ||
-    m.includes("funding") ||
-    m.includes("does not exist") ||
-    m.includes("not found")
-  ) {
-    return new DoqtriError(
-      "NOT_FUNDED",
-      "Account missing or unfunded on testnet. Fund it via Friendbot, then retry.",
-    );
-  }
-  if (
     (m.includes("already") && m.includes("exist")) ||
     m.includes("documentalreadyexists") ||
     m.includes("#1")
@@ -51,6 +39,32 @@ export function mapWalletError(err: unknown): DoqtriError {
     return new DoqtriError(
       "ALREADY_EXISTS",
       "Document already registered — updating instead.",
+    );
+  }
+  if (
+    m.includes("nodenotfound") ||
+    m.includes("node not found") ||
+    m.includes("#3")
+  ) {
+    return new DoqtriError("NODE_NOT_FOUND", "Node not found on-chain.");
+  }
+  if (
+    m.includes("documentnotfound") ||
+    m.includes("document not found") ||
+    m.includes("#2")
+  ) {
+    return new DoqtriError("NOT_FOUND", "Document not found on-chain.");
+  }
+  if (
+    m.includes("insufficient") ||
+    m.includes("underfunded") ||
+    m.includes("funding") ||
+    m.includes("account not found") ||
+    (m.includes("does not exist") && m.includes("account"))
+  ) {
+    return new DoqtriError(
+      "NOT_FUNDED",
+      "Account missing or unfunded on testnet. Fund it via Friendbot, then retry.",
     );
   }
   if (m.includes("simulation") && m.includes("fail")) {

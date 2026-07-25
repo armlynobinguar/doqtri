@@ -337,15 +337,14 @@ dependencies = [
 
 [[package]]
 name = "curve25519-dalek"
-version = "4.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97fb8b7c4503de7d6ae7b42ab72a5a59857b4c937ec27a3d4539dba95b5ab2be"
+version = "4.2.0"
+source = "git+https://github.com/dalek-cryptography/curve25519-dalek?rev=8016d6d9b9cdbaa681f24147e0b9377cc8cef934#8016d6d9b9cdbaa681f24147e0b9377cc8cef934"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
- "curve25519-dalek-derive",
+ "curve25519-dalek-derive 0.1.1 (git+https://github.com/dalek-cryptography/curve25519-dalek?rev=8016d6d9b9cdbaa681f24147e0b9377cc8cef934)",
  "digest 0.10.7",
- "fiat-crypto 0.2.9",
+ "fiat-crypto",
  "rustc_version",
  "subtle",
  "zeroize",
@@ -359,9 +358,9 @@ checksum = "b5eed333089e2e1c1ac8c6c0398e5e2497b4c9926ca6d0365ed1e099afa5bc23"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
- "curve25519-dalek-derive",
+ "curve25519-dalek-derive 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "digest 0.11.3",
- "fiat-crypto 0.3.0",
+ "fiat-crypto",
  "rustc_version",
  "subtle",
 ]
@@ -371,6 +370,16 @@ name = "curve25519-dalek-derive"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f46882e17999c6cc590af592290432be3bce0428cb0d5f8b6715e4dc7b383eb3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "curve25519-dalek-derive"
+version = "0.1.1"
+source = "git+https://github.com/dalek-cryptography/curve25519-dalek?rev=8016d6d9b9cdbaa681f24147e0b9377cc8cef934#8016d6d9b9cdbaa681f24147e0b9377cc8cef934"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -560,8 +569,9 @@ dependencies = [
 [[package]]
 name = "ed25519-dalek"
 version = "2.2.0"
+source = "git+https://github.com/dalek-cryptography/curve25519-dalek?rev=8016d6d9b9cdbaa681f24147e0b9377cc8cef934#8016d6d9b9cdbaa681f24147e0b9377cc8cef934"
 dependencies = [
- "curve25519-dalek 4.1.3",
+ "curve25519-dalek 4.2.0",
  "ed25519",
  "rand_core",
  "serde",
@@ -621,12 +631,6 @@ dependencies = [
  "rand_core",
  "subtle",
 ]
-
-[[package]]
-name = "fiat-crypto"
-version = "0.2.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 
 [[package]]
 name = "fiat-crypto"

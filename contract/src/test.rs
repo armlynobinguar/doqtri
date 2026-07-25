@@ -163,6 +163,41 @@ fn test_auth_is_required() {
     assert!(result.is_err());
 }
 
+/// Events always carry `doc_id` so the web vault can sync from the indexer.
+#[test]
+fn test_events_emit_doc_id() {
+    use soroban_sdk::testutils::Events;
+    use soroban_sdk::{symbol_short, IntoVal, Val};
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, owner) = setup(&env);
+
+    let doc_id = String::from_str(&env, "doc-events");
+    let node_id = String::from_str(&env, "milestone");
+
+    client.register_document(&owner, &doc_id, &hash(&env, 1));
+    client.update_document(&doc_id, &hash(&env, 2));
+    client.set_node_status(
+        &doc_id,
+        &node_id,
+        &NodeStatus::Built,
+        &String::from_str(&env, "n8n"),
+        &String::from_str(&env, "wf_1"),
+    );
+
+    let events = env.events().all();
+    assert_eq!(events.len(), 3);
+
+    for ev in events.iter() {
+        let topics = ev.1;
+        assert_eq!(topics.get(0).unwrap(), symbol_short!("doqtri").into_val(&env));
+        let data: Val = ev.2;
+        let emitted: String = data.try_into_val(&env).unwrap();
+        assert_eq!(emitted, doc_id);
+    }
+}
+
 /// Mirrors the UI write path: register → update hash → set_node_status.
 #[test]
 fn test_ui_write_path() {

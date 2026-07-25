@@ -4,6 +4,9 @@ import { DoqtriRegistry } from "@/lib/contract-client";
 
 const INDEX_KEY = "doqtri.chainDocs.v1";
 
+/** Contract topics: (doqtri, register|update|node) — value is always doc_id. */
+const DOC_EVENT_TOPICS = new Set(["register", "update", "node"]);
+
 function readIndex(): string[] {
   if (typeof window === "undefined") return [];
   try {
@@ -23,6 +26,16 @@ export function rememberDocId(docId: string) {
 function extractDocId(value: unknown): string | null {
   if (typeof value === "string" && value.length > 0 && value.length < 128) {
     return value;
+  }
+  return null;
+}
+
+function topicAction(topics: unknown[]): string | null {
+  // Expected: ["doqtri", "register" | "update" | "node", ...]
+  const parts = topics.map((t) => String(t ?? "").toLowerCase());
+  if (!parts.includes("doqtri")) return null;
+  for (const p of parts) {
+    if (DOC_EVENT_TOPICS.has(p)) return p;
   }
   return null;
 }
@@ -54,16 +67,10 @@ export async function discoverDocIds(): Promise<string[]> {
             return null;
           }
         });
-        const topicJoined = topics.map(String).join("|").toLowerCase();
-        if (
-          topicJoined.includes("register") ||
-          topicJoined.includes("update") ||
-          topicJoined.includes("doqtri")
-        ) {
-          const value = scValToNative(ev.value as xdr.ScVal);
-          const id = extractDocId(value);
-          if (id) found.add(id);
-        }
+        if (!topicAction(topics)) continue;
+        const value = scValToNative(ev.value as xdr.ScVal);
+        const id = extractDocId(value);
+        if (id) found.add(id);
       } catch {
         // ignore malformed events
       }

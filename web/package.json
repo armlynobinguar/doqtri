@@ -18,6 +18,11 @@
     "react": "19.1.0",
     "react-dom": "19.1.0"
   },
+  "overrides": {
+    "@trezor/connect-plugin-stellar": {
+      "@stellar/stellar-sdk": "$@stellar/stellar-sdk"
+    }
+  },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
     "@playwright/test": "^1.61.1",

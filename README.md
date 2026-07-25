@@ -146,10 +146,10 @@ doqtri/
 │   └── src/
 │       ├── app/       # pages, layout, OG image
 │       ├── components/
-│       ├── data/      # demo mindmap + contract constants
-│       └── lib/       # Soroban reads + Freighter wallet
-├── vendor/            # pinned ed25519-dalek 2.2.0 (Soroban host compat)
-├── .github/workflows/ # CI: cargo test + stellar contract build
+│       ├── data/      # demo mindmap
+│       └── lib/       # WASM bindings + Freighter + vault sync
+├── Cargo.toml         # workspace + ed25519-dalek git pin (Soroban host)
+├── .github/workflows/ # CI: cargo test + WASM + web build/Playwright
 └── README.md
 ```
 

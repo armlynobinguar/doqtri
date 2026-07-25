@@ -13,6 +13,6 @@ codegen-units = 1
 lto = true
 
 # ed25519-dalek 3.x broke CryptoRng vs ChaCha20Rng used by soroban-env-host 22.
-# Force the whole workspace onto 2.2.0.
+# Pin 2.2.0 from upstream git (no local vendor/ tree).
 [patch.crates-io]
-ed25519-dalek = { path = "vendor/ed25519-dalek" }
+ed25519-dalek = { git = "https://github.com/dalek-cryptography/curve25519-dalek", rev = "8016d6d9b9cdbaa681f24147e0b9377cc8cef934" }
