@@ -87,7 +87,7 @@ impl DoqtriRegistry {
             .persistent()
             .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND);
 
-        // Value is always `doc_id` so the web vault can index from events.
+        // Value is always `doc_id` so the Doqtri app can index from events.
         env.events()
             .publish((symbol_short!("doqtri"), symbol_short!("register")), doc_id);
         Ok(1)

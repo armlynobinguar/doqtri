@@ -1,9 +1,11 @@
-import { redirect } from "next/navigation";
+import { LandingPage } from "@/components/landing/landing-page";
 
-/**
- * The app has no marketing surface. proxy.ts already bounces unauthenticated
- * requests to /login, so reaching this point means there is a session.
- */
+export const metadata = {
+  title: "Doqtri — your last next plan",
+  description:
+    "Living documents become executable mindmaps. Anchor versions and node status on Stellar.",
+};
+
 export default function Home() {
-  redirect("/vault");
+  return <LandingPage />;
 }

@@ -4,6 +4,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { GraphPanel } from "@/components/vault/graph-panel";
 import { MindmapPanel } from "@/components/vault/mindmap-panel";
 import { BacklinksList } from "@/components/vault/backlinks-list";
+import { ShipPanel } from "@/components/vault/ship-panel";
 import { useVaultStatus, type RightTab } from "@/components/vault/vault-status";
 import type { DocMindmap } from "@/lib/mindmap-types";
 import type { Doc } from "@/lib/types";
@@ -55,19 +56,22 @@ export function RightPanel({
         Rendered conditionally rather than with TabsContent so the force
         simulation is not left running behind the mindmap.
       */}
-      {rightTab === "graph" ? (
-        <GraphPanel docs={docs} activeId={activeId} />
-      ) : (
-        <MindmapPanel
-          docId={activeId}
-          title={title}
-          markdown={markdown}
-          mindmap={mindmap}
-          stale={mindmapStale}
-        />
-      )}
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {rightTab === "graph" ? (
+          <GraphPanel docs={docs} activeId={activeId} />
+        ) : (
+          <MindmapPanel
+            docId={activeId}
+            title={title}
+            markdown={markdown}
+            mindmap={mindmap}
+            stale={mindmapStale}
+          />
+        )}
+      </div>
 
       <BacklinksList docs={docs} activeId={activeId} />
+      <ShipPanel docId={activeId} title={title} markdown={markdown} />
     </div>
   );
 }

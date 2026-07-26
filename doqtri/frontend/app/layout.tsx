@@ -19,9 +19,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Mindmap",
+  title: "Doqtri",
   description:
-    "Ingest any document, own the markdown, and read the knowledge graph it implies.",
+    "Living documents into executable mindmaps. Connect a Stellar wallet to open your vault.",
 };
 
 export default function RootLayout({
@@ -37,7 +37,7 @@ export default function RootLayout({
       // Consumed by @uiw/react-md-editor to pick its dark variant.
       data-color-mode="dark"
     >
-      <body className="bg-background text-foreground h-full overflow-hidden">
+      <body className="bg-background text-foreground min-h-full">
         <TooltipProvider delay={300}>{children}</TooltipProvider>
         <Toaster theme="dark" position="bottom-right" />
       </body>

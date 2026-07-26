@@ -71,3 +71,29 @@ export function shortenAddress(address: string): string {
   if (address.length < 10) return address;
   return `${address.slice(0, 4)}…${address.slice(-4)}`;
 }
+
+export async function signSorobanTx(
+  xdr: string,
+  address: string,
+): Promise<string> {
+  const wallets = await kit();
+  if (!wallets) throw new Error("Wallet signing needs a browser.");
+  const { NETWORK_PASSPHRASE } = await import("@/lib/stellar/config");
+  const { signedTxXdr } = await wallets.signTransaction(xdr, {
+    networkPassphrase: NETWORK_PASSPHRASE,
+    address,
+  });
+  return signedTxXdr;
+}
+
+/** Prefer the connected Freighter address when available. */
+export async function getWalletAddress(): Promise<string | null> {
+  const wallets = await kit();
+  if (!wallets) return null;
+  try {
+    const { address } = await wallets.fetchAddress();
+    return address ?? null;
+  } catch {
+    return null;
+  }
+}

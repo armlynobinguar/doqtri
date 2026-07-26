@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="https://lab.stellar.org/r/testnet/contract/CBWQV275C4MXYKRTFGAUD6FUJX2UHOE7D6LSKTTYYQ7ZBPM3KJSAQZWH"><img src="https://img.shields.io/badge/Stellar-Testnet_Contract-7D00FF?style=for-the-badge&logo=stellar&logoColor=white" alt="Stellar testnet" /></a>
+  <a href="https://lab.stellar.org/r/testnet/contract/CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB"><img src="https://img.shields.io/badge/Stellar-Testnet_Contract-7D00FF?style=for-the-badge&logo=stellar&logoColor=white" alt="Stellar testnet" /></a>
   <a href="#license"><img src="https://img.shields.io/badge/License-MIT-1FA971?style=for-the-badge" alt="MIT" /></a>
 </p>
 
@@ -85,20 +85,20 @@ worlds drift apart.
 - **Node build status** — `Planned → Building → Built → Verified` with tool name + artifact ref
 - **Owner auth** — every write requires `require_auth()` on the document owner
 - **Persistent storage + TTL** — 30-day threshold, extend to 90 days on write
-- **Events** — `(doqtri, register|update|node)` with **`doc_id` payload** (matches web vault sync)
+- **Events** — `(doqtri, register|update|node)` with **`doc_id` payload**
 
-### Web app (`web/`)
+### App (`doqtri/frontend` + `doqtri/backend`)
 
-- Dark, Zed-inspired landing with sticky interactive mindmap
-- Multi-wallet connection via [Stellar Wallets Kit](https://stellarwalletskit.dev/) (Freighter, Albedo, Hana, Lobstr, Rabet, xBull, Klever, OneKey, and Bitget)
-- **Vault**: local plans + **sync from chain** (contract events / owner filter)
-- Markdown → mindmap with nested `##` / `###` / `####`, drag nodes, layout persisted
-- **Tx UX**: pending spinner, Stellar Expert link, clear Freighter / funding / network errors
-- **Ship panel**: funded-account check, idempotent register→update, Freighter-signed writes
-- **Public audit** at `/d/[docId]` from vault snapshot (not demo-only) + copy audit URL
-- Typed contract client from WASM bindings (`web/src/lib/bindings/`)
-- Env-only `NEXT_PUBLIC_CONTRACT_ID` in production (see `web/.env.example`)
-- CI: `npm ci && npm run build` + Playwright smoke (vault gate, create doc)
+- Obsidian-style **vault**: markdown notes, wikilinks, global graph + per-doc mindmap
+- Supabase Auth (email/password) + RLS on `documents`
+- **Ingest** / **regenerate** via OpenAI (`/api/ingest`, `/api/regenerate`)
+- Private Storage bucket for uploads (`doqtri/backend/migrations/`)
+- Deploy target: Vercel Root Directory = `doqtri/frontend`
+
+### Legacy / chain (`web/`, `contract/`)
+
+- `web/` — previous Freighter + Soroban UI (kept for reference, not primary)
+- `contract/` — DoqtriRegistry on Stellar testnet (still built in CI)
 
 ---
 
@@ -107,14 +107,14 @@ worlds drift apart.
 | Field | Value |
 | --- | --- |
 | **Network** | Stellar Testnet |
-| **Contract ID** | [`CBWQV275C4MXYKRTFGAUD6FUJX2UHOE7D6LSKTTYYQ7ZBPM3KJSAQZWH`](https://lab.stellar.org/r/testnet/contract/CBWQV275C4MXYKRTFGAUD6FUJX2UHOE7D6LSKTTYYQ7ZBPM3KJSAQZWH) |
+| **Contract ID** | [`CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB`](https://lab.stellar.org/r/testnet/contract/CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB) |
 | **CLI alias** | `doqtri` |
 | **WASM hash** | `ef0124a4a22b60ba1f4e0e41823d31b175d90d38b1ba034970e58e0cf4e0e252` |
 
 **Explorer links**
 
-- [Open in Stellar Lab](https://lab.stellar.org/r/testnet/contract/CBWQV275C4MXYKRTFGAUD6FUJX2UHOE7D6LSKTTYYQ7ZBPM3KJSAQZWH)
-- [Deploy transaction (Expert)](https://stellar.expert/explorer/testnet/tx/5bdea82068e45bf2da6f84c969e8ce9eafeb892eab852a214b8a420a193098f9)
+- [Open in Stellar Lab](https://lab.stellar.org/r/testnet/contract/CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB)
+- [Deploy transaction (Expert)](https://stellar.expert/explorer/testnet/tx/8b65276712032e15a2094b75c0818c5b87556b91782b9612ffad8836084d916a)
 - [WASM upload transaction (Expert)](https://stellar.expert/explorer/testnet/tx/5da4263b7e01b3c5be44b093bc6105aec07f20e4157b5231516c980dd4933cbd)
 
 ---
@@ -137,39 +137,30 @@ worlds drift apart.
 ## Repository layout
 
 ```text
-doqtri/
-├── contract/          # Soroban crate: DoqtriRegistry
-│   └── src/
-│       ├── lib.rs     # contract + storage + events
-│       └── test.rs    # unit tests
-├── web/               # Next.js App Router frontend
-│   └── src/
-│       ├── app/       # pages, layout, OG image
-│       ├── components/
-│       ├── data/      # demo mindmap
-│       └── lib/       # WASM bindings + Freighter + vault sync
-├── Cargo.toml         # workspace + ed25519-dalek git pin (Soroban host)
-├── .github/workflows/ # CI: cargo test + WASM + web build/Playwright
+doqtri/                          # git repo root
+├── doqtri/
+│   ├── frontend/                # PRIMARY app (Next.js vault + mindmap)
+│   └── backend/                 # Supabase migrations + AI prompts
+├── contract/                    # Soroban DoqtriRegistry (optional chain layer)
+├── web/                         # LEGACY Stellar landing (not deployed)
+├── Cargo.toml
+├── .github/workflows/
 └── README.md
 ```
+
+See also [`doqtri/README.md`](./doqtri/README.md) and [`doqtri/SPEC.md`](./doqtri/SPEC.md).
 
 ---
 
 ## Architecture
 
 ```text
-  Living doc          Doqtri backend           Stellar testnet
- ┌──────────┐        ┌──────────────┐        ┌─────────────────┐
- │ Notion / │  hash  │ mindmap +    │ invoke │ DoqtriRegistry  │
- │ Docs /   ├───────►│ status sync  ├───────►│ versions+nodes  │
- │ markdown │        │              │        └────────┬────────┘
- └──────────┘        └──────────────┘                 │
-                                                      │ read
-                      ┌──────────────┐                │
-                      │ web/ (Next)  │◄───────────────┘
-                      │ Freighter    │
-                      │ mindmap UI   │
-                      └──────────────┘
+  Upload / note        doqtri/frontend           Supabase
+ ┌──────────┐         ┌────────────────┐       ┌─────────────┐
+ │ PDF/DOCX │ ingest  │ vault editor   │──────►│ documents   │
+ │ markdown ├────────►│ graph+mindmap  │       │ + Storage   │
+ └──────────┘         │ /api/* + AI    │       └─────────────┘
+                      └────────────────┘
 ```
 
 ---
@@ -191,29 +182,30 @@ doqtri/
 
 ---
 
-## Quick start — web
+## Quick start — app (`doqtri/frontend`)
 
-Prerequisites: Node 20+ and a supported Stellar wallet (such as [Freighter](https://freighter.app/)).
+Prerequisites: Node 20+, Supabase project + OpenAI key.
 
 ```bash
-cd web
+cd doqtri/frontend
+cp .env.example .env.local   # fill anon key, service_role, OPENAI_API_KEY
 npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
-
-- **Connect wallet** → choose a supported Stellar wallet → redirects to **`/vault`**
-- Create a plan → write markdown (`##` / `###` headings become nested nodes) → **Register** / **Update hash**
-- Select a node → set status/tool/artifact → **Sync to Stellar** (explorer link on success)
-- **Copy audit URL** or share **`/d/[docId]`** for public audit
+Open [http://localhost:3000](http://localhost:3000) → `/login` → vault.
 
 ```bash
-cp .env.example .env.local   # set NEXT_PUBLIC_CONTRACT_ID
-npm run build                # production build
+npm test
+npm run build
 npm run start
-npm run test:e2e             # Playwright smoke (after build)
 ```
+
+**Deploy (Vercel):** set Root Directory to `doqtri/frontend`, then add the env vars from `.env.example`.
+
+Backend SQL lives in `doqtri/backend/migrations/` (already applied on the Doqtri Supabase project).
+
+> Legacy Freighter UI: `web/` (not the primary app).
 
 ---
 
@@ -252,7 +244,7 @@ stellar contract deploy \
 ### Invoke (live contract)
 
 ```bash
-CONTRACT=CBWQV275C4MXYKRTFGAUD6FUJX2UHOE7D6LSKTTYYQ7ZBPM3KJSAQZWH
+CONTRACT=CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB
 
 stellar contract invoke \
   --id $CONTRACT --source alice --network testnet -- \

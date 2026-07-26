@@ -1,7 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { FileTextIcon, ChevronDownIcon, UploadIcon } from "lucide-react";
+import {
+  FileTextIcon,
+  ChevronDownIcon,
+  UploadIcon,
+  FilePlusIcon,
+  Loader2Icon,
+} from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -15,11 +21,15 @@ import type { NoteSummary } from "@/lib/types";
 export function FileExplorer({
   notes,
   activeId,
+  onNewNote,
   onUploadClick,
+  creating = false,
 }: {
   notes: NoteSummary[];
   activeId?: string;
+  onNewNote: () => void;
   onUploadClick: () => void;
+  creating?: boolean;
 }) {
   return (
     <aside className="bg-sidebar flex h-full min-h-0 flex-col">
@@ -27,16 +37,33 @@ export function FileExplorer({
         <span className="text-label text-[11px] font-medium tracking-wider uppercase">
           Vault
         </span>
-        <Tooltip>
-          <TooltipTrigger
-            aria-label="Upload document"
-            onClick={onUploadClick}
-            className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-7 items-center justify-center rounded-md transition-colors focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden"
-          >
-            <UploadIcon className="size-4" strokeWidth={1.75} />
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Upload document</TooltipContent>
-        </Tooltip>
+        <div className="flex items-center">
+          <Tooltip>
+            <TooltipTrigger
+              aria-label="New note"
+              disabled={creating}
+              onClick={onNewNote}
+              className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-7 items-center justify-center rounded-md transition-colors focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden disabled:opacity-50"
+            >
+              {creating ? (
+                <Loader2Icon className="size-4 animate-spin" strokeWidth={1.75} />
+              ) : (
+                <FilePlusIcon className="size-4" strokeWidth={1.75} />
+              )}
+            </TooltipTrigger>
+            <TooltipContent side="bottom">New note  ⌘N</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              aria-label="Upload document"
+              onClick={onUploadClick}
+              className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-7 items-center justify-center rounded-md transition-colors focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden"
+            >
+              <UploadIcon className="size-4" strokeWidth={1.75} />
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Upload document</TooltipContent>
+          </Tooltip>
+        </div>
       </header>
 
       <ScrollArea className="min-h-0 flex-1">
@@ -51,7 +78,7 @@ export function FileExplorer({
 
           {notes.length === 0 ? (
             <p className="text-label px-3 py-2 text-[12px] leading-relaxed">
-              No notes yet. Upload a document to get started.
+              No notes yet. Create a note or upload a document.
             </p>
           ) : (
             <ul>

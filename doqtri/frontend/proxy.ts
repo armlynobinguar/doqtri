@@ -38,15 +38,18 @@ export async function proxy(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const { pathname } = request.nextUrl;
-  const isAuthRoute = pathname === "/login";
+  const isPublicRoute = pathname === "/" || pathname === "/login";
 
-  if (!user && !isAuthRoute) {
+  // Unauthenticated users may view the landing (and /login). Everything else
+  // goes to the landing with Connect wallet — not a separate email sign-in.
+  if (!user && !isPublicRoute) {
     const url = request.nextUrl.clone();
-    url.pathname = "/login";
+    url.pathname = "/";
     return NextResponse.redirect(url);
   }
 
-  if (user && isAuthRoute) {
+  // Signed-in users skip marketing/login and land in the vault.
+  if (user && isPublicRoute) {
     const url = request.nextUrl.clone();
     url.pathname = "/vault";
     return NextResponse.redirect(url);

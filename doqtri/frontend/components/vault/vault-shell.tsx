@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { toast } from "sonner";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -17,6 +18,7 @@ import {
   VaultStatusProvider,
   useVaultStatus,
 } from "@/components/vault/vault-status";
+import { createBlankNote } from "@/lib/create-note";
 import type { NoteSummary } from "@/lib/types";
 
 export function VaultShell({
@@ -55,6 +57,7 @@ function VaultShellInner({
   const [uploadOpen, setUploadOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ribbonActive, setRibbonActive] = useState<RibbonAction>("files");
+  const [creating, setCreating] = useState(false);
 
   // The shell lives in the layout, so the active note comes from the URL
   // rather than from props. `/vault/mindmap` is the global mindmap, not a note.
@@ -64,16 +67,35 @@ function VaultShellInner({
   const onGlobalMindmap = segment === "mindmap";
   const activeId = onGlobalMindmap ? undefined : segment;
 
+  const handleNewNote = useCallback(async () => {
+    if (creating) return;
+    setCreating(true);
+    try {
+      const { id, title } = await createBlankNote();
+      toast.success(`Created “${title}”`);
+      router.refresh();
+      router.push(`/vault/${id}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not create note");
+    } finally {
+      setCreating(false);
+    }
+  }, [creating, router]);
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "k" && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
         setSwitcherOpen((open) => !open);
       }
+      if (event.key === "n" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        void handleNewNote();
+      }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [handleNewNote]);
 
   const handleRibbonAction = useCallback(
     (action: RibbonAction) => {
@@ -103,7 +125,7 @@ function VaultShellInner({
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-svh min-h-0 flex-col overflow-hidden">
       <div className="flex min-h-0 flex-1">
         <Ribbon
           // On the global mindmap the URL is the truth; elsewhere the last
@@ -125,6 +147,8 @@ function VaultShellInner({
                 <FileExplorer
                   notes={notes}
                   activeId={activeId}
+                  creating={creating}
+                  onNewNote={() => void handleNewNote()}
                   onUploadClick={() => setUploadOpen(true)}
                 />
               </ResizablePanel>
