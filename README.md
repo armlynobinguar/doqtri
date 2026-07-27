@@ -150,6 +150,82 @@ Every wallet and transaction link opens on Stellar Expert for inspection.
 | 20 | Bianca Domingo | [View wallet](https://stellar.expert/explorer/testnet/account/GB25SYZ3DUB3LRU2SPTVQ33A45AJ55YPCEBHZTFAQJHTBIO4RLN362VQ) | `bianca-domingo-plan` | [Register](https://stellar.expert/explorer/testnet/tx/4bb03cc7839b6c418c5b002bfc3413c191fd7582dc64784224dd1770f9a1d8e7) | [Update](https://stellar.expert/explorer/testnet/tx/c06a49f6d46964e28d6b9f74d25686780ea6c2cb4d1e866b22493d85132e6d8e) | [Node sync](https://stellar.expert/explorer/testnet/tx/d38fc311441e004a001a5f3783a8690f5d1bdcdbfa3d774a88a8e09db1b57d4f) |
 
 ---
+## Stellar wallet integration (testnet)
+
+End-to-end wallet flow on **Stellar Testnet**, verified on-chain.
+
+### 1. Wallet setup
+
+Freighter installed and switched to **Stellar Testnet**, account funded from
+Friendbot with **10,000 XLM**.
+
+<img src="docs/wallet/01-freighter-testnet.png" alt="Freighter on Stellar Testnet funded with 10,000 XLM" width="360" />
+
+| Field | Value |
+| --- | --- |
+| Network | Stellar Testnet |
+| Account | [`GB7KVJMPJDVI6NTRNENAMFGYQAZVRI266B4BZ4UMN2RA2NBHFOB6ZC5D`](https://stellar.expert/explorer/testnet/account/GB7KVJMPJDVI6NTRNENAMFGYQAZVRI266B4BZ4UMN2RA2NBHFOB6ZC5D) |
+| Created | 2026-07-27 11:03:17 UTC |
+| Initial balance | 10,000 XLM |
+
+### 2. Wallet connection
+
+Connect and disconnect are implemented in the app via
+[Stellar Wallets Kit](https://stellarwalletskit.dev/) pinned to `Networks.TESTNET`
+(Freighter plus the other default modules).
+
+![Doqtri landing page with Connect wallet](docs/wallet/02-connect-wallet.png)
+
+| Behavior | Code |
+| --- | --- |
+| **Connect** — opens the wallet modal, returns the public key | `connectWallet()` in `doqtri/frontend/lib/wallet.ts` |
+| Session exchange — public key → Supabase session | `doqtri/frontend/app/api/auth/wallet/route.ts` |
+| Connect button + redirect to `/vault` | `doqtri/frontend/components/auth/login-form.tsx` |
+| **Disconnect** — kit disconnect + Supabase sign-out | `disconnectWallet()` in `lib/wallet.ts`, called from `components/vault/settings-dialog.tsx` |
+| Live address changes | `onWalletState()` (kit `STATE_UPDATED` event) |
+
+The kit is imported lazily inside each function because it touches `localStorage`
+during module evaluation, which breaks server rendering of client components.
+
+### 3. Balance handling
+
+The connected account's XLM balance, read from testnet Horizon and shown on
+Stellar Expert after the transaction below:
+
+![Account balance on Stellar Expert testnet](docs/wallet/03-balance.png)
+
+**Balance after send:** `9,999.9053473 XLM` — 10,000 minus the 2 XLM payment and fees.
+
+> **Status:** the balance is fetched and verified on-chain, but it is not yet
+> rendered in the Doqtri UI — there is no balance component in
+> `doqtri/frontend/` today. Wiring `@stellar/stellar-sdk` (already a dependency)
+> to a Horizon `loadAccount` call and displaying it in the vault header is the
+> remaining piece.
+
+### 4. Transaction flow
+
+A 2 XLM payment signed with Freighter on testnet:
+
+![Successful transaction on Stellar Expert testnet](docs/wallet/04-transaction.png)
+
+| Field | Value |
+| --- | --- |
+| **Status** | ✅ Successful |
+| **Transaction hash** | [`38a1ccf5a26e236756c961e2a8e26ecb56856c91fff7f90b8dd0d9b72bedac4e`](https://stellar.expert/explorer/testnet/tx/38a1ccf5a26e236756c961e2a8e26ecb56856c91fff7f90b8dd0d9b72bedac4e) |
+| Ledger | 3826447 |
+| Processed | 2026-07-27 11:13:09 UTC |
+| Amount | 2 XLM |
+| From → To | `GB7KVJ…B6ZC5D` → `GCPF…4YUN` |
+| Fee charged | 0.00001 XLM |
+
+> **Status:** the payment was built and signed through Freighter on testnet and
+> confirmed on-chain. In-app send UI (amount form, pending spinner, success /
+> failure state, hash link) is not implemented in `doqtri/frontend/` yet — the
+> transaction-feedback pattern described under **Web app** above lives in the
+> legacy `web/` frontend.
+
+---
+
 ## Tech stack
 
 | Layer | Package | Badge |
