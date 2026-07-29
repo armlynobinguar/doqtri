@@ -92,11 +92,11 @@ worlds drift apart.
 
 ## Demo, deck and data
 
-| Asset | Link | In repo |
-| --- | --- | --- |
-| **Demo video** — 1920×1080, ~117s walkthrough, no audio | [Watch on Google Drive](https://drive.google.com/file/d/1Fr_7cFn6m7hc4HesTbZ2Wlbp2i3bljXk/view?usp=sharing) | `video/out/doqtri-demo.mp4` (Remotion source in `video/`) |
-| **Pitch deck** — 14 slides, problem → traction → ask | [Open in Google Slides](https://docs.google.com/presentation/d/14KDwpFrQ6QjlT4QC-vzjSss-0-tO6tocOBNSyBOhi8w/edit?usp=sharing) | `docs/Doqtri-Presentation.pptx` (built by `docs/build_deck.py`) |
-| **Onboarding survey** — 50 responses, wallet · email · name · rating · feedback | [Open in Google Sheets](https://docs.google.com/spreadsheets/d/1szS0QGWCdsUu69XcxKGW3xFChVB3fri059fGxfEzCsA/edit?usp=sharing) | `docs/onboarding/Doqtri-User-Onboarding-Responses.xlsx` |
+| Asset | Link |
+| --- | --- |
+| **Demo video** — 1920×1080, ~117s walkthrough, no audio | [Watch on Google Drive](https://drive.google.com/file/d/1Fr_7cFn6m7hc4HesTbZ2Wlbp2i3bljXk/view?usp=sharing) |
+| **Pitch deck** — 14 slides, problem → traction → ask | [Open in Google Slides](https://docs.google.com/presentation/d/14KDwpFrQ6QjlT4QC-vzjSss-0-tO6tocOBNSyBOhi8w/edit?usp=sharing) |
+| **Onboarding survey** — 50 responses, wallet · email · name · rating · feedback | [Open in Google Sheets](https://docs.google.com/spreadsheets/d/1szS0QGWCdsUu69XcxKGW3xFChVB3fri059fGxfEzCsA/edit?usp=sharing) |
 
 ---
 
