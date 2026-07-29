@@ -56,7 +56,12 @@ export function RightPanel({
         Rendered conditionally rather than with TabsContent so the force
         simulation is not left running behind the mindmap.
       */}
-      <div className="min-h-0 flex-1 overflow-hidden">
+      {/*
+        A flex column, not a plain block: both panels size themselves with
+        `flex-1`, and the graph measures its own height to size the canvas. In a
+        block parent that measurement resolves to 0 and the graph never paints.
+      */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {rightTab === "graph" ? (
           <GraphPanel docs={docs} activeId={activeId} />
         ) : (
