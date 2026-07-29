@@ -14,8 +14,21 @@
 </p>
 
 <p align="center">
+  <a href="https://drive.google.com/file/d/1Fr_7cFn6m7hc4HesTbZ2Wlbp2i3bljXk/view?usp=sharing"><img src="https://img.shields.io/badge/▶_Demo_video-EA4335?style=for-the-badge&logo=googledrive&logoColor=white" alt="Demo video" /></a>
+  <a href="https://docs.google.com/presentation/d/14KDwpFrQ6QjlT4QC-vzjSss-0-tO6tocOBNSyBOhi8w/edit?usp=sharing"><img src="https://img.shields.io/badge/Pitch_deck-F4B400?style=for-the-badge&logo=googleslides&logoColor=white" alt="Pitch deck" /></a>
+  <a href="https://docs.google.com/spreadsheets/d/1szS0QGWCdsUu69XcxKGW3xFChVB3fri059fGxfEzCsA/edit?usp=sharing"><img src="https://img.shields.io/badge/User_responses-0F9D58?style=for-the-badge&logo=googlesheets&logoColor=white" alt="User survey responses" /></a>
+</p>
+
+<p align="center">
   <a href="https://lab.stellar.org/r/testnet/contract/CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB"><img src="https://img.shields.io/badge/Stellar-Testnet_Contract-7D00FF?style=for-the-badge&logo=stellar&logoColor=white" alt="Stellar testnet" /></a>
   <a href="#license"><img src="https://img.shields.io/badge/License-MIT-1FA971?style=for-the-badge" alt="MIT" /></a>
+</p>
+
+<p align="center">
+  <a href="https://drive.google.com/file/d/1Fr_7cFn6m7hc4HesTbZ2Wlbp2i3bljXk/view?usp=sharing">Demo video</a> ·
+  <a href="https://docs.google.com/presentation/d/14KDwpFrQ6QjlT4QC-vzjSss-0-tO6tocOBNSyBOhi8w/edit?usp=sharing">Pitch deck</a> ·
+  <a href="https://docs.google.com/spreadsheets/d/1szS0QGWCdsUu69XcxKGW3xFChVB3fri059fGxfEzCsA/edit?usp=sharing">Onboarding survey responses</a> ·
+  <a href="https://stellar.expert/explorer/testnet/contract/CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB">Contract on Stellar Expert</a>
 </p>
 
 <p align="center">
@@ -74,6 +87,16 @@ worlds drift apart.
    anyone can verify progress from the ledger — not a private database.
 
 > Planned vs shipped becomes a receipt, not a marketing claim.
+
+---
+
+## Demo, deck and data
+
+| Asset | Link | In repo |
+| --- | --- | --- |
+| **Demo video** — 1920×1080, ~117s walkthrough, no audio | [Watch on Google Drive](https://drive.google.com/file/d/1Fr_7cFn6m7hc4HesTbZ2Wlbp2i3bljXk/view?usp=sharing) | `video/out/doqtri-demo.mp4` (Remotion source in `video/`) |
+| **Pitch deck** — 14 slides, problem → traction → ask | [Open in Google Slides](https://docs.google.com/presentation/d/14KDwpFrQ6QjlT4QC-vzjSss-0-tO6tocOBNSyBOhi8w/edit?usp=sharing) | `docs/Doqtri-Presentation.pptx` (built by `docs/build_deck.py`) |
+| **Onboarding survey** — 50 responses, wallet · email · name · rating · feedback | [Open in Google Sheets](https://docs.google.com/spreadsheets/d/1szS0QGWCdsUu69XcxKGW3xFChVB3fri059fGxfEzCsA/edit?usp=sharing) | `docs/onboarding/Doqtri-User-Onboarding-Responses.xlsx` |
 
 ---
 
@@ -178,6 +201,110 @@ Every wallet and transaction link opens on Stellar Expert for inspection.
 | 48 | Josefina Baltazar | [View wallet](https://stellar.expert/explorer/testnet/account/GALQDG5MLJQXE7K4Q4ENNYJAC3N2YOTXBECOQGKLTQI2QQXGMKH42AEI) | `josefina-baltazar-plan` | [Register](https://stellar.expert/explorer/testnet/tx/036de3e53a7ad088eb6b99f619779a4e3502a06d0dbf130eb3e401203289678b) | [Update](https://stellar.expert/explorer/testnet/tx/7d1f452ffbe3cc5fbb3576f8ca5644cb6fc1765df5ba865a283017e95cf8b5f2) | [Node sync](https://stellar.expert/explorer/testnet/tx/b92fe7c0650554370080f58a13a365f7472df83bc36d57f572f4e1729adf26bb) |
 | 49 | Arturo Legaspi | [View wallet](https://stellar.expert/explorer/testnet/account/GDZJBJOMYZQNK7RYX3376CD34AAFHERCIK7HKHDTJOTVF2SZ4PEHQWGK) | `arturo-legaspi-plan` | [Register](https://stellar.expert/explorer/testnet/tx/a4b589e0d6c316f5c677023fef04d7be216dd446c297d5c70d80287eb91909d5) | [Update](https://stellar.expert/explorer/testnet/tx/7475e99d8f0c3e7d6bb5c9ffaec25e2a76824b33ffc7e5de1981403e78f1212e) | [Node sync](https://stellar.expert/explorer/testnet/tx/43516b5183abf4f270502b45a9e569447e14a355a21b86fa60aa1c0e8c705701) |
 | 50 | Remedios Silvestre | [View wallet](https://stellar.expert/explorer/testnet/account/GBLAPDYM2GZI5JO2XEQVXWXLZQPMSGYNR6R7JRY7RRLO6YDMOV4K6OXC) | `remedios-silvestre-plan` | [Register](https://stellar.expert/explorer/testnet/tx/faebbcf4319d859448652ffeaba4dd83f8263c3226696ae54fc5276a20d0b606) | [Update](https://stellar.expert/explorer/testnet/tx/093a3ab94d7d9e4368ffd31ca7f37c98dd8122e61f0e282c62feeb9cdc1f70d6) | [Node sync](https://stellar.expert/explorer/testnet/tx/4b0e8891c5f01bf1981440c6812817024441538243d7a898d7c518e40a99b67a) |
+
+---
+
+## User onboarding — survey responses
+
+Every tester filled the onboarding form (wallet address, email, name, product
+rating, free-text feedback). All 50 responses were exported from Google Forms.
+
+📊 **[Open the responses in Google Sheets](https://docs.google.com/spreadsheets/d/1szS0QGWCdsUu69XcxKGW3xFChVB3fri059fGxfEzCsA/edit?usp=sharing)** ·
+[Download `.xlsx`](./docs/onboarding/Doqtri-User-Onboarding-Responses.xlsx) ·
+[CSV mirror](./docs/onboarding/Doqtri-User-Onboarding-Responses.csv)
+
+| Sheet | Contents |
+| --- | --- |
+| `Form Responses 1` | Timestamp · email · name · Stellar wallet · rating (1–5) · free-text feedback |
+| `Summary` | Response count, average rating, promoter / passive / detractor split, rating histogram |
+
+### Results
+
+| Metric | Value |
+| --- | --- |
+| Responses | **50 / 50** |
+| Average rating | **4.00 / 5** |
+| Promoters (4–5) | 36 (72%) |
+| Passives (3) | 10 (20%) |
+| Detractors (1–2) | 4 (8%) |
+
+| Rating | Count | Share |
+| -: | -: | -: |
+| ★★★★★ | 18 | 36% |
+| ★★★★☆ | 18 | 36% |
+| ★★★☆☆ | 10 | 20% |
+| ★★☆☆☆ | 4 | 8% |
+| ★☆☆☆☆ | 0 | 0% |
+
+**What testers loved:** the on-chain receipt (“proves we actually shipped the
+thing”), the markdown → mindmap compile, and the public audit link that works
+logged out.
+
+**What hurt the score:** slow / silent ingest, no visible XLM balance, no
+version number in the UI, flaky wallet-session redirects, and unusable mobile
+layout. Every 2★ response is an ingest or session bug, not a missing feature.
+
+---
+
+## Next phase — what we build from this feedback
+
+Each item below is scoped from the exported responses above. Baseline commit
+links point at the code the feedback was collected against.
+
+### 1. Fix the ingest pipeline (all four 2★ responses)
+
+> “ingest failed on a .docx with tables, just spun forever, no error”
+> “kept me on a blank screen after ingest until i refreshed”
+
+- Streaming progress + per-stage status on `/api/ingest`, hard timeout with a real error
+- DOCX table parsing, and a failed ingest must never leave a blank vault
+- Baseline: [`49493e6c`](https://github.com/TyronVT/doqtri/commit/49493e6c) — right-panel bugfix, same render path that blanks after ingest
+
+### 2. Wallet session + balance in the UI (mentioned 5×)
+
+> “wish i could see my xlm balance in the app”
+> “connected wallet twice and it kept bouncing me back to login”
+
+- Balance component in the vault header via `loadAccount` (SDK is already a dependency)
+- Idempotent public key → Supabase session exchange so a second connect can’t bounce to `/login`
+- Move disconnect out of the settings dialog into the account menu
+- Baseline: [`4a9f889d`](https://github.com/TyronVT/doqtri/commit/4a9f889d) — wallet connect, [`96397cf0`](https://github.com/TyronVT/doqtri/commit/96397cf0) — session fix
+
+### 3. Make the chain state visible (mentioned 4×)
+
+> “confusing that update tx bumps version but the ui doesnt show version anywhere”
+
+- Version badge + tx hash toast on register / update / node sync
+- Version history panel per `doc_id` read from the ledger
+- In-app send UI (amount form, pending, success/failure, hash link) — today only the legacy `web/` frontend has it
+
+### 4. Mindmap at scale (mentioned 4×)
+
+> “mindmap gets messy past ~30 nodes”, “graph is pretty but slow with a big vault”
+
+- Auto-layout pass so nodes don’t need dragging
+- Virtualized / LOD rendering for 200+ note vaults
+- Batch node status updates in one signed transaction
+- Baseline: [`eab81527`](https://github.com/TyronVT/doqtri/commit/eab81527) — document and global mindmaps
+
+### 5. Onboarding and escape hatches (mentioned 5×)
+
+> “i had no clue what to do after login”, “i dont get why i need a wallet just to write notes”
+
+- Demo vault, readable before signup
+- Email-first signup with wallet linking as a later step
+- Vault export to a markdown zip, undo for AI regenerate
+- Global search across notes
+
+### 6. Mobile + polish
+
+- Responsive vault (currently desktop-only — “opened it on my phone and it was unusable”)
+- Light-mode contrast pass, markdown table rendering, keyboard shortcuts
+- Mainnet fee estimates documented before the mainnet deploy
+
+**Priority order:** ingest reliability → wallet session → chain visibility →
+mindmap scale → onboarding → mobile. Reliability bugs first: they cap the score
+at 2★ no matter how good the rest is.
 
 ---
 ## Stellar wallet integration (testnet)
