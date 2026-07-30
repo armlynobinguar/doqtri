@@ -1,3 +1,5 @@
+import { IS_MAINNET } from "@/lib/stellar/config";
+
 export class DoqtriError extends Error {
   code: string;
   constructor(code: string, message: string) {
@@ -64,7 +66,9 @@ export function mapWalletError(err: unknown): DoqtriError {
   ) {
     return new DoqtriError(
       "NOT_FUNDED",
-      "Account missing or unfunded on testnet. Fund it via Friendbot, then retry.",
+      IS_MAINNET
+        ? "Account missing or unfunded on mainnet. Fund it with XLM, then retry."
+        : "Account missing or unfunded on testnet. Fund it via Friendbot, then retry.",
     );
   }
   if (m.includes("simulation") && m.includes("fail")) {

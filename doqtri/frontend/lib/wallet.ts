@@ -21,17 +21,22 @@ let initialized = false;
 async function kit(): Promise<Kit | null> {
   if (typeof window === "undefined") return null;
 
-  const [{ StellarWalletsKit }, { defaultModules }, { Networks, SwkAppDarkTheme }] =
-    await Promise.all([
-      import("@creit.tech/stellar-wallets-kit/sdk"),
-      import("@creit.tech/stellar-wallets-kit/modules/utils"),
-      import("@creit.tech/stellar-wallets-kit/types"),
-    ]);
+  const [
+    { StellarWalletsKit },
+    { defaultModules },
+    { Networks, SwkAppDarkTheme },
+    { IS_MAINNET },
+  ] = await Promise.all([
+    import("@creit.tech/stellar-wallets-kit/sdk"),
+    import("@creit.tech/stellar-wallets-kit/modules/utils"),
+    import("@creit.tech/stellar-wallets-kit/types"),
+    import("@/lib/stellar/config"),
+  ]);
 
   if (!initialized) {
     StellarWalletsKit.init({
       modules: defaultModules(),
-      network: Networks.TESTNET,
+      network: IS_MAINNET ? Networks.PUBLIC : Networks.TESTNET,
       theme: SwkAppDarkTheme,
     });
     initialized = true;

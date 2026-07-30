@@ -1,14 +1,23 @@
-import { HORIZON_URL } from "@/lib/stellar/config";
+import { HORIZON_URL, IS_MAINNET } from "@/lib/stellar/config";
 import { DoqtriError } from "@/lib/stellar/errors";
 
+/**
+ * 1 XLM base reserve stays locked, so this is the reserve plus headroom for
+ * several writes. A mainnet register measures at 0.063 XLM against 0.041 on
+ * testnet — close enough that one floor covers both.
+ */
 const MIN_XLM = 1.5;
+
+const FUND_HINT = IS_MAINNET
+  ? "Fund it with XLM, then retry."
+  : "Fund via Friendbot, then retry.";
 
 export async function assertFunded(address: string): Promise<void> {
   const res = await fetch(`${HORIZON_URL}/accounts/${address}`);
   if (res.status === 404) {
     throw new DoqtriError(
       "NOT_FUNDED",
-      "Account not on testnet yet. Fund via Friendbot, then retry.",
+      `Account not on ${IS_MAINNET ? "mainnet" : "testnet"} yet. ${FUND_HINT}`,
     );
   }
   if (!res.ok) {
