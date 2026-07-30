@@ -1,5 +1,23 @@
-function env(name: string, fallback: string): string {
-  return process.env[name] || fallback;
+/**
+ * Next.js only inlines statically-written `process.env.NEXT_PUBLIC_*` reads into
+ * the client bundle — a dynamic `process.env[name]` lookup is left untouched and
+ * evaluates to undefined in the browser. Every public var must therefore be
+ * spelled out literally, once, right here.
+ */
+const RAW = {
+  NETWORK_PASSPHRASE: process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE,
+  SOROBAN_RPC_URL: process.env.NEXT_PUBLIC_SOROBAN_RPC_URL,
+  CONTRACT_ID: process.env.NEXT_PUBLIC_CONTRACT_ID,
+  HORIZON_URL: process.env.NEXT_PUBLIC_HORIZON_URL,
+  EXPERT_NETWORK: process.env.NEXT_PUBLIC_EXPERT_NETWORK,
+  LAB_NETWORK: process.env.NEXT_PUBLIC_LAB_NETWORK,
+  EXPERT_TX_BASE: process.env.NEXT_PUBLIC_EXPERT_TX_BASE,
+} as const;
+
+/** Dashboard values often arrive wrapped in quotes or with a stray newline. */
+function env(name: keyof typeof RAW, fallback: string): string {
+  const raw = RAW[name]?.trim().replace(/^["']|["']$/g, "");
+  return raw || fallback;
 }
 
 /** Public testnet DoqtriRegistry — override via NEXT_PUBLIC_* in .env.local / Vercel */
@@ -10,7 +28,7 @@ export const MAINNET_PASSPHRASE =
   "Public Global Stellar Network ; September 2015";
 
 export const NETWORK_PASSPHRASE = env(
-  "NEXT_PUBLIC_NETWORK_PASSPHRASE",
+  "NETWORK_PASSPHRASE",
   "Test SDF Network ; September 2015",
 );
 
@@ -22,12 +40,12 @@ export const NETWORK_PASSPHRASE = env(
 export const IS_MAINNET = NETWORK_PASSPHRASE === MAINNET_PASSPHRASE;
 
 export const RPC_URL = env(
-  "NEXT_PUBLIC_SOROBAN_RPC_URL",
+  "SOROBAN_RPC_URL",
   IS_MAINNET ? "https://mainnet.sorobanrpc.com" : "https://soroban-testnet.stellar.org",
 );
 
 export const CONTRACT_ID = (() => {
-  const id = process.env.NEXT_PUBLIC_CONTRACT_ID;
+  const id = env("CONTRACT_ID", "");
   if (id) return id;
   if (IS_MAINNET) {
     throw new Error(
@@ -39,22 +57,16 @@ export const CONTRACT_ID = (() => {
 })();
 
 export const HORIZON_URL = env(
-  "NEXT_PUBLIC_HORIZON_URL",
+  "HORIZON_URL",
   IS_MAINNET ? "https://horizon.stellar.org" : "https://horizon-testnet.stellar.org",
 );
 
 /** stellar.expert and Stellar Lab disagree on the mainnet slug: `public` vs `mainnet`. */
-const EXPERT_NETWORK = env(
-  "NEXT_PUBLIC_EXPERT_NETWORK",
-  IS_MAINNET ? "public" : "testnet",
-);
-const LAB_NETWORK = env(
-  "NEXT_PUBLIC_LAB_NETWORK",
-  IS_MAINNET ? "mainnet" : "testnet",
-);
+const EXPERT_NETWORK = env("EXPERT_NETWORK", IS_MAINNET ? "public" : "testnet");
+const LAB_NETWORK = env("LAB_NETWORK", IS_MAINNET ? "mainnet" : "testnet");
 
 export const EXPERT_TX_BASE = env(
-  "NEXT_PUBLIC_EXPERT_TX_BASE",
+  "EXPERT_TX_BASE",
   `https://stellar.expert/explorer/${EXPERT_NETWORK}/tx`,
 );
 
