@@ -99,7 +99,7 @@ worlds drift apart.
 | **Demo video** — 1920×1080, ~117s walkthrough, no audio | [Watch on Google Drive](https://drive.google.com/file/d/1Fr_7cFn6m7hc4HesTbZ2Wlbp2i3bljXk/view?usp=sharing) |
 | **Pitch deck** — 14 slides, problem → traction → ask | [Open in Google Slides](https://docs.google.com/presentation/d/14KDwpFrQ6QjlT4QC-vzjSss-0-tO6tocOBNSyBOhi8w/edit?usp=sharing) |
 | **Onboarding survey** — 50 responses, wallet · email · name · rating · feedback | [Open in Google Sheets](https://docs.google.com/spreadsheets/d/1szS0QGWCdsUu69XcxKGW3xFChVB3fri059fGxfEzCsA/edit?usp=sharing) |
-
+| **Mainnet feedback** — 20 users | [Open in Google Sheets](https://docs.google.com/spreadsheets/d/1GUu0xxzByakSS_zG9otQRCnXqnVlt-cW_ytqngsmk5c/edit?usp=sharing) |
 ---
 
 ## Features
@@ -150,18 +150,44 @@ where the 50-user product test below was run.
 
 **What mainnet actually costs**
 
-| Operation | Fee |
+| Operation | Fee charged |
 | --- | --- |
 | WASM upload (one-time) | 8.0525 XLM |
 | Deploy contract (one-time) | 0.0183 XLM |
-| `register_document` | 0.0627 XLM |
-| `set_node_status` | ~0.054 XLM (estimated) |
-| `update_document` | ~0.0012 XLM (estimated) |
+| `register_document` | 0.055094 XLM |
+| `set_node_status` | 0.048082 XLM |
+| `update_document` | 0.000801 XLM |
+| Full document lifecycle, per user | ~0.104 XLM |
 
 The upload is expensive because the code entry's rent dominates it — about 17×
 the testnet price, while a `register_document` write costs only ~1.5× testnet.
 That rent expires: keep the code entry alive with
 `stellar contract extend --wasm-hash <hash> --network mainnet --ledgers-to-extend <n>`.
+
+### Mainnet — 20 wallets · 60 transactions
+
+| # | Name | Wallet | Doc ID | Register | Update | Node sync |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | Jomar Tolentino | [View wallet](https://stellar.expert/explorer/public/account/GAMZMS5SSPRUNKAQ3BPLK3NITIX7TZPNJSEMNO6YKLASAKLL7SEFEIG4) | `jomar-tolentino-plan` | [Register](https://stellar.expert/explorer/public/tx/cf8930e11899f47891061afd8525db703cc6fb0588b29c4aaa8b7e3c764e9c3b) | [Update](https://stellar.expert/explorer/public/tx/c3b6e6bfb379335a36ab9bee0f82c2cf5ddd18211aacb3a82145a6d183203d1d) | [Node sync](https://stellar.expert/explorer/public/tx/5ce3cfe496a75bad10355823c62cd850acaa2c62d7d1d788e29cfccfe17534ae) |
+| 2 | Trisha Mangubat | [View wallet](https://stellar.expert/explorer/public/account/GAL6WE6RLBKBDZBA6EE2IL5NVW3K46CFWO55S25ZMOAAHVIJYDRZCBLG) | `trisha-mangubat-plan` | [Register](https://stellar.expert/explorer/public/tx/e2f24f7409e8f8eff4c0ea828cf658962d75b007ee79ba03b71632c568bafd00) | [Update](https://stellar.expert/explorer/public/tx/955493be56f0252e21d67d09476b94a8a3c0c9fafae61f041e427c865876f53b) | [Node sync](https://stellar.expert/explorer/public/tx/f042bbda8a9f252bba1a0b5d0193d145ade403e183099f4e1a1152d79aadca99) |
+| 3 | Noel Katigbak | [View wallet](https://stellar.expert/explorer/public/account/GCVGJLWT7RX5YAP6YWVQO2G57NWGCVOYNHZFLCARMYGZ6AQVNHLGSJ4I) | `noel-katigbak-plan` | [Register](https://stellar.expert/explorer/public/tx/74515479fd9f3745de79fbf244c3c8f1017a9d07694096d7724fec36ab7f918c) | [Update](https://stellar.expert/explorer/public/tx/4830ce48912fb2c3115ac9a1a9daf66d2a08e739548d348df9536df8ce638744) | [Node sync](https://stellar.expert/explorer/public/tx/5f9c7034d89f96dd38161de794b58a3b97c1c44fff1495f9f588fb301fa3d746) |
+| 4 | Marilou Sandoval | [View wallet](https://stellar.expert/explorer/public/account/GDMH7NZKM45VGMAZU7TGROUOXQTZ2ODWRHRBNVC34X7FBSDR4CBLESX6) | `marilou-sandoval-plan` | [Register](https://stellar.expert/explorer/public/tx/aeb421cb976169340c1f5748efc64889298b0e804ab9d7047179402c7d3bb370) | [Update](https://stellar.expert/explorer/public/tx/d591c8fbee0b2c87b65a2d3251c6e861bb5195c56d1247aa0bd6ee8cc88ad9cc) | [Node sync](https://stellar.expert/explorer/public/tx/be159657af8caa2859d51f66b15681c330bf5fc997598f34ddf78971ac44598c) |
+| 5 | Ferdinand Cayetano | [View wallet](https://stellar.expert/explorer/public/account/GARFVAP4RRURZC6DQBR5VYKOOBPAZQQOIOWJIDOQQSTCHIYBEC5I76IB) | `ferdinand-cayetano-plan` | [Register](https://stellar.expert/explorer/public/tx/f5aff31fbb92e3649790289a470c5073edde43fac2244336363713b620d46335) | [Update](https://stellar.expert/explorer/public/tx/a3d977c5523c5d9d8e2e3a42fea5679951a16841344f2862e121178ddee81275) | [Node sync](https://stellar.expert/explorer/public/tx/3279f138ee49856bc8de73ed777db290a2d1ddedfac9984567770490a931700a) |
+| 6 | Rowena Alcantara | [View wallet](https://stellar.expert/explorer/public/account/GAFDVYSSPCOKKRZUXKA5RS6ILAO67NRNCN7HFK4OOUZJ6MUWAABBCB3Q) | `rowena-alcantara-plan` | [Register](https://stellar.expert/explorer/public/tx/411c2fde2406393937a52127a65929d7d1e97db8178f26288ada57722ec8bff5) | [Update](https://stellar.expert/explorer/public/tx/e032ac525d0ee47318273155ce549b9cdd35e24ac7b615bf6d82bedba062753b) | [Node sync](https://stellar.expert/explorer/public/tx/3cf17f16d59f024c48591a447c1a632e8b3e69e0c2d417473f491f884d439784) |
+| 7 | Dante Bermudez | [View wallet](https://stellar.expert/explorer/public/account/GBU6SESO4CCGICNVQ2O37WFXVRVCSNYNC3QWSML53PDWDXEOUJMIEAGL) | `dante-bermudez-plan` | [Register](https://stellar.expert/explorer/public/tx/70232c56fa8f5dab0d6cfe996079eed2c63a19c9c3ad4487c70977430f04a02d) | [Update](https://stellar.expert/explorer/public/tx/e889064640b57405c282a6588f643f8787635bada4b95742c788e18ce17f5c67) | [Node sync](https://stellar.expert/explorer/public/tx/402fbc02ddc5156344a2a1c3d933f24afd2a2f110db9a5a39fefb8776a4906a2) |
+| 8 | Marivic Concepcion | [View wallet](https://stellar.expert/explorer/public/account/GDCYJQHCWLGUUGCXJZ4GJ3YNO2W66FIJNFPFUOEZF3QCJRY53ABDKSDT) | `marivic-concepcion-plan` | [Register](https://stellar.expert/explorer/public/tx/013c6705133d928c0031ffb06980cc13d59422e0f2274b03cfdb4f7c3548a000) | [Update](https://stellar.expert/explorer/public/tx/b058edb2f54347301d8ac59873441c924edb184cdd095f0416ae7aa10eba479d) | [Node sync](https://stellar.expert/explorer/public/tx/45c6d922bf858f13f7df86316097f036699a9bb3716b5b944965c790bf9b53b9) |
+| 9 | Erwin Dimaculangan | [View wallet](https://stellar.expert/explorer/public/account/GDIOPOCURCOXH7TTUCS2JKBWGPZKR5SMTKMCBOQZK4NRXAEJUMR66HZD) | `erwin-dimaculangan-plan` | [Register](https://stellar.expert/explorer/public/tx/ae429ca135e31b08f46721469db6cbe290c71d77fb4bb35cab16e10d2a473da3) | [Update](https://stellar.expert/explorer/public/tx/2778da438799e2d624ffdd79f13ae57ad6c2e1dca0fbf0d6790ca8086a5daea3) | [Node sync](https://stellar.expert/explorer/public/tx/3a7324fbf24b1917583c6316dad38dbd02b7253e77e666d6d5484348b5ee1a8a) |
+| 10 | Cherry Escudero | [View wallet](https://stellar.expert/explorer/public/account/GA5NBQ2QCDPAPHEFE6STQ6O7RRT22IDJNYYVGCLL36RN66TCCKMKGSUF) | `cherry-escudero-plan` | [Register](https://stellar.expert/explorer/public/tx/944fcb13aec2d6183b8a34754252ea398caba70f5e5b422328b84f3df1fa1dab) | [Update](https://stellar.expert/explorer/public/tx/a7bfdf44c4c7f7b58782eda93e0fae455911edaa64ba484e53c5399aac2172ce) | [Node sync](https://stellar.expert/explorer/public/tx/43d27d835c4c8f539c018f69e23e59799cc14533907c1039255eba8c5e26bf70) |
+| 11 | Aldrin Fajardo | [View wallet](https://stellar.expert/explorer/public/account/GCPXFBX3CLCUD5IKYYT65HL6AO26V6DSDLDO4TOHUI4FEVI5BTI5BCAK) | `aldrin-fajardo-plan` | [Register](https://stellar.expert/explorer/public/tx/52a30f1da1e6d22b934527f9fe4e12978b954b9aaba3a0502288d4e7e6b9d65d) | [Update](https://stellar.expert/explorer/public/tx/103b93569b10881dc160d30202ed398b1afdb21a979c3e2dcecd6ba3309e03cb) | [Node sync](https://stellar.expert/explorer/public/tx/446d8876066524e681c378129ecbdd61413a7d483700b3c78c56f0f102a22d45) |
+| 12 | Girlie Gatchalian | [View wallet](https://stellar.expert/explorer/public/account/GAGP3ULNSVT5WYOHWW33RVLB43VF7DMOJW6KZOPJI7RXD3LJQG7USI3V) | `girlie-gatchalian-plan` | [Register](https://stellar.expert/explorer/public/tx/b36819f85d4173cfe1985ac8426d05b35c83b1eafa95d59d34d4705001126b48) | [Update](https://stellar.expert/explorer/public/tx/84d77b0b45e3fb600f9c2d5b2338c4a9d414f985efae9801f0d3d4f2227f1a4e) | [Node sync](https://stellar.expert/explorer/public/tx/e71a6070029e7762301370de7867324d48230ad1458a3d1c77cc3f966b26822c) |
+| 13 | Nestor Hizon | [View wallet](https://stellar.expert/explorer/public/account/GA4UELQHQQFXKEW5QCTTVHAA3ZLQJXK5GZZ26HXFRZPV3GRMIBIH6VN6) | `nestor-hizon-plan` | [Register](https://stellar.expert/explorer/public/tx/fe8d1349c720612639791259270806c7624d01267b27e79e4ded61ae3ba12893) | [Update](https://stellar.expert/explorer/public/tx/8839ffb70bdb7ba813aa89e87f103f105e9846871f5b37673dd3c14642d3c77f) | [Node sync](https://stellar.expert/explorer/public/tx/b67bd4854eac01ed59ef9df2d4b78d7f7f2be62a00cab99aac9527fa9e7c2275) |
+| 14 | Jocelyn Ilagan | [View wallet](https://stellar.expert/explorer/public/account/GBUCNZGDNVX4ECPLCLWL26EDFAJGKCBDJJE5LC7M5SUSNSPWKOJEXFPU) | `jocelyn-ilagan-plan` | [Register](https://stellar.expert/explorer/public/tx/81149d333e94dddc29a2d609f2dbde245d59608392ec812bd5825ef17d51c886) | [Update](https://stellar.expert/explorer/public/tx/930c5f44b56e222ee7086621da3a7d5427f0259ab8b3b9e06ee2c4ff4f1414a3) | [Node sync](https://stellar.expert/explorer/public/tx/e5b36369f4e669f52675fbee51cab7b034d15b13cb286237f231d17175987c8a) |
+| 15 | Rodel Jimenez | [View wallet](https://stellar.expert/explorer/public/account/GDADK2KO6ABCX6QOMCZFBL7PGTP22EWJRD3C3FS76XRGXC76WEAN57R3) | `rodel-jimenez-plan` | [Register](https://stellar.expert/explorer/public/tx/4f222c4ac09b4fa053f4a557e23ec1a2085c4e525447044bba7539d705c61dc9) | [Update](https://stellar.expert/explorer/public/tx/90ad121d3775ac166bc7431069875409c2433e4b6c2ae96442b6e957a60d6413) | [Node sync](https://stellar.expert/explorer/public/tx/4966213f3f99014b6ee71b73ce92708d3e54bb6f4031b96b9f316272e656ccd6) |
+| 16 | Precious Lumbao | [View wallet](https://stellar.expert/explorer/public/account/GCPODNJU5TR2VVR4RHH5HTNFSO3KB4JZSYED3KTZQH5ADNOODYMU54KX) | `precious-lumbao-plan` | [Register](https://stellar.expert/explorer/public/tx/3abd5182d1e029f2d6c1c3f734a4420f709b052699558b771531805a905f2831) | [Update](https://stellar.expert/explorer/public/tx/07f989eefcac1437aeaeb9136a67005349dfe9b093c1d3c5ccdfc8b843d45a0c) | [Node sync](https://stellar.expert/explorer/public/tx/0b1af1fb37133e60d5c65b3896d921ea3be9d598ce669de854dc2cd153ba37aa) |
+| 17 | Bernard Marasigan | [View wallet](https://stellar.expert/explorer/public/account/GCTGKVPUABCZZKTX4S3ENHUFE5T4I7LN5DLWEXYHDN3G2YL5QIWJNX53) | `bernard-marasigan-plan` | [Register](https://stellar.expert/explorer/public/tx/ae985a82202cfa8299b2271ed0742ec2c7428d546a4f6d89fcacda055e7636c4) | [Update](https://stellar.expert/explorer/public/tx/09b020f36aff4a4af5502b65749000f339da9026462bd8ace9ca2c194d1b0051) | [Node sync](https://stellar.expert/explorer/public/tx/c9dd22a4ab63d836993cfeda3e5932c021620293d4c28e3c8a3f90f09f7422e9) |
+| 18 | Katrina Nazareno | [View wallet](https://stellar.expert/explorer/public/account/GBHFKBIHK5535CTAUCCFYBOE775QMB62GJ6EAJEURR6IH6WTBLJG67SY) | `katrina-nazareno-plan` | [Register](https://stellar.expert/explorer/public/tx/1c70aa838df32a807dfb6d6f77180e865316893e5959de5071821b1670b4b2e8) | [Update](https://stellar.expert/explorer/public/tx/5e8c02b0fbe7edc7f28594d7017b683263b99f2bce73b3b722e32e2404065192) | [Node sync](https://stellar.expert/explorer/public/tx/c9c05d8514969e22e4abb82ce40960d7a88241eee95b9f713f9e00cbd9fb5ce6) |
+| 19 | Onofre Obispo | [View wallet](https://stellar.expert/explorer/public/account/GCBH4X7DNWERPLAQ5LBMYABFADTPHMQS6LR22BOO4YK2FTVFQVHA4U5D) | `onofre-obispo-plan` | [Register](https://stellar.expert/explorer/public/tx/e4229460aaad0f3081d3e1bc3e80f1dad13400627eb4e17ac184ab6f3a19261a) | [Update](https://stellar.expert/explorer/public/tx/b6c24cff8c6af7a6cfb6dcd2966f1925148b4496e6fe2656d18ae6641f339808) | [Node sync](https://stellar.expert/explorer/public/tx/82a8c435f63ad26a13896b66379d4851a557a40deb02f497985695c90bbe926e) |
+| 20 | Rhea Pangilinan | [View wallet](https://stellar.expert/explorer/public/account/GDA7V2WOOJ56NX7F6KB4CS7OMGDO2MS33JZI5LB3GUB76TQHFNEX5QZM) | `rhea-pangilinan-plan` | [Register](https://stellar.expert/explorer/public/tx/f300750d17fe949be80e57a412eddfadfcf896381c69d2bae9462c8d09e4c76f) | [Update](https://stellar.expert/explorer/public/tx/3ed0ddddb566fc7f1a896b6b31ffa2e73a335b3fdfb7eda97d8af1a2c4c9fab5) | [Node sync](https://stellar.expert/explorer/public/tx/ca73befe121811f06f5c39311758d3527b83e861fd3bc4fe3fde0b3df0da4813) |
 
 ### Stellar Testnet — sandbox
 
@@ -616,7 +642,6 @@ GitHub Actions (`.github/workflows/ci.yml`):
 
 - [ ] Register / update documents from the web UI (signed Freighter txs)
 - [ ] Sync real mindmap nodes from a source document pipeline
-- [ ] Mainnet deploy + contract verification
 - [ ] Public audit page by `doc_id`
 
 ---
