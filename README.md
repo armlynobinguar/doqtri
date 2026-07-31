@@ -20,6 +20,7 @@
 </p>
 
 <p align="center">
+  <a href="https://lab.stellar.org/r/mainnet/contract/CCP5KFIWLUNPV2G7ATBKFMIZF54JYRC343P5JCTARC4PRTGM23IU6ET4"><img src="https://img.shields.io/badge/Stellar-Mainnet_Contract-00B050?style=for-the-badge&logo=stellar&logoColor=white" alt="Stellar mainnet" /></a>
   <a href="https://lab.stellar.org/r/testnet/contract/CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB"><img src="https://img.shields.io/badge/Stellar-Testnet_Contract-7D00FF?style=for-the-badge&logo=stellar&logoColor=white" alt="Stellar testnet" /></a>
   <a href="#license"><img src="https://img.shields.io/badge/License-MIT-1FA971?style=for-the-badge" alt="MIT" /></a>
 </p>
@@ -28,7 +29,8 @@
   <a href="https://drive.google.com/file/d/1Fr_7cFn6m7hc4HesTbZ2Wlbp2i3bljXk/view?usp=sharing">Demo video</a> ·
   <a href="https://docs.google.com/presentation/d/14KDwpFrQ6QjlT4QC-vzjSss-0-tO6tocOBNSyBOhi8w/edit?usp=sharing">Pitch deck</a> ·
   <a href="https://docs.google.com/spreadsheets/d/1szS0QGWCdsUu69XcxKGW3xFChVB3fri059fGxfEzCsA/edit?usp=sharing">Onboarding survey responses</a> ·
-  <a href="https://stellar.expert/explorer/testnet/contract/CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB">Contract on Stellar Expert</a>
+  <a href="https://stellar.expert/explorer/public/contract/CCP5KFIWLUNPV2G7ATBKFMIZF54JYRC343P5JCTARC4PRTGM23IU6ET4">Mainnet contract on Stellar Expert</a> ·
+  <a href="https://stellar.expert/explorer/testnet/contract/CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB">Testnet contract on Stellar Expert</a>
 </p>
 
 <p align="center">
@@ -121,11 +123,47 @@ worlds drift apart.
 ### Legacy / chain (`web/`, `contract/`)
 
 - `web/` — previous Freighter + Soroban UI (kept for reference, not primary)
-- `contract/` — DoqtriRegistry on Stellar testnet (still built in CI)
+- `contract/` — DoqtriRegistry, deployed on Stellar mainnet and testnet (built in CI)
 
 ---
 
-## Deployed contract (Stellar Testnet)
+## Deployed contracts
+
+The app runs against **mainnet**. Testnet stays live as the free sandbox and is
+where the 50-user product test below was run.
+
+### Stellar Mainnet — live
+
+| Field | Value |
+| --- | --- |
+| **Network** | Stellar Public Network (mainnet) |
+| **Contract ID** | [`CCP5KFIWLUNPV2G7ATBKFMIZF54JYRC343P5JCTARC4PRTGM23IU6ET4`](https://lab.stellar.org/r/mainnet/contract/CCP5KFIWLUNPV2G7ATBKFMIZF54JYRC343P5JCTARC4PRTGM23IU6ET4) |
+| **WASM hash** | `6abac53e2306b09a13f6eb60649953305159ba293f8f97a2ab0720c6a26ad9af` |
+| **Deployed** | 2026-07-30 |
+
+**Explorer links**
+
+- [Open in Stellar Lab](https://lab.stellar.org/r/mainnet/contract/CCP5KFIWLUNPV2G7ATBKFMIZF54JYRC343P5JCTARC4PRTGM23IU6ET4)
+- [Contract on Stellar Expert](https://stellar.expert/explorer/public/contract/CCP5KFIWLUNPV2G7ATBKFMIZF54JYRC343P5JCTARC4PRTGM23IU6ET4)
+- [WASM upload transaction](https://stellar.expert/explorer/public/tx/8977c7b74768fce80768116cfe3d7a4270519471b5d34ff113302c348de9b336)
+- [Deploy transaction](https://stellar.expert/explorer/public/tx/9035158124d14a202347a990d9c3d1e63a844c35e64e2f46f3e3572ac801fbd2)
+
+**What mainnet actually costs**
+
+| Operation | Fee |
+| --- | --- |
+| WASM upload (one-time) | 8.0525 XLM |
+| Deploy contract (one-time) | 0.0183 XLM |
+| `register_document` | 0.0627 XLM |
+| `set_node_status` | ~0.054 XLM (estimated) |
+| `update_document` | ~0.0012 XLM (estimated) |
+
+The upload is expensive because the code entry's rent dominates it — about 17×
+the testnet price, while a `register_document` write costs only ~1.5× testnet.
+That rent expires: keep the code entry alive with
+`stellar contract extend --wasm-hash <hash> --network mainnet --ledgers-to-extend <n>`.
+
+### Stellar Testnet — sandbox
 
 | Field | Value |
 | --- | --- |
@@ -465,6 +503,25 @@ npm run build
 npm run start
 ```
 
+### Network selection
+
+The frontend defaults to **testnet**. Two env vars flip it to mainnet — every
+other network value (RPC, Horizon, explorer URLs) derives from the passphrase in
+`doqtri/frontend/lib/stellar/config.ts`:
+
+```bash
+NEXT_PUBLIC_NETWORK_PASSPHRASE="Public Global Stellar Network ; September 2015"
+NEXT_PUBLIC_CONTRACT_ID=CCP5KFIWLUNPV2G7ATBKFMIZF54JYRC343P5JCTARC4PRTGM23IU6ET4
+```
+
+The passphrase must match that string exactly, spaces around the `;` included;
+anything else is treated as testnet. Setting the mainnet passphrase without a
+contract ID throws at startup rather than silently falling back to the testnet
+contract.
+
+`NEXT_PUBLIC_*` values are inlined at build time, so changing them in the Vercel
+dashboard has no effect until a new build runs — redeploy after editing them.
+
 **Deploy (Vercel):** set Root Directory to `doqtri/frontend`, then add the env vars from `.env.example`.
 
 Backend SQL lives in `doqtri/backend/migrations/` (already applied on the Doqtri Supabase project).
@@ -503,6 +560,19 @@ stellar contract deploy \
   --source alice \
   --network testnet \
   --alias doqtri
+```
+
+### Deploy (mainnet)
+
+Same command against `--network mainnet`, with a funded real account — budget
+~8.1 XLM for the WASM upload (see the fee table above). Simulate first; a
+simulation is free and needs no key:
+
+```bash
+stellar contract deploy \
+  --wasm ../target/wasm32v1-none/release/doqtri_registry.wasm \
+  --source-account <YOUR_KEY> \
+  --network mainnet
 ```
 
 ### Invoke (live contract)
