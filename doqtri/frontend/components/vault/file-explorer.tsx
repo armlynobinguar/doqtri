@@ -7,11 +7,18 @@ import {
   UploadIcon,
   FilePlusIcon,
   Loader2Icon,
+  RotateCcwIcon,
+  TriangleAlertIcon,
+  XIcon,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import type { NoteSummary } from "@/lib/types";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import type { RetryTarget } from "@/components/vault/upload-dialog";
+import type { FailedImport, NoteSummary } from "@/lib/types";
 
 /**
  * Flat vault listing under a single root. The schema is one table with no
@@ -24,12 +31,16 @@ export function FileExplorer({
   onNewNote,
   onUploadClick,
   creating = false,
+  failedImports = [],
+  onRetryImport,
 }: {
   notes: NoteSummary[];
   activeId?: string;
   onNewNote: () => void;
   onUploadClick: () => void;
   creating?: boolean;
+  failedImports?: FailedImport[];
+  onRetryImport?: (target: RetryTarget) => void;
 }) {
   return (
     <aside className="bg-sidebar flex h-full min-h-0 flex-col">
@@ -107,8 +118,71 @@ export function FileExplorer({
               })}
             </ul>
           )}
+
+          {failedImports.length > 0 && onRetryImport ? (
+            <FailedImports items={failedImports} onRetry={onRetryImport} />
+          ) : null}
         </div>
       </ScrollArea>
     </aside>
+  );
+}
+
+/**
+ * Imports that never became notes. The original file is still archived, so
+ * each one can be re-run without finding the file again, or dismissed.
+ */
+function FailedImports({
+  items,
+  onRetry,
+}: {
+  items: FailedImport[];
+  onRetry: (target: RetryTarget) => void;
+}) {
+  const router = useRouter();
+
+  async function dismiss(id: string) {
+    // RLS allows the owner to delete their own ingest rows.
+    const { error } = await createSupabaseBrowserClient().from("ingests").delete().eq("id", id);
+    if (error) toast.error(error.message);
+    router.refresh();
+  }
+
+  return (
+    <div className="mt-3">
+      <div className="text-sidebar-foreground/80 flex items-center gap-1 px-2 py-1 text-[13px]">
+        <TriangleAlertIcon className="text-destructive size-3.5 shrink-0" strokeWidth={2} />
+        <span className="truncate">Failed imports</span>
+        <span className="text-label ml-auto pr-1 text-[11px] tabular-nums">{items.length}</span>
+      </div>
+      <ul>
+        {items.map((item) => (
+          <li
+            key={item.id}
+            className="text-sidebar-foreground flex items-center gap-1 py-[3px] pr-1 pl-4 text-[13px]"
+          >
+            <span className="min-w-0 flex-1 truncate" title={item.error_code ?? "Interrupted"}>
+              {item.filename}
+            </span>
+            <button
+              type="button"
+              aria-label={`Retry import of ${item.filename}`}
+              onClick={() => onRetry({ ingestId: item.id, filename: item.filename })}
+              className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-6 items-center justify-center rounded-md"
+            >
+              <RotateCcwIcon className="size-3.5" strokeWidth={1.75} />
+            </button>
+            <button
+              type="button"
+              aria-label={`Dismiss failed import of ${item.filename}`}
+              onClick={() => void dismiss(item.id)}
+              className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-6 items-center justify-center rounded-md"
+            >
+              <XIcon className="size-3.5" strokeWidth={1.75} />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

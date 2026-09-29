@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { VaultShell } from "@/components/vault/vault-shell";
+import { loadFailedImports } from "@/lib/ingest/failed";
 import type { NoteSummary } from "@/lib/types";
 
 export default async function VaultLayout({
@@ -27,13 +28,15 @@ export default async function VaultLayout({
   if (error) throw new Error(`Failed to load vault: ${error.message}`);
 
   const notes: NoteSummary[] = data ?? [];
+
+  const failedImports = await loadFailedImports(supabase);
   const wallet =
     typeof user.user_metadata?.wallet_address === "string"
       ? user.user_metadata.wallet_address
       : user.email ?? "";
 
   return (
-    <VaultShell notes={notes} email={wallet}>
+    <VaultShell notes={notes} failedImports={failedImports} email={wallet}>
       {children}
     </VaultShell>
   );
