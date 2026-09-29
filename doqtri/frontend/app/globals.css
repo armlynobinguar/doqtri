@@ -155,30 +155,80 @@ html[data-color-mode] .w-md-editor {
   box-shadow: none;
 }
 
-.w-md-editor-toolbar {
+/*
+ * The library's ESM entry also imports its own stylesheet, which lands when the
+ * lazily loaded editor chunk does — after globals.css. Every override below is
+ * therefore prefixed with `html[data-color-mode] .w-md-editor` so it wins on
+ * specificity, never on load order.
+ */
+html[data-color-mode] .w-md-editor .w-md-editor-toolbar {
   background-color: var(--muted);
   border-bottom: 1px solid var(--border);
 }
 
-.w-md-editor-toolbar li > button {
+html[data-color-mode] .w-md-editor .w-md-editor-toolbar li > button {
   color: var(--muted-foreground);
 }
 
-.w-md-editor-toolbar li > button:hover,
-.w-md-editor-toolbar li > button:focus-visible {
+html[data-color-mode] .w-md-editor .w-md-editor-toolbar li > button:hover,
+html[data-color-mode] .w-md-editor .w-md-editor-toolbar li > button:focus-visible {
   background-color: var(--secondary);
   color: var(--foreground);
 }
 
-.w-md-editor-text-pre > code,
-.w-md-editor-text-input,
-.w-md-editor-text {
-  font-family: var(--font-mono), ui-monospace, monospace !important;
-  font-size: 13px !important;
-  line-height: 1.7 !important;
+/*
+ * The editor is a transparent <textarea> (which owns the caret) stacked over a
+ * syntax-highlighted <pre> (which owns the visible glyphs). Any difference in
+ * how the two lay out text puts the caret somewhere other than the letters, so
+ * all three layers get identical metrics. The library already reads the font
+ * from --md-editor-font-family with !important on each layer, so the font is
+ * set through that variable rather than fought over.
+ */
+html[data-color-mode] .w-md-editor {
+  --md-editor-font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo,
+    Consolas, monospace;
 }
 
-.w-md-editor-preview {
+html[data-color-mode] .w-md-editor .w-md-editor-text,
+html[data-color-mode] .w-md-editor .w-md-editor-text-pre,
+html[data-color-mode] .w-md-editor .w-md-editor-text-pre > code,
+html[data-color-mode] .w-md-editor .w-md-editor-text-input {
+  font-family: var(--md-editor-font-family) !important;
+  font-size: 13px !important;
+  line-height: 22px !important;
+  font-weight: 400 !important;
+  font-style: normal !important;
+  letter-spacing: normal !important;
+  word-spacing: normal !important;
+  font-variant-ligatures: none !important;
+  font-feature-settings: normal !important;
+  font-kerning: none !important;
+  text-rendering: auto !important;
+  text-transform: none !important;
+  text-indent: 0 !important;
+  tab-size: 4 !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: break-word !important;
+}
+
+/*
+ * Tokens inside the <pre> must never change glyph metrics — bold headings or
+ * inline code in a different face would drift away from the textarea.
+ */
+html[data-color-mode] .w-md-editor .w-md-editor-text-pre code * {
+  font-family: inherit !important;
+  font-size: inherit !important;
+  line-height: inherit !important;
+  font-weight: inherit !important;
+  font-style: inherit !important;
+  letter-spacing: inherit !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+}
+
+html[data-color-mode] .w-md-editor .w-md-editor-preview {
   box-shadow: inset 1px 0 0 0 var(--border);
   background-color: var(--background);
 }
