@@ -13,10 +13,12 @@ export function StatusBar({
   noteCount,
   wordCount,
   saveState = "idle",
+  trailing,
 }: {
   noteCount: number;
   wordCount?: number;
   saveState?: SaveState;
+  trailing?: React.ReactNode;
 }) {
   return (
     <footer className="bg-sidebar border-border text-label flex h-6 shrink-0 items-center gap-4 border-t px-3 text-[11px] select-none">
@@ -37,6 +39,7 @@ export function StatusBar({
         </span>
       )}
       <span className="ml-auto">Cursor Dark</span>
+      {trailing}
     </footer>
   );
 }

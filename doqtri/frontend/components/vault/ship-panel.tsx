@@ -15,7 +15,8 @@ import { DoqtriError } from "@/lib/stellar/errors";
 import { getDocumentHistory, type DocumentHistory } from "@/lib/stellar/history";
 import { NODE_STATUSES, type NodeStatus } from "@/lib/stellar/types";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { getWalletAddress } from "@/lib/wallet";
+import { useWallet } from "@/components/vault/wallet-provider";
+import { IS_MAINNET } from "@/lib/stellar/config";
 import { buildMindmap } from "@/lib/mindmap";
 
 type Props = {
@@ -55,6 +56,11 @@ export function ShipPanel({ docId, title, markdown }: Props) {
   const [artifact, setArtifact] = useState("");
   // null until loaded; undefined when the column is unavailable.
   const [publishHeadings, setPublishHeadings] = useState<boolean | null | undefined>(null);
+
+  const wallet = useWallet();
+  const [fundingError, setFundingError] = useState<string | null>(null);
+  const [funding, setFunding] = useState(false);
+  const unfunded = wallet.balance?.funded === false;
 
   const tree = buildMindmap(title, markdown);
   const flatNodes = flattenNodes(tree);
@@ -130,19 +136,26 @@ export function ShipPanel({ docId, title, markdown }: Props) {
   }, [docId]);
 
   async function withWallet<T>(fn: (address: string) => Promise<T>) {
-    const address = await getWalletAddress();
-    if (!address) {
-      throw new DoqtriError(
-        "NO_WALLET",
-        "Connect your Stellar wallet from the landing page first.",
-      );
-    }
+    // Opens the wallet modal in place when disconnected, and refuses to sign
+    // with an account other than the one that owns this vault.
+    const address = await wallet.ensureWallet();
     return fn(address);
+  }
+
+  /** Funding problems stay on screen next to the buttons; the rest are toasts. */
+  function reportError(e: unknown, fallback: string) {
+    if (e instanceof DoqtriError && e.code === "NOT_FUNDED") {
+      setFundingError(e.message);
+      void wallet.refreshBalance();
+      return;
+    }
+    toast.error(e instanceof Error ? e.message : fallback);
   }
 
   async function anchor() {
     setBusy(true);
     setReceipt(null);
+    setFundingError(null);
     try {
       const contentHash = await sha256Hex(markdown);
       const registering = chainVersion == null;
@@ -163,8 +176,9 @@ export function ShipPanel({ docId, title, markdown }: Props) {
           : `Updated to v${result.version ?? "?"}`,
       );
       await refreshChain();
+      void wallet.refreshBalance();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Anchor failed");
+      reportError(e, "Anchor failed");
     } finally {
       setBusy(false);
     }
@@ -173,6 +187,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
   async function syncNode() {
     setBusy(true);
     setReceipt(null);
+    setFundingError(null);
     try {
       if (chainVersion == null) {
         throw new DoqtriError("NOT_REGISTERED", "Anchor the document first");
@@ -190,10 +205,24 @@ export function ShipPanel({ docId, title, markdown }: Props) {
       setReceipt({ ...result, kind: "node", nodeId, version: chainVersion });
       toast.success(`Node “${nodeId}” synced on-chain`);
       await refreshChain();
+      void wallet.refreshBalance();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Ship failed");
+      reportError(e, "Ship failed");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function fundAccount() {
+    setFunding(true);
+    try {
+      await wallet.fund();
+      setFundingError(null);
+      toast.success("Funded with Friendbot");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Friendbot failed");
+    } finally {
+      setFunding(false);
     }
   }
 
@@ -233,10 +262,36 @@ export function ShipPanel({ docId, title, markdown }: Props) {
         <VersionBadge version={chainVersion} unanchored={unanchored} />
       </div>
 
+      {fundingError || unfunded ? (
+        <div
+          role="alert"
+          data-testid="funding-warning"
+          className="grid gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-2 text-[11px]"
+        >
+          <span>
+            {fundingError ??
+              "This wallet is not funded yet, so it cannot pay transaction fees."}
+          </span>
+          {!IS_MAINNET ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={funding}
+              className="h-6 justify-self-start px-2 text-[11px]"
+              onClick={() => void fundAccount()}
+            >
+              {funding ? <Loader2Icon className="animate-spin" /> : null}
+              Fund with Friendbot
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+
       <Button
         type="button"
         size="sm"
-        disabled={busy}
+        disabled={busy || unfunded}
         className="w-full"
         onClick={() => void anchor()}
       >
@@ -350,7 +405,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
         type="button"
         size="sm"
         variant="secondary"
-        disabled={busy}
+        disabled={busy || unfunded}
         className="w-full"
         onClick={() => void syncNode()}
       >

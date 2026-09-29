@@ -1,20 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { LogOutIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { disconnectWallet, shortenAddress } from "@/lib/wallet";
+import { shortenAddress } from "@/lib/wallet";
 
 export function SettingsDialog({
   email,
@@ -27,22 +21,7 @@ export function SettingsDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const router = useRouter();
-  const [busy, setBusy] = useState(false);
   const identity = email.startsWith("G") ? shortenAddress(email) : email;
-
-  async function signOut() {
-    setBusy(true);
-    try {
-      await disconnectWallet();
-    } catch {
-      // wallet may already be disconnected
-    }
-    const supabase = createSupabaseBrowserClient();
-    await supabase.auth.signOut();
-    router.refresh();
-    router.push("/login");
-  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -73,12 +52,10 @@ export function SettingsDialog({
           </div>
         </dl>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={signOut} disabled={busy}>
-            <LogOutIcon />
-            Disconnect
-          </Button>
-        </DialogFooter>
+        <p className="text-muted-foreground text-[12px]">
+          Balance, reconnect, and disconnect are in the account menu at the
+          bottom right of the status bar.
+        </p>
       </DialogContent>
     </Dialog>
   );

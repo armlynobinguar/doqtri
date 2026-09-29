@@ -14,6 +14,9 @@ import { StatusBar } from "@/components/vault/status-bar";
 import { QuickSwitcher } from "@/components/vault/quick-switcher";
 import { UploadDialog, type RetryTarget } from "@/components/vault/upload-dialog";
 import { SettingsDialog } from "@/components/vault/settings-dialog";
+import { AccountMenu } from "@/components/vault/account-menu";
+import { WalletProvider } from "@/components/vault/wallet-provider";
+import { isStellarPublicKey } from "@/lib/wallet-address";
 import {
   VaultStatusProvider,
   useVaultStatus,
@@ -33,11 +36,13 @@ export function VaultShell({
   children: React.ReactNode;
 }) {
   return (
-    <VaultStatusProvider>
-      <VaultShellInner notes={notes} failedImports={failedImports} email={email}>
-        {children}
-      </VaultShellInner>
-    </VaultStatusProvider>
+    <WalletProvider sessionAddress={isStellarPublicKey(email) ? email : null}>
+      <VaultStatusProvider>
+        <VaultShellInner notes={notes} failedImports={failedImports} email={email}>
+          {children}
+        </VaultShellInner>
+      </VaultStatusProvider>
+    </WalletProvider>
   );
 }
 
@@ -179,6 +184,7 @@ function VaultShellInner({
         noteCount={notes.length}
         wordCount={wordCount}
         saveState={saveState}
+        trailing={<AccountMenu />}
       />
 
       <QuickSwitcher

@@ -5,8 +5,8 @@ import { useRouter } from "next/navigation";
 import { Loader2Icon, WalletIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { connectWallet } from "@/lib/wallet";
+import { exchangeWalletSession } from "@/lib/wallet-session";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -27,26 +27,7 @@ export function ConnectWalletButton({
     setBusy(true);
     try {
       const address = await connectWallet();
-      const res = await fetch("/api/auth/wallet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address }),
-      });
-      const payload = (await res.json()) as {
-        error?: string;
-        access_token?: string;
-        refresh_token?: string;
-      };
-      if (!res.ok || !payload.access_token || !payload.refresh_token) {
-        throw new Error(payload.error ?? "Wallet login failed");
-      }
-
-      const supabase = createSupabaseBrowserClient();
-      const { error } = await supabase.auth.setSession({
-        access_token: payload.access_token,
-        refresh_token: payload.refresh_token,
-      });
-      if (error) throw error;
+      await exchangeWalletSession(address);
 
       router.refresh();
       router.push("/vault");
