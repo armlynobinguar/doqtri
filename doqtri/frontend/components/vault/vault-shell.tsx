@@ -83,8 +83,11 @@ function VaultShellInner({
     try {
       const { id, title } = await createBlankNote();
       toast.success(`Created “${title}”`);
-      router.refresh();
+      // Navigate first, then refresh: a refresh issued before the push is
+      // superseded by it, and the push reuses the cached layout, so the
+      // explorer (rendered by the layout) would never list the new note.
       router.push(`/vault/${id}`);
+      router.refresh();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not create note");
     } finally {
