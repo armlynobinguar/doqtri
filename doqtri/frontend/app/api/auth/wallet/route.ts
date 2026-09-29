@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type Session, type SupabaseClient } from "@supabase/supabase-js";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import {
   isStellarPublicKey,
@@ -8,8 +8,11 @@ import {
 
 /**
  * Bridge Stellar wallet → Supabase session.
- * Ensures a confirmed user exists for the public key, then returns tokens
- * for the browser client to `setSession`.
+ *
+ * Idempotent: any number of calls for the same public key, including
+ * concurrent ones from two tabs, end in a session for the same user. The
+ * password is derived from the address, so every path converges on one
+ * sign-in; the branches only exist to create or repair the user first.
  */
 export async function POST(request: Request) {
   let body: { address?: string };
@@ -27,80 +30,129 @@ export async function POST(request: Request) {
   const email = walletEmail(address);
   const password = walletPassword(address);
   const admin = createSupabaseAdminClient();
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  const authClient = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { auth: { persistSession: false, autoRefreshToken: false } },
+  );
 
-  const authClient = createClient(url, anon, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
+  const signIn = async (): Promise<Session | null> =>
+    (await authClient.auth.signInWithPassword({ email, password })).data.session;
 
-  let session = (
-    await authClient.auth.signInWithPassword({ email, password })
-  ).data.session;
+  const ok = (session: Session) => {
+    return Response.json({
+      address,
+      access_token: session.access_token,
+      refresh_token: session.refresh_token,
+    });
+  };
 
-  if (!session) {
-    const { error: createError } = await admin.auth.admin.createUser({
+  // 1. The common case: the user exists and the derived password matches.
+  let session = await signIn();
+  if (session) {
+    await rememberWalletUser(admin, address, session.user.id);
+    return ok(session);
+  }
+
+  // 2. Known wallet whose password no longer matches (e.g. a rotated secret):
+  //    repair it by id, found by primary key rather than a user scan.
+  let userId = await findWalletUser(admin, address, email);
+
+  if (!userId) {
+    const { data: created, error: createError } = await admin.auth.admin.createUser({
       email,
       password,
       email_confirm: true,
       user_metadata: { wallet_address: address },
     });
 
-    if (createError) {
-      const already =
-        /already|registered|exists/i.test(createError.message) ||
-        createError.status === 422;
-      if (!already) {
-        return Response.json({ error: createError.message }, { status: 500 });
-      }
-
-      // User exists but password may be stale — reset it.
-      const { data: listed, error: listError } =
-        await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
-      if (listError) {
-        return Response.json({ error: listError.message }, { status: 500 });
-      }
-      const existing = listed.users.find(
-        (u) => u.email?.toLowerCase() === email.toLowerCase(),
-      );
-      if (!existing) {
-        return Response.json(
-          { error: "Wallet user exists but could not be loaded" },
-          { status: 500 },
-        );
-      }
-      const { error: updateError } = await admin.auth.admin.updateUserById(
-        existing.id,
-        {
-          password,
-          email_confirm: true,
-          user_metadata: {
-            ...existing.user_metadata,
-            wallet_address: address,
-          },
-        },
-      );
-      if (updateError) {
-        return Response.json({ error: updateError.message }, { status: 500 });
-      }
+    if (created?.user) {
+      await rememberWalletUser(admin, address, created.user.id);
+      session = await signIn();
+      if (session) return ok(session);
+      return Response.json({ error: "Failed to create session" }, { status: 500 });
     }
 
-    const signedIn = await authClient.auth.signInWithPassword({
-      email,
-      password,
-    });
-    session = signedIn.data.session;
-    if (signedIn.error || !session) {
+    const already =
+      /already|registered|exists/i.test(createError?.message ?? "") ||
+      createError?.status === 422;
+    if (!already) {
       return Response.json(
-        { error: signedIn.error?.message ?? "Failed to create session" },
+        { error: createError?.message ?? "Could not create wallet user" },
+        { status: 500 },
+      );
+    }
+
+    // 3. Lost a race with a concurrent request for the same wallet: it created
+    //    the user with this same password, so signing in now just works.
+    session = await signIn();
+    if (session) {
+      await rememberWalletUser(admin, address, session.user.id);
+      return ok(session);
+    }
+    userId = await findWalletUser(admin, address, email, { scan: true });
+    if (!userId) {
+      return Response.json(
+        { error: "Wallet user exists but could not be loaded" },
         { status: 500 },
       );
     }
   }
 
-  return Response.json({
-    address,
-    access_token: session.access_token,
-    refresh_token: session.refresh_token,
+  const { error: updateError } = await admin.auth.admin.updateUserById(userId, {
+    password,
+    email_confirm: true,
+    user_metadata: { wallet_address: address },
   });
+  if (updateError) {
+    return Response.json({ error: updateError.message }, { status: 500 });
+  }
+  await rememberWalletUser(admin, address, userId);
+
+  session = await signIn();
+  if (!session) {
+    return Response.json({ error: "Failed to create session" }, { status: 500 });
+  }
+  return ok(session);
+}
+
+/**
+ * Looks the wallet up in `wallet_accounts`. With `scan`, falls back to paging
+ * through every auth user — needed for wallets created before the mapping
+ * table existed, or while its migration is not applied yet.
+ */
+async function findWalletUser(
+  admin: SupabaseClient,
+  address: string,
+  email: string,
+  options: { scan?: boolean } = {},
+): Promise<string | null> {
+  const { data } = await admin
+    .from("wallet_accounts")
+    .select("user_id")
+    .eq("address", address)
+    .maybeSingle();
+  if (data?.user_id) return data.user_id as string;
+  if (!options.scan) return null;
+
+  const perPage = 1000;
+  for (let page = 1; ; page += 1) {
+    const { data: listed, error } = await admin.auth.admin.listUsers({ page, perPage });
+    if (error) return null;
+    const match = listed.users.find((u) => u.email?.toLowerCase() === email);
+    if (match) return match.id;
+    if (listed.users.length < perPage) return null;
+  }
+}
+
+/** Best-effort: the mapping only speeds up repair, so a failed write is not fatal. */
+async function rememberWalletUser(
+  admin: SupabaseClient,
+  address: string,
+  userId: string,
+): Promise<void> {
+  const { error } = await admin
+    .from("wallet_accounts")
+    .upsert({ address, user_id: userId }, { onConflict: "address", ignoreDuplicates: true });
+  if (error) console.warn(`[auth/wallet] mapping not saved: ${error.message}`);
 }

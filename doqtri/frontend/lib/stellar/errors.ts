@@ -10,6 +10,8 @@ export class DoqtriError extends Error {
 }
 
 export function mapWalletError(err: unknown): DoqtriError {
+  // Already typed (e.g. the pre-flight funding check): keep code and message.
+  if (err instanceof DoqtriError) return err;
   const raw =
     err instanceof Error
       ? err.message

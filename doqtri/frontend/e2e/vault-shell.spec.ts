@@ -108,11 +108,25 @@ test.describe("vault shell", () => {
     await page.goto(`/vault/${noteId}`);
     await page.getByRole("button", { name: "Settings" }).click();
 
-    await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("heading", { name: "Settings" })).toBeVisible();
     // Login is wallet-based, so the account line is the shortened public key
     // rather than an email address.
-    await expect(page.getByText(shortenAddress(E2E_WALLET))).toBeVisible();
-    await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
+    await expect(dialog.getByText(shortenAddress(E2E_WALLET))).toBeVisible();
+    // Disconnect moved to the account menu.
+    await expect(dialog.getByRole("button", { name: "Disconnect" })).toHaveCount(0);
+  });
+
+  test("account menu shows the vault wallet, balance, and disconnect", async ({ page }) => {
+    await page.goto(`/vault/${noteId}`);
+    const trigger = page.getByTestId("account-menu");
+    await expect(trigger).toContainText(shortenAddress(E2E_WALLET));
+    // Funded or not, the balance resolves to a value rather than staying "…".
+    await expect(page.getByTestId("xlm-balance")).not.toHaveText("…", { timeout: 15_000 });
+
+    await trigger.click();
+    // Not clicked: signing out would end the session the other tests share.
+    await expect(page.getByRole("menuitem", { name: "Disconnect" })).toBeVisible();
   });
 
   test("upload dialog opens and explains the conversion", async ({ page }) => {
