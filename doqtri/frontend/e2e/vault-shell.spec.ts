@@ -129,6 +129,26 @@ test.describe("vault shell", () => {
     await expect(page.getByRole("menuitem", { name: "Disconnect" })).toBeVisible();
   });
 
+  test("a new note appears in the explorer and the note count", async ({ page }) => {
+    await page.goto(`/vault/${noteId}`);
+    const explorer = page.getByRole("complementary");
+    const before = await explorer.locator('a[href^="/vault/"]').count();
+
+    await page.getByRole("button", { name: "New note" }).click();
+    await page.waitForURL((url) => /^\/vault\/[0-9a-f-]{36}$/.test(url.pathname) && !url.pathname.endsWith(noteId));
+    const createdId = new URL(page.url()).pathname.split("/")[2];
+
+    try {
+      // The explorer lives in the layout, so it only updates if the layout is
+      // re-rendered after navigating to the new note.
+      await expect(explorer.locator(`a[href="/vault/${createdId}"]`)).toBeVisible();
+      await expect(explorer.locator('a[href^="/vault/"]')).toHaveCount(before + 1);
+      await expect(page.getByRole("contentinfo")).toContainText(`${before + 1} notes`);
+    } finally {
+      await deleteNote(createdId);
+    }
+  });
+
   test("upload dialog opens and explains the conversion", async ({ page }) => {
     await page.goto(`/vault/${noteId}`);
     await page.getByRole("button", { name: "Upload document" }).click();

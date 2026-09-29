@@ -115,8 +115,10 @@ export function UploadDialog({
     }
     reset();
     onOpenChange(false);
-    router.refresh();
+    // Push, then refresh, so the layout's note list includes the new note
+    // (see the same ordering in vault-shell.tsx).
     router.push(`/vault/${outcome.id}`);
+    router.refresh();
   }
 
   function upload() {
