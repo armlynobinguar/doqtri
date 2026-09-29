@@ -12,39 +12,48 @@ import { Ribbon, type RibbonAction } from "@/components/vault/ribbon";
 import { FileExplorer } from "@/components/vault/file-explorer";
 import { StatusBar } from "@/components/vault/status-bar";
 import { QuickSwitcher } from "@/components/vault/quick-switcher";
-import { UploadDialog } from "@/components/vault/upload-dialog";
+import { UploadDialog, type RetryTarget } from "@/components/vault/upload-dialog";
 import { SettingsDialog } from "@/components/vault/settings-dialog";
+import { AccountMenu } from "@/components/vault/account-menu";
+import { WalletProvider } from "@/components/vault/wallet-provider";
+import { isStellarPublicKey } from "@/lib/wallet-address";
 import {
   VaultStatusProvider,
   useVaultStatus,
 } from "@/components/vault/vault-status";
 import { createBlankNote } from "@/lib/create-note";
-import type { NoteSummary } from "@/lib/types";
+import type { FailedImport, NoteSummary } from "@/lib/types";
 
 export function VaultShell({
   notes,
+  failedImports,
   email,
   children,
 }: {
   notes: NoteSummary[];
+  failedImports: FailedImport[];
   email: string;
   children: React.ReactNode;
 }) {
   return (
-    <VaultStatusProvider>
-      <VaultShellInner notes={notes} email={email}>
-        {children}
-      </VaultShellInner>
-    </VaultStatusProvider>
+    <WalletProvider sessionAddress={isStellarPublicKey(email) ? email : null}>
+      <VaultStatusProvider>
+        <VaultShellInner notes={notes} failedImports={failedImports} email={email}>
+          {children}
+        </VaultShellInner>
+      </VaultStatusProvider>
+    </WalletProvider>
   );
 }
 
 function VaultShellInner({
   notes,
+  failedImports,
   email,
   children,
 }: {
   notes: NoteSummary[];
+  failedImports: FailedImport[];
   email: string;
   children: React.ReactNode;
 }) {
@@ -55,6 +64,7 @@ function VaultShellInner({
   const [explorerOpen, setExplorerOpen] = useState(true);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [retryTarget, setRetryTarget] = useState<RetryTarget | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ribbonActive, setRibbonActive] = useState<RibbonAction>("files");
   const [creating, setCreating] = useState(false);
@@ -73,8 +83,11 @@ function VaultShellInner({
     try {
       const { id, title } = await createBlankNote();
       toast.success(`Created “${title}”`);
-      router.refresh();
+      // Navigate first, then refresh: a refresh issued before the push is
+      // superseded by it, and the push reuses the cached layout, so the
+      // explorer (rendered by the layout) would never list the new note.
       router.push(`/vault/${id}`);
+      router.refresh();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not create note");
     } finally {
@@ -149,7 +162,15 @@ function VaultShellInner({
                   activeId={activeId}
                   creating={creating}
                   onNewNote={() => void handleNewNote()}
-                  onUploadClick={() => setUploadOpen(true)}
+                  onUploadClick={() => {
+                    setRetryTarget(null);
+                    setUploadOpen(true);
+                  }}
+                  failedImports={failedImports}
+                  onRetryImport={(target) => {
+                    setRetryTarget(target);
+                    setUploadOpen(true);
+                  }}
                 />
               </ResizablePanel>
               <ResizableHandle className="hover:bg-primary/40 transition-colors" />
@@ -166,6 +187,7 @@ function VaultShellInner({
         noteCount={notes.length}
         wordCount={wordCount}
         saveState={saveState}
+        trailing={<AccountMenu />}
       />
 
       <QuickSwitcher
@@ -173,7 +195,14 @@ function VaultShellInner({
         open={switcherOpen}
         onOpenChange={setSwitcherOpen}
       />
-      <UploadDialog open={uploadOpen} onOpenChange={setUploadOpen} />
+      <UploadDialog
+        open={uploadOpen}
+        retry={retryTarget}
+        onOpenChange={(next) => {
+          setUploadOpen(next);
+          if (!next) setRetryTarget(null);
+        }}
+      />
       <SettingsDialog
         email={email}
         noteCount={notes.length}

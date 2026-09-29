@@ -11,6 +11,16 @@ export type DocumentRow = {
   mindmap_hash: string | null;
 };
 
+/**
+ * An import that did not produce a note. `pending` rows only show up once
+ * they are old enough that the request must have died without reporting.
+ */
+export type FailedImport = {
+  id: string;
+  filename: string;
+  error_code: string | null;
+};
+
 /** What the explorer, tabs, and quick switcher need to list a note. */
 export type NoteSummary = {
   id: string;

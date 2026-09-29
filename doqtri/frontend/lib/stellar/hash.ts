@@ -1,5 +1,13 @@
+/**
+ * SHA-256 of a string's UTF-8 encoding (no BOM) — the exact bytes a note's
+ * content hash is computed over, and the bytes "Download anchored .md" writes.
+ */
 export async function sha256Hex(text: string): Promise<string> {
-  const data = new TextEncoder().encode(text);
+  return sha256HexBytes(new TextEncoder().encode(text));
+}
+
+/** SHA-256 of raw bytes, e.g. a file dropped on the public audit page. */
+export async function sha256HexBytes(data: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
     data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer,

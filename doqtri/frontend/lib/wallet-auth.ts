@@ -14,6 +14,4 @@ export function walletPassword(address: string): string {
   return createHmac("sha256", secret).update(`doqtri-wallet:${address}`).digest("hex");
 }
 
-export function isStellarPublicKey(address: string): boolean {
-  return /^G[A-Z2-7]{55}$/.test(address);
-}
+export { isStellarPublicKey } from "@/lib/wallet-address";

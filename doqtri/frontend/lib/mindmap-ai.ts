@@ -109,8 +109,9 @@ function toRaw(node: ModelNode): RawConceptNode {
 export async function extractMindmap(params: {
   title: string;
   markdown: string;
+  signal?: AbortSignal;
 }): Promise<DocMindmap> {
-  const { title, markdown } = params;
+  const { title, markdown, signal } = params;
 
   if (markdown.trim().length === 0) {
     throw new Error("Cannot build a mindmap from an empty note.");
@@ -150,7 +151,7 @@ export async function extractMindmap(params: {
         ],
       },
     ],
-  });
+  }, { signal });
 
   let parsed: ModelNode;
   try {
