@@ -23,7 +23,14 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 ```
 20260724220911_create_documents_with_rls.sql
 20260724220920_create_private_uploads_bucket.sql
+20260725000000_add_document_mindmap.sql
+20260928000000_create_ingests.sql
+20260928000100_create_wallet_accounts.sql
+20260928000200_add_documents_publish_headings.sql
 ```
+
+The remote records its own version stamps (e.g. `20260929114657` for
+`create_ingests`); match on the name, not the number.
 
 These were applied through the Supabase MCP server, so the remote project is
 already in this state. The files exist so the schema is reviewable in git and
@@ -31,8 +38,20 @@ replayable into a fresh project.
 
 ## Data model
 
-One table, `public.documents`, with RLS restricting every operation to
-`auth.uid() = user_id`. There are deliberately **no** graph tables: nodes and
+`public.documents` holds the notes, with RLS restricting every operation to
+`auth.uid() = user_id`. `publish_headings` (default `false`) is the owner's
+opt-in for showing heading labels on the public `/d/[docId]` audit page.
+
+Two supporting tables:
+
+- `public.ingests` — one row per upload attempt, pointing at the archived
+  original in `uploads`, so failed imports can be retried. Owners can read and
+  delete their rows; only `/api/ingest` writes them.
+- `public.wallet_accounts` — Stellar address → auth user, used by
+  `/api/auth/wallet`. RLS on with no policies: service role only, which the
+  advisor reports as `rls_enabled_no_policy` by design.
+
+The notes table itself is still the only content store. There are deliberately **no** graph tables: nodes and
 edges are parsed from `markdown` at render time by `lib/wikilinks.ts`, so the
 graph cannot drift from the text.
 
