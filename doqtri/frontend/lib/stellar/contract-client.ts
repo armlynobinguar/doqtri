@@ -22,6 +22,13 @@ export type ChainDocument = {
   owner?: string;
 };
 
+/** What a registry write leaves behind for the UI to show as a receipt. */
+export type WriteReceipt = {
+  txHash: string;
+  /** The document version after the write; absent for node-status writes. */
+  version?: number;
+};
+
 export type ChainNode = {
   status: string;
   tool: string;
@@ -103,31 +110,65 @@ function unwrapResult<T>(result: unknown, fallbackMsg: string): T {
   return result as T;
 }
 
+/**
+ * register/update return the new version; read it from the confirmed result
+ * rather than re-querying, which can race a lagging RPC node.
+ */
+function receipt(
+  sent: { sendTransactionResponse?: { hash?: string }; result: unknown },
+  hasVersion: boolean,
+): WriteReceipt {
+  const txHash = sent.sendTransactionResponse?.hash;
+  if (!txHash) throw new DoqtriError("SEND_FAILED", "No transaction hash");
+  if (!hasVersion) return { txHash };
+  try {
+    return { txHash, version: Number(unwrapResult<number>(sent.result, "write failed")) };
+  } catch {
+    return { txHash };
+  }
+}
+
 function mapInvokeError(e: unknown): never {
   throw mapWalletError(e);
 }
 
 export const DoqtriRegistry = {
+  /** Best-effort read: null for "not anchored" and for any network failure. */
   async getDocument(docId: string): Promise<ChainDocument | null> {
     try {
-      const tx = await readClient().get_document({ doc_id: docId });
-      const doc = unwrapResult<{
-        version: number;
-        node_count: number;
-        content_hash: Buffer;
-        updated_at: bigint | number;
-        owner: string;
-      }>(tx.result, "get_document failed");
-      return {
-        version: Number(doc.version),
-        nodeCount: Number(doc.node_count),
-        contentHash: hashToHex(doc.content_hash),
-        updatedAt: Number(doc.updated_at),
-        owner: doc.owner ? String(doc.owner) : undefined,
-      };
+      return await DoqtriRegistry.readDocument(docId);
     } catch {
       return null;
     }
+  },
+
+  /**
+   * Strict read: null only when the contract says the document does not exist.
+   * Transport and RPC failures throw, so a public page can tell "not anchored"
+   * apart from "the ledger could not be reached".
+   */
+  async readDocument(docId: string): Promise<ChainDocument | null> {
+    const tx = await readClient().get_document({ doc_id: docId });
+    let doc: {
+      version: number;
+      node_count: number;
+      content_hash: Buffer;
+      updated_at: bigint | number;
+      owner: string;
+    };
+    try {
+      doc = unwrapResult(tx.result, "get_document failed");
+    } catch (e) {
+      if (e instanceof DoqtriError && e.code === "NOT_FOUND") return null;
+      throw e;
+    }
+    return {
+      version: Number(doc.version),
+      nodeCount: Number(doc.node_count),
+      contentHash: hashToHex(doc.content_hash),
+      updatedAt: Number(doc.updated_at),
+      owner: doc.owner ? String(doc.owner) : undefined,
+    };
   },
 
   async getNode(docId: string, nodeId: string): Promise<ChainNode | null> {
@@ -157,7 +198,7 @@ export const DoqtriRegistry = {
     source: string,
     docId: string,
     contentHashHex: string,
-  ): Promise<string> {
+  ): Promise<WriteReceipt> {
     await assertFunded(source);
     try {
       const tx = await writeClient(source).register_document({
@@ -175,9 +216,7 @@ export const DoqtriRegistry = {
         throw e;
       }
       const sent = await tx.signAndSend();
-      const hash = sent.sendTransactionResponse?.hash;
-      if (!hash) throw new DoqtriError("SEND_FAILED", "No transaction hash");
-      return hash;
+      return receipt(sent, true);
     } catch (e) {
       if (e instanceof DoqtriError && e.code === "ALREADY_EXISTS") {
         return DoqtriRegistry.updateDocument(source, docId, contentHashHex);
@@ -194,7 +233,7 @@ export const DoqtriRegistry = {
     source: string,
     docId: string,
     contentHashHex: string,
-  ): Promise<string> {
+  ): Promise<WriteReceipt> {
     await assertFunded(source);
     try {
       const tx = await writeClient(source).update_document({
@@ -202,9 +241,7 @@ export const DoqtriRegistry = {
         new_hash: hexToBuffer(contentHashHex),
       });
       const sent = await tx.signAndSend();
-      const hash = sent.sendTransactionResponse?.hash;
-      if (!hash) throw new DoqtriError("SEND_FAILED", "No transaction hash");
-      return hash;
+      return receipt(sent, true);
     } catch (e) {
       mapInvokeError(e);
     }
@@ -217,7 +254,7 @@ export const DoqtriRegistry = {
     status: NodeStatus,
     tool: string,
     artifactRef: string,
-  ): Promise<string> {
+  ): Promise<WriteReceipt> {
     await assertFunded(source);
     try {
       const tx = await writeClient(source).set_node_status({
@@ -228,9 +265,7 @@ export const DoqtriRegistry = {
         artifact_ref: artifactRef,
       });
       const sent = await tx.signAndSend();
-      const hash = sent.sendTransactionResponse?.hash;
-      if (!hash) throw new DoqtriError("SEND_FAILED", "No transaction hash");
-      return hash;
+      return receipt(sent, false);
     } catch (e) {
       mapInvokeError(e);
     }

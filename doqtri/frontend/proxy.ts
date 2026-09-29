@@ -39,6 +39,9 @@ export async function proxy(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
   const isPublicRoute = pathname === "/" || pathname === "/login";
+  // Public audit pages must open for anyone, signed in or not, unchanged.
+  const isAuditRoute = pathname.startsWith("/d/");
+  if (isAuditRoute) return response;
 
   // Unauthenticated users may view the landing (and /login). Everything else
   // goes to the landing with Connect wallet — not a separate email sign-in.

@@ -15,11 +15,17 @@ import type { DocMindmap } from "@/lib/mindmap-types";
  */
 export async function generateAndStoreMindmap(
   admin: SupabaseClient,
-  params: { id: string; userId: string; title: string; markdown: string },
+  params: {
+    id: string;
+    userId: string;
+    title: string;
+    markdown: string;
+    signal?: AbortSignal;
+  },
 ): Promise<DocMindmap> {
-  const { id, userId, title, markdown } = params;
+  const { id, userId, title, markdown, signal } = params;
 
-  const mindmap = await extractMindmap({ title, markdown });
+  const mindmap = await extractMindmap({ title, markdown, signal });
 
   const { error } = await admin
     .from("documents")

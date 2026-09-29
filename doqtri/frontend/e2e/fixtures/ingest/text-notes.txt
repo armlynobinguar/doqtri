@@ -1,0 +1,5 @@
+﻿Meeting notes
+
+Decisions:
+- Ship streaming ingest first
+- Audit page in week 3
