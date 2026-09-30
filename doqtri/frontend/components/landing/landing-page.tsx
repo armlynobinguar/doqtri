@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { ConnectWalletButton } from "@/components/auth/connect-wallet-button";
 import { BlockChain } from "@/components/brand/block-chain";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
@@ -49,6 +50,7 @@ export function LandingPage() {
           <a href="#map">Map</a>
           <a href="#how">How</a>
           <a href="#proof">Proof</a>
+          <Link href="/docs">Docs</Link>
         </nav>
         <ConnectWalletButton size="sm" className={styles.cta} />
       </header>
@@ -67,9 +69,9 @@ export function LandingPage() {
             </p>
             <div className={styles.actions}>
               <ConnectWalletButton size="lg" label="Open your vault" className={styles.cta} />
-              <a className={styles.secondary} href="#how">
-                How it works
-              </a>
+              <Link className={styles.secondary} href="/docs">
+                Read the docs
+              </Link>
             </div>
           </div>
 
@@ -173,6 +175,7 @@ export function LandingPage() {
           Doqtri
         </span>
         <span className={styles.footerLinks}>
+          <Link href="/docs">Docs</Link>
           <a href={X_URL} target="_blank" rel="noreferrer">
             @usedoqtri
           </a>
