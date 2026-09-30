@@ -119,15 +119,16 @@ worlds drift apart.
 ### App (`doqtri/frontend` + `doqtri/backend`)
 
 - Obsidian-style **vault**: markdown notes, wikilinks, global graph + per-doc mindmap
-- Supabase Auth (email/password) + RLS on `documents`
+- Stellar wallet sign-in ([Stellar Wallets Kit](https://stellarwalletskit.dev/) + Freighter) bridged to a Supabase session; RLS on every table
 - **Ingest** / **regenerate** via OpenAI (`/api/ingest`, `/api/regenerate`)
 - Private Storage bucket for uploads (`doqtri/backend/migrations/`)
 - Deploy target: Vercel Root Directory = `doqtri/frontend`
 
-### Legacy / chain (`web/`, `contract/`)
+### Chain (`contract/`)
 
-- `web/` — previous Freighter + Soroban UI (kept for reference, not primary)
 - `contract/` — DoqtriRegistry, deployed on Stellar mainnet and testnet (built in CI)
+- **Ship panel** signs `register_document` / `update_document` / `set_node_status` with the connected wallet
+- **Public audit** at `/d/[docId]` reads the contract (and the owner's Horizon history) — no login
 
 ---
 
@@ -458,11 +459,14 @@ A 2 XLM payment signed with Freighter on testnet:
 | Smart contracts | [soroban-sdk](https://crates.io/crates/soroban-sdk) `22` | ![Soroban](https://img.shields.io/badge/soroban--sdk-22-7D00FF?logo=rust&logoColor=white) |
 | Contract language | [Rust](https://www.rust-lang.org/) | ![Rust](https://img.shields.io/badge/Rust-stable-black?logo=rust) |
 | CLI / deploy | [Stellar CLI](https://developers.stellar.org/docs/tools/cli) | ![Stellar](https://img.shields.io/badge/stellar--cli-25+-7D00FF?logo=stellar&logoColor=white) |
-| Frontend | [Next.js](https://nextjs.org/) `15` + [React](https://react.dev/) `19` | ![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=nextdotjs) |
+| Frontend | [Next.js](https://nextjs.org/) `16` + [React](https://react.dev/) `19` | ![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=nextdotjs) |
 | Language | [TypeScript](https://www.typescriptlang.org/) | ![TS](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white) |
 | Chain client | [@stellar/stellar-sdk](https://www.npmjs.com/package/@stellar/stellar-sdk) | ![SDK](https://img.shields.io/badge/stellar--sdk-16-7D00FF?logo=stellar&logoColor=white) |
 | Wallet | [@creit.tech/stellar-wallets-kit](https://www.npmjs.com/package/@creit.tech/stellar-wallets-kit) + Freighter | ![Freighter](https://img.shields.io/badge/Freighter-wallet-0B0D10?logo=stellar&logoColor=white) |
-| Fonts | Instrument Sans · Outfit · IBM Plex Mono | ![Fonts](https://img.shields.io/badge/fonts-Google_Fonts-4285F4?logo=googlefonts&logoColor=white) |
+| Data + auth | [Supabase](https://supabase.com/) — Postgres with RLS, Auth, Storage | ![Supabase](https://img.shields.io/badge/Supabase-Postgres-3FCF8E?logo=supabase&logoColor=white) |
+| AI | [OpenAI](https://platform.openai.com/) — ingest formatting + mindmap generation | ![OpenAI](https://img.shields.io/badge/OpenAI-API-412991?logo=openai&logoColor=white) |
+| Hosting | [Vercel](https://vercel.com/) (root directory `doqtri/frontend`) | ![Vercel](https://img.shields.io/badge/Vercel-deploy-000000?logo=vercel&logoColor=white) |
+| Fonts | [Geist](https://vercel.com/font) Sans + Mono | ![Fonts](https://img.shields.io/badge/fonts-Geist-000000) |
 
 ---
 
@@ -471,10 +475,14 @@ A 2 XLM payment signed with Freighter on testnet:
 ```text
 doqtri/                          # git repo root
 ├── doqtri/
-│   ├── frontend/                # PRIMARY app (Next.js vault + mindmap)
-│   └── backend/                 # Supabase migrations + AI prompts
-├── contract/                    # Soroban DoqtriRegistry (optional chain layer)
-├── web/                         # LEGACY Stellar landing (not deployed)
+│   ├── frontend/                # Next.js app: landing, vault, mindmaps, audit, API routes
+│   │   ├── app/                 #   routes (/, /vault, /d/[docId], /api/*)
+│   │   ├── components/          #   brand/, landing/, vault/, audit/, auth/, ui/
+│   │   └── lib/                 #   stellar/ (contract client, history), ingest/, supabase/
+│   ├── backend/                 # Supabase migrations + AI prompts
+│   └── image/                   # logo
+├── contract/                    # Soroban DoqtriRegistry (Rust)
+├── docs/                        # wallet walkthrough screenshots
 ├── Cargo.toml
 ├── .github/workflows/
 └── README.md
@@ -486,14 +494,193 @@ See also [`doqtri/README.md`](./doqtri/README.md) and [`doqtri/SPEC.md`](./doqtr
 
 ## Architecture
 
-```text
-  Upload / note        doqtri/frontend           Supabase
- ┌──────────┐         ┌────────────────┐       ┌─────────────┐
- │ PDF/DOCX │ ingest  │ vault editor   │──────►│ documents   │
- │ markdown ├────────►│ graph+mindmap  │       │ + Storage   │
- └──────────┘         │ /api/* + AI    │       └─────────────┘
-                      └────────────────┘
+### System overview
+
+```mermaid
+flowchart LR
+  subgraph Browser
+    UI["Next.js app<br/>landing · vault · mindmaps"]
+    W["Stellar wallet<br/>Freighter via Wallets Kit"]
+  end
+
+  subgraph Vercel["Vercel · doqtri/frontend"]
+    API["API routes<br/>/api/auth/wallet · /api/ingest<br/>/api/regenerate · /api/mindmap · /api/notes"]
+    AUDIT["Public audit page<br/>/d/[docId]"]
+  end
+
+  subgraph Supabase
+    AUTH[Auth]
+    DB[("Postgres + RLS<br/>documents · ingests · wallet_accounts")]
+    ST[("Storage<br/>private uploads")]
+  end
+
+  AI[OpenAI]
+
+  subgraph Stellar
+    RPC[Soroban RPC]
+    REG[["DoqtriRegistry<br/>contract"]]
+    HZ[Horizon]
+  end
+
+  UI -- connect --> W
+  UI -- session, notes, uploads --> API
+  UI -- reads own rows --> DB
+  API --> AUTH
+  API --> DB
+  API --> ST
+  API -- format + mindmap --> AI
+  W -- sign tx --> UI
+  UI -- register / update / set_node_status --> RPC --> REG
+  AUDIT -- get_document / get_node --> RPC
+  AUDIT -- owner's operations --> HZ
+  AUDIT -- opted-in headings --> DB
 ```
+
+The database stores the private workspace; the ledger stores the proof. A
+document's markdown never goes on-chain — only its SHA-256 hash and the
+status of each mindmap node.
+
+### Sign in with a wallet
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor U as User
+  participant App as Doqtri (browser)
+  participant Kit as Stellar Wallets Kit
+  participant API as /api/auth/wallet
+  participant SB as Supabase Auth
+
+  U->>App: Connect wallet
+  App->>Kit: open wallet modal
+  Kit-->>App: public key (G…)
+  App->>API: POST { address }
+  API->>SB: sign in / create the wallet's user
+  API-->>App: access + refresh token
+  App->>SB: setSession()
+  App-->>U: redirect to /vault
+```
+
+`wallet_accounts` maps each Stellar address to exactly one Supabase user.
+
+### Ingest: upload → note
+
+```mermaid
+flowchart LR
+  F["PDF · DOCX · PPTX · text"] --> U["1 · Upload<br/>archive original<br/>to Storage + ingests row"]
+  U --> E["2 · Extract<br/>officeparser · mammoth"]
+  E --> M["3 · Model<br/>OpenAI formats headings<br/>and [[wikilinks]]"]
+  M --> V["4 · Save<br/>documents row"]
+  V --> MM["5 · Mindmap<br/>generated + hashed"]
+  U -. any failure .-> R["ingests.status = failed<br/>retry from archived original<br/>/api/ingest/retry"]
+  R -.-> E
+```
+
+Progress streams back to the browser as NDJSON, one event per stage, so the
+upload dialog shows exactly where an import is and why it stopped.
+
+### Anchor and ship
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor O as Owner
+  participant SP as Ship panel
+  participant W as Wallet
+  participant RPC as Soroban RPC
+  participant C as DoqtriRegistry
+
+  O->>SP: Anchor this note
+  SP->>SP: sha256(markdown)
+  alt first anchor
+    SP->>RPC: register_document(owner, doc_id, hash)
+  else note changed since last anchor
+    SP->>RPC: update_document(doc_id, new_hash)
+  end
+  RPC-->>SP: simulated + assembled tx
+  SP->>W: sign
+  W-->>SP: signed tx
+  SP->>RPC: send
+  RPC->>C: owner.require_auth() · version += 1
+  C-->>RPC: event (doqtri, register|update)
+  O->>SP: Mark node Built / Verified
+  SP->>RPC: set_node_status(doc_id, node_id, status, tool, artifact_ref)
+  C-->>RPC: event (doqtri, node)
+```
+
+The ship panel compares the note's current hash with the anchored one and
+disables node updates until a changed note is re-anchored, so node status is
+always attached to the exact version it describes.
+
+### Node lifecycle
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> Planned: heading compiled
+  Planned --> Building: work started
+  Building --> Built: shipped with tool + artifact ref
+  Built --> Verified: checked
+  Verified --> [*]
+```
+
+Each transition is a `set_node_status` call signed by the document owner, and
+each one is readable by anyone on the audit page.
+
+### Public audit (`/d/[docId]`)
+
+```mermaid
+flowchart TD
+  V[Visitor · no login] --> P["/d/[docId]"]
+  P -->|get_document| C[(DoqtriRegistry)]
+  C -->|not found| NA[Not anchored]
+  C -->|found| H["version · hash · owner"]
+  H --> HI["Horizon: owner's operations<br/>→ full version history"]
+  H --> TTL[Storage TTL]
+  H --> PH{"Owner opted in and<br/>private note hash<br/>== anchored hash?"}
+  PH -->|yes| L[Show heading labels on nodes]
+  PH -->|no| N[Show node ids only]
+  P --> HC["Hash check: paste text or drop a file,<br/>SHA-256 compared in the browser"]
+```
+
+### Data model
+
+```mermaid
+erDiagram
+  AUTH_USERS ||--o{ DOCUMENTS : owns
+  AUTH_USERS ||--o{ INGESTS : uploads
+  AUTH_USERS ||--|| WALLET_ACCOUNTS : "signs in as"
+  DOCUMENTS |o--o{ INGESTS : "created by"
+
+  DOCUMENTS {
+    uuid id PK
+    uuid user_id FK
+    text title
+    text markdown
+    jsonb mindmap
+    text mindmap_hash
+    boolean publish_headings
+    timestamptz updated_at
+  }
+  INGESTS {
+    uuid id PK
+    uuid user_id FK
+    text object_path "private Storage path"
+    text filename
+    text kind "pdf | docx | pptx | text"
+    text status "pending | succeeded | failed"
+    text error_code
+    uuid document_id FK
+  }
+  WALLET_ACCOUNTS {
+    text address PK "G… Stellar key"
+    uuid user_id FK "unique"
+  }
+```
+
+On-chain, DoqtriRegistry keeps `DataKey::Doc(doc_id)` → owner, content hash and
+version, and `DataKey::Node(doc_id, node_id)` → status, tool and artifact ref
+(see [Contract interface](#contract-interface)).
 
 ---
 
@@ -644,9 +831,9 @@ GitHub Actions (`.github/workflows/ci.yml`):
 
 ## Roadmap (near-term)
 
-- [ ] Register / update documents from the web UI (signed Freighter txs)
+- [x] Register / update documents from the web UI (signed wallet txs)
+- [x] Public audit page by `doc_id`
 - [ ] Sync real mindmap nodes from a source document pipeline
-- [ ] Public audit page by `doc_id`
 
 ---
 
