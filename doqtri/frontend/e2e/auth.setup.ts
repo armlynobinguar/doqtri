@@ -1,12 +1,13 @@
 import { test as setup, expect } from "@playwright/test";
 import { createServerClient } from "@supabase/ssr";
-import { E2E_WALLET } from "./helpers";
+import { E2E_KEYPAIR, E2E_WALLET } from "./helpers";
 
 const AUTH_FILE = "e2e/.auth/user.json";
 
 /**
- * Asserts the Connect wallet UI, then seeds a session via /api/auth/wallet
- * (no Freighter in CI).
+ * Asserts the Connect wallet UI, then seeds a session through the same
+ * challenge -> signature -> /api/auth/wallet exchange the app uses, signing
+ * with the test keypair where a browser wallet would (no Freighter in CI).
  *
  * The session has to land in *cookies*, not localStorage: proxy.ts and every
  * server component read the session through `@supabase/ssr`, which is
@@ -22,8 +23,21 @@ setup("wallet login surface + session seed", async ({ page }) => {
     page.getByRole("button", { name: /Connect wallet/i }),
   ).toBeVisible();
 
-  const res = await page.request.post("/api/auth/wallet", {
+  // An address alone must not open a session.
+  const unsigned = await page.request.post("/api/auth/wallet", {
     data: { address: E2E_WALLET },
+  });
+  expect(unsigned.status()).toBe(401);
+
+  const challengeRes = await page.request.post("/api/auth/wallet/challenge", {
+    data: { address: E2E_WALLET },
+  });
+  expect(challengeRes.ok(), await challengeRes.text()).toBeTruthy();
+  const challenge = (await challengeRes.json()) as { message: string; token: string };
+  const signature = Buffer.from(E2E_KEYPAIR.signMessage(challenge.message)).toString("base64");
+
+  const res = await page.request.post("/api/auth/wallet", {
+    data: { address: E2E_WALLET, token: challenge.token, signature },
   });
   expect(res.ok(), await res.text()).toBeTruthy();
   const tokens = (await res.json()) as {

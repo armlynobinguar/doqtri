@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { Keypair } from "@stellar/stellar-sdk";
 import { hashMarkdown } from "@/lib/mindmap-hash";
 import { toDocMindmap, type DocMindmap } from "@/lib/mindmap-types";
 import { walletEmail } from "@/lib/wallet-auth";
@@ -6,8 +8,15 @@ import { walletEmail } from "@/lib/wallet-auth";
  * The wallet the e2e session belongs to. Login is wallet-based, so the browser
  * signs in as the Supabase user derived from this address — and seeded notes
  * have to be owned by that same user or RLS hides them.
+ *
+ * Sign-in requires a real signature, so this is a keypair rather than a bare
+ * address. It is derived from a public, test-only seed: it never holds funds
+ * and exists only for this suite's Supabase project.
  */
-export const E2E_WALLET = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+export const E2E_KEYPAIR = Keypair.fromRawEd25519Seed(
+  createHash("sha256").update("doqtri-e2e-wallet").digest(),
+);
+export const E2E_WALLET = E2E_KEYPAIR.publicKey();
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY!;
