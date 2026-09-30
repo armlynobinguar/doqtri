@@ -91,6 +91,29 @@ export async function signSorobanTx(
   return signedTxXdr;
 }
 
+/**
+ * SEP-53 message signature (base64) from the connected wallet. Used to prove
+ * wallet ownership at sign-in; it is not a transaction and costs nothing.
+ */
+export async function signWalletMessage(message: string, address: string): Promise<string> {
+  const wallets = await kit();
+  if (!wallets) throw new Error("Wallet signing needs a browser.");
+  const { NETWORK_PASSPHRASE } = await import("@/lib/stellar/config");
+  try {
+    const { signedMessage } = await wallets.signMessage(message, {
+      networkPassphrase: NETWORK_PASSPHRASE,
+      address,
+    });
+    return signedMessage;
+  } catch (err) {
+    const text = (err as { message?: string })?.message ?? String(err);
+    if (/does not support/i.test(text)) {
+      throw new Error("This wallet can't sign messages. Connect with Freighter or another wallet that supports message signing.");
+    }
+    throw err instanceof Error ? err : new Error(text || "Signing was cancelled.");
+  }
+}
+
 /** Prefer the connected Freighter address when available. */
 export async function getWalletAddress(): Promise<string | null> {
   const wallets = await kit();

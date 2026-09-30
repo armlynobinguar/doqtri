@@ -5,9 +5,15 @@ import {
   walletEmail,
   walletPassword,
 } from "@/lib/wallet-auth";
+import { verifyWalletChallenge } from "@/lib/wallet-challenge";
 
 /**
  * Bridge Stellar wallet → Supabase session.
+ *
+ * The caller must prove it controls the wallet: `token` comes from
+ * POST /api/auth/wallet/challenge and `signature` is the wallet's SEP-53
+ * signature of that challenge's message. An address alone is public
+ * information and never opens a session.
  *
  * Idempotent: any number of calls for the same public key, including
  * concurrent ones from two tabs, end in a session for the same user. The
@@ -15,9 +21,9 @@ import {
  * sign-in; the branches only exist to create or repair the user first.
  */
 export async function POST(request: Request) {
-  let body: { address?: string };
+  let body: { address?: string; token?: string; signature?: string };
   try {
-    body = (await request.json()) as { address?: string };
+    body = (await request.json()) as { address?: string; token?: string; signature?: string };
   } catch {
     return Response.json({ error: "Invalid JSON" }, { status: 400 });
   }
@@ -25,6 +31,20 @@ export async function POST(request: Request) {
   const address = body.address?.trim();
   if (!address || !isStellarPublicKey(address)) {
     return Response.json({ error: "Invalid Stellar address" }, { status: 400 });
+  }
+
+  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!secret) return Response.json({ error: "Server is not configured" }, { status: 500 });
+  if (!body.token || !body.signature) {
+    return Response.json({ error: "Sign the login message with your wallet to continue." }, { status: 401 });
+  }
+  const proof = verifyWalletChallenge({ address, token: body.token, signature: body.signature }, secret);
+  if (!proof.ok) {
+    const error =
+      proof.reason === "expired"
+        ? "The login request expired. Connect your wallet again."
+        : "Wallet signature could not be verified.";
+    return Response.json({ error }, { status: 401 });
   }
 
   const email = walletEmail(address);
