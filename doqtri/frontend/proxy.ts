@@ -62,9 +62,10 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Everything except static assets and the API routes, which verify the
-  // session themselves and must be able to return 401 rather than a redirect.
+  // Everything except static assets, the generated link-preview image (crawlers
+  // fetch it signed out), and the API routes, which verify the session
+  // themselves and must be able to return 401 rather than a redirect.
   matcher: [
-    "/((?!_next/static|_next/image|api/|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+    "/((?!_next/static|_next/image|api/|favicon.ico|opengraph-image|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],
 };

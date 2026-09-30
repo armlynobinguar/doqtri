@@ -21,7 +21,12 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Doqtri",
   description:
-    "Living documents into executable mindmaps. Connect a Stellar wallet to open your vault.",
+    "Living documents. Executable mindmaps. Planned vs shipped, proven on Stellar.",
+  twitter: {
+    card: "summary_large_image",
+    site: "@usedoqtri",
+    creator: "@usedoqtri",
+  },
 };
 
 export default function RootLayout({
