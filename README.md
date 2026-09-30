@@ -5,7 +5,8 @@
 <h1 align="center">Doqtri</h1>
 
 <p align="center">
-  <strong>Living documents → executable mindmaps → on-chain proof</strong>
+  <strong>Tested vs Shipped, Block by Block.</strong><br />
+  Living documents → executable mindmaps → on-chain proof
 </p>
 
 <p align="center">

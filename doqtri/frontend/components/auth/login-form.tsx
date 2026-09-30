@@ -1,11 +1,13 @@
 "use client";
 
 import { ConnectWalletButton } from "@/components/auth/connect-wallet-button";
+import { DoqtriMark } from "@/components/brand/doqtri-mark";
 
 /** Kept as /login fallback — same Connect wallet flow as the landing. */
 export function LoginForm() {
   return (
     <div className="flex w-full max-w-[320px] flex-col gap-3">
+      <DoqtriMark className="mb-2 h-auto w-14 text-foreground" glow={false} />
       <div className="mb-3 flex flex-col gap-1.5">
         <h1 className="text-[15px] font-medium">Open your vault</h1>
         <p className="text-muted-foreground text-[13px] leading-relaxed">

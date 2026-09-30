@@ -1,10 +1,20 @@
+/* Brand palette from the Doqtri banner: navy-charcoal ground, white ink. */
 .page {
+  --brand-ground: #12151c;
+  --brand-panel: #1b1f2a;
+  --brand-disc: #232733;
+  --brand-ink: #eef1f6;
+  --brand-muted: #8d95a5;
+  --brand-line: rgba(238, 241, 246, 0.1);
+  --mark-fill: var(--brand-disc);
+
   position: relative;
   min-height: 100svh;
   display: flex;
   flex-direction: column;
   overflow-x: clip;
-  color: var(--foreground);
+  color: var(--brand-ink);
+  background: var(--brand-ground);
 }
 
 .atmosphere {
@@ -13,188 +23,325 @@
   inset: 0;
   z-index: 0;
   background:
-    radial-gradient(ellipse 90% 60% at 50% -15%, rgba(77, 157, 255, 0.22), transparent 55%),
-    radial-gradient(ellipse 45% 35% at 0% 70%, rgba(77, 157, 255, 0.07), transparent 55%),
-    linear-gradient(180deg, #121212 0%, #1e1e1e 50%, #161616 100%);
+    radial-gradient(ellipse 70% 55% at 78% 18%, rgba(238, 241, 246, 0.07), transparent 60%),
+    radial-gradient(ellipse 60% 40% at 10% 90%, rgba(141, 149, 165, 0.06), transparent 60%),
+    linear-gradient(180deg, #151923 0%, #12151c 55%, #0f1218 100%);
 }
 
 .atmosphere::after {
   content: "";
   position: absolute;
   inset: 0;
-  opacity: 0.4;
-  background-image: radial-gradient(
-    rgba(255, 255, 255, 0.035) 0.55px,
-    transparent 0.55px
-  );
+  opacity: 0.35;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.04) 0.6px, transparent 0.6px);
   background-size: 3px 3px;
-  mask-image: linear-gradient(180deg, black 0%, transparent 80%);
+  mask-image: linear-gradient(180deg, black 0%, transparent 85%);
 }
 
 .nav,
-.hero,
-.mapBand,
-.how,
-.proof,
+.main,
 .footer {
   position: relative;
   z-index: 1;
 }
 
+/* ------------------------------------------------------------------ nav */
+
 .nav {
+  position: sticky;
+  top: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 1.1rem clamp(1.25rem, 4vw, 2.5rem);
+  padding: 0.9rem clamp(1rem, 4vw, 2.5rem);
+  background: rgba(18, 21, 28, 0.72);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--brand-line);
 }
 
 .navBrand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
   font-size: 1.1rem;
   font-weight: 700;
-  letter-spacing: -0.05em;
+  letter-spacing: -0.04em;
+}
+
+.navMark {
+  width: 1.75rem;
+  height: auto;
 }
 
 .navLinks {
   display: none;
-  gap: 1.35rem;
+  gap: 1.5rem;
   font-size: 0.85rem;
-  color: var(--muted-foreground);
-  letter-spacing: -0.02em;
+  color: var(--brand-muted);
 }
 
 .navLinks a:hover {
-  color: var(--foreground);
+  color: var(--brand-ink);
 }
 
-@media (min-width: 720px) {
+@media (min-width: 760px) {
   .navLinks {
     display: flex;
   }
 }
 
+/* ----------------------------------------------------------------- hero */
+
 .hero {
-  position: relative;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  gap: clamp(2rem, 5vw, 3.5rem);
   align-items: center;
-  justify-content: flex-start;
-  min-height: calc(100svh - 4.25rem);
-  padding: clamp(2.5rem, 9vw, 5rem) clamp(1.25rem, 4vw, 2.5rem) 2rem;
-  text-align: center;
-  overflow: hidden;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: clamp(2.5rem, 8vw, 5.5rem) clamp(1rem, 4vw, 2.5rem) clamp(3rem, 8vw, 5rem);
+}
+
+@media (min-width: 960px) {
+  .hero {
+    grid-template-columns: 1.15fr 0.85fr;
+  }
 }
 
 .heroCopy {
-  position: relative;
-  z-index: 2;
-  max-width: 40rem;
+  min-width: 0;
   animation: rise 0.75s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.heroChain {
+  --block-size: clamp(1.35rem, 3.4vw, 1.9rem);
+  margin-bottom: 1.4rem;
+}
+
 .brand {
-  font-size: clamp(3.75rem, 13vw, 7rem);
+  font-size: clamp(3.75rem, 12vw, 7.5rem);
   font-weight: 700;
-  letter-spacing: -0.075em;
-  line-height: 0.9;
-  margin-bottom: 1.1rem;
+  letter-spacing: -0.06em;
+  line-height: 0.92;
+  margin-bottom: 0.9rem;
 }
 
 .headline {
-  font-size: clamp(1.25rem, 3vw, 1.7rem);
+  font-size: clamp(1.2rem, 2.6vw, 1.6rem);
   font-weight: 500;
-  letter-spacing: -0.04em;
-  line-height: 1.25;
+  letter-spacing: -0.03em;
+  line-height: 1.3;
   margin-bottom: 0.8rem;
 }
 
 .support {
-  max-width: 38ch;
-  margin: 0 auto 1.85rem;
-  color: var(--muted-foreground);
+  max-width: 44ch;
+  margin-bottom: 1.9rem;
+  color: var(--brand-muted);
   font-size: 1.05rem;
-  letter-spacing: -0.015em;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.7rem;
-  justify-content: center;
   align-items: center;
+}
+
+/* Brand CTA: white block on navy, like the marks. Overrides the app's blue primary. */
+.cta {
+  background: var(--brand-ink);
+  color: var(--brand-ground);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px rgba(238, 241, 246, 0.4), 0 0 18px rgba(238, 241, 246, 0.12);
+}
+
+.cta:hover:not(:disabled) {
+  background: #ffffff;
+}
+
+.cta:focus-visible {
+  outline: 2px solid var(--brand-ink);
+  outline-offset: 2px;
 }
 
 .secondary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-height: 2.5rem;
   padding: 0.55rem 1.1rem;
   border-radius: calc(var(--radius) - 2px);
-  border: 1px solid var(--border);
-  color: var(--foreground);
+  border: 1px solid rgba(238, 241, 246, 0.18);
   font-size: 0.9rem;
   font-weight: 550;
-  letter-spacing: -0.02em;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .secondary:hover {
-  background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(238, 241, 246, 0.32);
 }
 
-.mapBand {
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  background: rgba(0, 0, 0, 0.22);
-  padding: clamp(3rem, 8vw, 5rem) clamp(1.25rem, 4vw, 2.5rem);
-  animation: rise 0.8s 0.08s cubic-bezier(0.22, 1, 0.36, 1) both;
+/* The profile-picture emblem: mark + tagline inside a disc. */
+.emblem {
+  margin: 0;
+  display: flex;
+  justify-content: center;
+  animation: rise 0.9s 0.1s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-.bandInner {
-  max-width: 36rem;
-  margin: 0 auto;
+.disc {
+  position: relative;
+  width: min(100%, 26rem);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 38%, #2a2f3c 0%, var(--brand-disc) 55%, #1d212b 100%);
+  box-shadow:
+    0 0 0 1px var(--brand-line),
+    0 30px 80px -30px rgba(0, 0, 0, 0.7);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.1rem;
+  padding: 12%;
+}
+
+.emblemMark {
+  width: 78%;
+  height: auto;
+  color: var(--brand-ink);
+  filter: drop-shadow(0 0 14px rgba(238, 241, 246, 0.18));
+}
+
+.tagline {
+  font-size: clamp(0.85rem, 2.4vw, 1.05rem);
+  font-weight: 500;
+  letter-spacing: -0.01em;
   text-align: center;
+  color: var(--brand-ink);
 }
 
-.bandTitle,
-.howTitle {
-  font-size: clamp(1.4rem, 3.2vw, 1.85rem);
-  font-weight: 600;
-  letter-spacing: -0.045em;
+/* ------------------------------------------------------------- sections */
+
+.eyebrow {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--brand-muted);
   margin-bottom: 0.7rem;
 }
 
-.bandSupport,
-.howSupport {
-  color: var(--muted-foreground);
-  font-size: 1rem;
-  line-height: 1.55;
-  max-width: 40ch;
-  margin: 0 auto;
+.sectionTitle {
+  font-size: clamp(1.5rem, 3.4vw, 2.2rem);
+  font-weight: 650;
+  letter-spacing: -0.045em;
+  line-height: 1.15;
+  margin-bottom: 0.9rem;
+  max-width: 24ch;
 }
 
+.sectionSupport {
+  color: var(--brand-muted);
+  font-size: 1rem;
+  line-height: 1.6;
+  max-width: 52ch;
+}
+
+.sectionSupport code {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.9em;
+  color: var(--brand-ink);
+}
+
+/* Keep anchored sections clear of the sticky nav. */
+.hero,
+.blocks,
+.mapBand,
 .how,
 .proof {
-  max-width: 40rem;
-  margin: 0 auto;
-  padding: clamp(3.5rem, 9vw, 5.5rem) clamp(1.25rem, 4vw, 2.5rem);
-  text-align: center;
-  animation: rise 0.8s 0.12s cubic-bezier(0.22, 1, 0.36, 1) both;
+  scroll-margin-top: 4.5rem;
 }
 
-.howSupport {
-  margin-bottom: 2rem;
+.blocks,
+.how,
+.proof {
+  max-width: 72rem;
+  margin: 0 auto;
+  width: 100%;
+  padding: clamp(3.5rem, 8vw, 5.5rem) clamp(1rem, 4vw, 2.5rem);
+}
+
+.blockGrid {
+  list-style: none;
+  padding: 0;
+  margin: 2rem 0 0;
+  display: grid;
+  gap: 1rem;
+}
+
+@media (min-width: 820px) {
+  .blockGrid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.blockCard {
+  padding: 1.5rem;
+  border-radius: 14px;
+  background: var(--brand-panel);
+  border: 1px solid var(--brand-line);
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.blockCard:hover {
+  border-color: rgba(238, 241, 246, 0.24);
+  transform: translateY(-2px);
+}
+
+.blockIcon {
+  width: 2.25rem;
+  height: 2.25rem;
+  margin-bottom: 1rem;
+  filter: drop-shadow(0 0 8px rgba(238, 241, 246, 0.25));
+}
+
+.blockCard h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  margin-bottom: 0.45rem;
+}
+
+.blockCard p {
+  color: var(--brand-muted);
+  font-size: 0.93rem;
+  line-height: 1.55;
+}
+
+/* The banner band: a full-width panel like the X header. */
+.mapBand {
+  background: var(--brand-panel);
+  border-top: 1px solid var(--brand-line);
+  border-bottom: 1px solid var(--brand-line);
+  padding: clamp(3.5rem, 8vw, 5rem) clamp(1rem, 4vw, 2.5rem) 0;
+  overflow: hidden;
+}
+
+.mapCopy {
+  max-width: 72rem;
+  margin: 0 auto;
 }
 
 .steps {
   list-style: none;
   display: grid;
-  gap: 0;
-  text-align: left;
   padding: 0;
-  margin: 0;
+  margin: 2rem 0 0;
+  max-width: 46rem;
 }
 
 .steps li {
@@ -202,80 +349,118 @@
   grid-template-columns: auto 1fr;
   gap: 1rem;
   align-items: start;
-  padding: 1.1rem 0;
-  border-top: 1px solid var(--border);
+  padding: 1.2rem 0;
+  border-top: 1px solid var(--brand-line);
 }
 
 .steps li:last-child {
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--brand-line);
+}
+
+.stepIcon {
+  width: 1.6rem;
+  height: 1.6rem;
+  margin-top: 0.1rem;
 }
 
 .steps strong {
   display: block;
-  font-size: 0.98rem;
-  letter-spacing: -0.03em;
+  font-size: 1rem;
+  letter-spacing: -0.02em;
   margin-bottom: 0.25rem;
 }
 
 .steps p {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: 0.9rem;
-  line-height: 1.45;
-}
-
-.stepNum {
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
-  font-size: 0.72rem;
-  color: var(--primary);
-  letter-spacing: 0.04em;
-  padding-top: 0.2rem;
+  color: var(--brand-muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
 }
 
 .lifecycle {
   list-style: none;
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
-  gap: 0.5rem 1.25rem;
+  align-items: center;
+  gap: 0.6rem 0;
   padding: 0;
-  margin: 1.75rem 0 2rem;
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
-  font-size: 0.78rem;
-  color: var(--muted-foreground);
-  letter-spacing: 0.02em;
+  margin: 1.5rem 0 1.5rem;
 }
 
 .lifecycle li {
-  position: relative;
+  display: flex;
+  align-items: center;
 }
 
-.lifecycle li:not(:last-child)::after {
-  content: "→";
-  margin-left: 1.25rem;
-  opacity: 0.45;
+.lifecycleLink {
+  width: 1.6rem;
+  height: 1px;
+  margin: 0 0.35rem;
+  background: rgba(238, 241, 246, 0.35);
+}
+
+.lifecycleStep {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.8rem 0.45rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--brand-line);
+  background: var(--brand-panel);
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.8rem;
+}
+
+.lifecycleIcon {
+  width: 1.15rem;
+  height: 1.15rem;
 }
 
 .proofCta {
-  display: flex;
-  justify-content: center;
+  margin-top: 2rem;
 }
+
+/* --------------------------------------------------------------- footer */
 
 .footer {
   margin-top: auto;
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
+  align-items: center;
   gap: 1rem;
-  padding: 1.25rem clamp(1.25rem, 4vw, 2.5rem) 1.75rem;
-  font-size: 0.8rem;
-  letter-spacing: -0.02em;
-  border-top: 1px solid var(--border);
+  padding: 1.25rem clamp(1rem, 4vw, 2.5rem) 1.75rem;
+  font-size: 0.85rem;
+  border-top: 1px solid var(--brand-line);
+}
+
+.footerBrand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+}
+
+.footerMark {
+  width: 1.4rem;
+  height: auto;
+}
+
+.footerLinks {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+}
+
+.footerLinks a:hover {
+  text-decoration: underline;
 }
 
 .footerMuted {
-  color: var(--muted-foreground);
+  color: var(--brand-muted);
   font-family: var(--font-geist-mono), ui-monospace, monospace;
-  font-size: 0.7rem;
+  font-size: 0.72rem;
 }
 
 @keyframes rise {
@@ -285,6 +470,13 @@
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .heroCopy,
+  .emblem {
+    animation: none;
   }
 }

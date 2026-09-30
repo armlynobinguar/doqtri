@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { HashCheck } from "@/components/audit/hash-check";
+import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { DoqtriRegistry, type ChainDocument } from "@/lib/stellar/contract-client";
 import {
   CONTRACT_ID,
@@ -122,7 +123,8 @@ export default async function AuditPage(props: PageProps<"/d/[docId]">) {
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 py-10 sm:px-6">
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <Link href="/" className="font-medium tracking-tight">
+        <Link href="/" className="inline-flex items-center gap-2 font-medium tracking-tight">
+          <DoqtriMark className="h-auto w-6" glow={false} title="" />
           Doqtri <span className="text-muted-foreground font-normal">audit</span>
         </Link>
         <span className="border-border text-muted-foreground rounded-full border px-2.5 py-0.5 text-[12px]">
