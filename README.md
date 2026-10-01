@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  Compile plans into mindmaps, track Planned → Verified build status, and anchor
+  Compile plans into mindmaps, track Planned → Verified build status, and anchor its
   every version hash on <a href="https://stellar.org">Stellar</a> so “planned vs shipped” is ledger-true.
 </p>
 
