@@ -3,6 +3,7 @@ import {
   createSupabaseServerClient,
   createSupabaseAdminClient,
 } from "@/lib/supabase/server";
+import { consumeAiQuota, quotaRefusal } from "@/lib/ai-quota";
 import { generateAndStoreMindmap } from "@/lib/mindmap-store";
 
 export const runtime = "nodejs";
@@ -58,6 +59,10 @@ export async function POST(request: Request) {
   if (!doc) {
     return NextResponse.json({ error: "Note not found" }, { status: 404 });
   }
+
+  // Charged after the ownership check, so a bad id costs nothing.
+  const quota = await consumeAiQuota(admin, user.id, "mindmap");
+  if (!quota.ok) return quotaRefusal(quota);
 
   try {
     const mindmap = await generateAndStoreMindmap(admin, {

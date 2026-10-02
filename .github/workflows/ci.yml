@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -97,6 +98,9 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Lint
+        run: npm run lint
+
       - name: Unit tests
         run: npm test
 
@@ -106,3 +110,66 @@ jobs:
             export NEXT_PUBLIC_SUPABASE_ANON_KEY=ci-placeholder-anon-key
           fi
           npm run build
+
+  e2e:
+    name: E2E (Playwright)
+    # The suite signs in and seeds/cleans notes in the Supabase project, so it
+    # runs on pushes to main (and on demand), not on every pull request.
+    if: github.event_name != 'pull_request'
+    needs: app
+    runs-on: ubuntu-latest
+    # Every run shares one test user; never let two runs mutate it at once.
+    concurrency:
+      group: e2e-supabase
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: doqtri/frontend
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://omoalynhmtbqffogjvoy.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - name: Check secrets
+        id: secrets
+        working-directory: .
+        run: |
+          if [ -z "${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}" ] || [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
+            echo "::warning::E2E skipped: NEXT_PUBLIC_SUPABASE_ANON_KEY and SUPABASE_SERVICE_ROLE_KEY secrets are required."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.secrets.outputs.ready == 'true'
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        if: steps.secrets.outputs.ready == 'true'
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: doqtri/frontend/package-lock.json
+
+      - name: Install
+        if: steps.secrets.outputs.ready == 'true'
+        run: npm ci
+
+      - name: Install Chromium
+        if: steps.secrets.outputs.ready == 'true'
+        run: npx playwright install --with-deps chromium
+
+      # playwright.config.ts starts `npm run dev` itself.
+      - name: Run E2E
+        if: steps.secrets.outputs.ready == 'true'
+        run: npm run test:e2e
+
+      - name: Upload traces
+        if: failure() && steps.secrets.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: doqtri/frontend/test-results/
+          retention-days: 7
