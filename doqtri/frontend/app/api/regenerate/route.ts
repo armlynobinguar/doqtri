@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient, createSupabaseAdminClient } from "@/lib/supabase/server";
 import { improveMarkdown } from "@/lib/openai";
+import { consumeAiQuota, quotaRefusal } from "@/lib/ai-quota";
 import { generateAndStoreMindmap } from "@/lib/mindmap-store";
 
 export const runtime = "nodejs";
@@ -48,6 +49,10 @@ export async function POST(request: Request) {
   if (!doc) {
     return NextResponse.json({ error: "Note not found" }, { status: 404 });
   }
+
+  // Charged after the ownership check, so a bad id costs nothing.
+  const quota = await consumeAiQuota(admin, user.id, "regenerate");
+  if (!quota.ok) return quotaRefusal(quota);
 
   // Give the model the user's real note titles so it links to notes that
   // exist rather than inventing ghost targets.

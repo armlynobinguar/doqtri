@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient, createSupabaseAdminClient } from "@/lib/supabase/server";
+import { consumeAiQuota, quotaRefusal } from "@/lib/ai-quota";
 import { INGEST_ERRORS, type IngestErrorCode } from "@/lib/ingest/errors";
 import { ingestStream, runIngest } from "@/lib/ingest/pipeline";
 import type { UploadKind } from "@/lib/openai";
@@ -46,6 +47,11 @@ export async function POST(request: Request) {
     .maybeSingle();
 
   if (!attempt || attempt.status === "succeeded") return reject("NOT_FOUND", 404);
+
+  // A raw retry still builds the mindmap (and a PDF is read by the model), so
+  // every retry draws on the budget.
+  const quota = await consumeAiQuota(admin, user.id, "ingest-retry");
+  if (!quota.ok) return quotaRefusal(quota);
 
   const { data: blob, error: downloadError } = await admin.storage
     .from("uploads")

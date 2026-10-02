@@ -79,6 +79,13 @@ OPENAI_API_KEY=              # platform.openai.com/api-keys
 Ingest and regenerate return a clear error until both are set. Everything else
 works without them.
 
+Optional: `AI_DAILY_LIMIT` (default `30`) caps how many AI requests
+(`/api/ingest`, `/api/ingest/retry`, `/api/regenerate`, `/api/mindmap`) one user
+can make in a rolling 24 hours. Over the cap these routes answer `429` with a
+`Retry-After` header. The budget lives in Postgres
+(`backend/migrations/20261002000000_create_ai_usage.sql`); until that migration
+is applied the AI routes answer `503` rather than run uncounted.
+
 ```bash
 npm run dev       # http://localhost:3000
 npm test          # 57 unit tests over lib/

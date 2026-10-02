@@ -69,6 +69,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=      # server-side only, never exposed to client
 OPENAI_API_KEY=                 # server-side only
 OPENAI_MODEL=gpt-4o             # any current vision-capable model
+AI_DAILY_LIMIT=30               # optional: AI requests per user per rolling 24h
 ```
 
 ---
