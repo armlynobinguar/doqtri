@@ -18,6 +18,8 @@ export const INGEST_ERROR_CODES = [
   "EMPTY_OUTPUT",
   "SAVE_FAILED",
   "CONNECTION_LOST",
+  "AI_DAILY_LIMIT",
+  "AI_LIMIT_UNAVAILABLE",
 ] as const;
 
 export type IngestErrorCode = (typeof INGEST_ERROR_CODES)[number];
@@ -43,6 +45,9 @@ export const INGEST_ERRORS: Record<IngestErrorCode, ErrorCopy> = {
   EMPTY_OUTPUT: { message: "The conversion produced an empty note.", retryable: true, rawFallback: true },
   SAVE_FAILED: { message: "The note could not be saved to your vault.", retryable: true },
   CONNECTION_LOST: { message: "The connection dropped before the import finished.", retryable: true },
+  // The route's own message carries the exact wait; these are the fallbacks.
+  AI_DAILY_LIMIT: { message: "You've reached today's AI limit. Try again later.", retryable: false },
+  AI_LIMIT_UNAVAILABLE: { message: "AI features are temporarily unavailable. Try again shortly.", retryable: true },
 };
 
 /** Thrown inside the pipeline; the route turns it into an `error` event. */

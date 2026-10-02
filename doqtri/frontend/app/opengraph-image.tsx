@@ -56,10 +56,13 @@ export default async function Image() {
         }}
       >
         <div style={{ display: "flex", flexDirection: "column" }}>
+          {/* ImageResponse renders through Satori, which only understands plain <img>; next/image does not apply. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={dataUri(chainSvg())} width={chainWidth} height={Math.round((chainWidth * 24) / 290)} alt="" />
           <div style={{ fontSize: 150, fontWeight: 700, letterSpacing: "-0.05em", marginTop: 26, lineHeight: 1 }}>Doqtri</div>
           <div style={{ fontSize: 34, fontWeight: 500, color: "#a7afbd", marginTop: 22 }}>Planned vs shipped, proven on-chain.</div>
         </div>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={dataUri(mark)} width={330} height={297} alt="" />
       </div>
     ),

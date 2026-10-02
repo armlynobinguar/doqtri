@@ -27,6 +27,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20260928000000_create_ingests.sql
 20260928000100_create_wallet_accounts.sql
 20260928000200_add_documents_publish_headings.sql
+20261002000000_create_ai_usage.sql        # NOT yet applied: apply before deploying
 ```
 
 The remote records its own version stamps (e.g. `20260929114657` for
@@ -50,6 +51,10 @@ Two supporting tables:
 - `public.wallet_accounts` — Stellar address → auth user, used by
   `/api/auth/wallet`. RLS on with no policies: service role only, which the
   advisor reports as `rls_enabled_no_policy` by design.
+- `public.ai_usage` — one row per accepted AI request, written only through
+  `consume_ai_quota()` (service role; execute is revoked from `anon` and
+  `authenticated`). It enforces the per-user `AI_DAILY_LIMIT` atomically under a
+  per-user advisory lock. Owners can read their own rows.
 
 The notes table itself is still the only content store. There are deliberately **no** graph tables: nodes and
 edges are parsed from `markdown` at render time by `lib/wikilinks.ts`, so the

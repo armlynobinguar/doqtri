@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient, createSupabaseAdminClient } from "@/lib/supabase/server";
+import { consumeAiQuota, quotaRefusal } from "@/lib/ai-quota";
 import { classifyUpload } from "@/lib/openai";
 import { INGEST_ERRORS, type IngestErrorCode } from "@/lib/ingest/errors";
 import { ingestStream, runIngest } from "@/lib/ingest/pipeline";
@@ -51,6 +52,10 @@ export async function POST(request: Request) {
   // 2. Service role from here on: it bypasses RLS, so user.id must come from
   //    the verified session above and never from the request body.
   const admin = createSupabaseAdminClient();
+
+  // 3. Charge the daily AI budget only once the upload is known to be valid.
+  const quota = await consumeAiQuota(admin, user.id, "ingest");
+  if (!quota.ok) return quotaRefusal(quota);
 
   return ingestStream((emit) =>
     runIngest({

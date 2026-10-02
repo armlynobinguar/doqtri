@@ -204,7 +204,6 @@ export function MindmapCanvas({
        */
       // eslint-disable-next-line react-hooks/immutability
       node.fx = undefined;
-      // eslint-disable-next-line react-hooks/immutability
       node.fy = undefined;
     }
     framedRef.current = false;

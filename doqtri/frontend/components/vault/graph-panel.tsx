@@ -33,8 +33,10 @@ export function GraphPanel({
 
   // force-graph mutates node objects with simulation coordinates. Rebuilding
   // the graph on every edit would otherwise reset the layout, so positions are
-  // cached by node id and seeded back in.
-  const positionsRef = useRef(new Map<string, { x: number; y: number }>());
+  // cached by node id and seeded back in. The Map itself never changes identity
+  // (it is only filled in), so it lives in state rather than a ref: the graph
+  // memo reads it during render, which refs must not be.
+  const [positions] = useState(() => new Map<string, { x: number; y: number }>());
 
   useEffect(() => {
     const element = containerRef.current;
@@ -50,22 +52,20 @@ export function GraphPanel({
 
   const graphData = useMemo(() => {
     const { nodes, edges } = buildGraph(docs);
-    const cache = positionsRef.current;
 
     return {
       nodes: nodes.map((node) => {
-        const cached = cache.get(node.id);
+        const cached = positions.get(node.id);
         return cached ? { ...node, x: cached.x, y: cached.y } : { ...node };
       }),
       links: edges.map((edge) => ({ source: edge.source, target: edge.target })),
     };
-  }, [docs]);
+  }, [docs, positions]);
 
   function rememberPositions(nodes: NodeObject<NodeDatum>[]) {
-    const cache = positionsRef.current;
     for (const node of nodes) {
       if (typeof node.x === "number" && typeof node.y === "number") {
-        cache.set(String(node.id), { x: node.x, y: node.y });
+        positions.set(String(node.id), { x: node.x, y: node.y });
       }
     }
   }
