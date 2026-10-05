@@ -1,8 +1,6 @@
 "use client";
 
-import { Fragment } from "react";
 import Link from "next/link";
-import { ArrowRight, FileText, Link2, Workflow, type LucideIcon } from "lucide-react";
 import { ConnectWalletButton } from "@/components/auth/connect-wallet-button";
 import { BlockChain } from "@/components/brand/block-chain";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
@@ -30,19 +28,11 @@ const BLOCKS: { glyph: Glyph; title: string; body: string }[] = [
   },
 ];
 
-// Brand essence triad, as on the brand sheet.
-const TRIAD: { icon: LucideIcon; title: string; body: string }[] = [
-  { icon: FileText, title: "Documents", body: "Markdown, notes, plans." },
-  { icon: Workflow, title: "Mindmaps", body: "Structured, executable, traceable." },
-  { icon: Link2, title: "On-chain", body: "Immutable proof on Stellar." },
-];
-
-// `tone` picks the brand status color: neutral → blue → green → purple.
-const LIFECYCLE: { label: string; glyph: Glyph; tone?: "building" | "verified" | "onchain" }[] = [
+const LIFECYCLE: { label: string; glyph: Glyph }[] = [
   { label: "Planned", glyph: "check" },
-  { label: "Building", glyph: "hash", tone: "building" },
-  { label: "Built", glyph: "hash", tone: "verified" },
-  { label: "Verified", glyph: "stellar", tone: "onchain" },
+  { label: "Building", glyph: "hash" },
+  { label: "Built", glyph: "hash" },
+  { label: "Verified", glyph: "stellar" },
 ];
 
 export function LandingPage() {
@@ -79,9 +69,8 @@ export function LandingPage() {
             </p>
             <div className={styles.actions}>
               <ConnectWalletButton size="lg" label="Open your vault" className={styles.cta} />
-              <Link className={styles.ghost} href="/docs">
+              <Link className={styles.secondary} href="/docs">
                 Read the docs
-                <ArrowRight aria-hidden />
               </Link>
             </div>
           </div>
@@ -89,30 +78,9 @@ export function LandingPage() {
           <figure className={styles.emblem}>
             <div className={styles.disc}>
               <DoqtriMark className={styles.emblemMark} />
-              <figcaption className={styles.tagline}>
-                Living documents → executable mindmaps → on-chain proof.
-              </figcaption>
+              <figcaption className={styles.tagline}>Tested vs Shipped, Block by Block.</figcaption>
             </div>
           </figure>
-        </section>
-
-        <section className={styles.triad} aria-label="From documents to on-chain proof">
-          <ol className={styles.triadList}>
-            {TRIAD.map((t, i) => (
-              <Fragment key={t.title}>
-                {i > 0 && (
-                  <li aria-hidden>
-                    <ArrowRight className={styles.triadArrow} />
-                  </li>
-                )}
-                <li className={styles.triadItem}>
-                  <t.icon className={styles.triadIcon} aria-hidden />
-                  <strong>{t.title}</strong>
-                  <span>{t.body}</span>
-                </li>
-              </Fragment>
-            ))}
-          </ol>
         </section>
 
         <section className={styles.blocks} id="blocks" aria-labelledby="blocks-title">
@@ -184,7 +152,7 @@ export function LandingPage() {
             {LIFECYCLE.map((s, i) => (
               <li key={s.label}>
                 {i > 0 && <span className={styles.lifecycleLink} aria-hidden />}
-                <span className={styles.lifecycleStep} data-tone={s.tone}>
+                <span className={styles.lifecycleStep}>
                   <BlockGlyph glyph={s.glyph} className={styles.lifecycleIcon} />
                   {s.label}
                 </span>
@@ -205,14 +173,13 @@ export function LandingPage() {
         <span className={styles.footerBrand}>
           <DoqtriMark className={styles.footerMark} glow={false} title="" />
           Doqtri
-          <span className={styles.footerTagline}>Living documents → executable mindmaps → on-chain proof.</span>
         </span>
         <span className={styles.footerLinks}>
           <Link href="/docs">Docs</Link>
           <a href={X_URL} target="_blank" rel="noreferrer">
             @usedoqtri
           </a>
-          <span className={styles.footerMuted}>Built for builders. Backed by Stellar.</span>
+          <span className={styles.footerMuted}>Stellar testnet · Soroban</span>
         </span>
       </footer>
     </div>
