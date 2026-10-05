@@ -1,14 +1,20 @@
-/* Doqtri Dark Tech brand system: near-black ground, hairlines, elevated cards. */
+/* Brand palette from the Doqtri banner: navy-charcoal ground, white ink. */
 .page {
-  --mark-fill: var(--brand-elevated);
+  --brand-ground: #12151c;
+  --brand-panel: #1b1f2a;
+  --brand-disc: #232733;
+  --brand-ink: #eef1f6;
+  --brand-muted: #8d95a5;
+  --brand-line: rgba(238, 241, 246, 0.1);
+  --mark-fill: var(--brand-disc);
 
   position: relative;
   min-height: 100svh;
   display: flex;
   flex-direction: column;
   overflow-x: clip;
-  color: var(--brand-text);
-  background: var(--brand-bg);
+  color: var(--brand-ink);
+  background: var(--brand-ground);
 }
 
 .atmosphere {
@@ -17,18 +23,18 @@
   inset: 0;
   z-index: 0;
   background:
-    radial-gradient(ellipse 60% 45% at 80% 12%, color-mix(in oklch, var(--brand-purple), transparent 92%), transparent 60%),
-    radial-gradient(ellipse 50% 40% at 8% 85%, color-mix(in oklch, var(--brand-blue), transparent 94%), transparent 60%),
-    var(--brand-bg);
+    radial-gradient(ellipse 70% 55% at 78% 18%, rgba(238, 241, 246, 0.07), transparent 60%),
+    radial-gradient(ellipse 60% 40% at 10% 90%, rgba(141, 149, 165, 0.06), transparent 60%),
+    linear-gradient(180deg, #151923 0%, #12151c 55%, #0f1218 100%);
 }
 
 .atmosphere::after {
   content: "";
   position: absolute;
   inset: 0;
-  opacity: 0.6;
-  background-image: radial-gradient(color-mix(in oklch, var(--brand-text), transparent 93%) 0.7px, transparent 0.7px);
-  background-size: 22px 22px;
+  opacity: 0.35;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.04) 0.6px, transparent 0.6px);
+  background-size: 3px 3px;
   mask-image: linear-gradient(180deg, black 0%, transparent 85%);
 }
 
@@ -49,9 +55,9 @@
   justify-content: space-between;
   gap: 1rem;
   padding: 0.9rem clamp(1rem, 4vw, 2.5rem);
-  background: color-mix(in oklch, var(--brand-bg), transparent 25%);
+  background: rgba(18, 21, 28, 0.72);
   backdrop-filter: blur(10px);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--brand-line);
 }
 
 .navBrand {
@@ -72,11 +78,11 @@
   display: none;
   gap: 1.5rem;
   font-size: 0.85rem;
-  color: var(--muted-foreground);
+  color: var(--brand-muted);
 }
 
 .navLinks a:hover {
-  color: var(--brand-text);
+  color: var(--brand-ink);
 }
 
 @media (min-width: 760px) {
@@ -131,7 +137,7 @@
 .support {
   max-width: 44ch;
   margin-bottom: 1.9rem;
-  color: var(--muted-foreground);
+  color: var(--brand-muted);
   font-size: 1.05rem;
   line-height: 1.55;
 }
@@ -143,24 +149,22 @@
   align-items: center;
 }
 
-/* Brand primary: elevated surface, bright hairline, soft glow. */
+/* Brand CTA: white block on navy, like the marks. Overrides the app's blue primary. */
 .cta {
-  background: var(--brand-elevated);
-  color: var(--brand-text);
+  background: var(--brand-ink);
+  color: var(--brand-ground);
+  /* The shared Button's default variant draws a border; the landing CTA has none. */
+  border-color: transparent;
   font-weight: 600;
-  border: 1px solid color-mix(in oklch, var(--brand-text), transparent 30%);
-  box-shadow:
-    0 0 0 1px color-mix(in oklch, var(--brand-text), transparent 88%),
-    0 0 22px -4px color-mix(in oklch, var(--brand-text), transparent 75%);
+  box-shadow: 0 0 0 1px rgba(238, 241, 246, 0.4), 0 0 18px rgba(238, 241, 246, 0.12);
 }
 
 .cta:hover:not(:disabled) {
-  border-color: var(--brand-text);
-  background: color-mix(in oklch, var(--brand-elevated), var(--brand-text) 6%);
+  background: #ffffff;
 }
 
 .cta:focus-visible {
-  outline: 2px solid var(--brand-blue);
+  outline: 2px solid var(--brand-ink);
   outline-offset: 2px;
 }
 
@@ -171,43 +175,15 @@
   min-height: 2.5rem;
   padding: 0.55rem 1.1rem;
   border-radius: calc(var(--radius) - 2px);
-  border: 1px solid var(--brand-border);
-  background: var(--brand-surface);
+  border: 1px solid rgba(238, 241, 246, 0.18);
   font-size: 0.9rem;
   font-weight: 550;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .secondary:hover {
-  background: var(--brand-elevated);
-  border-color: var(--brand-hover);
-}
-
-/* Brand ghost link: text with a trailing arrow. */
-.ghost {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  min-height: 2.5rem;
-  padding: 0.55rem 0.4rem;
-  font-size: 0.9rem;
-  font-weight: 500;
-  color: var(--muted-foreground);
-  transition: color 0.15s ease;
-}
-
-.ghost:hover {
-  color: var(--brand-text);
-}
-
-.ghost svg {
-  width: 1rem;
-  height: 1rem;
-  transition: transform 0.15s ease;
-}
-
-.ghost:hover svg {
-  transform: translateX(2px);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(238, 241, 246, 0.32);
 }
 
 /* The profile-picture emblem: mark + tagline inside a disc. */
@@ -223,12 +199,10 @@
   width: min(100%, 26rem);
   aspect-ratio: 1;
   border-radius: 50%;
-  background: radial-gradient(circle at 50% 38%, var(--brand-elevated) 0%, var(--brand-surface) 60%, var(--brand-bg) 100%);
+  background: radial-gradient(circle at 50% 38%, #2a2f3c 0%, var(--brand-disc) 55%, #1d212b 100%);
   box-shadow:
-    0 0 0 1px var(--border),
-    0 0 0 14px color-mix(in oklch, var(--brand-surface), transparent 50%),
-    0 0 0 15px var(--border),
-    0 30px 80px -30px rgba(0, 0, 0, 0.8);
+    0 0 0 1px var(--brand-line),
+    0 30px 80px -30px rgba(0, 0, 0, 0.7);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -240,8 +214,8 @@
 .emblemMark {
   width: 78%;
   height: auto;
-  color: var(--brand-text);
-  filter: drop-shadow(0 0 14px color-mix(in oklch, var(--brand-text), transparent 78%));
+  color: var(--brand-ink);
+  filter: drop-shadow(0 0 14px rgba(238, 241, 246, 0.18));
 }
 
 .tagline {
@@ -249,85 +223,17 @@
   font-weight: 500;
   letter-spacing: -0.01em;
   text-align: center;
-  color: var(--muted-foreground);
-}
-
-/* ---------------------------------------------------------------- triad */
-
-/* Brand essence: DOCUMENTS → MINDMAPS → ON-CHAIN. */
-.triad {
-  max-width: 72rem;
-  margin: 0 auto;
-  width: 100%;
-  padding: 0 clamp(1rem, 4vw, 2.5rem);
-}
-
-.triadList {
-  list-style: none;
-  margin: 0;
-  padding: 1.75rem 0;
-  display: grid;
-  gap: 1.5rem;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-}
-
-@media (min-width: 760px) {
-  .triadList {
-    grid-template-columns: 1fr auto 1fr auto 1fr;
-    align-items: center;
-  }
-}
-
-.triadItem {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  gap: 0.45rem;
-}
-
-.triadIcon {
-  width: 2.4rem;
-  height: 2.4rem;
-  stroke-width: 1.4;
-  color: var(--brand-text);
-  filter: drop-shadow(0 0 8px color-mix(in oklch, var(--brand-text), transparent 80%));
-}
-
-.triadItem strong {
-  font-size: 0.85rem;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.triadItem span {
-  color: var(--muted-foreground);
-  font-size: 0.85rem;
-}
-
-.triadArrow {
-  display: none;
-  width: 1.3rem;
-  height: 1.3rem;
-  color: var(--brand-connector);
-}
-
-@media (min-width: 760px) {
-  .triadArrow {
-    display: block;
-  }
+  color: var(--brand-ink);
 }
 
 /* ------------------------------------------------------------- sections */
 
 .eyebrow {
-  font-family: var(--font-code), ui-monospace, monospace;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
   font-size: 0.72rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--muted-foreground);
+  color: var(--brand-muted);
   margin-bottom: 0.7rem;
 }
 
@@ -341,16 +247,16 @@
 }
 
 .sectionSupport {
-  color: var(--muted-foreground);
+  color: var(--brand-muted);
   font-size: 1rem;
   line-height: 1.6;
   max-width: 52ch;
 }
 
 .sectionSupport code {
-  font-family: var(--font-code), ui-monospace, monospace;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
   font-size: 0.9em;
-  color: var(--brand-text);
+  color: var(--brand-ink);
 }
 
 /* Keep anchored sections clear of the sticky nav. */
@@ -387,15 +293,14 @@
 
 .blockCard {
   padding: 1.5rem;
-  border-radius: 12px;
-  background: var(--brand-surface);
-  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--brand-panel);
+  border: 1px solid var(--brand-line);
   transition: border-color 0.2s ease, transform 0.2s ease;
 }
 
 .blockCard:hover {
-  border-color: var(--brand-border);
-  background: var(--brand-elevated);
+  border-color: rgba(238, 241, 246, 0.24);
   transform: translateY(-2px);
 }
 
@@ -403,7 +308,7 @@
   width: 2.25rem;
   height: 2.25rem;
   margin-bottom: 1rem;
-  filter: drop-shadow(0 0 8px color-mix(in oklch, var(--brand-text), transparent 75%));
+  filter: drop-shadow(0 0 8px rgba(238, 241, 246, 0.25));
 }
 
 .blockCard h3 {
@@ -414,16 +319,16 @@
 }
 
 .blockCard p {
-  color: var(--muted-foreground);
+  color: var(--brand-muted);
   font-size: 0.93rem;
   line-height: 1.55;
 }
 
 /* The banner band: a full-width panel like the X header. */
 .mapBand {
-  background: var(--brand-surface);
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
+  background: var(--brand-panel);
+  border-top: 1px solid var(--brand-line);
+  border-bottom: 1px solid var(--brand-line);
   padding: clamp(3.5rem, 8vw, 5rem) clamp(1rem, 4vw, 2.5rem) 0;
   overflow: hidden;
 }
@@ -447,11 +352,11 @@
   gap: 1rem;
   align-items: start;
   padding: 1.2rem 0;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--brand-line);
 }
 
 .steps li:last-child {
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--brand-line);
 }
 
 .stepIcon {
@@ -468,7 +373,7 @@
 }
 
 .steps p {
-  color: var(--muted-foreground);
+  color: var(--brand-muted);
   font-size: 0.92rem;
   line-height: 1.5;
 }
@@ -492,7 +397,7 @@
   width: 1.6rem;
   height: 1px;
   margin: 0 0.35rem;
-  background: var(--brand-connector);
+  background: rgba(238, 241, 246, 0.35);
 }
 
 .lifecycleStep {
@@ -501,24 +406,10 @@
   gap: 0.5rem;
   padding: 0.45rem 0.8rem 0.45rem 0.5rem;
   border-radius: 999px;
-  border: 1px solid var(--brand-border);
-  background: var(--brand-surface);
-  font-family: var(--font-code), ui-monospace, monospace;
+  border: 1px solid var(--brand-line);
+  background: var(--brand-panel);
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
   font-size: 0.8rem;
-}
-
-.lifecycleStep[data-tone="verified"] {
-  border-color: color-mix(in oklch, var(--brand-green), transparent 40%);
-  color: var(--brand-green);
-}
-
-.lifecycleStep[data-tone="onchain"] {
-  border-color: color-mix(in oklch, var(--brand-purple), transparent 40%);
-  color: var(--brand-purple);
-}
-
-.lifecycleStep[data-tone="building"] {
-  border-color: color-mix(in oklch, var(--brand-blue), transparent 50%);
 }
 
 .lifecycleIcon {
@@ -541,7 +432,7 @@
   gap: 1rem;
   padding: 1.25rem clamp(1rem, 4vw, 2.5rem) 1.75rem;
   font-size: 0.85rem;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--brand-line);
 }
 
 .footerBrand {
@@ -568,17 +459,9 @@
   text-decoration: underline;
 }
 
-.footerTagline {
-  color: var(--muted-foreground);
-  font-size: 0.78rem;
-  padding-left: 0.85rem;
-  margin-left: 0.35rem;
-  border-left: 1px solid var(--border);
-}
-
 .footerMuted {
-  color: var(--muted-foreground);
-  font-family: var(--font-code), ui-monospace, monospace;
+  color: var(--brand-muted);
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
   font-size: 0.72rem;
 }
 

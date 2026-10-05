@@ -142,11 +142,6 @@
   ::selection {
     background-color: color-mix(in oklch, var(--brand-blue), transparent 65%);
   }
-  h1,
-  h2,
-  h3 {
-    letter-spacing: -0.015em;
-  }
 }
 
 /*
