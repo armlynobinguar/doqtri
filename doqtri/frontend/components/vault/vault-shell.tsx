@@ -62,7 +62,7 @@ function VaultShellInner({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { wordCount, saveState, setRightTab } = useVaultStatus();
+  const { wordCount, saveState } = useVaultStatus();
 
   const [explorerOpen, setExplorerOpen] = useState(true);
   const [switcherOpen, setSwitcherOpen] = useState(false);
@@ -76,12 +76,14 @@ function VaultShellInner({
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // The shell lives in the layout, so the active note comes from the URL
-  // rather than from props. `/vault/mindmap` is the global mindmap, not a note.
+  // rather than from props. `/vault/mindmap` and `/vault/graph` are
+  // vault-wide views, not notes.
   const segment = pathname.startsWith("/vault/")
     ? pathname.split("/")[2] || undefined
     : undefined;
-  const onGlobalMindmap = segment === "mindmap";
-  const activeId = onGlobalMindmap ? undefined : segment;
+  const routeAction: RibbonAction | undefined =
+    segment === "mindmap" || segment === "graph" ? segment : undefined;
+  const activeId = routeAction ? undefined : segment;
 
   const handleNewNote = useCallback(async () => {
     if (creating) return;
@@ -180,29 +182,26 @@ function VaultShellInner({
           setSwitcherOpen(true);
           break;
         case "graph":
-          setRightTab("graph");
-          setRibbonActive("graph");
-          break;
         case "mindmap":
-          // A route rather than a panel tab: the global mindmap needs the whole
+          // Routes rather than panel tabs: the vault-wide views need the whole
           // pane, and the ribbon's active state follows the URL below.
-          router.push("/vault/mindmap");
+          router.push(`/vault/${action}`);
           break;
         case "settings":
           setSettingsOpen(true);
           break;
       }
     },
-    [router, setRightTab],
+    [router],
   );
 
   return (
     <div className="flex h-svh min-h-0 flex-col overflow-hidden">
       <div className="flex min-h-0 flex-1">
         <Ribbon
-          // On the global mindmap the URL is the truth; elsewhere the last
+          // On the vault-wide views the URL is the truth; elsewhere the last
           // ribbon click is, since those actions only toggle panels.
-          active={onGlobalMindmap ? "mindmap" : ribbonActive}
+          active={routeAction ?? ribbonActive}
           onAction={handleRibbonAction}
         />
 

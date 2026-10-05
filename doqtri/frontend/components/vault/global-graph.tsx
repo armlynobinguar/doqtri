@@ -1,0 +1,43 @@
+"use client";
+
+import { useMemo } from "react";
+import { GraphPanel } from "@/components/vault/graph-panel";
+import { buildGraph } from "@/lib/wikilinks";
+import type { Doc } from "@/lib/types";
+
+/**
+ * The vault-wide link graph. The same graph the right panel shows beside a
+ * note, but with the whole pane to spread out in.
+ */
+export function GlobalGraph({ docs }: { docs: Doc[] }) {
+  const { nodes, edges } = useMemo(() => buildGraph(docs), [docs]);
+
+  const noteCount = docs.length;
+  const linkCount = edges.length;
+  const unresolvedCount = nodes.filter((node) => node.ghost).length;
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="border-border bg-background flex h-9 shrink-0 items-center justify-between gap-2 border-b px-3">
+        <h1 className="text-foreground truncate text-[13px] font-medium">
+          Graph view
+        </h1>
+
+        <div className="text-label flex shrink-0 items-center gap-3 text-[11px]">
+          <span>Click a note to open it · scroll to zoom</span>
+          <span>
+            {noteCount} {noteCount === 1 ? "note" : "notes"}
+          </span>
+          <span>
+            {linkCount} {linkCount === 1 ? "link" : "links"}
+          </span>
+          {unresolvedCount > 0 && <span>{unresolvedCount} unresolved</span>}
+        </div>
+      </header>
+
+      <div className="flex min-h-0 flex-1 flex-col">
+        <GraphPanel docs={docs} />
+      </div>
+    </div>
+  );
+}
