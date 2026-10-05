@@ -15,7 +15,7 @@ test.describe("vault shell", () => {
     await deleteNote(noteId);
   });
 
-  test("renders the three panes in the Cursor palette", async ({ page }) => {
+  test("renders the three panes in the brand palette", async ({ page }) => {
     await page.goto(`/vault/${noteId}`);
 
     // Ribbon
@@ -32,7 +32,7 @@ test.describe("vault shell", () => {
     await expect(page.getByText("Backlinks")).toBeVisible();
 
     // Status bar
-    await expect(page.getByText("Cursor Dark")).toBeVisible();
+    await expect(page.getByText("Doqtri Dark")).toBeVisible();
 
     /*
      * The palette actually applied, rather than shadcn's default neutral.
@@ -53,12 +53,12 @@ test.describe("vault shell", () => {
     const bodyBg = await page.evaluate(
       () => getComputedStyle(document.body).backgroundColor,
     );
-    expect(await toRgb(bodyBg)).toBe("#1e1e1e");
+    expect(await toRgb(bodyBg)).toBe("#0c0f14");
 
     const accentVar = await page.evaluate(() =>
       getComputedStyle(document.documentElement).getPropertyValue("--primary").trim(),
     );
-    expect(await toRgb(accentVar)).toBe("#4d9dff");
+    expect(await toRgb(accentVar)).toBe("#4a9df0");
   });
 
   test("the explorer/editor divider resizes", async ({ page }) => {

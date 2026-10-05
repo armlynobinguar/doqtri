@@ -27,8 +27,8 @@ async function findHubPill(page: Page): Promise<{ x: number; y: number } | null>
     const { data } = ctx.getImageData(0, 0, el.width, el.height);
     const hits: { x: number; y: number }[] = [];
     for (let i = 0; i < data.length; i += 4) {
-      // #2f2547 — MINDMAP_COLORS.hub.fill
-      if (data[i] === 0x2f && data[i + 1] === 0x25 && data[i + 2] === 0x47) {
+      // #211a33 — MINDMAP_COLORS.hub.fill
+      if (data[i] === 0x21 && data[i + 1] === 0x1a && data[i + 2] === 0x33) {
         const pixel = i / 4;
         hits.push({ x: pixel % el.width, y: Math.floor(pixel / el.width) });
       }

@@ -109,9 +109,9 @@ test.describe("derived views", () => {
         if (!ctx) return 0;
         const { data } = ctx.getImageData(0, 0, el.width, el.height);
         let accent = 0;
-        // #4d9dff resolved-node fill
+        // #4a9df0 resolved-node fill
         for (let i = 0; i < data.length; i += 4) {
-          if (data[i] === 0x4d && data[i + 1] === 0x9d && data[i + 2] === 0xff) accent += 1;
+          if (data[i] === 0x4a && data[i + 1] === 0x9d && data[i + 2] === 0xf0) accent += 1;
         }
         return accent;
       });

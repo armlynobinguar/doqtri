@@ -7,7 +7,10 @@ export const alt = "Doqtri — planned vs shipped, proven on-chain.";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
-const INK = "#eef1f6";
+// Brand palette mirrors (app/globals.css); ImageResponse cannot read CSS variables.
+const INK = "#e7e9ee";
+const BG = "#0c0f14";
+const MUTED = "#8b93a3";
 const GLYPHS: Record<string, string> = {
   check: '<path d="M6.2 12.4 10.2 16.3 17.8 7.9"/>',
   stellar: '<circle cx="12" cy="12" r="6.4"/><path d="M5 17.6 19 6.4"/>',
@@ -50,7 +53,7 @@ export default async function Image() {
           alignItems: "center",
           justifyContent: "space-between",
           padding: "0 90px",
-          background: "linear-gradient(180deg, #1d212c 0%, #161a23 100%)",
+          background: `radial-gradient(ellipse 60% 70% at 85% 30%, rgba(179, 139, 239, 0.10), transparent 70%), ${BG}`,
           color: INK,
           fontFamily: "Geist",
         }}
@@ -60,7 +63,7 @@ export default async function Image() {
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={dataUri(chainSvg())} width={chainWidth} height={Math.round((chainWidth * 24) / 290)} alt="" />
           <div style={{ fontSize: 150, fontWeight: 700, letterSpacing: "-0.05em", marginTop: 26, lineHeight: 1 }}>Doqtri</div>
-          <div style={{ fontSize: 34, fontWeight: 500, color: "#a7afbd", marginTop: 22 }}>Planned vs shipped, proven on-chain.</div>
+          <div style={{ fontSize: 28, fontWeight: 500, color: MUTED, marginTop: 22 }}>Living documents → executable mindmaps → on-chain proof.</div>
         </div>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={dataUri(mark)} width={330} height={297} alt="" />

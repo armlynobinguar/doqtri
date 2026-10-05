@@ -48,7 +48,7 @@ export function SettingsDialog({
           <Separator />
           <div className="flex justify-between gap-4">
             <dt className="text-muted-foreground">Theme</dt>
-            <dd>Cursor Dark</dd>
+            <dd>Doqtri Dark</dd>
           </div>
         </dl>
 
