@@ -13,6 +13,7 @@
 import { Address, rpc, scValToNative, xdr } from "@stellar/stellar-sdk";
 import { Buffer } from "buffer";
 import { CONTRACT_ID, HORIZON_URL, RPC_URL } from "@/lib/stellar/config";
+import { docLedgerKey } from "@/lib/stellar/anchored";
 import { DoqtriRegistry } from "@/lib/stellar/contract-client";
 
 export type ChainVersion = {
@@ -222,24 +223,14 @@ export type DocumentTtl = {
 const SECONDS_PER_LEDGER = 5.5;
 
 /**
- * When the document's persistent entry is due to be archived. The key mirrors
- * the contract's `DataKey::Doc(doc_id)`, which a `#[contracttype]` enum encodes
- * as `Vec[Symbol("Doc"), String(doc_id)]`. Null when the entry is not found.
+ * When the document's persistent entry is due to be archived. Null when the
+ * entry is not found.
  */
 export async function getDocumentTtl(docId: string): Promise<DocumentTtl | null> {
-  const key = xdr.LedgerKey.contractData(
-    new xdr.LedgerKeyContractData({
-      contract: new Address(CONTRACT_ID).toScAddress(),
-      key: xdr.ScVal.scvVec([
-        xdr.ScVal.scvSymbol("Doc"),
-        xdr.ScVal.scvString(docId),
-      ]),
-      durability: xdr.ContractDataDurability.persistent(),
-    }),
-  );
-
   const server = new rpc.Server(RPC_URL);
-  const { entries, latestLedger } = await server.getLedgerEntries(key);
+  const { entries, latestLedger } = await server.getLedgerEntries(
+    docLedgerKey(docId),
+  );
   const entry = entries[0];
   if (!entry?.liveUntilLedgerSeq) return null;
 
