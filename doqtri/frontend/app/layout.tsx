@@ -1,20 +1,20 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Inter, JetBrains_Mono } from "next/font/google";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
-// The editor's stylesheet must load before globals.css so the Cursor-palette
+// The editor's stylesheet must load before globals.css so the brand-palette
 // overrides in there win on equal specificity.
 import "@uiw/react-md-editor/markdown-editor.css";
 import "./globals.css";
 
 // Variable names match the tokens consumed by @theme inline in globals.css.
-const geistSans = Geist({
+const inter = Inter({
   variable: "--font-sans",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const jetbrainsMono = JetBrains_Mono({
+  variable: "--font-code",
   subsets: ["latin"],
 });
 
@@ -38,7 +38,7 @@ export default function RootLayout({
     // The app is dark-only, so `dark` is hardcoded rather than theme-switchable.
     <html
       lang="en"
-      className={`dark ${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`dark ${inter.variable} ${jetbrainsMono.variable} h-full antialiased`}
       // Consumed by @uiw/react-md-editor to pick its dark variant.
       data-color-mode="dark"
     >

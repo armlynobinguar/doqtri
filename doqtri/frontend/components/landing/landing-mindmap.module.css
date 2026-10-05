@@ -72,7 +72,7 @@
 .status {
   fill: #8d95a5;
   font-size: 9.5px;
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-family: var(--font-code), ui-monospace, monospace;
   text-anchor: middle;
   letter-spacing: 0.04em;
 }
