@@ -61,22 +61,31 @@ export function RightPanel({
         `flex-1`, and the graph measures its own height to size the canvas. In a
         block parent that measurement resolves to 0 and the graph never paints.
       */}
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {rightTab === "graph" ? (
-          <GraphPanel docs={docs} activeId={activeId} />
-        ) : (
-          <MindmapPanel
-            docId={activeId}
-            title={title}
-            markdown={markdown}
-            mindmap={mindmap}
-            stale={mindmapStale}
-          />
-        )}
-      </div>
+      {/*
+        Everything under the tabs scrolls as one column. The graph keeps a floor
+        height so a tall ship panel scrolls into view instead of crushing the
+        canvas to nothing (and clipping the controls below it).
+      */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <div className="flex min-h-64 flex-1 flex-col overflow-hidden">
+          {rightTab === "graph" ? (
+            <GraphPanel docs={docs} activeId={activeId} />
+          ) : (
+            <MindmapPanel
+              docId={activeId}
+              title={title}
+              markdown={markdown}
+              mindmap={mindmap}
+              stale={mindmapStale}
+            />
+          )}
+        </div>
 
-      <BacklinksList docs={docs} activeId={activeId} />
-      <ShipPanel docId={activeId} title={title} markdown={markdown} />
+        <BacklinksList docs={docs} activeId={activeId} />
+        <div className="shrink-0">
+          <ShipPanel docId={activeId} title={title} markdown={markdown} />
+        </div>
+      </div>
     </div>
   );
 }
