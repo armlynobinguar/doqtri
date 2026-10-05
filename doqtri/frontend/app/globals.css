@@ -8,7 +8,7 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-mono: var(--font-code);
   --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
@@ -43,6 +43,12 @@
   /* App-specific tokens (see lib/theme.ts for the canvas-side mirrors). */
   --color-label: var(--label);
   --color-ghost: var(--ghost);
+  --color-elevated: var(--elevated);
+  --color-success: var(--success);
+  --color-onchain: var(--onchain);
+  --color-info: var(--info);
+  --color-warning: var(--warning);
+  --color-connector: var(--brand-connector);
 
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
@@ -54,50 +60,73 @@
 }
 
 /*
- * Cursor dark palette, converted from the spec's HSL channels to oklch.
+ * Doqtri Dark Tech palette (see "Doqtri Dark Tech Brand System").
  * The app is dark-only, so :root and .dark carry identical values — this
  * prevents a light flash before the `dark` class on <html> is honored.
+ *
+ * Accent roles are fixed by the brand:
+ *   blue   — links, focus, resolved notes, info
+ *   green  — verified / success
+ *   purple — on-chain proof and AI-derived affordances
  */
 :root,
 .dark {
-  --background: oklch(0.235 0 0); /* #1e1e1e editor / app */
-  --foreground: oklch(0.8699 0 0); /* #d4d4d4 primary text */
-  --card: oklch(0.235 0 0);
-  --card-foreground: oklch(0.8699 0 0);
-  --popover: oklch(0.1913 0 0); /* #141414 */
-  --popover-foreground: oklch(0.8699 0 0);
-  --primary: oklch(0.6918 0.1647 254.97); /* #4d9dff accent */
-  --primary-foreground: oklch(1 0 0);
-  --secondary: oklch(0.2562 0 0); /* #232323 active row */
-  --secondary-foreground: oklch(0.8699 0 0);
-  --muted: oklch(0.209 0 0); /* #181818 sidebars */
-  --muted-foreground: oklch(0.5999 0 0); /* #808080 */
-  --accent: oklch(0.7809 0.1346 302.19); /* #c8a2ff secondary / AI actions */
-  --accent-foreground: oklch(0.235 0 0);
-  --destructive: oklch(0.6368 0.2078 25.33);
-  --border: oklch(0.285 0 0); /* #2a2a2a hairlines */
-  --input: oklch(0.285 0 0);
-  --ring: oklch(0.6918 0.1647 254.97);
+  /* Brand primitives */
+  --brand-bg: #0c0f14; /* page background */
+  --brand-surface: #11151c; /* card / surface */
+  --brand-elevated: #161b24; /* elevated surface */
+  --brand-border: #3f4552;
+  --brand-hover: #5a6273;
+  --brand-connector: #5a6273;
+  --brand-text: #e7e9ee;
+  --brand-purple: #b38bef;
+  --brand-green: #43c27a;
+  --brand-blue: #4a9df0;
 
-  --label: oklch(0.4676 0 0); /* #5a5a5a section labels */
-  --ghost: oklch(0.4676 0 0); /* unresolved-link stroke */
+  --background: var(--brand-bg);
+  --foreground: var(--brand-text);
+  --card: var(--brand-surface);
+  --card-foreground: var(--brand-text);
+  --popover: var(--brand-elevated);
+  --popover-foreground: var(--brand-text);
+  --primary: var(--brand-blue);
+  --primary-foreground: #0c0f14;
+  --secondary: #1b212c; /* active row */
+  --secondary-foreground: var(--brand-text);
+  --muted: var(--brand-surface);
+  --muted-foreground: #8b93a3;
+  --accent: var(--brand-purple);
+  --accent-foreground: #0c0f14;
+  --destructive: #ef6b6b;
+  --border: #232a35; /* hairlines */
+  --input: var(--brand-border); /* control outlines */
+  --ring: var(--brand-blue);
 
-  --chart-1: oklch(0.6918 0.1647 254.97);
-  --chart-2: oklch(0.7809 0.1346 302.19);
-  --chart-3: oklch(0.5999 0 0);
-  --chart-4: oklch(0.4676 0 0);
-  --chart-5: oklch(0.285 0 0);
+  --elevated: var(--brand-elevated);
+  --success: var(--brand-green);
+  --onchain: var(--brand-purple);
+  --info: var(--brand-blue);
+  --warning: #e8b155;
 
-  --radius: 0.375rem;
+  --label: #6b7383; /* section labels */
+  --ghost: var(--brand-connector); /* unresolved-link stroke */
 
-  --sidebar: oklch(0.209 0 0); /* #181818 */
-  --sidebar-foreground: oklch(0.683 0 0); /* 0 0% 60% */
-  --sidebar-primary: oklch(0.6918 0.1647 254.97);
-  --sidebar-primary-foreground: oklch(1 0 0);
-  --sidebar-accent: oklch(0.2562 0 0); /* #232323 */
-  --sidebar-accent-foreground: oklch(0.8699 0 0);
-  --sidebar-border: oklch(0.285 0 0);
-  --sidebar-ring: oklch(0.6918 0.1647 254.97);
+  --chart-1: var(--brand-blue);
+  --chart-2: var(--brand-purple);
+  --chart-3: var(--brand-green);
+  --chart-4: var(--brand-hover);
+  --chart-5: var(--brand-border);
+
+  --radius: 0.5rem;
+
+  --sidebar: var(--brand-surface);
+  --sidebar-foreground: #a3aab8;
+  --sidebar-primary: var(--brand-blue);
+  --sidebar-primary-foreground: #0c0f14;
+  --sidebar-accent: #1b212c;
+  --sidebar-accent-foreground: var(--brand-text);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--brand-blue);
 }
 
 @layer base {
@@ -110,9 +139,35 @@
   html {
     @apply font-sans;
   }
+  ::selection {
+    background-color: color-mix(in oklch, var(--brand-blue), transparent 65%);
+  }
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.015em;
+  }
 }
 
-/* Thin, low-contrast scrollbars — Obsidian/Cursor style. */
+/*
+ * Brand surface helpers. `.surface-glow` is the soft bright hairline the brand
+ * system uses on primary buttons and highlighted cards.
+ */
+@utility surface-glow {
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--foreground), transparent 88%),
+    0 0 18px -4px color-mix(in oklch, var(--foreground), transparent 80%);
+}
+
+@utility bg-grid {
+  background-image: radial-gradient(
+    color-mix(in oklch, var(--foreground), transparent 94%) 0.6px,
+    transparent 0.6px
+  );
+  background-size: 18px 18px;
+}
+
+/* Thin, low-contrast scrollbars. */
 @layer base {
   * {
     scrollbar-width: thin;
@@ -185,7 +240,7 @@ html[data-color-mode] .w-md-editor .w-md-editor-toolbar li > button:focus-visibl
  * set through that variable rather than fought over.
  */
 html[data-color-mode] .w-md-editor {
-  --md-editor-font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo,
+  --md-editor-font-family: var(--font-code), ui-monospace, SFMono-Regular, Menlo,
     Consolas, monospace;
 }
 
@@ -258,6 +313,22 @@ html[data-color-mode] .wmde-markdown a {
 
 html[data-color-mode] .wmde-markdown code {
   background-color: var(--secondary);
+  font-family: var(--font-code), ui-monospace, monospace;
+}
+
+html[data-color-mode] .wmde-markdown pre {
+  background-color: var(--card);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+}
+
+html[data-color-mode] .wmde-markdown pre code {
+  background-color: transparent;
+}
+
+html[data-color-mode] .wmde-markdown blockquote {
+  border-left-color: var(--brand-purple);
+  color: var(--muted-foreground);
 }
 
 /*
