@@ -6,7 +6,7 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  color: var(--brand-ink, #eef1f6);
+  color: var(--brand-ink, var(--brand-text, #e7e9ee));
 }
 
 .item {

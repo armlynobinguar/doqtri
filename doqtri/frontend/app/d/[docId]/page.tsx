@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { HashCheck } from "@/components/audit/hash-check";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
+import { StatusTag } from "@/components/ui/status-tag";
 import { DoqtriRegistry, type ChainDocument } from "@/lib/stellar/contract-client";
 import {
   CONTRACT_ID,
@@ -111,6 +112,20 @@ function formatDate(value: string | number | Date): string {
   }) + " UTC";
 }
 
+/** Brand status colors for contract node statuses. */
+function statusTone(status: string) {
+  switch (status) {
+    case "Verified":
+      return "onchain" as const;
+    case "Built":
+      return "verified" as const;
+    case "Building":
+      return "info" as const;
+    default:
+      return "planned" as const;
+  }
+}
+
 function shortHash(hash: string): string {
   return `${hash.slice(0, 8)}…${hash.slice(-8)}`;
 }
@@ -121,15 +136,13 @@ export default async function AuditPage(props: PageProps<"/d/[docId]">) {
   const network = IS_MAINNET ? "Mainnet" : "Testnet";
 
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 py-10 sm:px-6">
+    <main className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 py-10 sm:px-6 [--mark-fill:var(--brand-elevated)]">
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <Link href="/" className="inline-flex items-center gap-2 font-medium tracking-tight">
-          <DoqtriMark className="h-auto w-6" glow={false} title="" />
+        <Link href="/" className="inline-flex items-center gap-2 font-bold tracking-tight">
+          <DoqtriMark className="h-auto w-7" glow={false} title="" />
           Doqtri <span className="text-muted-foreground font-normal">audit</span>
         </Link>
-        <span className="border-border text-muted-foreground rounded-full border px-2.5 py-0.5 text-[12px]">
-          Stellar {network}
-        </span>
+        <StatusTag tone="onchain">Stellar {network}</StatusTag>
       </header>
 
       {audit.state === "anchored" ? (
@@ -177,8 +190,8 @@ function EmptyState({
   }[state];
 
   return (
-    <section className="border-border grid gap-2 rounded-lg border px-5 py-6">
-      <h1 className="text-lg font-semibold tracking-tight">{copy.title}</h1>
+    <section className="bg-card grid gap-2 rounded-xl border px-5 py-6">
+      <h1 className="text-lg font-bold tracking-tight">{copy.title}</h1>
       <p className="text-muted-foreground text-[14px]">{copy.body}</p>
       <p className="text-muted-foreground font-mono text-[12px] break-all">{docId}</p>
     </section>
@@ -210,14 +223,14 @@ function Anchored({
     <>
       <section className="grid gap-4">
         <div className="flex flex-wrap items-baseline gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight">
+          <h1 className="text-2xl font-bold tracking-tight">
             Anchored document
           </h1>
-          <span className="border-primary/40 text-primary rounded border px-2 py-0.5 font-mono text-[13px]">
+          <StatusTag tone="verified" className="font-mono">
             v{doc.version}
-          </span>
+          </StatusTag>
         </div>
-        <dl className="border-border grid gap-x-6 gap-y-3 rounded-lg border px-5 py-4 text-[13px] sm:grid-cols-[max-content_1fr]">
+        <dl className="bg-card grid gap-x-6 gap-y-3 rounded-xl border px-5 py-4 text-[13px] sm:grid-cols-[max-content_1fr]">
           <Field label="Document id">
             <span className="font-mono break-all">{docId}</span>
           </Field>
@@ -254,7 +267,7 @@ function Anchored({
       </section>
 
       <section className="grid gap-3">
-        <h2 className="text-lg font-semibold tracking-tight">Check a copy</h2>
+        <h2 className="text-lg font-bold tracking-tight">Check a copy</h2>
         <p className="text-muted-foreground text-[14px]">
           If you were sent this document, confirm it is exactly what the owner
           anchored.
@@ -263,9 +276,9 @@ function Anchored({
       </section>
 
       <section className="grid gap-3">
-        <h2 className="text-lg font-semibold tracking-tight">Version history</h2>
+        <h2 className="text-lg font-bold tracking-tight">Version history</h2>
         {history && history.versions.length > 0 ? (
-          <ol className="border-border divide-border divide-y rounded-lg border text-[13px]">
+          <ol className="bg-card divide-border divide-y rounded-xl border text-[13px]">
             {[...history.versions].reverse().map((v) => (
               <li
                 key={v.txHash}
@@ -295,10 +308,10 @@ function Anchored({
       </section>
 
       <section className="grid gap-3">
-        <h2 className="text-lg font-semibold tracking-tight">Build status</h2>
+        <h2 className="text-lg font-bold tracking-tight">Build status</h2>
         {history && history.nodes.length > 0 ? (
           <>
-            <ul className="border-border divide-border divide-y rounded-lg border text-[13px]">
+            <ul className="bg-card divide-border divide-y rounded-xl border text-[13px]">
               {history.nodes.map((node) => (
                 <li
                   key={node.nodeId}
@@ -315,8 +328,8 @@ function Anchored({
                       {node.artifactRef ? ` · ${node.artifactRef}` : ""}
                     </span>
                   </span>
-                  <span className="text-muted-foreground text-[12px]">
-                    <span className="text-foreground font-medium">{node.status}</span>{" "}
+                  <span className="text-muted-foreground inline-flex items-center gap-2 text-[12px]">
+                    <StatusTag tone={statusTone(node.status)}>{node.status}</StatusTag>
                     as of v{node.docVersion}
                   </span>
                   <a
@@ -345,7 +358,7 @@ function Anchored({
         )}
       </section>
 
-      <section className="border-border grid gap-4 rounded-lg border px-5 py-4 text-[13px] sm:grid-cols-2">
+      <section className="bg-card grid gap-4 rounded-xl border px-5 py-4 text-[13px] sm:grid-cols-2">
         <div className="grid content-start gap-1.5">
           <h2 className="font-semibold">What this proves</h2>
           <ul className="text-muted-foreground list-disc space-y-1 pl-4">
