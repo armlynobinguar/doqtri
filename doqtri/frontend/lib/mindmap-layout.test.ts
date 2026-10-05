@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   PILL_GAP,
+  createRadialForce,
   hasOverlap,
   isPinned,
   resolveOverlaps,
@@ -181,5 +182,51 @@ describe("hasOverlap", () => {
     // Stacked: the y gap alone means they are clear.
     expect(hasOverlap([pill(0, 0), pill(0, 20)], extentOf)).toBe(false);
     expect(hasOverlap([pill(0, 0), pill(10, 4)], extentOf)).toBe(true);
+  });
+});
+
+describe("createRadialForce", () => {
+  type Ringed = Positioned & { depth: number };
+
+  function settle(nodes: Ringed[], ticks: number) {
+    const force = createRadialForce<Ringed>(70);
+    force.initialize(nodes);
+    for (let t = 0; t < ticks; t++) {
+      for (const node of nodes) {
+        node.vx = node.vy = 0;
+      }
+      force(1);
+      for (const node of nodes) {
+        node.x = (node.x ?? 0) + (node.vx ?? 0);
+        node.y = (node.y ?? 0) + (node.vy ?? 0);
+      }
+    }
+  }
+
+  it("pulls the root to the centre rather than through it", () => {
+    // force-graph's own radial mode aims depth 0 at radius -70, which flings
+    // the root across the origin every tick. This one must not.
+    const root: Ringed = { x: 30, y: -40, depth: 0 };
+    settle([root], 1);
+    expect(Math.hypot(root.x ?? 0, root.y ?? 0)).toBeCloseTo(0, 6);
+  });
+
+  it("puts each depth on its own ring", () => {
+    const nodes: Ringed[] = [
+      { x: 5, y: 0, depth: 1 },
+      { x: 0, y: 300, depth: 2 },
+      { x: -10, y: -10, depth: 3 },
+    ];
+    settle(nodes, 1);
+    for (const node of nodes) {
+      expect(Math.hypot(node.x ?? 0, node.y ?? 0)).toBeCloseTo(node.depth * 70, 6);
+    }
+  });
+
+  it("stays finite for a node exactly on the origin", () => {
+    const node: Ringed = { x: 0, y: 0, depth: 1 };
+    settle([node], 1);
+    expect(Number.isFinite(node.x)).toBe(true);
+    expect(Number.isFinite(node.y)).toBe(true);
   });
 });

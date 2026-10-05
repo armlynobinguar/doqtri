@@ -52,6 +52,8 @@ export function GlobalMindmap({ docs }: { docs: Doc[] }) {
         onNodeClick={(node) => {
           if (node.href) router.push(node.href);
         }}
+        // Only notes open anything; concepts and hubs are labels.
+        isClickable={(node) => Boolean(node.href)}
         emptyMessage="Upload a document to start the global mindmap."
       />
     </div>

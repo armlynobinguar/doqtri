@@ -3,12 +3,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import type {
+  MindmapForceGraphProps,
   MindmapGraphInstance,
   MindmapGraphNode,
 } from "@/components/vault/force-graph-2d";
+import { useNodePointer } from "@/components/vault/use-node-pointer";
 import { MINDMAP_COLORS } from "@/lib/theme";
 import {
   createGravityForce,
+  createRadialForce,
   isPinned,
   resolveOverlaps,
   separateOnce,
@@ -25,7 +28,7 @@ type GraphInstance = MindmapGraphInstance;
 const ForceGraph2D = dynamic(
   () => import("@/components/vault/force-graph-2d"),
   { ssr: false },
-);
+) as unknown as React.ComponentType<MindmapForceGraphProps>;
 
 /**
  * Pill geometry per node kind, in graph units.
@@ -44,6 +47,9 @@ const PILL: Record<MapNodeKind, { font: number; padX: number; padY: number }> = 
 };
 
 const FONT_STACK = "ui-sans-serif, system-ui, sans-serif";
+
+/** Spacing between the rings of the radial layout, in graph units. */
+const RING_DISTANCE = 70;
 
 const extentCache = new Map<string, Extent>();
 let measureContext: CanvasRenderingContext2D | null | undefined;
@@ -92,14 +98,29 @@ function extentOf(node: GraphNode): Extent {
   return measureExtent(node.kind, node.label);
 }
 
+/** Whether graph point (x, y) is on the node's pill. */
+function hitsPill(node: GraphNode, x: number, y: number): boolean {
+  const { halfWidth, halfHeight } = extentOf(node);
+  return (
+    Math.abs(x - (node.x ?? 0)) <= halfWidth &&
+    Math.abs(y - (node.y ?? 0)) <= halfHeight
+  );
+}
+
 export function MindmapCanvas({
   graph,
   onNodeClick,
+  isClickable = () => onNodeClick !== undefined,
   emptyMessage = "Nothing to map yet.",
   layout = "radial",
 }: {
   graph: MindmapGraph;
   onNodeClick?: (node: MapNode) => void;
+  /**
+   * Which nodes a click does something for, so only those get the hand cursor.
+   * Defaults to every node when there is a click handler at all.
+   */
+  isClickable?: (node: MapNode) => boolean;
   emptyMessage?: string;
   /**
    * `radial` rings a single tree outward from its root. `free` is an
@@ -171,11 +192,18 @@ export function MindmapCanvas({
           return 46 + span;
         });
 
-      // Only the free layout needs it: the radial mode already holds every node
-      // at a fixed distance from the centre.
+      // Each layout gets one of these. Gravity keeps the free layout's
+      // disconnected clusters from drifting apart; the radial mode already
+      // holds every node at a fixed distance from the centre.
       instance.d3Force(
         "gravity",
         layout === "free" ? createGravityForce<GraphNode>(0.12) : null,
+      );
+      instance.d3Force(
+        "radial",
+        layout === "radial"
+          ? createRadialForce<GraphNode>(RING_DISTANCE)
+          : null,
       );
 
       instance.d3ReheatSimulation();
@@ -192,6 +220,30 @@ export function MindmapCanvas({
     const instance = graphRef.current;
     if (instance) applyForces(instance);
   }, [graphData, applyForces]);
+
+  useNodePointer<GraphNode>({
+    containerRef,
+    instanceRef: graphRef,
+    getNodes: () => nodesRef.current,
+    hitTest: hitsPill,
+    isClickable: (node) => onNodeClick !== undefined && isClickable(node as MapNode),
+    onClick: (node) => onNodeClick?.(node as MapNode),
+    /*
+     * Pins the node where it was dropped — fx/fy already hold the drop point.
+     * Handing it straight back to the simulation reads as the drag having been
+     * ignored, and under a radial layout the node is visibly yanked back onto
+     * its ring. A deliberate move should stick.
+     */
+    onDragEnd: () => {},
+    onRightClick: (node) => {
+      if (!isPinned(node)) return;
+      node.fx = undefined;
+      node.fy = undefined;
+      graphRef.current?.d3ReheatSimulation();
+    },
+    tooltip: (node) =>
+      node.summary ?? (isPinned(node) ? "Right-click to release" : undefined),
+  });
 
   const releaseAll = useCallback(() => {
     for (const node of nodesRef.current) {
@@ -210,9 +262,11 @@ export function MindmapCanvas({
     graphRef.current?.d3ReheatSimulation();
   }, []);
 
+  // One container either way: the resize observer and pointer listeners attach
+  // to it once, at mount, so it must exist even while there is nothing to map.
   if (graph.nodes.length === 0) {
     return (
-      <div className="relative min-h-0 flex-1 overflow-hidden">
+      <div ref={containerRef} className="relative min-h-0 flex-1 overflow-hidden">
         <p className="text-label absolute inset-0 flex items-center justify-center px-4 text-center text-[12px]">
           {emptyMessage}
         </p>
@@ -244,42 +298,16 @@ export function MindmapCanvas({
           height={size.height}
           graphData={graphData}
           backgroundColor={MINDMAP_COLORS.background}
-          // Rings outward from the root for a single tree. The vault-wide map
-          // passes `free`, where a radial force would fight both the several
-          // roots it has and the nodes the user has moved.
-          dagMode={layout === "radial" ? "radialout" : undefined}
-          dagLevelDistance={layout === "radial" ? 70 : undefined}
-          // A shared concept in the global view has two parents, which is still
-          // a DAG. A genuine cycle should degrade to a force layout, not throw.
-          onDagError={() => {}}
+          // No dagMode: its radial rings shake the map (see createRadialForce),
+          // so the rings come from the "radial" force set in applyForces.
           cooldownTicks={200}
           d3AlphaDecay={0.022}
           d3VelocityDecay={0.35}
           linkColor={() => MINDMAP_COLORS.link}
           linkWidth={1}
-          enableNodeDrag
-          nodeLabel={(node: GraphNode) =>
-            node.summary ?? (isPinned(node) ? "Right-click to release" : "")
-          }
-          showPointerCursor={(node) => Boolean(node)}
-          onNodeClick={(node: GraphNode) => onNodeClick?.(node as MapNode)}
-          /*
-           * Pins the node where it was dropped. force-graph's own default is to
-           * hand the node straight back to the simulation, which reads as the
-           * drag having been ignored — and under a radial layout the node is
-           * visibly yanked back onto its ring. A deliberate move should stick.
-           */
-          onNodeDragEnd={(node: GraphNode) => {
-            node.fx = node.x;
-            node.fy = node.y;
-          }}
-          onNodeRightClick={(node: GraphNode, event: MouseEvent) => {
-            event.preventDefault();
-            if (!isPinned(node)) return;
-            node.fx = undefined;
-            node.fy = undefined;
-            graphRef.current?.d3ReheatSimulation();
-          }}
+          // Hover, click and drag come from useNodePointer, by geometry.
+          enablePointerInteraction={false}
+          enableNodeDrag={false}
           // Runs after d3 has integrated the tick, so the separation it applies
           // is what the frame actually draws. The last tick before the engine
           // stops therefore leaves the map with no pills overlapping.
@@ -322,23 +350,6 @@ export function MindmapCanvas({
             ctx.textBaseline = "middle";
             ctx.fillStyle = colors.text;
             ctx.fillText(node.label, x, y);
-          }}
-          nodePointerAreaPaint={(
-            node: GraphNode,
-            color: string,
-            ctx: CanvasRenderingContext2D,
-          ) => {
-            const { halfWidth, halfHeight } = extentOf(node);
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.roundRect(
-              (node.x ?? 0) - halfWidth,
-              (node.y ?? 0) - halfHeight,
-              halfWidth * 2,
-              halfHeight * 2,
-              halfHeight,
-            );
-            ctx.fill();
           }}
         />
       )}

@@ -166,6 +166,45 @@ export function createGravityForce<T extends Positioned>(strength: number) {
 }
 
 /**
+ * A force holding each node on a ring at `depth * levelDistance` from the
+ * origin, which is what lays a single concept tree out radially.
+ *
+ * force-graph has this built in (`dagMode="radialout"`), but it looks a node's
+ * ring up as `depth || -1`, so the root — depth 0 — is aimed at radius -70.
+ * Every tick that flings the root across the origin, its links drag the rest of
+ * the tree after it, and the whole map shakes until the simulation cools. The
+ * depth already sits on every node, so this reads it directly, and the root is
+ * pulled to the centre instead.
+ *
+ * Same formula as d3's forceRadial otherwise, scaled by `alpha` so it fades out
+ * as the layout settles.
+ */
+export function createRadialForce<T extends Positioned & { depth: number }>(
+  levelDistance: number,
+) {
+  let nodes: T[] = [];
+
+  const force = (alpha: number) => {
+    for (const node of nodes) {
+      const x = node.x ?? 0;
+      const y = node.y ?? 0;
+      // A node exactly on the origin has no direction to be pushed in; a
+      // hair of distance keeps the division finite, and it only happens once.
+      const r = Math.hypot(x, y) || 1e-6;
+      const k = ((node.depth * levelDistance - r) * alpha) / r;
+      node.vx = (node.vx ?? 0) + x * k;
+      node.vy = (node.vy ?? 0) + y * k;
+    }
+  };
+
+  force.initialize = (given: T[]) => {
+    nodes = given;
+  };
+
+  return force;
+}
+
+/**
  * Whether any two pills currently overlap.
  *
  * Deliberately ignores `PILL_GAP`: this asks the visual question — are two

@@ -51,6 +51,76 @@ test.describe("derived views", () => {
       .toBeGreaterThan(2);
   });
 
+  test("the ribbon opens the full-pane graph", async ({ page }) => {
+    await page.goto(`/vault/${hubId}`);
+    await page.getByRole("button", { name: "Graph view" }).click();
+
+    await page.waitForURL("**/vault/graph");
+    await expect(page.getByRole("heading", { name: "Graph view" })).toBeVisible();
+    // The hub's [[Nonexistent Target]] guarantees at least one ghost.
+    await expect(page.getByText(/^\d+ unresolved$/)).toBeVisible();
+    await expect(page.locator("canvas").first()).toBeVisible();
+  });
+
+  test("graph nodes stay clickable when canvas readback is perturbed", async ({
+    page,
+  }) => {
+    // Brave Shields and similar anti-fingerprinting perturb canvas readback.
+    // force-graph's own hit-testing reads a single pixel to find the node under
+    // the pointer, so emulate the perturbation on exactly those reads.
+    await page.addInitScript(() => {
+      const original = CanvasRenderingContext2D.prototype.getImageData;
+      CanvasRenderingContext2D.prototype.getImageData = function (
+        this: CanvasRenderingContext2D,
+        ...args: Parameters<typeof original>
+      ) {
+        const data = original.apply(this, args);
+        if (data.width === 1 && data.height === 1) data.data[2] ^= 1;
+        return data;
+      } as typeof original;
+    });
+
+    await page.goto(`/vault/${spokeId}`);
+    const canvas = page.locator("canvas").first();
+    await expect(canvas).toBeVisible();
+    await page.waitForTimeout(4000); // let the layout settle
+
+    // A resolved note's dot, found by its fill colour (#4a9df0).
+    const dot = await canvas.evaluate((el: HTMLCanvasElement) => {
+      const ctx = el.getContext("2d")!;
+      const { data, width, height } = ctx.getImageData(0, 0, el.width, el.height);
+      const scale = el.width / el.getBoundingClientRect().width;
+      const hits: [number, number][] = [];
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const i = (y * width + x) * 4;
+          const near = (v: number, t: number) => Math.abs(v - t) < 12;
+          if (near(data[i], 0x4a) && near(data[i + 1], 0x9d) && near(data[i + 2], 0xf0)) {
+            hits.push([x, y]);
+          }
+        }
+      }
+      if (hits.length === 0) return null;
+      // Centroid of the pixels around the first match: one dot, not all of them.
+      const [fx, fy] = hits[0];
+      const mine = hits.filter(([x, y]) => Math.hypot(x - fx, y - fy) < 10 * scale);
+      const cx = mine.reduce((a, [x]) => a + x, 0) / mine.length;
+      const cy = mine.reduce((a, [, y]) => a + y, 0) / mine.length;
+      return { x: cx / scale, y: cy / scale };
+    });
+    expect(dot, "no note dot found on the graph canvas").not.toBeNull();
+
+    const box = (await canvas.boundingBox())!;
+    await page.mouse.move(box.x + dot!.x, box.y + dot!.y);
+    await expect
+      .poll(() => canvas.evaluate((el) => el.style.cursor))
+      .toBe("pointer");
+
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.waitForURL(/\/vault\/[0-9a-f-]{36}$/);
+  });
+
   test("backlinks list the notes pointing here", async ({ page }) => {
     await page.goto(`/vault/${spokeId}`);
 
