@@ -1,16 +1,12 @@
-/* Same palette as the landing page (components/landing/landing-page.module.css). */
+/* Brand palette tokens from app/globals.css, shared with the landing page. */
 .page {
-  --brand-ground: #12151c;
-  --brand-panel: #1b1f2a;
-  --brand-disc: #232733;
-  --brand-ink: #eef1f6;
-  --brand-muted: #8d95a5;
-  --brand-line: rgba(238, 241, 246, 0.1);
-  --mark-fill: var(--brand-disc);
+  --mark-fill: var(--brand-elevated);
 
   min-height: 100svh;
-  background: linear-gradient(180deg, #151923 0%, #12151c 40%, #0f1218 100%);
-  color: var(--brand-ink);
+  background:
+    radial-gradient(ellipse 55% 35% at 85% 0%, color-mix(in oklch, var(--brand-purple), transparent 93%), transparent 60%),
+    var(--brand-bg);
+  color: var(--brand-text);
 }
 
 /* ------------------------------------------------------------------ nav */
@@ -24,9 +20,9 @@
   justify-content: space-between;
   gap: 1rem;
   padding: 0.9rem clamp(1rem, 4vw, 2.5rem);
-  background: rgba(18, 21, 28, 0.8);
+  background: color-mix(in oklch, var(--brand-bg), transparent 20%);
   backdrop-filter: blur(10px);
-  border-bottom: 1px solid var(--brand-line);
+  border-bottom: 1px solid var(--border);
 }
 
 .brand {
@@ -44,13 +40,13 @@
 }
 
 .brandTag {
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-family: var(--font-code), ui-monospace, monospace;
   font-size: 0.7rem;
   font-weight: 500;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--brand-muted);
-  border: 1px solid var(--brand-line);
+  color: var(--muted-foreground);
+  border: 1px solid var(--border);
   border-radius: 999px;
   padding: 0.1rem 0.5rem;
 }
@@ -61,11 +57,11 @@
   margin-left: auto;
   margin-right: 1rem;
   font-size: 0.85rem;
-  color: var(--brand-muted);
+  color: var(--muted-foreground);
 }
 
 .navLinks a:hover {
-  color: var(--brand-ink);
+  color: var(--brand-text);
 }
 
 @media (min-width: 640px) {
@@ -74,15 +70,20 @@
   }
 }
 
+/* Brand primary: elevated surface, bright hairline, soft glow. */
 .cta {
-  background: var(--brand-ink);
-  color: var(--brand-ground);
+  background: var(--brand-elevated);
+  color: var(--brand-text);
   font-weight: 600;
-  box-shadow: 0 0 0 1px rgba(238, 241, 246, 0.4), 0 0 18px rgba(238, 241, 246, 0.12);
+  border: 1px solid color-mix(in oklch, var(--brand-text), transparent 30%);
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--brand-text), transparent 88%),
+    0 0 22px -4px color-mix(in oklch, var(--brand-text), transparent 75%);
 }
 
 .cta:hover:not(:disabled) {
-  background: #ffffff;
+  border-color: var(--brand-text);
+  background: color-mix(in oklch, var(--brand-elevated), var(--brand-text) 6%);
 }
 
 /* --------------------------------------------------------------- layout */
@@ -119,11 +120,11 @@
 }
 
 .tocTitle {
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-family: var(--font-code), ui-monospace, monospace;
   font-size: 0.7rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--brand-muted);
+  color: var(--muted-foreground);
   margin-bottom: 0.8rem;
 }
 
@@ -133,7 +134,7 @@
   margin: 0;
   display: grid;
   gap: 0.15rem;
-  border-left: 1px solid var(--brand-line);
+  border-left: 1px solid var(--border);
 }
 
 .toc a {
@@ -142,12 +143,12 @@
   margin-left: -1px;
   border-left: 1px solid transparent;
   font-size: 0.87rem;
-  color: var(--brand-muted);
+  color: var(--muted-foreground);
 }
 
 .toc a:hover {
-  color: var(--brand-ink);
-  border-left-color: var(--brand-ink);
+  color: var(--brand-text);
+  border-left-color: var(--brand-blue);
 }
 
 /* -------------------------------------------------------------- content */
@@ -158,11 +159,11 @@
 }
 
 .eyebrow {
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-family: var(--font-code), ui-monospace, monospace;
   font-size: 0.72rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--brand-muted);
+  color: var(--muted-foreground);
   margin-bottom: 0.6rem;
 }
 
@@ -177,7 +178,7 @@
 .lede {
   font-size: 1.08rem;
   line-height: 1.6;
-  color: var(--brand-muted);
+  color: var(--muted-foreground);
   margin-bottom: 1rem;
 }
 
@@ -185,7 +186,7 @@
   scroll-margin-top: 5rem;
   padding-top: 2.5rem;
   margin-top: 2.5rem;
-  border-top: 1px solid var(--brand-line);
+  border-top: 1px solid var(--border);
 }
 
 .section h2 {
@@ -197,33 +198,33 @@
 
 .section p {
   line-height: 1.7;
-  color: #c9ced8;
+  color: color-mix(in oklch, var(--brand-text), var(--muted-foreground) 35%);
   margin-bottom: 0.9rem;
 }
 
 .section a {
-  color: var(--brand-ink);
+  color: var(--brand-blue);
   text-decoration: underline;
   text-underline-offset: 3px;
-  text-decoration-color: rgba(238, 241, 246, 0.35);
+  text-decoration-color: color-mix(in oklch, var(--brand-blue), transparent 60%);
 }
 
 .section a:hover {
-  text-decoration-color: var(--brand-ink);
+  text-decoration-color: var(--brand-blue);
 }
 
 .section code {
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-family: var(--font-code), ui-monospace, monospace;
   font-size: 0.86em;
-  background: var(--brand-panel);
-  border: 1px solid var(--brand-line);
+  background: var(--brand-surface);
+  border: 1px solid var(--border);
   border-radius: 5px;
   padding: 0.08rem 0.35rem;
   overflow-wrap: anywhere;
 }
 
 .section b {
-  color: var(--brand-ink);
+  color: var(--brand-text);
   font-weight: 600;
 }
 
@@ -235,7 +236,7 @@
   padding-left: 1.2rem;
   margin: 0 0 1rem;
   line-height: 1.65;
-  color: #c9ced8;
+  color: color-mix(in oklch, var(--brand-text), var(--muted-foreground) 35%);
 }
 
 .list {
@@ -249,12 +250,12 @@
 
 .steps li::marker,
 .pipeline li::marker {
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
-  color: var(--brand-muted);
+  font-family: var(--font-code), ui-monospace, monospace;
+  color: var(--muted-foreground);
 }
 
 .steps strong {
-  color: var(--brand-ink);
+  color: var(--brand-text);
 }
 
 .blocks {
@@ -276,15 +277,15 @@
   gap: 0.4rem;
   padding: 1rem;
   border-radius: 12px;
-  background: var(--brand-panel);
-  border: 1px solid var(--brand-line);
+  background: var(--brand-surface);
+  border: 1px solid var(--border);
   font-size: 0.9rem;
   line-height: 1.5;
-  color: var(--brand-muted);
+  color: var(--muted-foreground);
 }
 
 .blocks strong {
-  color: var(--brand-ink);
+  color: var(--brand-text);
   font-size: 1rem;
 }
 
@@ -295,8 +296,9 @@
 }
 
 .code {
-  background: #0d1016;
-  border: 1px solid var(--brand-line);
+  counter-reset: line;
+  background: var(--brand-surface);
+  border: 1px solid var(--brand-border);
   border-radius: 10px;
   padding: 1rem 1.1rem;
   overflow-x: auto;
@@ -308,9 +310,24 @@
   background: none;
   border: 0;
   padding: 0;
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
-  color: #d8dde6;
+  font-family: var(--font-code), ui-monospace, monospace;
+  color: var(--brand-text);
   white-space: pre;
+}
+
+/* Dim line-number gutter, as in the brand code block. */
+.line {
+  counter-increment: line;
+}
+
+.line::before {
+  content: counter(line);
+  display: inline-block;
+  width: 1.5rem;
+  margin-right: 1rem;
+  text-align: right;
+  color: var(--brand-hover);
+  user-select: none;
 }
 
 .lifecycle {
@@ -325,26 +342,45 @@
   display: inline-block;
   padding: 0.3rem 0.75rem;
   border-radius: 999px;
-  border: 1px solid var(--brand-line);
-  background: var(--brand-panel);
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  border: 1px solid var(--brand-border);
+  background: var(--secondary);
+  color: var(--muted-foreground);
+  font-family: var(--font-code), ui-monospace, monospace;
   font-size: 0.8rem;
+}
+
+.pill[data-tone="building"] {
+  border-color: color-mix(in oklch, var(--brand-blue), transparent 40%);
+  background: color-mix(in oklch, var(--brand-blue), transparent 90%);
+  color: var(--brand-blue);
+}
+
+.pill[data-tone="verified"] {
+  border-color: color-mix(in oklch, var(--brand-green), transparent 40%);
+  background: color-mix(in oklch, var(--brand-green), transparent 90%);
+  color: var(--brand-green);
+}
+
+.pill[data-tone="onchain"] {
+  border-color: color-mix(in oklch, var(--brand-purple), transparent 40%);
+  background: color-mix(in oklch, var(--brand-purple), transparent 90%);
+  color: var(--brand-purple);
 }
 
 .arrow {
   margin: 0 0.5rem;
-  color: var(--brand-muted);
+  color: var(--muted-foreground);
 }
 
 .mono {
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-family: var(--font-code), ui-monospace, monospace;
   font-size: 0.85em;
   overflow-wrap: anywhere;
 }
 
 .tableWrap {
   overflow-x: auto;
-  border: 1px solid var(--brand-line);
+  border: 1px solid var(--border);
   border-radius: 10px;
   margin-bottom: 1rem;
 }
@@ -359,16 +395,16 @@
 .table td {
   text-align: left;
   padding: 0.65rem 0.8rem;
-  border-bottom: 1px solid var(--brand-line);
+  border-bottom: 1px solid var(--border);
   vertical-align: top;
 }
 
 .table th {
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-family: var(--font-code), ui-monospace, monospace;
   font-size: 0.72rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--brand-muted);
+  color: var(--muted-foreground);
   font-weight: 500;
 }
 
@@ -377,7 +413,7 @@
 }
 
 .table td {
-  color: #c9ced8;
+  color: color-mix(in oklch, var(--brand-text), var(--muted-foreground) 35%);
 }
 
 .table code {
@@ -401,7 +437,7 @@
 
 .faq dd {
   margin: 0;
-  color: #c9ced8;
+  color: color-mix(in oklch, var(--brand-text), var(--muted-foreground) 35%);
   line-height: 1.65;
 }
 
@@ -409,8 +445,8 @@
   margin-top: 3.5rem;
   padding: 2rem;
   border-radius: 16px;
-  background: var(--brand-panel);
-  border: 1px solid var(--brand-line);
+  background: var(--brand-surface);
+  border: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -421,7 +457,7 @@
 .footerMark {
   width: 6rem;
   height: auto;
-  filter: drop-shadow(0 0 12px rgba(238, 241, 246, 0.18));
+  filter: drop-shadow(0 0 12px color-mix(in oklch, var(--brand-text), transparent 78%));
 }
 
 .footerCta p {

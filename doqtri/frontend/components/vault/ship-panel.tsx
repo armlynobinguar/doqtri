@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CopyIcon, DownloadIcon, LinkIcon, Loader2Icon } from "lucide-react";
+import { CircleCheckIcon, CopyIcon, DownloadIcon, LinkIcon, Loader2Icon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { StatusTag } from "@/components/ui/status-tag";
 import {
   DoqtriRegistry,
   type ChainDocument,
@@ -256,7 +257,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
   return (
     <div className="border-border flex flex-col gap-2.5 border-t px-3 py-3 text-[12px]">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-muted-foreground font-medium tracking-tight">
+        <span className="text-label text-[11px] font-medium tracking-wider uppercase">
           Stellar proof
         </span>
         <VersionBadge version={chainVersion} unanchored={unanchored} />
@@ -266,7 +267,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
         <div
           role="alert"
           data-testid="funding-warning"
-          className="grid gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-2 text-[11px]"
+          className="grid gap-1.5 rounded-md border border-warning/40 bg-warning/5 px-2.5 py-2 text-[11px]"
         >
           <span>
             {fundingError ??
@@ -354,7 +355,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
       <label className="text-muted-foreground grid gap-1">
         Node
         <select
-          className="border-border bg-background h-8 rounded-md border px-2"
+          className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 rounded-md border px-2 outline-none focus-visible:ring-3"
           value={nodeId}
           onChange={(e) => setNodeId(e.target.value)}
         >
@@ -369,7 +370,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
       <label className="text-muted-foreground grid gap-1">
         Status
         <select
-          className="border-border bg-background h-8 rounded-md border px-2"
+          className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 rounded-md border px-2 outline-none focus-visible:ring-3"
           value={status}
           onChange={(e) => setStatus(e.target.value as NodeStatus)}
         >
@@ -384,7 +385,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
       <label className="text-muted-foreground grid gap-1">
         Tool
         <input
-          className="border-border bg-background h-8 rounded-md border px-2"
+          className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 rounded-md border px-2 outline-none focus-visible:ring-3"
           placeholder="n8n / Make / Retool"
           value={tool}
           onChange={(e) => setTool(e.target.value)}
@@ -394,7 +395,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
       <label className="text-muted-foreground grid gap-1">
         Artifact
         <input
-          className="border-border bg-background h-8 rounded-md border px-2"
+          className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 rounded-md border px-2 outline-none focus-visible:ring-3"
           placeholder="wf_id or URL"
           value={artifact}
           onChange={(e) => setArtifact(e.target.value)}
@@ -424,24 +425,22 @@ function VersionBadge({
   unanchored: boolean;
 }) {
   if (version == null) {
-    return (
-      <span className="text-muted-foreground font-mono text-[11px]">local</span>
-    );
+    return <StatusTag tone="planned">local</StatusTag>;
   }
   return (
-    <span className="flex items-center gap-1.5 font-mono text-[11px]">
-      <span className="border-primary/40 text-primary rounded border px-1.5 py-px">
+    <span className="flex flex-wrap items-center justify-end gap-1">
+      <StatusTag tone="onchain" className="font-mono">
         v{version}
-      </span>
+      </StatusTag>
       {unanchored ? (
-        <span
-          className="text-amber-500"
+        <StatusTag
+          tone="warning"
           title="The note has changed since this version was anchored"
         >
           unanchored changes
-        </span>
+        </StatusTag>
       ) : (
-        <span className="text-muted-foreground">anchored</span>
+        <StatusTag tone="verified">anchored</StatusTag>
       )}
     </span>
   );
@@ -456,9 +455,12 @@ function ReceiptCard({ receipt }: { receipt: Receipt }) {
         : `Node “${receipt.nodeId}” synced`;
 
   return (
-    <div className="border-border bg-background/60 grid gap-1 rounded-md border px-2 py-1.5 text-[11px]">
+    <div className="border-input bg-card grid gap-1 rounded-md border px-2 py-1.5 text-[11px]">
       <div className="flex items-center justify-between gap-2">
-        <span className="font-medium">{label}</span>
+        <span className="flex items-center gap-1.5 font-medium">
+          <CircleCheckIcon className="text-success size-3.5" strokeWidth={2} aria-hidden />
+          {label}
+        </span>
         {receipt.version != null ? (
           <span className="text-muted-foreground font-mono">v{receipt.version}</span>
         ) : null}

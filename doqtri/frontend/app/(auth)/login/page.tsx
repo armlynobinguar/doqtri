@@ -4,7 +4,7 @@ export const metadata = { title: "Connect wallet · Doqtri" };
 
 export default function LoginPage() {
   return (
-    <main className="flex h-full items-center justify-center px-6">
+    <main className="bg-grid flex min-h-svh items-center justify-center px-6">
       <LoginForm />
     </main>
   );

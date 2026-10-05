@@ -1,5 +1,7 @@
 "use client";
 
+import { CheckIcon, Loader2Icon } from "lucide-react";
+
 export type SaveState = "idle" | "saving" | "saved" | "error";
 
 const SAVE_LABEL: Record<SaveState, string> = {
@@ -32,13 +34,21 @@ export function StatusBar({
       )}
       {saveState !== "idle" && (
         <span
-          className={saveState === "error" ? "text-destructive" : undefined}
+          className={
+            saveState === "error"
+              ? "text-destructive"
+              : saveState === "saved"
+                ? "text-success flex items-center gap-1"
+                : "flex items-center gap-1"
+          }
           role="status"
         >
+          {saveState === "saved" ? <CheckIcon className="size-3" strokeWidth={2.25} aria-hidden /> : null}
+          {saveState === "saving" ? <Loader2Icon className="size-3 animate-spin" aria-hidden /> : null}
           {SAVE_LABEL[saveState]}
         </span>
       )}
-      <span className="ml-auto">Cursor Dark</span>
+      <span className="ml-auto">Doqtri Dark</span>
       {trailing}
     </footer>
   );

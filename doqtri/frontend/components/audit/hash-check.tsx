@@ -44,8 +44,8 @@ export function HashCheck({
   return (
     <div className="grid gap-3">
       <label
-        className={`border-border flex cursor-pointer flex-col items-center gap-1.5 rounded-lg border border-dashed px-4 py-6 text-center text-[13px] transition-colors ${
-          dragging ? "border-primary bg-primary/5" : "hover:bg-muted/40"
+        className={`border-input bg-card flex cursor-pointer flex-col items-center gap-1.5 rounded-lg border border-dashed px-4 py-6 text-center text-[13px] transition-colors ${
+          dragging ? "border-primary bg-primary/5" : "hover:border-[var(--brand-hover)] hover:bg-elevated"
         }`}
         onDragOver={(e) => {
           e.preventDefault();
@@ -77,7 +77,7 @@ export function HashCheck({
 
       <div className="grid gap-2">
         <textarea
-          className="border-border bg-background min-h-24 rounded-md border px-3 py-2 font-mono text-[12px]"
+          className="border-input bg-card placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 min-h-24 rounded-lg border px-3 py-2 font-mono text-[12px] outline-none focus-visible:ring-3"
           placeholder="…or paste the document text"
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -86,7 +86,7 @@ export function HashCheck({
           type="button"
           disabled={!text}
           onClick={() => void checkText()}
-          className="bg-secondary text-secondary-foreground hover:bg-secondary/80 h-8 justify-self-start rounded-md px-3 text-[12px] font-medium disabled:opacity-50"
+          className="border-input bg-card text-foreground hover:border-[var(--brand-hover)] hover:bg-elevated h-8 justify-self-start rounded-lg border px-3 text-[12px] font-medium transition-colors disabled:opacity-50"
         >
           Check pasted text
         </button>
@@ -95,19 +95,19 @@ export function HashCheck({
       {result ? (
         <div
           role="status"
-          className={`rounded-md border px-3 py-2 text-[13px] ${
+          className={`rounded-lg border px-3 py-2 text-[13px] ${
             result.match != null
-              ? "border-emerald-500/40 bg-emerald-500/10"
-              : "border-red-500/40 bg-red-500/10"
+              ? "border-success/50 bg-success/10"
+              : "border-destructive/50 bg-destructive/10"
           }`}
         >
           {result.match != null ? (
-            <p className="font-medium text-emerald-400">
+            <p className="text-success font-medium">
               Match — {result.source} is anchored version v{result.match}
               {result.match === currentVersion ? " (current)" : " (superseded)"}.
             </p>
           ) : (
-            <p className="font-medium text-red-400">
+            <p className="text-destructive font-medium">
               No match — {result.source} does not equal any anchored version.
             </p>
           )}

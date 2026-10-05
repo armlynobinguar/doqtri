@@ -29,6 +29,22 @@ const TOC: [id: string, label: string][] = [
   ["faq", "FAQ"],
 ];
 
+const NOTE_SNIPPET = `## Doc ingest
+Import the spec and the pricing notes. See [[Pricing]].
+
+## Mindmap
+
+## Ship proof
+### Audit page`;
+
+// Brand status colors: neutral → blue → green → purple.
+const LIFECYCLE: [label: string, tone: string | undefined][] = [
+  ["Planned", undefined],
+  ["Building", "building"],
+  ["Built", "verified"],
+  ["Verified", "onchain"],
+];
+
 const BLOCKS: { glyph: Glyph; title: string; body: string }[] = [
   { glyph: "check", title: "Tested", body: "Each mindmap node moves Planned → Building → Built → Verified." },
   { glyph: "hash", title: "Shipped", body: "Every semantic change is hashed (SHA-256) and bumps a version." },
@@ -131,13 +147,14 @@ export default function DocsPage() {
               <li>Edits save automatically. The mindmap and hash are recomputed from the text, so nothing goes stale.</li>
             </ul>
             <pre className={styles.code}>
-              <code>{`## Doc ingest
-Import the spec and the pricing notes. See [[Pricing]].
-
-## Mindmap
-
-## Ship proof
-### Audit page`}</code>
+              <code>
+                {NOTE_SNIPPET.split("\n").map((line, i) => (
+                  <span key={i} className={styles.line}>
+                    {line}
+                    {"\n"}
+                  </span>
+                ))}
+              </code>
             </pre>
           </section>
 
@@ -194,10 +211,12 @@ Import the spec and the pricing notes. See [[Pricing]].
           <section id="nodes" className={styles.section}>
             <h2>Node status</h2>
             <div className={styles.lifecycle} aria-label="Node lifecycle">
-              {["Planned", "Building", "Built", "Verified"].map((s, i) => (
+              {LIFECYCLE.map(([s, tone], i) => (
                 <span key={s}>
                   {i > 0 && <span className={styles.arrow} aria-hidden>→</span>}
-                  <span className={styles.pill}>{s}</span>
+                  <span className={styles.pill} data-tone={tone}>
+                    {s}
+                  </span>
                 </span>
               ))}
             </div>
