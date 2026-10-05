@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { StatusTag } from "@/components/ui/status-tag";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -53,7 +54,7 @@ export function FileExplorer({
 }) {
   return (
     <aside className="bg-sidebar flex h-full min-h-0 flex-col">
-      <header className="flex h-9 shrink-0 items-center justify-between gap-1 pr-1 pl-3">
+      <header className="border-border flex h-10 shrink-0 items-center justify-between gap-1 border-b pr-1.5 pl-3">
         <span className="text-label text-[11px] font-medium tracking-wider uppercase">
           Vault
         </span>
@@ -109,19 +110,19 @@ export function FileExplorer({
                   <li
                     key={note.id}
                     className={cn(
-                      "group flex items-center border-l-2 pr-1 text-[13px] transition-colors",
+                      "group mx-1.5 flex items-center rounded-md pr-1 text-[13px] transition-colors",
                       isActive
-                        ? "border-l-primary bg-sidebar-accent text-sidebar-accent-foreground"
-                        : "text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-foreground border-l-transparent",
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                        : "text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-foreground",
                     )}
                   >
                     <Link
                       href={`/vault/${note.id}`}
                       aria-current={isActive ? "page" : undefined}
-                      className="flex min-w-0 flex-1 items-center gap-1.5 py-[5px] pl-4"
+                      className="flex min-w-0 flex-1 items-center gap-2 py-[5px] pl-2.5"
                     >
                       <FileTextIcon
-                        className="size-3.5 shrink-0 opacity-60"
+                        className={cn("size-3.5 shrink-0", isActive ? "text-primary" : "opacity-60")}
                         strokeWidth={1.75}
                       />
                       <span className="truncate">{note.title}</span>
@@ -235,9 +236,12 @@ function NoteRowAction({
           render={<span />}
           role="img"
           aria-label={`${note.title} is anchored on Stellar and cannot be deleted`}
-          className="text-sidebar-foreground/35 flex size-6 shrink-0 items-center justify-center rounded-md"
+          className="flex shrink-0 items-center"
         >
-          <LinkIcon className="size-3.5" strokeWidth={1.75} />
+          <StatusTag tone="onchain" className="px-1.5 py-[3px] text-[10px]">
+            <LinkIcon strokeWidth={2} />
+            On-chain
+          </StatusTag>
         </TooltipTrigger>
         <TooltipContent side="right" className="max-w-[260px]">
           Anchored on Stellar. The on-chain record cannot be deleted, so this

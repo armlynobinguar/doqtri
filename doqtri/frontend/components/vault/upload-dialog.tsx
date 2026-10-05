@@ -255,7 +255,7 @@ function StageRow({ label, status }: { label: string; status: StageStatus }) {
   const icon = {
     pending: <CircleIcon className="size-3.5 opacity-40" />,
     active: <Loader2Icon className="text-primary size-3.5 animate-spin" />,
-    done: <CheckIcon className="text-primary size-3.5" />,
+    done: <CheckIcon className="text-success size-3.5" />,
     skipped: <MinusIcon className="size-3.5 opacity-60" />,
     failed: <XIcon className="text-destructive size-3.5" />,
   }[status];

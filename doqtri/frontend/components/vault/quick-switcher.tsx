@@ -38,7 +38,7 @@ export function QuickSwitcher({
         CommandInput has no store to subscribe to.
       */}
       <Command>
-        <CommandInput placeholder="Go to note…" />
+        <CommandInput placeholder="Go to note…" shortcut="⌘K" />
         <CommandList>
           <CommandEmpty className="text-muted-foreground">
             No notes found.

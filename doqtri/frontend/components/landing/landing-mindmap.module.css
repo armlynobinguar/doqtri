@@ -14,7 +14,7 @@
 
 .edge {
   fill: none;
-  stroke: rgba(238, 241, 246, 0.28);
+  stroke: var(--brand-connector);
   stroke-width: 1.5;
   stroke-dasharray: 420;
   stroke-dashoffset: 420;
@@ -33,14 +33,14 @@
 }
 
 .circle {
-  fill: #232733;
-  stroke: #eef1f6;
+  fill: var(--brand-elevated);
+  stroke: var(--brand-text);
   stroke-width: 2;
 }
 
 .glyph {
   fill: none;
-  stroke: #eef1f6;
+  stroke: var(--brand-text);
   stroke-width: 2.2;
   stroke-linecap: round;
   stroke-linejoin: round;
@@ -48,29 +48,38 @@
 
 /* Brightness tracks progress: planned nodes are dim, verified ones glow. */
 .planned .circle {
-  stroke: rgba(238, 241, 246, 0.35);
+  stroke: var(--brand-border);
   stroke-dasharray: 3 4;
 }
 .planned .glyph {
-  stroke: rgba(238, 241, 246, 0.45);
+  stroke: var(--brand-hover);
 }
-.building .circle {
-  stroke: rgba(238, 241, 246, 0.6);
+.building .circle,
+.building .glyph {
+  stroke: var(--brand-blue);
+}
+.built .circle,
+.built .glyph {
+  stroke: var(--brand-green);
 }
 .verified .circle {
+  stroke: var(--brand-purple);
   stroke-width: 3;
-  filter: drop-shadow(0 0 6px rgba(238, 241, 246, 0.45));
+  filter: drop-shadow(0 0 6px color-mix(in oklch, var(--brand-purple), transparent 50%));
+}
+.verified .glyph {
+  stroke: var(--brand-purple);
 }
 
 .label {
-  fill: #eef1f6;
+  fill: var(--brand-text);
   font-size: 12px;
   font-weight: 500;
   text-anchor: middle;
 }
 
 .status {
-  fill: #8d95a5;
+  fill: var(--muted-foreground);
   font-size: 9.5px;
   font-family: var(--font-code), ui-monospace, monospace;
   text-anchor: middle;

@@ -76,14 +76,14 @@ export function AccountMenu() {
           aria-hidden
           className={cn(
             "size-1.5 rounded-full",
-            connected ? "bg-emerald-500" : "bg-amber-500",
+            connected ? "bg-success shadow-[0_0_6px_var(--success)]" : "bg-warning",
           )}
         />
         <span className="font-mono">{shortenAddress(sessionAddress)}</span>
         <span aria-hidden>·</span>
         <span
           data-testid="xlm-balance"
-          className={cn((low || unfunded || balanceError) && "text-amber-500")}
+          className={cn((low || unfunded || balanceError) && "text-warning")}
         >
           {balanceLabel}
         </span>
@@ -113,12 +113,12 @@ export function AccountMenu() {
             {balance?.funded ? (
               <>
                 <span>{formatXlm(balance.balance)} XLM total</span>
-                <span className={cn("text-muted-foreground", low && "text-amber-500")}>
+                <span className={cn("text-muted-foreground", low && "text-warning")}>
                   {formatXlm(balance.spendable)} XLM spendable after reserve
                 </span>
               </>
             ) : (
-              <span className="text-amber-500">
+              <span className="text-warning">
                 {balanceError
                   ? "Could not reach Horizon."
                   : unfunded
@@ -157,7 +157,7 @@ export function AccountMenu() {
             </DropdownMenuItem>
           ) : mismatch ? (
             <>
-              <DropdownMenuLabel className="text-amber-500">
+              <DropdownMenuLabel className="text-warning">
                 Wallet is on {shortenAddress(walletAddress)}
               </DropdownMenuLabel>
               <DropdownMenuItem disabled={busy} onClick={() => void act("Switch", wallet.switchVault)}>
