@@ -4,10 +4,12 @@ import Link from "next/link";
 import {
   FileTextIcon,
   ChevronDownIcon,
+  LinkIcon,
   UploadIcon,
   FilePlusIcon,
   Loader2Icon,
   RotateCcwIcon,
+  Trash2Icon,
   TriangleAlertIcon,
   XIcon,
 } from "lucide-react";
@@ -33,6 +35,9 @@ export function FileExplorer({
   creating = false,
   failedImports = [],
   onRetryImport,
+  anchoredIds,
+  onDeleteNote,
+  deletingId,
 }: {
   notes: NoteSummary[];
   activeId?: string;
@@ -41,6 +46,10 @@ export function FileExplorer({
   creating?: boolean;
   failedImports?: FailedImport[];
   onRetryImport?: (target: RetryTarget) => void;
+  /** Notes with a record on the ledger. Those cannot be deleted. */
+  anchoredIds?: ReadonlySet<string>;
+  onDeleteNote?: (note: NoteSummary) => void;
+  deletingId?: string | null;
 }) {
   return (
     <aside className="bg-sidebar flex h-full min-h-0 flex-col">
@@ -95,17 +104,21 @@ export function FileExplorer({
             <ul>
               {notes.map((note) => {
                 const isActive = note.id === activeId;
+                const anchored = anchoredIds?.has(note.id) ?? false;
                 return (
-                  <li key={note.id}>
+                  <li
+                    key={note.id}
+                    className={cn(
+                      "group flex items-center border-l-2 pr-1 text-[13px] transition-colors",
+                      isActive
+                        ? "border-l-primary bg-sidebar-accent text-sidebar-accent-foreground"
+                        : "text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-foreground border-l-transparent",
+                    )}
+                  >
                     <Link
                       href={`/vault/${note.id}`}
                       aria-current={isActive ? "page" : undefined}
-                      className={cn(
-                        "group flex items-center gap-1.5 border-l-2 py-[5px] pr-2 pl-4 text-[13px] transition-colors",
-                        isActive
-                          ? "border-l-primary bg-sidebar-accent text-sidebar-accent-foreground"
-                          : "text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-foreground border-l-transparent",
-                      )}
+                      className="flex min-w-0 flex-1 items-center gap-1.5 py-[5px] pl-4"
                     >
                       <FileTextIcon
                         className="size-3.5 shrink-0 opacity-60"
@@ -113,6 +126,12 @@ export function FileExplorer({
                       />
                       <span className="truncate">{note.title}</span>
                     </Link>
+                    <NoteRowAction
+                      note={note}
+                      anchored={anchored}
+                      deleting={deletingId === note.id}
+                      onDelete={onDeleteNote}
+                    />
                   </li>
                 );
               })}
@@ -184,5 +203,67 @@ function FailedImports({
         ))}
       </ul>
     </div>
+  );
+}
+
+/**
+ * The trailing control on a note row: delete, or — for a note that is anchored
+ * — a greyed-out chain in its place.
+ *
+ * The registry contract has no delete, so an anchored note's ledger entry and
+ * its public /d/[docId] page outlive anything this app could remove. Showing a
+ * disabled marker says that, where hiding the button would read as a bug and
+ * an enabled one would promise an erasure that cannot happen.
+ */
+function NoteRowAction({
+  note,
+  anchored,
+  deleting,
+  onDelete,
+}: {
+  note: NoteSummary;
+  anchored: boolean;
+  deleting: boolean;
+  onDelete?: (note: NoteSummary) => void;
+}) {
+  if (anchored) {
+    return (
+      <Tooltip>
+        {/* A span, not a disabled button: a disabled button swallows the
+            hover that opens the tooltip explaining why it is disabled. */}
+        <TooltipTrigger
+          render={<span />}
+          role="img"
+          aria-label={`${note.title} is anchored on Stellar and cannot be deleted`}
+          className="text-sidebar-foreground/35 flex size-6 shrink-0 items-center justify-center rounded-md"
+        >
+          <LinkIcon className="size-3.5" strokeWidth={1.75} />
+        </TooltipTrigger>
+        <TooltipContent side="right" className="max-w-[260px]">
+          Anchored on Stellar. The on-chain record cannot be deleted, so this
+          note stays with it.
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  if (!onDelete) return null;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        aria-label={`Delete ${note.title}`}
+        disabled={deleting}
+        onClick={() => onDelete(note)}
+        className="text-sidebar-foreground/70 hover:text-destructive hover:bg-sidebar-accent focus-visible:ring-ring flex size-6 shrink-0 items-center justify-center rounded-md opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:outline-hidden disabled:opacity-100"
+      >
+        {deleting ? (
+          <Loader2Icon className="size-3.5 animate-spin" strokeWidth={1.75} />
+        ) : (
+          <Trash2Icon className="size-3.5" strokeWidth={1.75} />
+        )}
+      </TooltipTrigger>
+      <TooltipContent side="right">Delete note</TooltipContent>
+    </Tooltip>
   );
 }

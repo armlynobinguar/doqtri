@@ -13,6 +13,7 @@ import { FileExplorer } from "@/components/vault/file-explorer";
 import { StatusBar } from "@/components/vault/status-bar";
 import { QuickSwitcher } from "@/components/vault/quick-switcher";
 import { UploadDialog, type RetryTarget } from "@/components/vault/upload-dialog";
+import { DeleteNoteDialog } from "@/components/vault/delete-note-dialog";
 import { SettingsDialog } from "@/components/vault/settings-dialog";
 import { AccountMenu } from "@/components/vault/account-menu";
 import { WalletProvider } from "@/components/vault/wallet-provider";
@@ -22,6 +23,8 @@ import {
   useVaultStatus,
 } from "@/components/vault/vault-status";
 import { createBlankNote } from "@/lib/create-note";
+import { deleteNote, DeleteNoteError } from "@/lib/delete-note";
+import { anchoredDocIds } from "@/lib/stellar/anchored";
 import type { FailedImport, NoteSummary } from "@/lib/types";
 
 export function VaultShell({
@@ -68,6 +71,9 @@ function VaultShellInner({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ribbonActive, setRibbonActive] = useState<RibbonAction>("files");
   const [creating, setCreating] = useState(false);
+  const [anchored, setAnchored] = useState<ReadonlySet<string>>(new Set());
+  const [pendingDelete, setPendingDelete] = useState<NoteSummary | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // The shell lives in the layout, so the active note comes from the URL
   // rather than from props. `/vault/mindmap` is the global mindmap, not a note.
@@ -94,6 +100,59 @@ function VaultShellInner({
       setCreating(false);
     }
   }, [creating, router]);
+
+  // Whether a note is anchored decides whether it can be deleted at all, and
+  // only the ledger knows. One batched read covers the whole vault; the string
+  // key keeps it from re-running when the layout hands back an equal list.
+  const noteIdKey = notes.map((note) => note.id).join(",");
+  useEffect(() => {
+    const ids = noteIdKey ? noteIdKey.split(",") : [];
+    let cancelled = false;
+    void (async () => {
+      try {
+        // An empty vault resolves to an empty set without touching the RPC.
+        const found = await anchoredDocIds(ids);
+        if (!cancelled) setAnchored(found);
+      } catch {
+        // Ledger unreachable: leave the rows deletable rather than locking the
+        // vault. /api/notes/[id] re-checks and refuses with the real reason.
+        if (!cancelled) setAnchored(new Set());
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [noteIdKey]);
+
+  const handleDeleteNote = useCallback(
+    async (note: NoteSummary) => {
+      setDeletingId(note.id);
+      try {
+        const { purgedUploads } = await deleteNote(note.id);
+        toast.success(
+          purgedUploads > 0
+            ? `Deleted “${note.title}” and its archived original`
+            : `Deleted “${note.title}”`,
+        );
+        // Same ordering as handleNewNote: a refresh issued before the push is
+        // superseded by it, and the explorer lives in the layout.
+        if (activeId === note.id) router.push("/vault");
+        router.refresh();
+      } catch (error) {
+        // The ledger moved since the explorer last looked — show the chain
+        // icon on that row now, so the refusal is not a dead end.
+        if (error instanceof DeleteNoteError && error.code === "ANCHORED") {
+          setAnchored((prev) => new Set(prev).add(note.id));
+        }
+        toast.error(
+          error instanceof Error ? error.message : "Could not delete note",
+        );
+      } finally {
+        setDeletingId(null);
+      }
+    },
+    [activeId, router],
+  );
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -171,6 +230,9 @@ function VaultShellInner({
                     setRetryTarget(target);
                     setUploadOpen(true);
                   }}
+                  anchoredIds={anchored}
+                  deletingId={deletingId}
+                  onDeleteNote={setPendingDelete}
                 />
               </ResizablePanel>
               <ResizableHandle className="hover:bg-primary/40 transition-colors" />
@@ -201,6 +263,16 @@ function VaultShellInner({
         onOpenChange={(next) => {
           setUploadOpen(next);
           if (!next) setRetryTarget(null);
+        }}
+      />
+      <DeleteNoteDialog
+        open={pendingDelete !== null}
+        title={pendingDelete?.title ?? ""}
+        onOpenChange={(next) => {
+          if (!next) setPendingDelete(null);
+        }}
+        onConfirm={async () => {
+          if (pendingDelete) await handleDeleteNote(pendingDelete);
         }}
       />
       <SettingsDialog
