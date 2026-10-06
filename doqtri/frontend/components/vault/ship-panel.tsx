@@ -17,6 +17,7 @@ import { getDocumentHistory, type DocumentHistory } from "@/lib/stellar/history"
 import { NODE_STATUSES, type NodeStatus } from "@/lib/stellar/types";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useWallet } from "@/components/vault/wallet-provider";
+import { GitHubLinks } from "@/components/vault/github-links";
 import { IS_MAINNET } from "@/lib/stellar/config";
 import { buildMindmap } from "@/lib/mindmap";
 
@@ -413,6 +414,14 @@ export function ShipPanel({ docId, title, markdown }: Props) {
         {busy ? <Loader2Icon className="animate-spin" /> : null}
         Sync node status
       </Button>
+
+      <GitHubLinks
+        key={docId}
+        docId={docId}
+        nodes={flatNodes}
+        anchored={chainVersion != null}
+        onSynced={() => void refreshChain()}
+      />
     </div>
   );
 }

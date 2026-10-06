@@ -86,6 +86,36 @@ can make in a rolling 24 hours. Over the cap these routes answer `429` with a
 (`backend/migrations/20261002000000_create_ai_usage.sql`); until that migration
 is applied the AI routes answer `503` rather than run uncounted.
 
+Optional: `GITHUB_TOKEN` — a fine-grained, **read-only** token used by
+`/api/github/status` to read the issues and pull requests linked to mindmap
+nodes. Without it only public repositories work and GitHub allows 60 requests an
+hour per IP, which a serverless deployment shares, so set one in production.
+Links live in `public.node_links`
+(`backend/migrations/20261006000000_create_node_links.sql`).
+
+### GitHub-linked node status
+
+In the ship panel, link any heading to a GitHub issue or pull request
+(`owner/repo#12` or its URL). **Check** reads it and suggests where the node
+should be:
+
+| GitHub | Suggested status | `artifact_ref` written on-chain |
+| --- | --- | --- |
+| Issue open, PR open or draft, or CI failing / running | Building | The issue or PR |
+| PR open with CI passing | Built | The tested head commit |
+| PR merged (CI not failing) | Verified | The merge commit |
+| PR merged but CI failed | Built (flagged) | The merge commit |
+| Issue closed as completed | Verified | The issue |
+| PR closed unmerged, issue not planned | none | — |
+
+**Sync N ready nodes** signs every suggestion that moves a node *forward* from
+what the ledger says, with `tool = "github"`. Nothing is ever moved backwards
+automatically, and the owner still signs each change: the contract requires
+the owner's signature, so the server cannot write statuses on its own. Until a
+batch contract call exists, each node is one signature. Links remember the
+heading text they were made on; if headings are reordered, the link is flagged
+and skipped until it is relinked, because node ids are positional.
+
 ```bash
 npm run dev       # http://localhost:3000
 npm test          # 57 unit tests over lib/
