@@ -1,6 +1,6 @@
 # 002 — Email sign-up with an automatic passkey wallet
 
-**Status:** In progress — §0 spike done (testnet), §1 next
+**Status:** In progress — §0 spike, §1 email accounts, §2 schema done; §3 next
 **Opened:** 2026-10-06
 **Supersedes:** the wallet-only sign-in in `proxy.ts` ("not a separate email
 sign-in") and `components/auth/login-form.tsx`. Freighter sign-in stays; email
@@ -210,45 +210,32 @@ Findings that change later sections:
       on (security advisor flags it off), captcha → Turnstile secret.
 - [ ] Signed-in email vault checked end to end (needs the dashboard config).
 
-### 2. Wallet data model
+### 2. Wallet data model — **Done 2026-10-08, applied to production**
 
-`backend/migrations/<ts>_create_smart_wallets.sql`
+`backend/migrations/20261008000000_create_passkey_wallets.sql`. Changes from
+the first draft of this section:
 
-```sql
--- One passkey smart wallet per email user. Written by the service role only;
--- the owner may read their own row.
-create table public.smart_wallets (
-  user_id     uuid primary key references auth.users(id) on delete restrict,
-  address     text not null unique check (address ~ '^C[A-Z2-7]{55}$'),
-  created_tx  text not null,
-  created_at  timestamptz not null default now()
-);
+- **Every table carries `network`** (`testnet` | `mainnet`). Local dev runs on
+  testnet against the same Supabase project production uses on mainnet, and a
+  user's wallet has a different address per network. Keys are
+  `(user_id, network)` and `(network, tx_hash)`.
+- `smart_wallets` (owner select): `address` `C…`, `created_tx`. `on delete restrict`
+  to `auth.users`: a user that owns an on-chain wallet is not silently deleted.
+- `wallet_passkeys` (owner select): credential id, 65-byte uncompressed P-256
+  key (checked), `rp_id`, `label`; FK to the wallet on the same network.
+- `chain_writes` (**public select**, no `user_id` column): what the audit page
+  reads for `C…` owners. Everything in it is already public on the ledger.
+  FK to `documents` with `restrict`, matching the delete route's rule that
+  anchored notes stay.
+- `chain_usage` + `consume_chain_quota(user, network, kind, user_limit,
+  global_limit, window)`: per-user **and** global caps per `deploy`/`write`,
+  one transaction under an advisory lock; service role only.
 
-create table public.wallet_passkeys (
-  credential_id text primary key,            -- base64url WebAuthn credential id
-  user_id       uuid not null references public.smart_wallets(user_id),
-  public_key    bytea not null,              -- uncompressed secp256r1, 65 bytes
-  rp_id         text not null,
-  label         text,
-  created_at    timestamptz not null default now()
-);
-
--- Every relayed write, so history no longer depends on the tx source (§5).
-create table public.chain_writes (
-  tx_hash     text primary key,
-  doc_id      text not null,
-  fn          text not null check (fn in ('register_document','update_document','set_node_status')),
-  owner       text not null,
-  user_id     uuid not null references auth.users(id),
-  created_at  timestamptz not null default now()
-);
-create index chain_writes_doc_idx on public.chain_writes (doc_id, created_at);
-```
-
-RLS on all three: select-own for `smart_wallets` and `wallet_passkeys`; no
-browser access to `chain_writes` (the public audit page reads it server-side).
-`on delete restrict` is deliberate: deleting the auth user must not orphan the
-record of an on-chain wallet.
+Verified with a rolled-back dry run on production before applying: bad
+address/key rejected, passkey without wallet rejected, anchored document
+delete blocked, user cap (`scope = user`, retry 86400 s) and global cap
+(`scope = global`) refuse, other network counted separately, anon and
+authenticated cannot execute the function, RLS on all four tables.
 
 ### 3. Wallet creation
 
