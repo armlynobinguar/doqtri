@@ -63,6 +63,8 @@ export function ShipPanel({ docId, title, markdown }: Props) {
   const [fundingError, setFundingError] = useState<string | null>(null);
   const [funding, setFunding] = useState(false);
   const unfunded = wallet.balance?.funded === false;
+  // Email accounts have no wallet to sign with until passkey wallets land.
+  const noWallet = wallet.sessionAddress === null;
 
   const tree = buildMindmap(title, markdown);
   const flatNodes = flattenNodes(tree);
@@ -264,7 +266,17 @@ export function ShipPanel({ docId, title, markdown }: Props) {
         <VersionBadge version={chainVersion} unanchored={unanchored} />
       </div>
 
-      {fundingError || unfunded ? (
+      {noWallet ? (
+        <p
+          data-testid="no-wallet-notice"
+          className="text-muted-foreground rounded-md border px-2.5 py-2 text-[11px]"
+        >
+          Anchoring on Stellar needs a wallet. Email accounts will get a passkey
+          wallet soon; until then, notes stay private and unanchored.
+        </p>
+      ) : null}
+
+      {!noWallet && (fundingError || unfunded) ? (
         <div
           role="alert"
           data-testid="funding-warning"
@@ -293,7 +305,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
       <Button
         type="button"
         size="sm"
-        disabled={busy || unfunded}
+        disabled={busy || unfunded || noWallet}
         className="w-full max-lg:h-10"
         onClick={() => void anchor()}
       >
@@ -407,7 +419,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
         type="button"
         size="sm"
         variant="secondary"
-        disabled={busy || unfunded}
+        disabled={busy || unfunded || noWallet}
         className="w-full max-lg:h-10"
         onClick={() => void syncNode()}
       >

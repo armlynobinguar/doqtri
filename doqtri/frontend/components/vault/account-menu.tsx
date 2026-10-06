@@ -5,6 +5,7 @@ import {
   ArrowLeftRightIcon,
   CopyIcon,
   DropletIcon,
+  KeyRoundIcon,
   LogOutIcon,
   PlugIcon,
   RefreshCwIcon,
@@ -40,6 +41,9 @@ export function AccountMenu({ className }: { className?: string }) {
   const [busy, setBusy] = useState(false);
   const { sessionAddress, walletAddress, mismatch, balance, balanceError } = wallet;
 
+  if (wallet.identity.kind === "email") {
+    return <EmailAccountMenu className={className} email={wallet.identity.email} />;
+  }
   if (!sessionAddress) return null;
 
   const connected = walletAddress !== null && !mismatch;
@@ -178,6 +182,65 @@ export function AccountMenu({ className }: { className?: string }) {
             Disconnect
           </DropdownMenuItem>
         </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * Email accounts: no wallet, balance, or reconnect yet — just who is signed in
+ * and the way out. Passkey wallets (progress/002) will add to this menu.
+ */
+function EmailAccountMenu({ email, className }: { email: string; className?: string }) {
+  const wallet = useWallet();
+  const [busy, setBusy] = useState(false);
+
+  async function signOut() {
+    setBusy(true);
+    try {
+      await wallet.signOut();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Sign out failed");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        aria-label="Account"
+        data-testid="account-menu"
+        className={cn(
+          "hover:text-foreground focus-visible:ring-ring -mr-1.5 flex h-5 max-w-56 items-center gap-1.5 rounded px-1.5 focus-visible:ring-1 focus-visible:outline-hidden",
+          className,
+        )}
+      >
+        <span aria-hidden className="bg-success size-1.5 shrink-0 rounded-full shadow-[0_0_6px_var(--success)]" />
+        <span className="truncate">{email}</span>
+      </DropdownMenuTrigger>
+
+      <DropdownMenuContent side="top" align="end" className="w-64 text-[13px]">
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Signed in with email</DropdownMenuLabel>
+          <div className="truncate px-1.5 pb-1 text-[12px]" title={email}>
+            {email}
+          </div>
+        </DropdownMenuGroup>
+
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Wallet · {IS_MAINNET ? "Mainnet" : "Testnet"}</DropdownMenuLabel>
+          <div className="text-muted-foreground flex gap-2 px-1.5 pb-1 text-[12px]">
+            <KeyRoundIcon className="mt-0.5 size-3.5 shrink-0" />
+            <span>No wallet yet. Passkey wallets for anchoring notes on Stellar are on the way.</span>
+          </div>
+        </DropdownMenuGroup>
+
+        <DropdownMenuSeparator />
+
+        <DropdownMenuItem variant="destructive" disabled={busy} onClick={() => void signOut()}>
+          <LogOutIcon />
+          Sign out
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

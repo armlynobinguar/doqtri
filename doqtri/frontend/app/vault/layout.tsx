@@ -2,7 +2,8 @@ import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { VaultShell } from "@/components/vault/vault-shell";
 import { loadFailedImports } from "@/lib/ingest/failed";
-import type { NoteSummary } from "@/lib/types";
+import { walletAddressFromEmail } from "@/lib/wallet-address";
+import type { NoteSummary, VaultIdentity } from "@/lib/types";
 
 export default async function VaultLayout({
   children,
@@ -30,13 +31,14 @@ export default async function VaultLayout({
   const notes: NoteSummary[] = data ?? [];
 
   const failedImports = await loadFailedImports(supabase);
-  const wallet =
-    typeof user.user_metadata?.wallet_address === "string"
-      ? user.user_metadata.wallet_address
-      : user.email ?? "";
+  // From the verified email, not user_metadata: the user can rewrite metadata.
+  const address = walletAddressFromEmail(user.email);
+  const identity: VaultIdentity = address
+    ? { kind: "wallet", address }
+    : { kind: "email", email: user.email ?? "" };
 
   return (
-    <VaultShell notes={notes} failedImports={failedImports} email={wallet}>
+    <VaultShell notes={notes} failedImports={failedImports} identity={identity}>
       {children}
     </VaultShell>
   );

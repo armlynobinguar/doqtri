@@ -1,8 +1,9 @@
 import { createHmac } from "crypto";
+import { WALLET_EMAIL_DOMAIN } from "@/lib/wallet-address";
 
 /** Deterministic Supabase email for a Stellar public key. */
 export function walletEmail(address: string): string {
-  return `${address.toLowerCase()}@stellar.doqtri.local`;
+  return `${address.toLowerCase()}@${WALLET_EMAIL_DOMAIN}`;
 }
 
 /** Server-only password derived from the service role secret + address. */

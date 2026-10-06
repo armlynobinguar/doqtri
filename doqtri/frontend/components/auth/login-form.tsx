@@ -1,23 +1,31 @@
 "use client";
 
 import { ConnectWalletButton } from "@/components/auth/connect-wallet-button";
-import { DoqtriMark } from "@/components/brand/doqtri-mark";
+import { AuthCard } from "@/components/auth/auth-card";
+import { EmailAuthForm } from "@/components/auth/email-auth-form";
 
-/** Kept as /login fallback — same Connect wallet flow as the landing. */
-export function LoginForm() {
+/** /login: a Stellar wallet or email + password, side by side. */
+export function LoginForm({ notice }: { notice?: string }) {
   return (
-    <div className="bg-card flex w-full max-w-[360px] flex-col gap-3 rounded-xl border p-7 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.8)]">
-      <DoqtriMark className="mb-2 h-auto w-14 text-foreground [--mark-fill:var(--brand-elevated)]" />
-      <div className="mb-3 flex flex-col gap-1.5">
-        <h1 className="text-lg font-bold tracking-tight">Open your vault</h1>
-        <p className="text-muted-foreground text-[13px] leading-relaxed">
-          Connect a Stellar wallet to unlock your notes, graph, and mindmap.
+    <AuthCard
+      title="Open your vault"
+      description="Connect a Stellar wallet, or sign in with email, to unlock your notes, graph, and mindmap."
+    >
+      {notice ? (
+        <p role="alert" className="border-warning/40 bg-warning/5 rounded-md border px-2.5 py-2 text-[12px]">
+          {notice}
         </p>
-      </div>
-      <ConnectWalletButton size="lg" className="mt-1 w-full" />
-      <p className="text-muted-foreground mt-1 text-center text-[12px]">
+      ) : null}
+      <ConnectWalletButton size="lg" className="w-full" />
+      <p className="text-muted-foreground text-center text-[12px]">
         Freighter and other Stellar wallets supported
       </p>
-    </div>
+      <div className="text-muted-foreground my-1 flex items-center gap-3 text-[11px] tracking-wider uppercase">
+        <span className="bg-border h-px flex-1" />
+        or
+        <span className="bg-border h-px flex-1" />
+      </div>
+      <EmailAuthForm mode="sign-in" />
+    </AuthCard>
   );
 }

@@ -20,7 +20,6 @@ import { MobileTabBar, MobileTopBar } from "@/components/vault/mobile-chrome";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useIsCompactVault } from "@/hooks/use-mobile";
 import { WalletProvider } from "@/components/vault/wallet-provider";
-import { isStellarPublicKey } from "@/lib/wallet-address";
 import {
   VaultStatusProvider,
   useVaultStatus,
@@ -28,7 +27,7 @@ import {
 import { createBlankNote } from "@/lib/create-note";
 import { deleteNote, DeleteNoteError } from "@/lib/delete-note";
 import { anchoredDocIds } from "@/lib/stellar/anchored";
-import type { FailedImport, NoteSummary } from "@/lib/types";
+import type { FailedImport, NoteSummary, VaultIdentity } from "@/lib/types";
 import {
   NavigationOverlay,
   NavigationProvider,
@@ -38,19 +37,19 @@ import {
 export function VaultShell({
   notes,
   failedImports,
-  email,
+  identity,
   children,
 }: {
   notes: NoteSummary[];
   failedImports: FailedImport[];
-  email: string;
+  identity: VaultIdentity;
   children: React.ReactNode;
 }) {
   return (
-    <WalletProvider sessionAddress={isStellarPublicKey(email) ? email : null}>
+    <WalletProvider identity={identity}>
       <VaultStatusProvider>
         <NavigationProvider>
-          <VaultShellInner notes={notes} failedImports={failedImports} email={email}>
+          <VaultShellInner notes={notes} failedImports={failedImports} identity={identity}>
             {children}
           </VaultShellInner>
         </NavigationProvider>
@@ -62,12 +61,12 @@ export function VaultShell({
 function VaultShellInner({
   notes,
   failedImports,
-  email,
+  identity,
   children,
 }: {
   notes: NoteSummary[];
   failedImports: FailedImport[];
-  email: string;
+  identity: VaultIdentity;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -350,7 +349,7 @@ function VaultShellInner({
         }}
       />
       <SettingsDialog
-        email={email}
+        identity={identity}
         noteCount={notes.length}
         open={settingsOpen}
         onOpenChange={setSettingsOpen}

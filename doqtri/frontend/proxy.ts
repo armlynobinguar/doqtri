@@ -9,6 +9,9 @@ import { createServerClient } from "@supabase/ssr";
  * redirect. This is an optimistic check only — the real authorization is RLS
  * plus the per-route session lookups.
  */
+/** Signed-out pages; signed-in users are sent on to the vault instead. */
+const PUBLIC_ROUTES = new Set(["/", "/login", "/signup", "/forgot-password"]);
+
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
 
@@ -38,21 +41,24 @@ export async function proxy(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const { pathname } = request.nextUrl;
-  const isPublicRoute = pathname === "/" || pathname === "/login";
+  const isPublicRoute = PUBLIC_ROUTES.has(pathname);
   // Public audit pages and the docs must open for anyone, signed in or not.
   const isAuditRoute = pathname.startsWith("/d/");
   const isDocsRoute = pathname === "/docs" || pathname.startsWith("/docs/");
-  if (isAuditRoute || isDocsRoute) return response;
+  // Emailed links land on /auth/confirm signed out and leave signed in.
+  const isAuthCallback = pathname.startsWith("/auth/");
+  if (isAuditRoute || isDocsRoute || isAuthCallback) return response;
 
-  // Unauthenticated users may view the landing (and /login). Everything else
-  // goes to the landing with Connect wallet — not a separate email sign-in.
+  // Unauthenticated users may view the landing and the sign-in screens.
+  // Everything else (including /reset-password, which the emailed link reaches
+  // already signed in) goes to the landing.
   if (!user && !isPublicRoute) {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     return NextResponse.redirect(url);
   }
 
-  // Signed-in users skip marketing/login and land in the vault.
+  // Signed-in users skip marketing and sign-in screens and land in the vault.
   if (user && isPublicRoute) {
     const url = request.nextUrl.clone();
     url.pathname = "/vault";

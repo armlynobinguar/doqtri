@@ -21,6 +21,15 @@ export type FailedImport = {
   error_code: string | null;
 };
 
+/**
+ * Who owns the vault. Wallet accounts sign in with a Stellar wallet; email
+ * accounts sign in with a password and have no wallet until passkey wallets
+ * land (progress/002).
+ */
+export type VaultIdentity =
+  | { kind: "wallet"; address: string }
+  | { kind: "email"; email: string };
+
 /** What the explorer, tabs, and quick switcher need to list a note. */
 export type NoteSummary = {
   id: string;
