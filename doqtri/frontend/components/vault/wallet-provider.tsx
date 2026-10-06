@@ -25,6 +25,7 @@ import {
   shortenAddress,
 } from "@/lib/wallet";
 import { exchangeWalletSession } from "@/lib/wallet-session";
+import type { VaultIdentity } from "@/lib/types";
 
 const BALANCE_POLL_MS = 30_000;
 
@@ -42,6 +43,7 @@ const BALANCE_POLL_MS = 30_000;
  * mismatch the user resolves on purpose.
  */
 type WalletContextValue = {
+  identity: VaultIdentity;
   sessionAddress: string | null;
   walletAddress: string | null;
   mismatch: boolean;
@@ -54,18 +56,21 @@ type WalletContextValue = {
   /** Re-issues the session for the wallet's current account. */
   switchVault: () => Promise<void>;
   disconnect: () => Promise<void>;
+  /** Ends the session without touching any wallet (email accounts). */
+  signOut: () => Promise<void>;
   fund: () => Promise<void>;
 };
 
 const WalletContext = createContext<WalletContextValue | null>(null);
 
 export function WalletProvider({
-  sessionAddress,
+  identity,
   children,
 }: {
-  sessionAddress: string | null;
+  identity: VaultIdentity;
   children: React.ReactNode;
 }) {
+  const sessionAddress = identity.kind === "wallet" ? identity.address : null;
   const router = useRouter();
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [balance, setBalance] = useState<AccountBalance | null>(null);
@@ -73,6 +78,8 @@ export function WalletProvider({
   const switching = useRef(false);
 
   useEffect(() => {
+    // Email accounts have no browser wallet to track; skip loading the kit.
+    if (!sessionAddress) return;
     let cancelled = false;
     let unsubscribe: (() => void) | undefined;
     void getWalletAddress().then((address) => {
@@ -88,7 +95,7 @@ export function WalletProvider({
       cancelled = true;
       unsubscribe?.();
     };
-  }, []);
+  }, [sessionAddress]);
 
   const refreshBalance = useCallback(async () => {
     if (!sessionAddress) return;
@@ -115,6 +122,12 @@ export function WalletProvider({
   }, [refreshBalance]);
 
   const ensureWallet = useCallback(async () => {
+    if (!sessionAddress) {
+      throw new DoqtriError(
+        "NO_WALLET",
+        "Email accounts can't sign Stellar transactions yet. Passkey wallets are on the way.",
+      );
+    }
     let address = walletAddress ?? (await getWalletAddress());
     if (!address) address = await connectWallet();
     setWalletAddress(address);
@@ -145,18 +158,22 @@ export function WalletProvider({
     }
   }, [walletAddress, router]);
 
+  const signOut = useCallback(async () => {
+    // This browser only: signing out here should not end the same account's
+    // sessions in other browsers (the default scope is global).
+    await createSupabaseBrowserClient().auth.signOut({ scope: "local" });
+    router.push("/");
+    router.refresh();
+  }, [router]);
+
   const disconnect = useCallback(async () => {
     try {
       await disconnectWallet();
     } catch {
       // wallet may already be disconnected
     }
-    // This browser only: disconnecting here should not end the same wallet's
-    // sessions in other browsers (the default scope is global).
-    await createSupabaseBrowserClient().auth.signOut({ scope: "local" });
-    router.push("/");
-    router.refresh();
-  }, [router]);
+    await signOut();
+  }, [signOut]);
 
   const fund = useCallback(async () => {
     if (!sessionAddress) return;
@@ -166,6 +183,7 @@ export function WalletProvider({
 
   const value = useMemo(
     () => ({
+      identity,
       sessionAddress,
       walletAddress,
       mismatch: Boolean(sessionAddress && walletAddress && walletAddress !== sessionAddress),
@@ -176,9 +194,11 @@ export function WalletProvider({
       reconnect,
       switchVault,
       disconnect,
+      signOut,
       fund,
     }),
     [
+      identity,
       sessionAddress,
       walletAddress,
       balance,
@@ -188,6 +208,7 @@ export function WalletProvider({
       reconnect,
       switchVault,
       disconnect,
+      signOut,
       fund,
     ],
   );

@@ -308,7 +308,9 @@ export function GitHubLinks({
           type="button"
           size="sm"
           className="w-full max-lg:h-10"
-          disabled={!anchored || busy != null || wallet.balance?.funded === false}
+          disabled={
+            !anchored || busy != null || wallet.sessionAddress === null || wallet.balance?.funded === false
+          }
           onClick={() => void syncReady()}
         >
           {busy === "sync" ? <Loader2Icon className="animate-spin" /> : null}

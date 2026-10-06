@@ -69,6 +69,9 @@ export function LandingPage() {
             </p>
             <div className={styles.actions}>
               <ConnectWalletButton size="lg" label="Open your vault" className={styles.cta} />
+              <Link className={styles.secondary} href="/signup">
+                Sign up with email
+              </Link>
               <Link className={styles.secondary} href="/docs">
                 Read the docs
               </Link>
@@ -123,7 +126,10 @@ export function LandingPage() {
               <BlockGlyph glyph="check" className={styles.stepIcon} />
               <div>
                 <strong>Connect a Stellar wallet</strong>
-                <p>Your Stellar testnet identity opens your private vault. Freighter and other Stellar wallets work.</p>
+                <p>
+                  Your Stellar testnet identity opens your private vault. Freighter and other Stellar wallets work —
+                  or <Link href="/signup">sign up with email</Link> to start writing without one.
+                </p>
               </div>
             </li>
             <li>
