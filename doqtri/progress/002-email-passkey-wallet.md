@@ -1,6 +1,6 @@
 # 002 — Email sign-up with an automatic passkey wallet
 
-**Status:** In progress — §0–§4 done (create + anchor verified on testnet); §5 (audit history) next, required before merging
+**Status:** In progress — §0–§5 done and verified on testnet; ready to merge. §7 (backup passkeys) next
 **Opened:** 2026-10-06
 **Supersedes:** the wallet-only sign-in in `proxy.ts` ("not a separate email
 sign-in") and `components/auth/login-form.tsx`. Freighter sign-in stays; email
@@ -312,17 +312,30 @@ authenticated cannot execute the function, RLS on all four tables.
   the production project. `on delete restrict` means removing them needs the
   wallet rows (testnet) deleted first.
 
-### 5. History for contract-account owners
+### 5. History for contract-account owners — **Done 2026-10-08 (testnet verified)**
 
-- [ ] `lib/stellar/history.ts`: if `owner` starts with `C`, read the tx hashes
-      for `doc_id` from `chain_writes` (server, admin client), fetch each from
-      Horizon `/transactions/{hash}/operations`, and feed the existing
-      `buildHistory` decoder. `G…` owners keep the account-feed path.
-- [ ] The audit page states the trust change honestly: for these documents the
-      list of writes comes from Doqtri's index, while each entry's content is
-      verified against the ledger. A missing row hides a version; it cannot forge one.
-- [ ] Optional hardening later: an independent indexer of the contract's
-      `doqtri/*` events (RPC drops events after ~7 days, so it must run continuously).
+- [x] `lib/stellar/history.ts`: `C…` owners read their transaction hashes from
+      `chain_writes` (public, anon key, so the same code runs on the audit
+      page and in the vault), fetch each transaction's operations from Horizon
+      in batches of 10 (at most 200 writes), restore ledger order by paging
+      token (`inLedgerOrder`), and decode with the existing `buildHistory`.
+      `G…` owners keep the owner-feed path unchanged.
+- [x] The index only says where to look: the decoder keeps only successful
+      calls to this registry for this document, so a bogus row cannot add a
+      version (unit-tested).
+- [x] Completeness: if the contract's version is higher than the versions
+      found (a write made outside Doqtri, or one the index missed),
+      `history.incomplete` is set; the audit page warns, stops numbering the
+      listed versions, and the hash checker labels only the contract's current
+      version.
+- [x] Audit page: passkey-wallet owners are labelled as such, with a
+      stellar.expert contract link.
+- [x] Verified on testnet against three owners: passkey wallet fully indexed
+      (v1/v2 with the right tx links, no warning); passkey wallet never indexed
+      (warning, no misleading "Horizon unavailable"); Freighter owner (v1/v2
+      from the owner feed, unchanged).
+- Deferred: an independent event indexer, so the list does not depend on
+  Doqtri's index at all.
 
 ### 6. Vault UI
 

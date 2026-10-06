@@ -7,14 +7,21 @@
  * its contract, function name and arguments forever. So history is rebuilt by
  * reading the owner's operations and decoding the arguments.
  *
- * Every write in this app is submitted with the owner as the transaction
- * source, so the owner's operation feed contains all of them.
+ * Freighter-style owners (`G…`) submit their own writes, so the owner's
+ * operation feed contains all of them. Passkey smart wallets (`C…`) cannot be a
+ * transaction source: the relay submits their writes from shared Channels
+ * accounts, and Horizon has no feed for a contract address. For those, the
+ * relay's index (`chain_writes`) lists which transactions to read, and each one
+ * is still read from Horizon and decoded here — the index only says where to
+ * look, so a bogus row cannot add a version that is not on the ledger.
  */
-import { Address, rpc, scValToNative, xdr } from "@stellar/stellar-sdk";
+import { createClient } from "@supabase/supabase-js";
+import { Address, rpc, scValToNative, StrKey, xdr } from "@stellar/stellar-sdk";
 import { Buffer } from "buffer";
 import { CONTRACT_ID, HORIZON_URL, RPC_URL } from "@/lib/stellar/config";
 import { docLedgerKey } from "@/lib/stellar/anchored";
 import { DoqtriRegistry } from "@/lib/stellar/contract-client";
+import { NETWORK } from "@/lib/stellar/smart-wallet-config";
 
 export type ChainVersion = {
   version: number;
@@ -40,11 +47,20 @@ export type DocumentHistory = {
   nodeEvents: ChainNodeEvent[];
   /** Latest event per node id, in first-seen order. */
   nodes: ChainNodeEvent[];
+  /**
+   * Set when the contract reports more versions than were found — possible
+   * only for passkey-wallet owners, whose history comes from Doqtri's index
+   * (a write made outside Doqtri, or one the index missed). Version numbers
+   * are then not trustworthy and should not be shown as such.
+   */
+  incomplete?: true;
 };
 
 /** The subset of a Horizon operation record this module reads. */
 export type HorizonOperation = {
   type: string;
+  /** Total order across the ledger: ledger, transaction, operation. */
+  paging_token?: string;
   transaction_successful?: boolean;
   transaction_hash: string;
   created_at: string;
@@ -199,6 +215,66 @@ async function fetchOwnerOperations(owner: string): Promise<HorizonOperation[]> 
   return ops;
 }
 
+/** Operations from separate transactions, oldest first (paging tokens are ledger order). */
+export function inLedgerOrder(ops: HorizonOperation[]): HorizonOperation[] {
+  const key = (op: HorizonOperation) => {
+    try {
+      return BigInt(op.paging_token ?? "0");
+    } catch {
+      return BigInt(0);
+    }
+  };
+  return [...ops].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+}
+
+/** Marks a history that found fewer versions than the contract has. */
+export function withCompleteness(history: DocumentHistory, contractVersion: number): DocumentHistory {
+  return history.versions.length === contractVersion ? history : { ...history, incomplete: true };
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Bounds the Horizon calls for one page view. */
+const MAX_INDEXED_WRITES = 200;
+const HORIZON_BATCH = 10;
+
+/** Relayed writes for a passkey-wallet document: index lookup, then Horizon. */
+async function fetchIndexedOperations(docId: string): Promise<HorizonOperation[]> {
+  if (!UUID.test(docId)) return [];
+  // chain_writes is publicly readable (it mirrors ledger data), so the anon
+  // key works the same on the public audit page and in the vault.
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { auth: { persistSession: false, autoRefreshToken: false } },
+  );
+  const { data, error } = await supabase
+    .from("chain_writes")
+    .select("tx_hash")
+    .eq("network", NETWORK)
+    .eq("document_id", docId)
+    .order("created_at", { ascending: true })
+    .limit(MAX_INDEXED_WRITES);
+  if (error) throw new Error(`Write index unavailable: ${error.message}`);
+
+  const hashes = (data ?? []).map((row) => row.tx_hash as string);
+  const ops: HorizonOperation[] = [];
+  for (let i = 0; i < hashes.length; i += HORIZON_BATCH) {
+    const batch = await Promise.all(
+      hashes.slice(i, i + HORIZON_BATCH).map(async (hash) => {
+        const res = await fetch(`${HORIZON_URL}/transactions/${hash}/operations?limit=10`);
+        // Not on this network's Horizon: not a write we can show.
+        if (res.status === 404) return [];
+        if (!res.ok) throw new Error(`Horizon error (${res.status})`);
+        const body = (await res.json()) as { _embedded?: { records?: HorizonOperation[] } };
+        return body._embedded?.records ?? [];
+      }),
+    );
+    ops.push(...batch.flat());
+  }
+  return inLedgerOrder(ops);
+}
+
 /**
  * Full history for `docId`, or null when it is not anchored. Throws on
  * transport errors, so callers can tell "not anchored" from "ledger down".
@@ -208,6 +284,10 @@ export async function getDocumentHistory(
 ): Promise<DocumentHistory | null> {
   const doc = await DoqtriRegistry.readDocument(docId);
   if (!doc?.owner) return null;
+  if (StrKey.isValidContract(doc.owner)) {
+    const ops = await fetchIndexedOperations(docId);
+    return withCompleteness(buildHistory(ops, docId, CONTRACT_ID, doc.owner), doc.version);
+  }
   const ops = await fetchOwnerOperations(doc.owner);
   return buildHistory(ops, docId, CONTRACT_ID, doc.owner);
 }
