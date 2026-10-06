@@ -280,7 +280,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
               size="sm"
               variant="outline"
               disabled={funding}
-              className="h-6 justify-self-start px-2 text-[11px]"
+              className="h-6 justify-self-start px-2 text-[11px] max-lg:h-9 max-lg:text-[12px]"
               onClick={() => void fundAccount()}
             >
               {funding ? <Loader2Icon className="animate-spin" /> : null}
@@ -294,7 +294,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
         type="button"
         size="sm"
         disabled={busy || unfunded}
-        className="w-full"
+        className="w-full max-lg:h-10"
         onClick={() => void anchor()}
       >
         {busy ? <Loader2Icon className="animate-spin" /> : null}
@@ -309,7 +309,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
             type="button"
             size="sm"
             variant="outline"
-            className="h-7 flex-1 px-2 text-[11px]"
+            className="h-7 flex-1 px-2 text-[11px] max-lg:h-10 max-lg:text-[13px]"
             onClick={() =>
               void copy(`${window.location.origin}/d/${docId}`, "Audit link")
             }
@@ -321,7 +321,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
             type="button"
             size="sm"
             variant="outline"
-            className="h-7 flex-1 px-2 text-[11px]"
+            className="h-7 flex-1 px-2 text-[11px] max-lg:h-10 max-lg:text-[13px]"
             disabled={unanchored || localHash == null}
             title={
               unanchored
@@ -356,7 +356,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
       <label className="text-muted-foreground grid gap-1">
         Node
         <select
-          className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 rounded-md border px-2 outline-none focus-visible:ring-3"
+          className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-md border px-2 outline-none focus-visible:ring-3"
           value={nodeId}
           onChange={(e) => setNodeId(e.target.value)}
         >
@@ -371,7 +371,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
       <label className="text-muted-foreground grid gap-1">
         Status
         <select
-          className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 rounded-md border px-2 outline-none focus-visible:ring-3"
+          className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-md border px-2 outline-none focus-visible:ring-3"
           value={status}
           onChange={(e) => setStatus(e.target.value as NodeStatus)}
         >
@@ -386,7 +386,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
       <label className="text-muted-foreground grid gap-1">
         Tool
         <input
-          className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 rounded-md border px-2 outline-none focus-visible:ring-3"
+          className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-md border px-2 outline-none focus-visible:ring-3"
           placeholder="n8n / Make / Retool"
           value={tool}
           onChange={(e) => setTool(e.target.value)}
@@ -396,7 +396,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
       <label className="text-muted-foreground grid gap-1">
         Artifact
         <input
-          className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 rounded-md border px-2 outline-none focus-visible:ring-3"
+          className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-md border px-2 outline-none focus-visible:ring-3"
           placeholder="wf_id or URL"
           value={artifact}
           onChange={(e) => setArtifact(e.target.value)}
@@ -408,7 +408,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
         size="sm"
         variant="secondary"
         disabled={busy || unfunded}
-        className="w-full"
+        className="w-full max-lg:h-10"
         onClick={() => void syncNode()}
       >
         {busy ? <Loader2Icon className="animate-spin" /> : null}

@@ -93,9 +93,14 @@ test.describe("vault shell", () => {
     await page.goto("/vault");
     await expect(page.getByText("No note open")).toBeVisible();
 
-    await page.keyboard.press("ControlOrMeta+k");
+    // The shortcut listener attaches on hydration, after the server HTML is
+    // already showing, so a press that lands first is dropped. Retry until one
+    // is heard.
     const input = page.getByPlaceholder("Go to note…");
-    await expect(input).toBeVisible();
+    await expect(async () => {
+      await page.keyboard.press("ControlOrMeta+k");
+      await expect(input).toBeVisible({ timeout: 2_000 });
+    }).toPass();
 
     await input.fill(title);
     await page.getByRole("option", { name: title }).first().click();

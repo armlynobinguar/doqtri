@@ -23,14 +23,15 @@ export function GlobalMindmap({ docs }: { docs: Doc[] }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="border-border bg-background flex h-9 shrink-0 items-center justify-between gap-2 border-b px-3">
-        <h1 className="text-foreground truncate text-[13px] font-medium">
+      <header className="border-border bg-background flex h-9 shrink-0 items-center justify-between gap-2 border-b px-3 max-lg:justify-center">
+        {/* The mobile top bar already names the view. */}
+        <h1 className="text-foreground truncate text-[13px] font-medium max-lg:sr-only">
           Global mindmap
         </h1>
 
         <div className="text-label flex shrink-0 items-center gap-3 text-[11px]">
-          <span>Drag to arrange · right-click to release</span>
-          <span>
+          <span className="max-lg:hidden">Drag to arrange · right-click to release</span>
+          <span className="max-[380px]:hidden">
             {documentCount} {documentCount === 1 ? "note" : "notes"}
           </span>
           <span>

@@ -350,3 +350,72 @@ html[data-color-mode] .wmde-markdown blockquote {
 .wikilink-ghost:hover {
   text-decoration: underline dotted;
 }
+
+/*
+ * The vault's compact layout: phones and portrait tablets, below `lg` (see
+ * useIsCompactVault). iOS zooms the page into any focused field set below
+ * 16px, so the editor's three stacked layers move up together — the caret alignment above
+ * only needs them to match each other. The toolbar becomes one swipeable row
+ * of finger-sized buttons instead of wrapping into a column beside the text.
+ */
+@media (max-width: 1023px) {
+  html[data-color-mode] .w-md-editor .w-md-editor-text,
+  html[data-color-mode] .w-md-editor .w-md-editor-text-pre,
+  html[data-color-mode] .w-md-editor .w-md-editor-text-pre > code,
+  html[data-color-mode] .w-md-editor .w-md-editor-text-input {
+    font-size: 16px !important;
+    line-height: 26px !important;
+  }
+
+  html[data-color-mode] .w-md-editor .w-md-editor-toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    gap: 12px;
+    padding: 4px 6px;
+    min-height: 44px;
+  }
+
+  html[data-color-mode] .w-md-editor .w-md-editor-toolbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  html[data-color-mode] .w-md-editor .w-md-editor-toolbar ul {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  html[data-color-mode] .w-md-editor .w-md-editor-toolbar li > button {
+    height: 36px;
+    min-width: 36px;
+    padding: 0 9px;
+  }
+
+  html[data-color-mode] .w-md-editor .w-md-editor-toolbar li > button svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  /* No room for a second window on a phone, and the help page is a new tab. */
+  html[data-color-mode] .w-md-editor .w-md-editor-toolbar li > button[data-name="fullscreen"],
+  html[data-color-mode] .w-md-editor .w-md-editor-toolbar li > button[data-name="help"] {
+    display: none;
+  }
+
+  html[data-color-mode] .w-md-editor .w-md-editor-content .w-md-editor-text {
+    padding: 14px 16px;
+  }
+
+  html[data-color-mode] .w-md-editor .w-md-editor-preview {
+    padding: 14px 16px;
+    box-shadow: none;
+  }
+
+  html[data-color-mode] .wmde-markdown {
+    font-size: 16px;
+  }
+}

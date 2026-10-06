@@ -18,20 +18,24 @@ export function GlobalGraph({ docs }: { docs: Doc[] }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="border-border bg-background flex h-9 shrink-0 items-center justify-between gap-2 border-b px-3">
-        <h1 className="text-foreground truncate text-[13px] font-medium">
+      <header className="border-border bg-background flex h-9 shrink-0 items-center justify-between gap-2 border-b px-3 max-lg:justify-center">
+        {/* The mobile top bar already names the view. */}
+        <h1 className="text-foreground truncate text-[13px] font-medium max-lg:sr-only">
           Graph view
         </h1>
 
         <div className="text-label flex shrink-0 items-center gap-3 text-[11px]">
-          <span>Click a note to open it · scroll to zoom</span>
+          <span className="max-lg:hidden">Click a note to open it · scroll to zoom</span>
+          <span className="lg:hidden">Tap a note · pinch to zoom</span>
           <span>
             {noteCount} {noteCount === 1 ? "note" : "notes"}
           </span>
           <span>
             {linkCount} {linkCount === 1 ? "link" : "links"}
           </span>
-          {unresolvedCount > 0 && <span>{unresolvedCount} unresolved</span>}
+          {unresolvedCount > 0 && (
+            <span className="max-sm:hidden">{unresolvedCount} unresolved</span>
+          )}
         </div>
       </header>
 

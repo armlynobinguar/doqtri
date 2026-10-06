@@ -9,7 +9,7 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test --project=chromium",
+    "test:e2e": "playwright test --project=chromium --project=mobile",
     "shots": "playwright test --project=shots",
     "walkthrough": "playwright test --project=walkthrough"
   },

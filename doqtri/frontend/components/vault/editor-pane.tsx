@@ -22,11 +22,18 @@ export function EditorPane({
   markdown,
   onChange,
   onRegenerate,
+  compact = false,
 }: {
   title: string;
   markdown: string;
   onChange: (markdown: string) => void;
   onRegenerate: () => void;
+  /**
+   * The phone layout: the title and Regenerate live in the surrounding chrome,
+   * and the editor opens on the source alone — a live preview beside it would
+   * leave each side a column a few words wide.
+   */
+  compact?: boolean;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -34,48 +41,50 @@ export function EditorPane({
         A tab strip for the open note. Multi-note tab sessions are not part of
         v1 — the explorer and ⌘K are the navigation model.
       */}
-      <div className="border-border bg-background flex h-9 shrink-0 items-center justify-between gap-2 border-b pr-2">
-        <Tabs value="active" className="min-w-0">
-          <TabsList variant="line" className="h-9 border-0 bg-transparent">
-            <TabsTrigger
-              value="active"
-              // The active tab underline is one of the four places the single
-              // accent is allowed to appear.
-              className="data-active:text-foreground text-muted-foreground max-w-[280px] gap-1.5 px-3 text-[13px] after:bg-primary!"
-            >
-              <FileTextIcon className="size-3.5 shrink-0 opacity-60" strokeWidth={1.75} />
-              <span className="truncate">{title}</span>
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={onRegenerate}
-                // Purple is reserved for AI-driven affordances.
-                className="text-accent hover:text-accent hover:bg-accent/10 h-7 gap-1.5 px-2 text-[12px]"
+      {compact ? null : (
+        <div className="border-border bg-background flex h-9 shrink-0 items-center justify-between gap-2 border-b pr-2">
+          <Tabs value="active" className="min-w-0">
+            <TabsList variant="line" className="h-9 border-0 bg-transparent">
+              <TabsTrigger
+                value="active"
+                // The active tab underline is one of the four places the single
+                // accent is allowed to appear.
+                className="data-active:text-foreground text-muted-foreground max-w-[280px] gap-1.5 px-3 text-[13px] after:bg-primary!"
               >
-                <SparklesIcon className="size-3.5" strokeWidth={1.75} />
-                Regenerate
-              </Button>
-            }
-          />
-          <TooltipContent side="bottom">
-            Rewrite this note&apos;s structure and links with AI
-          </TooltipContent>
-        </Tooltip>
-      </div>
+                <FileTextIcon className="size-3.5 shrink-0 opacity-60" strokeWidth={1.75} />
+                <span className="truncate">{title}</span>
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onRegenerate}
+                  // Purple is reserved for AI-driven affordances.
+                  className="text-accent hover:text-accent hover:bg-accent/10 h-7 gap-1.5 px-2 text-[12px]"
+                >
+                  <SparklesIcon className="size-3.5" strokeWidth={1.75} />
+                  Regenerate
+                </Button>
+              }
+            />
+            <TooltipContent side="bottom">
+              Rewrite this note&apos;s structure and links with AI
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      )}
 
       <div className="min-h-0 flex-1" data-color-mode="dark">
         <MDEditor
           value={markdown}
           onChange={(next) => onChange(next ?? "")}
           height="100%"
-          preview="live"
+          preview={compact ? "edit" : "live"}
           visibleDragbar={false}
           textareaProps={{
             placeholder: "Write markdown. Wrap concepts in [[double brackets]].",

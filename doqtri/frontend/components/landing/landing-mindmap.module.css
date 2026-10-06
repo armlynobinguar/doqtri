@@ -77,6 +77,23 @@
   letter-spacing: 0.04em;
 }
 
+/*
+ * A phone draws the 960-unit map at about a third of its size, which leaves
+ * 12-unit labels a few pixels tall. Labels grow to stay readable, hanging below
+ * the node so they clear it; the status line goes, since the glyph in each
+ * node already carries it.
+ */
+@media (max-width: 639px) {
+  .label {
+    font-size: 28px;
+    dominant-baseline: hanging;
+  }
+
+  .status {
+    display: none;
+  }
+}
+
 @keyframes draw {
   to {
     stroke-dashoffset: 0;

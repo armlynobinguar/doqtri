@@ -285,7 +285,7 @@ export function MindmapCanvas({
         type="button"
         onClick={releaseAll}
         title="Release every node back into the layout"
-        className="border-border/80 bg-muted/90 text-muted-foreground hover:text-foreground hover:border-border absolute top-2 right-2 z-10 rounded-md border px-2 py-1 text-[11px] backdrop-blur transition-colors"
+        className="border-border/80 bg-muted/90 text-muted-foreground hover:text-foreground hover:border-border absolute top-2 right-2 z-10 rounded-md border px-2 py-1 text-[11px] backdrop-blur pointer-coarse:px-3 pointer-coarse:py-2 pointer-coarse:text-[12px] transition-colors"
       >
         Reset layout
       </button>

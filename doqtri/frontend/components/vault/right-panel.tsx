@@ -16,6 +16,7 @@ export function RightPanel({
   markdown,
   mindmap,
   mindmapStale,
+  showShip = true,
 }: {
   /** All notes, with the active one carrying the live editor text. */
   docs: Doc[];
@@ -25,6 +26,8 @@ export function RightPanel({
   /** The active note's stored concept map, null when it has none. */
   mindmap: DocMindmap | null;
   mindmapStale: boolean;
+  /** Off on phones, where the ship panel is a view of its own. */
+  showShip?: boolean;
 }) {
   const { rightTab, setRightTab } = useVaultStatus();
 
@@ -82,9 +85,11 @@ export function RightPanel({
         </div>
 
         <BacklinksList docs={docs} activeId={activeId} />
-        <div className="shrink-0">
-          <ShipPanel docId={activeId} title={title} markdown={markdown} />
-        </div>
+        {showShip && (
+          <div className="shrink-0">
+            <ShipPanel docId={activeId} title={title} markdown={markdown} />
+          </div>
+        )}
       </div>
     </div>
   );

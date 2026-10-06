@@ -32,7 +32,7 @@ export function Ribbon({
   return (
     <nav
       aria-label="Primary"
-      className="bg-sidebar border-border flex w-12 shrink-0 flex-col items-center gap-1 border-r py-2"
+      className="bg-sidebar border-border hidden w-12 shrink-0 flex-col items-center gap-1 border-r py-2 lg:flex"
     >
       <Link
         href="/"
