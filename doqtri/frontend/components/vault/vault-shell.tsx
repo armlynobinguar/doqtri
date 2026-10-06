@@ -26,6 +26,11 @@ import { createBlankNote } from "@/lib/create-note";
 import { deleteNote, DeleteNoteError } from "@/lib/delete-note";
 import { anchoredDocIds } from "@/lib/stellar/anchored";
 import type { FailedImport, NoteSummary } from "@/lib/types";
+import {
+  NavigationOverlay,
+  NavigationProvider,
+  useNavigate,
+} from "@/components/vault/navigation";
 
 export function VaultShell({
   notes,
@@ -41,9 +46,11 @@ export function VaultShell({
   return (
     <WalletProvider sessionAddress={isStellarPublicKey(email) ? email : null}>
       <VaultStatusProvider>
-        <VaultShellInner notes={notes} failedImports={failedImports} email={email}>
-          {children}
-        </VaultShellInner>
+        <NavigationProvider>
+          <VaultShellInner notes={notes} failedImports={failedImports} email={email}>
+            {children}
+          </VaultShellInner>
+        </NavigationProvider>
       </VaultStatusProvider>
     </WalletProvider>
   );
@@ -62,6 +69,7 @@ function VaultShellInner({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const navigate = useNavigate();
   const { wordCount, saveState } = useVaultStatus();
 
   const [explorerOpen, setExplorerOpen] = useState(true);
@@ -94,14 +102,14 @@ function VaultShellInner({
       // Navigate first, then refresh: a refresh issued before the push is
       // superseded by it, and the push reuses the cached layout, so the
       // explorer (rendered by the layout) would never list the new note.
-      router.push(`/vault/${id}`);
+      navigate(`/vault/${id}`);
       router.refresh();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not create note");
     } finally {
       setCreating(false);
     }
-  }, [creating, router]);
+  }, [creating, navigate, router]);
 
   // Whether a note is anchored decides whether it can be deleted at all, and
   // only the ledger knows. One batched read covers the whole vault; the string
@@ -138,7 +146,7 @@ function VaultShellInner({
         );
         // Same ordering as handleNewNote: a refresh issued before the push is
         // superseded by it, and the explorer lives in the layout.
-        if (activeId === note.id) router.push("/vault");
+        if (activeId === note.id) navigate("/vault");
         router.refresh();
       } catch (error) {
         // The ledger moved since the explorer last looked — show the chain
@@ -153,7 +161,7 @@ function VaultShellInner({
         setDeletingId(null);
       }
     },
-    [activeId, router],
+    [activeId, navigate, router],
   );
 
   useEffect(() => {
@@ -185,14 +193,14 @@ function VaultShellInner({
         case "mindmap":
           // Routes rather than panel tabs: the vault-wide views need the whole
           // pane, and the ribbon's active state follows the URL below.
-          router.push(`/vault/${action}`);
+          navigate(`/vault/${action}`);
           break;
         case "settings":
           setSettingsOpen(true);
           break;
       }
     },
-    [router],
+    [navigate],
   );
 
   return (
@@ -238,8 +246,9 @@ function VaultShellInner({
             </>
           )}
 
-          <ResizablePanel id="main" className="min-h-0">
+          <ResizablePanel id="main" className="relative min-h-0">
             {children}
+            <NavigationOverlay />
           </ResizablePanel>
         </ResizablePanelGroup>
       </div>

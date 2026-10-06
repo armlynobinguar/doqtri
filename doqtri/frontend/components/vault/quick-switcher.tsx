@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { FileTextIcon } from "lucide-react";
 import {
   Command,
@@ -12,6 +11,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import type { NoteSummary } from "@/lib/types";
+import { useNavigate } from "@/components/vault/navigation";
 
 /** Obsidian-style quick switcher. Opened with ⌘K from the shell. */
 export function QuickSwitcher({
@@ -23,7 +23,7 @@ export function QuickSwitcher({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const router = useRouter();
+  const navigate = useNavigate();
 
   return (
     <CommandDialog
@@ -50,7 +50,7 @@ export function QuickSwitcher({
                 value={note.title}
                 onSelect={() => {
                   onOpenChange(false);
-                  router.push(`/vault/${note.id}`);
+                  navigate(`/vault/${note.id}`);
                 }}
               >
                 <FileTextIcon className="opacity-60" strokeWidth={1.75} />

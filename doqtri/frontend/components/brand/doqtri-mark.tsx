@@ -4,12 +4,12 @@ import { GlyphPath, type Glyph } from "./glyphs";
 // Triangle layout on a 200×180 canvas: tested (top) feeds both anchored
 // (bottom-left) and shipped (bottom-right); anchored feeds shipped.
 // `tint` is the ring color in the brand's color variant of the mark.
-const NODES: { glyph: Glyph; x: number; y: number; tint: string }[] = [
+export const NODES: { glyph: Glyph; x: number; y: number; tint: string }[] = [
   { glyph: "check", x: 100, y: 38, tint: "var(--brand-purple, #b38bef)" },
   { glyph: "stellar", x: 38, y: 142, tint: "var(--brand-green, #43c27a)" },
   { glyph: "hash", x: 162, y: 142, tint: "var(--brand-blue, #4a9df0)" },
 ];
-const R = 28;
+export const R = 28;
 const EDGES: [number, number][] = [
   [0, 1],
   [0, 2],
@@ -41,10 +41,18 @@ type Props = {
   title?: string;
   /** "mono" draws in currentColor; "color" tints each ring with a brand accent. */
   tone?: "mono" | "color";
+  /** Extra children for each node's group, e.g. SMIL animations of the node itself. */
+  nodeChildren?: (index: number) => React.ReactNode;
 };
 
 /** The Doqtri mark: ✓ → Ø → # joined block by block. */
-export function DoqtriMark({ className, glow = true, title = "Doqtri", tone = "mono" }: Props) {
+export function DoqtriMark({
+  className,
+  glow = true,
+  title = "Doqtri",
+  tone = "mono",
+  nodeChildren,
+}: Props) {
   const id = useId().replace(/:/g, "");
   return (
     <svg
@@ -81,13 +89,14 @@ export function DoqtriMark({ className, glow = true, title = "Doqtri", tone = "m
       </g>
 
       <g filter={glow ? `url(#glow-${id})` : undefined}>
-        {NODES.map((n) => (
+        {NODES.map((n, i) => (
           <g key={n.glyph} transform={`translate(${n.x} ${n.y})`} color={tone === "color" ? n.tint : undefined}>
             <circle r={R} fill="var(--mark-fill, #11151c)" stroke="currentColor" strokeWidth="4.5" />
             <circle r={R - 6} stroke="currentColor" strokeOpacity="0.35" strokeWidth="1.4" />
             <g transform="translate(-19.2 -19.2) scale(1.6)" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <GlyphPath glyph={n.glyph} />
             </g>
+            {nodeChildren?.(i)}
           </g>
         ))}
       </g>

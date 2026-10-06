@@ -26,6 +26,7 @@ import { INGEST_ERRORS, type IngestErrorCode } from "@/lib/ingest/errors";
 import { INGEST_STAGES, STAGE_LABELS, type IngestStage } from "@/lib/ingest/events";
 import { runIngestRequest } from "@/lib/ingest/client";
 import { cn } from "@/lib/utils";
+import { useNavigate } from "@/components/vault/navigation";
 
 const ACCEPT = ".pdf,.docx,.pptx,.txt,.md";
 
@@ -57,6 +58,7 @@ export function UploadDialog({
   retry?: RetryTarget | null;
 }) {
   const router = useRouter();
+  const navigate = useNavigate();
   const [file, setFile] = useState<File | null>(null);
   const [filename, setFilename] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -117,7 +119,7 @@ export function UploadDialog({
     onOpenChange(false);
     // Push, then refresh, so the layout's note list includes the new note
     // (see the same ordering in vault-shell.tsx).
-    router.push(`/vault/${outcome.id}`);
+    navigate(`/vault/${outcome.id}`);
     router.refresh();
   }
 
