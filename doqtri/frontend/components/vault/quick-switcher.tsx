@@ -31,6 +31,8 @@ export function QuickSwitcher({
       onOpenChange={onOpenChange}
       title="Quick switcher"
       description="Jump to a note by title"
+      // Clear of the on-screen keyboard, which covers the lower half.
+      className="max-sm:top-[calc(env(safe-area-inset-top)+0.75rem)]"
     >
       {/*
         CommandDialog only supplies the Dialog shell — it does not wrap children

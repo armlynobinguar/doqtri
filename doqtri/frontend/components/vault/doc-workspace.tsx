@@ -11,12 +11,25 @@ import {
 import { EditorPane } from "@/components/vault/editor-pane";
 import { RightPanel } from "@/components/vault/right-panel";
 import { RegenerateDialog } from "@/components/vault/regenerate-dialog";
+import { ShipPanel } from "@/components/vault/ship-panel";
+import { SparklesIcon } from "lucide-react";
+import { useIsCompactVault } from "@/hooks/use-mobile";
+import { cn } from "@/lib/utils";
 import { useVaultStatus } from "@/components/vault/vault-status";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { Doc } from "@/lib/types";
 
 const SETTLE_MS = 700;
+
+/** The phone layout's views, in place of the desktop's side-by-side panes. */
+type MobileView = "note" | "map" | "ship";
+
+const MOBILE_VIEWS: { id: MobileView; label: string }[] = [
+  { id: "note", label: "Note" },
+  { id: "map", label: "Map" },
+  { id: "ship", label: "Ship" },
+];
 
 function countWords(markdown: string): number {
   const words = markdown.trim().split(/\s+/).filter(Boolean);
@@ -43,6 +56,8 @@ export function DocWorkspace({
 
   const [markdown, setMarkdown] = useState(active.markdown);
   const [regenerateOpen, setRegenerateOpen] = useState(false);
+  const isMobile = useIsCompactVault();
+  const [mobileView, setMobileView] = useState<MobileView>("note");
   const lastSavedRef = useRef(active.markdown);
 
   // Keeps the Supabase write and the force simulation off the keystroke path.
@@ -145,6 +160,89 @@ export function DocWorkspace({
     router.refresh();
   }, [active.id, router, setSaveState]);
 
+  const regenerateDialog = (
+    <RegenerateDialog
+      open={regenerateOpen}
+      onOpenChange={setRegenerateOpen}
+      onConfirm={handleRegenerate}
+    />
+  );
+
+  if (isMobile) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="border-border bg-background flex h-12 shrink-0 items-center gap-2 border-b px-2">
+          <div
+            role="tablist"
+            aria-label="Note views"
+            className="bg-muted border-border grid h-9 flex-1 grid-cols-3 rounded-lg border p-0.5 sm:max-w-sm"
+          >
+            {MOBILE_VIEWS.map(({ id, label }) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={mobileView === id}
+                onClick={() => setMobileView(id)}
+                className={cn(
+                  "focus-visible:ring-ring rounded-md text-[13px] font-medium transition-colors focus-visible:ring-1 focus-visible:outline-hidden",
+                  mobileView === id
+                    ? "bg-secondary text-foreground shadow-sm"
+                    : "text-muted-foreground active:text-foreground",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            aria-label="Regenerate with AI"
+            onClick={() => setRegenerateOpen(true)}
+            // Purple is reserved for AI-driven affordances.
+            className="text-accent active:bg-accent/10 focus-visible:ring-ring ml-auto flex size-9 shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:ring-1 focus-visible:outline-hidden"
+          >
+            <SparklesIcon className="size-[18px]" strokeWidth={1.75} />
+          </button>
+        </div>
+
+        {/*
+          The editor stays mounted while hidden so switching views keeps its
+          caret and scroll; the graph is unmounted so its simulation stops.
+        */}
+        <div className={cn("min-h-0 flex-1", mobileView !== "note" && "hidden")}>
+          <EditorPane
+            compact
+            title={active.title}
+            markdown={markdown}
+            onChange={setMarkdown}
+            onRegenerate={() => setRegenerateOpen(true)}
+          />
+        </div>
+        {mobileView === "map" && (
+          <div className="min-h-0 flex-1">
+            <RightPanel
+              docs={docsForGraph}
+              activeId={active.id}
+              title={active.title}
+              markdown={markdown}
+              mindmap={active.mindmap ?? null}
+              mindmapStale={active.mindmapStale ?? false}
+              showShip={false}
+            />
+          </div>
+        )}
+        {mobileView === "ship" && (
+          <div className="bg-muted min-h-0 flex-1 overflow-y-auto [&>*:first-child]:border-t-0">
+            <ShipPanel docId={active.id} title={active.title} markdown={markdown} />
+          </div>
+        )}
+
+        {regenerateDialog}
+      </div>
+    );
+  }
+
   return (
     <>
       <ResizablePanelGroup orientation="horizontal" className="min-h-0">
@@ -177,11 +275,7 @@ export function DocWorkspace({
         </ResizablePanel>
       </ResizablePanelGroup>
 
-      <RegenerateDialog
-        open={regenerateOpen}
-        onOpenChange={setRegenerateOpen}
-        onConfirm={handleRegenerate}
-      />
+      {regenerateDialog}
     </>
   );
 }

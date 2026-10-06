@@ -35,7 +35,7 @@ function formatXlm(value: number): string {
  * The vault's account surface, in the status bar: which wallet owns the vault,
  * whether it is connected, what it can spend, and the one place to disconnect.
  */
-export function AccountMenu() {
+export function AccountMenu({ className }: { className?: string }) {
   const wallet = useWallet();
   const [busy, setBusy] = useState(false);
   const { sessionAddress, walletAddress, mismatch, balance, balanceError } = wallet;
@@ -70,7 +70,10 @@ export function AccountMenu() {
       <DropdownMenuTrigger
         aria-label="Account"
         data-testid="account-menu"
-        className="hover:text-foreground focus-visible:ring-ring -mr-1.5 flex h-5 items-center gap-1.5 rounded px-1.5 tabular-nums focus-visible:ring-1 focus-visible:outline-hidden"
+        className={cn(
+          "hover:text-foreground focus-visible:ring-ring -mr-1.5 flex h-5 items-center gap-1.5 rounded px-1.5 tabular-nums focus-visible:ring-1 focus-visible:outline-hidden",
+          className,
+        )}
       >
         <span
           aria-hidden

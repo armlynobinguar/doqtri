@@ -16,6 +16,9 @@ import { UploadDialog, type RetryTarget } from "@/components/vault/upload-dialog
 import { DeleteNoteDialog } from "@/components/vault/delete-note-dialog";
 import { SettingsDialog } from "@/components/vault/settings-dialog";
 import { AccountMenu } from "@/components/vault/account-menu";
+import { MobileTabBar, MobileTopBar } from "@/components/vault/mobile-chrome";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { useIsCompactVault } from "@/hooks/use-mobile";
 import { WalletProvider } from "@/components/vault/wallet-provider";
 import { isStellarPublicKey } from "@/lib/wallet-address";
 import {
@@ -72,7 +75,10 @@ function VaultShellInner({
   const navigate = useNavigate();
   const { wordCount, saveState } = useVaultStatus();
 
+  const isMobile = useIsCompactVault();
   const [explorerOpen, setExplorerOpen] = useState(true);
+  // The explorer's home on a phone, where there is no room to dock it.
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [retryTarget, setRetryTarget] = useState<RetryTarget | null>(null);
@@ -93,9 +99,19 @@ function VaultShellInner({
     segment === "mindmap" || segment === "graph" ? segment : undefined;
   const activeId = routeAction ? undefined : segment;
 
+  // What the mobile top bar calls the current pane. The desktop layout has no
+  // equivalent: there the explorer's highlight and the tab strip say it.
+  const mobileTitle =
+    routeAction === "graph"
+      ? "Graph view"
+      : routeAction === "mindmap"
+        ? "Global mindmap"
+        : (notes.find((note) => note.id === activeId)?.title ?? "Vault");
+
   const handleNewNote = useCallback(async () => {
     if (creating) return;
     setCreating(true);
+    setDrawerOpen(false);
     try {
       const { id, title } = await createBlankNote();
       toast.success(`Created “${title}”`);
@@ -183,6 +199,10 @@ function VaultShellInner({
     (action: RibbonAction) => {
       switch (action) {
         case "files":
+          if (isMobile) {
+            setDrawerOpen(true);
+            break;
+          }
           setExplorerOpen((open) => !open);
           setRibbonActive("files");
           break;
@@ -200,11 +220,42 @@ function VaultShellInner({
           break;
       }
     },
-    [navigate],
+    [isMobile, navigate],
+  );
+
+  const explorer = (
+    <FileExplorer
+      notes={notes}
+      activeId={activeId}
+      creating={creating}
+      onNewNote={() => void handleNewNote()}
+      onUploadClick={() => {
+        setDrawerOpen(false);
+        setRetryTarget(null);
+        setUploadOpen(true);
+      }}
+      failedImports={failedImports}
+      onRetryImport={(target) => {
+        setDrawerOpen(false);
+        setRetryTarget(target);
+        setUploadOpen(true);
+      }}
+      anchoredIds={anchored}
+      deletingId={deletingId}
+      onDeleteNote={setPendingDelete}
+    />
   );
 
   return (
-    <div className="flex h-svh min-h-0 flex-col overflow-hidden">
+    <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
+      <MobileTopBar
+        title={mobileTitle}
+        // Desktop shows this in the status bar; one live "Saved" is enough.
+        saveState={isMobile ? saveState : "idle"}
+        creating={creating}
+        onNewNote={() => void handleNewNote()}
+      />
+
       <div className="flex min-h-0 flex-1">
         <Ribbon
           // On the vault-wide views the URL is the truth; elsewhere the last
@@ -214,35 +265,23 @@ function VaultShellInner({
         />
 
         <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-          {explorerOpen && (
+          {/*
+            Phones get the explorer in a drawer instead. `max-lg:hidden` covers
+            the server render and hydration, before useIsCompactVault can answer;
+            the main panel keeps its slot either way, so it never remounts.
+          */}
+          {explorerOpen && !isMobile && (
             <>
               <ResizablePanel
                 id="explorer"
                 defaultSize={210}
                 minSize={160}
                 maxSize={420}
-                className="min-h-0"
+                className="min-h-0 max-lg:hidden"
               >
-                <FileExplorer
-                  notes={notes}
-                  activeId={activeId}
-                  creating={creating}
-                  onNewNote={() => void handleNewNote()}
-                  onUploadClick={() => {
-                    setRetryTarget(null);
-                    setUploadOpen(true);
-                  }}
-                  failedImports={failedImports}
-                  onRetryImport={(target) => {
-                    setRetryTarget(target);
-                    setUploadOpen(true);
-                  }}
-                  anchoredIds={anchored}
-                  deletingId={deletingId}
-                  onDeleteNote={setPendingDelete}
-                />
+                {explorer}
               </ResizablePanel>
-              <ResizableHandle className="hover:bg-primary/40 transition-colors" />
+              <ResizableHandle className="hover:bg-primary/40 transition-colors max-lg:hidden" />
             </>
           )}
 
@@ -253,12 +292,39 @@ function VaultShellInner({
         </ResizablePanelGroup>
       </div>
 
+      <MobileTabBar
+        active={drawerOpen ? "files" : (routeAction ?? (activeId ? "files" : undefined))}
+        onAction={handleRibbonAction}
+      />
+
       <StatusBar
+        className="max-lg:hidden"
         noteCount={notes.length}
         wordCount={wordCount}
         saveState={saveState}
         trailing={<AccountMenu />}
       />
+
+      <Sheet open={drawerOpen && isMobile} onOpenChange={setDrawerOpen}>
+        <SheetContent
+          side="left"
+          showCloseButton={false}
+          className="w-[85%] max-w-xs gap-0 border-r-border pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
+          // Picking a note is the drawer's whole job, so any link closes it.
+          onClick={(event) => {
+            if ((event.target as HTMLElement).closest("a")) setDrawerOpen(false);
+          }}
+        >
+          <SheetTitle className="sr-only">Notes</SheetTitle>
+          <div className="min-h-0 flex-1">{explorer}</div>
+          <div className="bg-sidebar border-border flex h-12 shrink-0 items-center justify-between gap-2 border-t px-3 text-[12px]">
+            <span className="text-label tabular-nums">
+              {notes.length} {notes.length === 1 ? "note" : "notes"}
+            </span>
+            <AccountMenu className="text-sidebar-foreground h-9 text-[12px]" />
+          </div>
+        </SheetContent>
+      </Sheet>
 
       <QuickSwitcher
         notes={notes}

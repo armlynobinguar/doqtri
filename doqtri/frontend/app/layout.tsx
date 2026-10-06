@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
@@ -29,6 +29,13 @@ export const metadata: Metadata = {
   },
 };
 
+export const viewport: Viewport = {
+  themeColor: "#0c0f14",
+  // Lets the vault's top and tab bars pad themselves into the notch and the
+  // home indicator through env(safe-area-inset-*).
+  viewportFit: "cover",
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -44,7 +51,12 @@ export default function RootLayout({
     >
       <body className="bg-background text-foreground min-h-full">
         <TooltipProvider delay={300}>{children}</TooltipProvider>
-        <Toaster theme="dark" position="bottom-right" />
+        <Toaster
+          theme="dark"
+          position="bottom-right"
+          // Clear of the vault's bottom tab bar on phones.
+          mobileOffset={{ bottom: "calc(4.5rem + env(safe-area-inset-bottom))" }}
+        />
       </body>
     </html>
   );

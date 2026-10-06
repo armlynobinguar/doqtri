@@ -74,7 +74,7 @@ export function MindmapPanel({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="border-border/60 flex h-7 shrink-0 items-center justify-between gap-1 border-b px-2">
+      <div className="border-border/60 flex h-7 shrink-0 items-center justify-between gap-1 border-b px-2 pointer-coarse:h-10">
         <span className="text-label truncate text-[11px]">
           {derived ? "From headings" : stale ? "Note has changed" : "Concept map"}
         </span>
@@ -87,7 +87,7 @@ export function MindmapPanel({
               onClick={rebuild}
               className={
                 // Purple is reserved for AI affordances, and this is one.
-                "text-accent/80 hover:text-accent hover:bg-accent/10 flex size-5 items-center justify-center rounded transition-colors disabled:opacity-50 " +
+                "text-accent/80 hover:text-accent hover:bg-accent/10 flex size-5 items-center justify-center rounded transition-colors pointer-coarse:size-9 disabled:opacity-50 " +
                 (derived || stale ? "" : "opacity-60")
               }
             >
@@ -110,7 +110,7 @@ export function MindmapPanel({
                 <NavLink
                   href={`/vault/${docId}/mindmap`}
                   aria-label="Open full mindmap"
-                  className="text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10 flex size-5 items-center justify-center rounded transition-colors"
+                  className="text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10 flex size-5 items-center justify-center rounded transition-colors pointer-coarse:size-9"
                 >
                   <ExternalLinkIcon className="size-3" strokeWidth={2} />
                 </NavLink>

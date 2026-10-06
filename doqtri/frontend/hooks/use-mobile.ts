@@ -18,3 +18,25 @@ export function useIsMobile() {
     () => false
   )
 }
+
+/*
+ * The vault switches to its phone layout below Tailwind's `lg`, not `md`: its
+ * desktop layout docks three panes beside the editor, which leaves a portrait
+ * tablet a ~300px column to write in. Keep in step with the `lg:`/`max-lg:`
+ * classes in components/vault and the editor media query in globals.css.
+ */
+const COMPACT_QUERY = "(max-width: 1023px)"
+
+function subscribeCompact(onChange: () => void) {
+  const mql = window.matchMedia(COMPACT_QUERY)
+  mql.addEventListener("change", onChange)
+  return () => mql.removeEventListener("change", onChange)
+}
+
+export function useIsCompactVault() {
+  return React.useSyncExternalStore(
+    subscribeCompact,
+    () => window.matchMedia(COMPACT_QUERY).matches,
+    () => false
+  )
+}

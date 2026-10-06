@@ -232,7 +232,7 @@ export function GitHubLinks({
             type="button"
             size="sm"
             variant="ghost"
-            className="h-6 px-1.5 text-[11px]"
+            className="h-6 px-1.5 text-[11px] max-lg:h-9 max-lg:px-2.5"
             disabled={busy != null}
             onClick={() => void check(links)}
           >
@@ -267,7 +267,7 @@ export function GitHubLinks({
         <div className="grid gap-1.5">
           <select
             aria-label="Heading to link"
-            className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 rounded-md border px-2 outline-none focus-visible:ring-3"
+            className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-md border px-2 outline-none focus-visible:ring-3"
             value={selectedNode}
             onChange={(e) => setLinkNode(e.target.value)}
           >
@@ -280,7 +280,7 @@ export function GitHubLinks({
           <div className="flex gap-1.5">
             <input
               aria-label="GitHub issue or pull request"
-              className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 min-w-0 flex-1 rounded-md border px-2 outline-none focus-visible:ring-3"
+              className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base min-w-0 flex-1 rounded-md border px-2 outline-none focus-visible:ring-3"
               placeholder="owner/repo#12 or PR URL"
               value={refText}
               onChange={(e) => setRefText(e.target.value)}
@@ -292,7 +292,7 @@ export function GitHubLinks({
               type="button"
               size="sm"
               variant="outline"
-              className="h-8"
+              className="h-8 max-lg:h-10"
               disabled={busy != null || !refText.trim()}
               onClick={() => void addLink()}
             >
@@ -307,7 +307,7 @@ export function GitHubLinks({
         <Button
           type="button"
           size="sm"
-          className="w-full"
+          className="w-full max-lg:h-10"
           disabled={!anchored || busy != null || wallet.balance?.funded === false}
           onClick={() => void syncReady()}
         >

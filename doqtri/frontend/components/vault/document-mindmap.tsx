@@ -70,17 +70,17 @@ export function DocumentMindmap({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="border-border bg-background flex h-9 shrink-0 items-center justify-between gap-2 border-b px-2">
+      <header className="border-border bg-background flex h-9 shrink-0 items-center justify-between gap-2 border-b px-2 max-lg:h-11">
         <div className="flex min-w-0 items-center gap-1.5">
           <NavLink
             href={`/vault/${docId}`}
             aria-label="Back to note"
-            className="text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10 flex size-6 shrink-0 items-center justify-center rounded transition-colors"
+            className="text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10 flex size-6 shrink-0 items-center justify-center rounded transition-colors pointer-coarse:size-9"
           >
             <ArrowLeftIcon className="size-3.5" strokeWidth={1.75} />
           </NavLink>
           <h1 className="text-foreground truncate text-[13px] font-medium">{title}</h1>
-          <span className="text-label shrink-0 text-[11px]">
+          <span className="text-label shrink-0 text-[11px] max-lg:hidden">
             {derived
               ? "· heading outline"
               : stale
@@ -103,7 +103,7 @@ export function DocumentMindmap({
             ) : (
               <SparklesIcon className="size-3.5" strokeWidth={1.75} />
             )}
-            {derived ? "Build mindmap" : "Rebuild"}
+            <span className="max-sm:sr-only">{derived ? "Build mindmap" : "Rebuild"}</span>
           </Button>
 
           <Button
@@ -114,7 +114,7 @@ export function DocumentMindmap({
             render={
               <NavLink href="/vault/mindmap">
                 <NetworkIcon className="size-3.5" strokeWidth={1.75} />
-                Global mindmap
+                <span className="max-sm:sr-only">Global mindmap</span>
               </NavLink>
             }
             className="text-muted-foreground hover:text-foreground h-7 gap-1.5 px-2 text-[12px]"

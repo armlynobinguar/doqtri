@@ -22,7 +22,7 @@ export default defineConfig({
   use: {
     baseURL: BASE_URL,
     trace: "retain-on-failure",
-    // The app is dark-only and desktop-only; no mobile layout exists in v1.
+    // Desktop by default; the `mobile` project covers the compact layout.
     viewport: { width: 1440, height: 900 },
   },
 
@@ -31,9 +31,21 @@ export default defineConfig({
     { name: "setup", testMatch: /auth\.setup\.ts/ },
     {
       name: "chromium",
+      testIgnore: /mobile\.spec\.ts/,
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1440, height: 900 },
+        storageState: "e2e/.auth/user.json",
+      },
+      dependencies: ["setup"],
+    },
+    // The vault's compact layout. A Chromium phone profile, so it runs on the
+    // same installed browser as the desktop suite.
+    {
+      name: "mobile",
+      testMatch: /mobile\.spec\.ts/,
+      use: {
+        ...devices["Pixel 7"],
         storageState: "e2e/.auth/user.json",
       },
       dependencies: ["setup"],

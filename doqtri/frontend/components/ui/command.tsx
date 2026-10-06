@@ -80,7 +80,7 @@ function CommandInput({
         <CommandPrimitive.Input
           data-slot="command-input"
           className={cn(
-            "w-full text-sm outline-hidden disabled:cursor-not-allowed disabled:opacity-50",
+            "w-full text-base outline-hidden disabled:cursor-not-allowed lg:text-sm disabled:opacity-50",
             className
           )}
           {...props}
@@ -89,7 +89,7 @@ function CommandInput({
           <SearchIcon className="size-4 shrink-0 opacity-50" />
         </InputGroupAddon>
         {shortcut ? (
-          <InputGroupAddon align="inline-end" className="pr-2!">
+          <InputGroupAddon align="inline-end" className="pr-2! pointer-coarse:hidden">
             <kbd className="flex h-5 min-w-5 items-center justify-center rounded border border-input bg-secondary px-1 font-mono text-[11px] text-muted-foreground">
               {shortcut}
             </kbd>
@@ -167,7 +167,7 @@ function CommandItem({
     <CommandPrimitive.Item
       data-slot="command-item"
       className={cn(
-        "group/command-item relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none in-data-[slot=dialog-content]:rounded-lg! data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-secondary data-selected:text-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-selected:*:[svg]:text-foreground",
+        "group/command-item relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none pointer-coarse:py-2.5 pointer-coarse:text-[15px] in-data-[slot=dialog-content]:rounded-lg! data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-secondary data-selected:text-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-selected:*:[svg]:text-foreground",
         className
       )}
       {...props}

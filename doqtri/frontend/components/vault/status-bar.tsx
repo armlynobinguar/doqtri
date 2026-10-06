@@ -1,6 +1,7 @@
 "use client";
 
 import { CheckIcon, Loader2Icon } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 export type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -16,14 +17,21 @@ export function StatusBar({
   wordCount,
   saveState = "idle",
   trailing,
+  className,
 }: {
   noteCount: number;
   wordCount?: number;
   saveState?: SaveState;
   trailing?: React.ReactNode;
+  className?: string;
 }) {
   return (
-    <footer className="bg-sidebar border-border text-label flex h-6 shrink-0 items-center gap-4 border-t px-3 text-[11px] select-none">
+    <footer
+      className={cn(
+        "bg-sidebar border-border text-label flex h-6 shrink-0 items-center gap-4 border-t px-3 text-[11px] select-none",
+        className,
+      )}
+    >
       <span className="tabular-nums">
         {noteCount} {noteCount === 1 ? "note" : "notes"}
       </span>
