@@ -4,9 +4,11 @@ import { HashCheck } from "@/components/audit/hash-check";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { StatusTag } from "@/components/ui/status-tag";
 import { DoqtriRegistry, type ChainDocument } from "@/lib/stellar/contract-client";
+import { StrKey } from "@stellar/stellar-sdk";
 import {
   CONTRACT_ID,
   IS_MAINNET,
+  expertContractUrl,
   expertTxUrl,
   labContractUrl,
 } from "@/lib/stellar/config";
@@ -211,11 +213,14 @@ function Anchored({
   ttl: DocumentTtl | null;
   labels: Map<string, string> | null;
 }) {
-  const current = history?.versions.find((v) => v.version === doc.version);
+  // An incomplete history (passkey-wallet owners only) numbers versions by
+  // what was found, which can be wrong, so it labels nothing here.
+  const numbered = history?.incomplete ? [] : (history?.versions ?? []);
+  const current = numbered.find((v) => v.version === doc.version);
   // Hash comparison must include every version, but the chain value wins for
   // the current one in case history is unavailable or lagging.
   const versions = [
-    ...(history?.versions ?? []).filter((v) => v.version !== doc.version),
+    ...numbered.filter((v) => v.version !== doc.version),
     { version: doc.version, contentHash: doc.contentHash },
   ];
 
@@ -239,6 +244,19 @@ function Anchored({
           </Field>
           <Field label="Owner">
             <span className="font-mono break-all">{doc.owner ?? "—"}</span>
+            {doc.owner && StrKey.isValidContract(doc.owner) ? (
+              <span className="text-muted-foreground block text-[12px]">
+                Passkey wallet (a contract account) ·{" "}
+                <a
+                  className="text-primary underline-offset-2 hover:underline"
+                  href={expertContractUrl(doc.owner)}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Stellar Expert →
+                </a>
+              </span>
+            ) : null}
           </Field>
           <Field label="Last updated">
             {formatDate(doc.updatedAt)}
@@ -277,6 +295,13 @@ function Anchored({
 
       <section className="grid gap-3">
         <h2 className="text-lg font-bold tracking-tight">Version history</h2>
+        {history?.incomplete ? (
+          <p data-testid="history-incomplete" className="text-warning text-[13px]">
+            The contract reports v{doc.version}, but only {history.versions.length} of its
+            transactions were found, so some versions are missing below. The current version
+            above is read directly from the contract.
+          </p>
+        ) : null}
         {history && history.versions.length > 0 ? (
           <ol className="bg-card divide-border divide-y rounded-xl border text-[13px]">
             {[...history.versions].reverse().map((v) => (
@@ -284,7 +309,7 @@ function Anchored({
                 key={v.txHash}
                 className="grid gap-1 px-4 py-2.5 sm:grid-cols-[3rem_1fr_auto] sm:items-center sm:gap-4"
               >
-                <span className="font-mono">v{v.version}</span>
+                <span className="font-mono">{history.incomplete ? "·" : `v${v.version}`}</span>
                 <span className="text-muted-foreground font-mono break-all" title={v.contentHash}>
                   {shortHash(v.contentHash)} · {formatDate(v.closedAt)}
                 </span>
@@ -299,7 +324,7 @@ function Anchored({
               </li>
             ))}
           </ol>
-        ) : (
+        ) : history?.incomplete ? null : (
           <p className="text-muted-foreground text-[14px]">
             History could not be read from Horizon right now. The current
             version above is read directly from the contract.

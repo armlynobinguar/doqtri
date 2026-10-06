@@ -309,7 +309,10 @@ export function GitHubLinks({
           size="sm"
           className="w-full max-lg:h-10"
           disabled={
-            !anchored || busy != null || wallet.sessionAddress === null || wallet.balance?.funded === false
+            !anchored ||
+            busy != null ||
+            (wallet.sessionAddress === null && !(wallet.identity.kind === "email" && wallet.identity.smartWallet)) ||
+            wallet.balance?.funded === false
           }
           onClick={() => void syncReady()}
         >

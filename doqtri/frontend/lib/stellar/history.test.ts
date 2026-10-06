@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { Address, Keypair, nativeToScVal, xdr } from "@stellar/stellar-sdk";
 import { Buffer } from "buffer";
-import { buildHistory, decodeInvocation, type HorizonOperation } from "@/lib/stellar/history";
+import {
+  buildHistory,
+  decodeInvocation,
+  inLedgerOrder,
+  withCompleteness,
+  type HorizonOperation,
+} from "@/lib/stellar/history";
 
 const CONTRACT = "CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB";
 const OTHER_CONTRACT = "CCP5KFIWLUNPV2G7ATBKFMIZF54JYRC343P5JCTARC4PRTGM23IU6ET4";
@@ -118,5 +124,46 @@ describe("buildHistory", () => {
       ["h0", "Built", "t5"],
       ["h1", "Planned", "t4"],
     ]);
+  });
+});
+
+describe("passkey-wallet history (from the write index)", () => {
+  const token = (op: HorizonOperation, t: string): HorizonOperation => ({ ...op, paging_token: t });
+
+  it("restores ledger order across separately fetched transactions", () => {
+    // Fetched per transaction, so they can arrive in any order.
+    const shuffled = [
+      token(update(DOC, 2, { tx: "t3" }), "300"),
+      token(register(DOC, 1, { tx: "t1" }), "100"),
+      token(node("h0", "Built", { tx: "t2" }), "200"),
+    ];
+    const history = buildHistory(inLedgerOrder(shuffled), DOC, CONTRACT, OWNER);
+    expect(history.versions.map((v) => [v.version, v.txHash])).toEqual([
+      [1, "t1"],
+      [2, "t3"],
+    ]);
+    expect(history.nodeEvents[0].docVersion).toBe(1);
+  });
+
+  it("orders by paging token numerically, not as text", () => {
+    const ops = [token(register(DOC, 1, { tx: "late" }), "1000"), token(register(DOC, 1, { tx: "early" }), "999")];
+    expect(inLedgerOrder(ops).map((op) => op.transaction_hash)).toEqual(["early", "late"]);
+  });
+
+  it("ignores indexed transactions that are not this document on this contract", () => {
+    // A bogus or mistaken index row can point anywhere; the decoder only keeps
+    // successful calls to the registry for this document.
+    const ops = inLedgerOrder([
+      token(register(DOC, 1, { tx: "real" }), "1"),
+      token(update("someone-elses-doc", 2, { tx: "other-doc" }), "2"),
+      token(update(DOC, 2, { tx: "failed", ok: false }), "3"),
+    ]);
+    expect(buildHistory(ops, DOC, CONTRACT, OWNER).versions.map((v) => v.txHash)).toEqual(["real"]);
+  });
+
+  it("flags a history with fewer versions than the contract reports", () => {
+    const history = buildHistory([register(DOC, 1, { tx: "t1" })], DOC, CONTRACT, OWNER);
+    expect(withCompleteness(history, 1).incomplete).toBeUndefined();
+    expect(withCompleteness(history, 3).incomplete).toBe(true);
   });
 });

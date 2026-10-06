@@ -1,6 +1,6 @@
 # 002 — Email sign-up with an automatic passkey wallet
 
-**Status:** In progress — §0 spike done (testnet), §1 next
+**Status:** In progress — §0–§5 done and verified on testnet; ready to merge. §7 (backup passkeys) next
 **Opened:** 2026-10-06
 **Supersedes:** the wallet-only sign-in in `proxy.ts` ("not a separate email
 sign-in") and `components/auth/login-form.tsx`. Freighter sign-in stays; email
@@ -210,94 +210,132 @@ Findings that change later sections:
       on (security advisor flags it off), captcha → Turnstile secret.
 - [ ] Signed-in email vault checked end to end (needs the dashboard config).
 
-### 2. Wallet data model
+### 2. Wallet data model — **Done 2026-10-08, applied to production**
 
-`backend/migrations/<ts>_create_smart_wallets.sql`
+`backend/migrations/20261008000000_create_passkey_wallets.sql`. Changes from
+the first draft of this section:
 
-```sql
--- One passkey smart wallet per email user. Written by the service role only;
--- the owner may read their own row.
-create table public.smart_wallets (
-  user_id     uuid primary key references auth.users(id) on delete restrict,
-  address     text not null unique check (address ~ '^C[A-Z2-7]{55}$'),
-  created_tx  text not null,
-  created_at  timestamptz not null default now()
-);
+- **Every table carries `network`** (`testnet` | `mainnet`). Local dev runs on
+  testnet against the same Supabase project production uses on mainnet, and a
+  user's wallet has a different address per network. Keys are
+  `(user_id, network)` and `(network, tx_hash)`.
+- `smart_wallets` (owner select): `address` `C…`, `created_tx`. `on delete restrict`
+  to `auth.users`: a user that owns an on-chain wallet is not silently deleted.
+- `wallet_passkeys` (owner select): credential id, 65-byte uncompressed P-256
+  key (checked), `rp_id`, `label`; FK to the wallet on the same network.
+- `chain_writes` (**public select**, no `user_id` column): what the audit page
+  reads for `C…` owners. Everything in it is already public on the ledger.
+  FK to `documents` with `restrict`, matching the delete route's rule that
+  anchored notes stay.
+- `chain_usage` + `consume_chain_quota(user, network, kind, user_limit,
+  global_limit, window)`: per-user **and** global caps per `deploy`/`write`,
+  one transaction under an advisory lock; service role only.
 
-create table public.wallet_passkeys (
-  credential_id text primary key,            -- base64url WebAuthn credential id
-  user_id       uuid not null references public.smart_wallets(user_id),
-  public_key    bytea not null,              -- uncompressed secp256r1, 65 bytes
-  rp_id         text not null,
-  label         text,
-  created_at    timestamptz not null default now()
-);
+Verified with a rolled-back dry run on production before applying: bad
+address/key rejected, passkey without wallet rejected, anchored document
+delete blocked, user cap (`scope = user`, retry 86400 s) and global cap
+(`scope = global`) refuse, other network counted separately, anon and
+authenticated cannot execute the function, RLS on all four tables.
 
--- Every relayed write, so history no longer depends on the tx source (§5).
-create table public.chain_writes (
-  tx_hash     text primary key,
-  doc_id      text not null,
-  fn          text not null check (fn in ('register_document','update_document','set_node_status')),
-  owner       text not null,
-  user_id     uuid not null references auth.users(id),
-  created_at  timestamptz not null default now()
-);
-create index chain_writes_doc_idx on public.chain_writes (doc_id, created_at);
-```
+### 3. Wallet creation — **Done 2026-10-08 (testnet verified)**
 
-RLS on all three: select-own for `smart_wallets` and `wallet_passkeys`; no
-browser access to `chain_writes` (the public audit page reads it server-side).
-`on delete restrict` is deliberate: deleting the auth user must not orphan the
-record of an on-chain wallet.
+- [x] `lib/stellar/smart-wallet-config.ts`: canonical wasm hash, per-network
+      WebAuthn verifier and threshold policy, shared deployer seed, relay path.
+- [x] `lib/passkey-wallet.ts`: lazy `SmartAccountKit` (`indexerUrl: false`,
+      `relayerUrl: /api/chain/relay`); `createPasskeyWallet` = one passkey
+      prompt, threshold-1 policy, resident key required.
+- [x] `app/api/chain/relay/route.ts` (deploy branch): email session required;
+      `{ func, auth }` only; refuses if the user already has a wallet on this
+      network; `lib/stellar/relay-validation.ts` checks the exact kit deploy
+      shape (canonical wasm, shared deployer, one External signer **on the
+      canonical verifier**, exactly the threshold-1 policy, salt =
+      sha256(credential id), one matching deployer auth entry) — stricter than
+      SDF's reference proxy; `consume_chain_quota` (3/user, 200 global per day,
+      env-tunable); simulation under `CHAIN_MAX_RESOURCE_FEE_STROOPS` (default
+      0.5 XLM; the reference proxy's 0.1 XLM would refuse mainnet deploys);
+      Channels submit; ledger confirmation; then `smart_wallets` +
+      `wallet_passkeys` rows. The wallet address is computed from the deploy
+      preimage, not taken from the client.
+- [x] UI: email account menu shows the wallet (copy, stellar.expert) or
+      "Create passkey wallet"; ship panel offers the same where anchoring would be.
+      Anchor buttons stay disabled until §4.
+- [x] Dependencies: `smart-account-kit` **0.8.0 pinned**, 
+      `@openzeppelin/relayer-plugin-channels` 0.21.0 pinned,
+      `@stellar/stellar-sdk` ^16.3.1 (installed with npm 10; `npm ci` checked).
+- [x] Verified on testnet through the real UI: Chromium virtual authenticator
+      → kit → relay → Channels → wallet `CDDBW7BX…VP4K` (tx `cdf96377…`, 0.0787 XLM
+      paid by Channels, 18 s end to end). Ledger instance holds the canonical
+      wasm, so the server-computed address is right. DB rows and quota row
+      present. Relay refuses signed-out (401), wrong shape and bad XDR (400).
+      Test account: `e2e-passkey@doqtri.test` (pre-confirmed via admin API).
+- [ ] Mainnet: set `CHANNELS_API_KEY` (mainnet key) in Vercel Production before
+      merging; until §4 ships, mainnet users can create a wallet but not use it.
 
-### 3. Wallet creation
+### 4. Signing and relaying writes — **Done 2026-10-08 (testnet verified)**
 
-- [ ] `lib/passkey-wallet.ts` (client): one `SmartAccountKit` instance with
-      `rpId = NEXT_PUBLIC_WEBAUTHN_RP_ID`, the canonical wasm/verifier/policy for the
-      network, `indexerUrl: false` (Supabase is the index), `relayerUrl: "/api/chain/relay"`.
-- [ ] `kit.createWallet(..., { autoSubmit: false, policies: [threshold 1] })` builds
-      the passkey and the deploy `{ func, auth }`; the browser posts it to the relay.
-- [ ] Relay, deploy branch (session required):
-  - refuse if the user already has a wallet — return it instead
-  - accept only one `createContractV2` with the canonical account wasm hash, one
-    External WebAuthn signer on the canonical verifier, the threshold-1 policy,
-    and the credential-derived salt (port these checks from `relayer-proxy`)
-  - submit through Channels; insert `smart_wallets` + `wallet_passkeys`
-  - per-user and global daily caps (reuse the `consume_ai_quota` pattern with a
-    `chain_usage` table)
-- [ ] Explain the passkey in the prompt before the browser dialog opens
-      ("Your device will create a passkey. It is your wallet's key.").
+- [x] `contract-client.ts`: the source address picks the signer. `G…` keeps
+      the Freighter path (source, envelope signature, funding checks). `C…`
+      simulates from the SDK's null account, skips funding checks, and calls
+      `signAndRelay` (passkey signs the auth entry, relay submits); the new
+      version is read from the confirmed transaction's return value.
+- [x] Relay write branch: caller's wallet on this network required;
+      `validateRegistryWrite` (exactly the registry contract, one of the three
+      functions with the contract's argument shapes, `register_document` owner =
+      caller's wallet, one auth entry from that wallet for exactly that call, no
+      nested invocations); **note must be the caller's** (`documents.user_id`);
+      `consume_chain_quota` writes (100/user, 5000 global per day); simulation
+      cap; Channels; ledger confirmation; `chain_writes` row.
+- [x] UI: `ensureWallet` returns the passkey wallet for email accounts; Register,
+      Update, and node-status buttons and GitHub Sync work once a wallet exists.
+- [x] Found and fixed during testing:
+      - WebAuthn user ids are capped at 64 bytes and the kit builds them from
+        `name:timestamp:random`; emails over ~28 bytes failed wallet creation.
+        `passkeyUserName` caps the name (unit-tested incl. non-ASCII).
+      - After a reload the kit re-verifies the wallet's birth before signing and
+        needs an indexer for that. `GET /api/chain/indexer/api/lookup/<hex>`
+        serves the kit's schema-2 format from Supabase (caller's own wallet
+        only); the kit then verifies the claimed creation tx itself (RPC, then
+        Horizon via `horizonUrl`).
+      - The kit's `defaultPolicies` must list the threshold-1 policy or it
+        rejects our wallets as having unexpected constructor policies.
+      - Kit storage moved to IndexedDB: the verified connection survives
+        reloads, so each write is **one** passkey prompt (was two after reload).
+- [x] Verified on testnet through the real UI (fresh user, virtual
+      authenticator): create wallet → reload → Register hash (tx `7afc38f1…`) →
+      edit → Update hash (`6ade1de5…`, "Updated to v2"); one passkey signature
+      per write; on-chain owner = the wallet, version 2; two `chain_writes` rows.
+      Relay refuses someone else's note (403), another wallet as owner (403),
+      unsigned auth (422 at simulation).
+- Note: an unsigned or failing write still consumes one quota slot (quota is
+  charged before simulation, to protect RPC as well as Channels).
+- Test data: 9 `e2e-passkey…@doqtri.test` users, 6 testnet wallets, 7 notes in
+  the production project. `on delete restrict` means removing them needs the
+  wallet rows (testnet) deleted first.
 
-### 4. Signing and relaying writes
+### 5. History for contract-account owners — **Done 2026-10-08 (testnet verified)**
 
-- [ ] Split `contract-client.ts` writes behind a signer:
-  - `FreighterSigner` — today's path, unchanged (`signAndSend`, funding preflight).
-  - `PasskeySigner` — simulate with the relayer's public key as source, sign the
-    `SorobanAuthorizationEntry` for the `C…` address with the passkey, POST
-    `{ func, auth }` to the relay route. No Horizon funding checks.
-- [ ] `POST /api/chain/relay` (server, session required). It is the fee faucet,
-      so it validates everything before spending:
-  - `func` is `invokeContract` on **exactly** `CONTRACT_ID`
-  - function name ∈ `register_document | update_document | set_node_status`
-  - the owner / signer address in `auth` is **this user's** `smart_wallets.address`
-  - `doc_id` is a `documents.id` owned by this user (RLS read)
-  - per-user rate limit and the global daily budget
-  - submit via `@openzeppelin/relayer-plugin-channels` (server-side only; it
-    CORS-fails in the browser), poll for the result, insert `chain_writes`, return `{ txHash, version }`
-- [ ] `errors.ts`: passkey cancel (`NotAllowedError`), relay refused (quota),
-      relay down, wallet archived. Freighter copy only on the Freighter path.
-
-### 5. History for contract-account owners
-
-- [ ] `lib/stellar/history.ts`: if `owner` starts with `C`, read the tx hashes
-      for `doc_id` from `chain_writes` (server, admin client), fetch each from
-      Horizon `/transactions/{hash}/operations`, and feed the existing
-      `buildHistory` decoder. `G…` owners keep the account-feed path.
-- [ ] The audit page states the trust change honestly: for these documents the
-      list of writes comes from Doqtri's index, while each entry's content is
-      verified against the ledger. A missing row hides a version; it cannot forge one.
-- [ ] Optional hardening later: an independent indexer of the contract's
-      `doqtri/*` events (RPC drops events after ~7 days, so it must run continuously).
+- [x] `lib/stellar/history.ts`: `C…` owners read their transaction hashes from
+      `chain_writes` (public, anon key, so the same code runs on the audit
+      page and in the vault), fetch each transaction's operations from Horizon
+      in batches of 10 (at most 200 writes), restore ledger order by paging
+      token (`inLedgerOrder`), and decode with the existing `buildHistory`.
+      `G…` owners keep the owner-feed path unchanged.
+- [x] The index only says where to look: the decoder keeps only successful
+      calls to this registry for this document, so a bogus row cannot add a
+      version (unit-tested).
+- [x] Completeness: if the contract's version is higher than the versions
+      found (a write made outside Doqtri, or one the index missed),
+      `history.incomplete` is set; the audit page warns, stops numbering the
+      listed versions, and the hash checker labels only the contract's current
+      version.
+- [x] Audit page: passkey-wallet owners are labelled as such, with a
+      stellar.expert contract link.
+- [x] Verified on testnet against three owners: passkey wallet fully indexed
+      (v1/v2 with the right tx links, no warning); passkey wallet never indexed
+      (warning, no misleading "Horizon unavailable"); Freighter owner (v1/v2
+      from the owner feed, unchanged).
+- Deferred: an independent event indexer, so the list does not depend on
+  Doqtri's index at all.
 
 ### 6. Vault UI
 

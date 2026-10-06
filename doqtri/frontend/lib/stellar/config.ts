@@ -74,6 +74,11 @@ export function expertTxUrl(hash: string) {
   return `${EXPERT_TX_BASE}/${hash}`;
 }
 
+/** Contract pages live next to tx pages: `.../explorer/<network>/contract/<id>`. */
+export function expertContractUrl(id: string) {
+  return `${EXPERT_TX_BASE.replace(/\/tx$/, "")}/contract/${id}`;
+}
+
 export function labContractUrl(id = CONTRACT_ID) {
   return `https://lab.stellar.org/r/${LAB_NETWORK}/contract/${id}`;
 }

@@ -16,7 +16,8 @@
   "dependencies": {
     "@base-ui/react": "^1.6.0",
     "@creit.tech/stellar-wallets-kit": "^2.5.0",
-    "@stellar/stellar-sdk": "^16.1.0",
+    "@openzeppelin/relayer-plugin-channels": "0.21.0",
+    "@stellar/stellar-sdk": "^16.3.1",
     "@supabase/ssr": "^0.12.3",
     "@supabase/supabase-js": "^2.110.8",
     "@uiw/react-md-editor": "^4.1.1",
@@ -35,6 +36,7 @@
     "react-force-graph-2d": "^1.29.1",
     "react-resizable-panels": "^4.12.2",
     "shadcn": "^4.14.1",
+    "smart-account-kit": "0.8.0",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
     "turndown": "^7.2.4",
