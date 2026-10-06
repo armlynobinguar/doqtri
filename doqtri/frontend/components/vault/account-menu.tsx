@@ -5,7 +5,9 @@ import {
   ArrowLeftRightIcon,
   CopyIcon,
   DropletIcon,
+  ExternalLinkIcon,
   KeyRoundIcon,
+  Loader2Icon,
   LogOutIcon,
   PlugIcon,
   RefreshCwIcon,
@@ -21,7 +23,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useWallet } from "@/components/vault/wallet-provider";
-import { IS_MAINNET } from "@/lib/stellar/config";
+import { expertContractUrl, IS_MAINNET } from "@/lib/stellar/config";
 import { shortenAddress } from "@/lib/wallet";
 import { cn } from "@/lib/utils";
 
@@ -42,7 +44,13 @@ export function AccountMenu({ className }: { className?: string }) {
   const { sessionAddress, walletAddress, mismatch, balance, balanceError } = wallet;
 
   if (wallet.identity.kind === "email") {
-    return <EmailAccountMenu className={className} email={wallet.identity.email} />;
+    return (
+      <EmailAccountMenu
+        className={className}
+        email={wallet.identity.email}
+        smartWallet={wallet.identity.smartWallet}
+      />
+    );
   }
   if (!sessionAddress) return null;
 
@@ -188,12 +196,33 @@ export function AccountMenu({ className }: { className?: string }) {
 }
 
 /**
- * Email accounts: no wallet, balance, or reconnect yet — just who is signed in
- * and the way out. Passkey wallets (progress/002) will add to this menu.
+ * Email accounts: who is signed in, their passkey wallet (or the way to create
+ * one), and the way out. No balance: the relay pays every fee.
  */
-function EmailAccountMenu({ email, className }: { email: string; className?: string }) {
+function EmailAccountMenu({
+  email,
+  smartWallet,
+  className,
+}: {
+  email: string;
+  smartWallet: string | null;
+  className?: string;
+}) {
   const wallet = useWallet();
   const [busy, setBusy] = useState(false);
+  const [creating, setCreating] = useState(false);
+
+  async function createWallet() {
+    setCreating(true);
+    try {
+      await wallet.createSmartWallet();
+      toast.success("Passkey wallet created");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Your wallet could not be created.");
+    } finally {
+      setCreating(false);
+    }
+  }
 
   async function signOut() {
     setBusy(true);
@@ -228,11 +257,40 @@ function EmailAccountMenu({ email, className }: { email: string; className?: str
         </DropdownMenuGroup>
 
         <DropdownMenuGroup>
-          <DropdownMenuLabel>Wallet · {IS_MAINNET ? "Mainnet" : "Testnet"}</DropdownMenuLabel>
-          <div className="text-muted-foreground flex gap-2 px-1.5 pb-1 text-[12px]">
-            <KeyRoundIcon className="mt-0.5 size-3.5 shrink-0" />
-            <span>No wallet yet. Passkey wallets for anchoring notes on Stellar are on the way.</span>
-          </div>
+          <DropdownMenuLabel>Passkey wallet · {IS_MAINNET ? "Mainnet" : "Testnet"}</DropdownMenuLabel>
+          {smartWallet ? (
+            <>
+              <DropdownMenuItem
+                onClick={() =>
+                  void navigator.clipboard.writeText(smartWallet).then(() => toast.success("Address copied"))
+                }
+              >
+                <CopyIcon />
+                <span className="font-mono">{shortenAddress(smartWallet)}</span>
+                <span className="text-muted-foreground ml-auto text-[11px]">copy</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => window.open(expertContractUrl(smartWallet), "_blank", "noopener")}>
+                <ExternalLinkIcon />
+                View on stellar.expert
+              </DropdownMenuItem>
+            </>
+          ) : (
+            <>
+              <div className="text-muted-foreground px-1.5 pb-1 text-[12px]">
+                A wallet unlocked by your fingerprint, face, or device PIN. It lets you anchor notes
+                on Stellar; Doqtri covers the fees.
+              </div>
+              <DropdownMenuItem
+                disabled={creating}
+                data-testid="create-passkey-wallet"
+                closeOnClick={false}
+                onClick={() => void createWallet()}
+              >
+                {creating ? <Loader2Icon className="animate-spin" /> : <KeyRoundIcon />}
+                {creating ? "Creating wallet…" : "Create passkey wallet"}
+              </DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuGroup>
 
         <DropdownMenuSeparator />

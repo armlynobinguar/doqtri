@@ -28,7 +28,7 @@ export type FailedImport = {
  */
 export type VaultIdentity =
   | { kind: "wallet"; address: string }
-  | { kind: "email"; email: string };
+  | { kind: "email"; email: string; smartWallet: string | null };
 
 /** What the explorer, tabs, and quick switcher need to list a note. */
 export type NoteSummary = {

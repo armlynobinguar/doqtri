@@ -3,6 +3,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { VaultShell } from "@/components/vault/vault-shell";
 import { loadFailedImports } from "@/lib/ingest/failed";
 import { walletAddressFromEmail } from "@/lib/wallet-address";
+import { NETWORK } from "@/lib/stellar/smart-wallet-config";
 import type { NoteSummary, VaultIdentity } from "@/lib/types";
 
 export default async function VaultLayout({
@@ -33,9 +34,18 @@ export default async function VaultLayout({
   const failedImports = await loadFailedImports(supabase);
   // From the verified email, not user_metadata: the user can rewrite metadata.
   const address = walletAddressFromEmail(user.email);
-  const identity: VaultIdentity = address
-    ? { kind: "wallet", address }
-    : { kind: "email", email: user.email ?? "" };
+  let identity: VaultIdentity;
+  if (address) {
+    identity = { kind: "wallet", address };
+  } else {
+    // RLS: only the caller's own wallet row is visible.
+    const { data: wallet } = await supabase
+      .from("smart_wallets")
+      .select("address")
+      .eq("network", NETWORK)
+      .maybeSingle();
+    identity = { kind: "email", email: user.email ?? "", smartWallet: wallet?.address ?? null };
+  }
 
   return (
     <VaultShell notes={notes} failedImports={failedImports} identity={identity}>

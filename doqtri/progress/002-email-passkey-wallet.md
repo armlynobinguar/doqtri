@@ -1,6 +1,6 @@
 # 002 — Email sign-up with an automatic passkey wallet
 
-**Status:** In progress — §0 spike, §1 email accounts, §2 schema done; §3 next
+**Status:** In progress — §0–§3 done (wallet creation verified on testnet); §4 next
 **Opened:** 2026-10-06
 **Supersedes:** the wallet-only sign-in in `proxy.ts` ("not a separate email
 sign-in") and `components/auth/login-form.tsx`. Freighter sign-in stays; email
@@ -237,23 +237,39 @@ delete blocked, user cap (`scope = user`, retry 86400 s) and global cap
 (`scope = global`) refuse, other network counted separately, anon and
 authenticated cannot execute the function, RLS on all four tables.
 
-### 3. Wallet creation
+### 3. Wallet creation — **Done 2026-10-08 (testnet verified)**
 
-- [ ] `lib/passkey-wallet.ts` (client): one `SmartAccountKit` instance with
-      `rpId = NEXT_PUBLIC_WEBAUTHN_RP_ID`, the canonical wasm/verifier/policy for the
-      network, `indexerUrl: false` (Supabase is the index), `relayerUrl: "/api/chain/relay"`.
-- [ ] `kit.createWallet(..., { autoSubmit: false, policies: [threshold 1] })` builds
-      the passkey and the deploy `{ func, auth }`; the browser posts it to the relay.
-- [ ] Relay, deploy branch (session required):
-  - refuse if the user already has a wallet — return it instead
-  - accept only one `createContractV2` with the canonical account wasm hash, one
-    External WebAuthn signer on the canonical verifier, the threshold-1 policy,
-    and the credential-derived salt (port these checks from `relayer-proxy`)
-  - submit through Channels; insert `smart_wallets` + `wallet_passkeys`
-  - per-user and global daily caps (reuse the `consume_ai_quota` pattern with a
-    `chain_usage` table)
-- [ ] Explain the passkey in the prompt before the browser dialog opens
-      ("Your device will create a passkey. It is your wallet's key.").
+- [x] `lib/stellar/smart-wallet-config.ts`: canonical wasm hash, per-network
+      WebAuthn verifier and threshold policy, shared deployer seed, relay path.
+- [x] `lib/passkey-wallet.ts`: lazy `SmartAccountKit` (`indexerUrl: false`,
+      `relayerUrl: /api/chain/relay`); `createPasskeyWallet` = one passkey
+      prompt, threshold-1 policy, resident key required.
+- [x] `app/api/chain/relay/route.ts` (deploy branch): email session required;
+      `{ func, auth }` only; refuses if the user already has a wallet on this
+      network; `lib/stellar/relay-validation.ts` checks the exact kit deploy
+      shape (canonical wasm, shared deployer, one External signer **on the
+      canonical verifier**, exactly the threshold-1 policy, salt =
+      sha256(credential id), one matching deployer auth entry) — stricter than
+      SDF's reference proxy; `consume_chain_quota` (3/user, 200 global per day,
+      env-tunable); simulation under `CHAIN_MAX_RESOURCE_FEE_STROOPS` (default
+      0.5 XLM; the reference proxy's 0.1 XLM would refuse mainnet deploys);
+      Channels submit; ledger confirmation; then `smart_wallets` +
+      `wallet_passkeys` rows. The wallet address is computed from the deploy
+      preimage, not taken from the client.
+- [x] UI: email account menu shows the wallet (copy, stellar.expert) or
+      "Create passkey wallet"; ship panel offers the same where anchoring would be.
+      Anchor buttons stay disabled until §4.
+- [x] Dependencies: `smart-account-kit` **0.8.0 pinned**, 
+      `@openzeppelin/relayer-plugin-channels` 0.21.0 pinned,
+      `@stellar/stellar-sdk` ^16.3.1 (installed with npm 10; `npm ci` checked).
+- [x] Verified on testnet through the real UI: Chromium virtual authenticator
+      → kit → relay → Channels → wallet `CDDBW7BX…VP4K` (tx `cdf96377…`, 0.0787 XLM
+      paid by Channels, 18 s end to end). Ledger instance holds the canonical
+      wasm, so the server-computed address is right. DB rows and quota row
+      present. Relay refuses signed-out (401), wrong shape and bad XDR (400).
+      Test account: `e2e-passkey@doqtri.test` (pre-confirmed via admin API).
+- [ ] Mainnet: set `CHANNELS_API_KEY` (mainnet key) in Vercel Production before
+      merging; until §4 ships, mainnet users can create a wallet but not use it.
 
 ### 4. Signing and relaying writes
 

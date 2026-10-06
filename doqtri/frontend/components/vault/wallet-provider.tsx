@@ -25,6 +25,7 @@ import {
   shortenAddress,
 } from "@/lib/wallet";
 import { exchangeWalletSession } from "@/lib/wallet-session";
+import { createPasskeyWallet } from "@/lib/passkey-wallet";
 import type { VaultIdentity } from "@/lib/types";
 
 const BALANCE_POLL_MS = 30_000;
@@ -58,6 +59,8 @@ type WalletContextValue = {
   disconnect: () => Promise<void>;
   /** Ends the session without touching any wallet (email accounts). */
   signOut: () => Promise<void>;
+  /** Email accounts: one passkey prompt, then the deployed wallet's address. */
+  createSmartWallet: () => Promise<string>;
   fund: () => Promise<void>;
 };
 
@@ -166,6 +169,13 @@ export function WalletProvider({
     router.refresh();
   }, [router]);
 
+  const createSmartWallet = useCallback(async () => {
+    if (identity.kind !== "email") throw new Error("Wallet accounts already have a wallet.");
+    const { address } = await createPasskeyWallet(identity.email);
+    router.refresh();
+    return address;
+  }, [identity, router]);
+
   const disconnect = useCallback(async () => {
     try {
       await disconnectWallet();
@@ -195,6 +205,7 @@ export function WalletProvider({
       switchVault,
       disconnect,
       signOut,
+      createSmartWallet,
       fund,
     }),
     [
@@ -209,6 +220,7 @@ export function WalletProvider({
       switchVault,
       disconnect,
       signOut,
+      createSmartWallet,
       fund,
     ],
   );
