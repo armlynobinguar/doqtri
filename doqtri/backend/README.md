@@ -28,6 +28,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20260928000100_create_wallet_accounts.sql
 20260928000200_add_documents_publish_headings.sql
 20261002000000_create_ai_usage.sql        # NOT yet applied: apply before deploying
+20261006000000_create_node_links.sql      # NOT yet applied: apply before deploying
 ```
 
 The remote records its own version stamps (e.g. `20260929114657` for
@@ -55,6 +56,10 @@ Two supporting tables:
   `consume_ai_quota()` (service role; execute is revoked from `anon` and
   `authenticated`). It enforces the per-user `AI_DAILY_LIMIT` atomically under a
   per-user advisory lock. Owners can read their own rows.
+- `public.node_links` — mindmap node → GitHub issue or PR (one per node), read
+  by `/api/github/status` to suggest the next node status. Owners select,
+  insert and delete their own rows, and can only link their own documents.
+  Nothing in it touches the chain; the owner signs any status change.
 
 The notes table itself is still the only content store. There are deliberately **no** graph tables: nodes and
 edges are parsed from `markdown` at render time by `lib/wikilinks.ts`, so the
