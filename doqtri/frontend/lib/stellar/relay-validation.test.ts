@@ -5,6 +5,7 @@ import {
   deployerAddress,
   parseRelayBody,
   RelayRejection,
+  validateRegistryWrite,
   validateWalletDeploy,
   type RelaySubmission,
 } from "./relay-validation";
@@ -157,5 +158,78 @@ describe("deployed contract address", () => {
     expect(testnet).toMatch(/^C[A-Z2-7]{55}$/);
     expect(deployedContractAddress(expected.deployer, salt, Networks.TESTNET)).toBe(testnet);
     expect(deployedContractAddress(expected.deployer, salt, Networks.PUBLIC)).not.toBe(testnet);
+  });
+});
+
+describe("registry write validation", () => {
+  const registry = contract("registry");
+  const wallet = contract("wallet");
+  const docId = "3f1c2a9e-0000-4000-8000-000000000001";
+  const str = (s: string) => xdr.ScVal.scvString(s);
+  const hash32 = xdr.ScVal.scvBytes(Buffer.alloc(32, 1));
+  const status = xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Built")]);
+
+  function call(fn: string, args: xdr.ScVal[], o: { target?: string; signer?: string; nested?: boolean; entries?: number } = {}) {
+    const invoke = new xdr.InvokeContractArgs({
+      contractAddress: Address.fromString(o.target ?? registry).toScAddress(),
+      functionName: fn,
+      args,
+    });
+    const root = (inv: xdr.InvokeContractArgs, children: xdr.SorobanAuthorizedInvocation[] = []) =>
+      new xdr.SorobanAuthorizedInvocation({
+        function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(inv),
+        subInvocations: children,
+      });
+    const entry = new xdr.SorobanAuthorizationEntry({
+      credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(
+        new xdr.SorobanAddressCredentials({
+          address: Address.fromString(o.signer ?? wallet).toScAddress(),
+          nonce: xdr.Int64.fromString("7"),
+          signatureExpirationLedger: 100,
+          signature: xdr.ScVal.scvVoid(),
+        }),
+      ),
+      rootInvocation: root(invoke, o.nested ? [root(invoke)] : []),
+    });
+    return {
+      func: xdr.HostFunction.hostFunctionTypeInvokeContract(invoke),
+      auth: Array.from({ length: o.entries ?? 1 }, () => entry),
+    };
+  }
+
+  const register = (owner = wallet, o = {}) =>
+    call("register_document", [Address.fromString(owner).toScVal(), str(docId), hash32], o);
+  const check = (s: RelaySubmission) => validateRegistryWrite(s, { registry, wallet });
+
+  it("accepts the three registry writes and reports the document", () => {
+    expect(check(register())).toEqual({ fn: "register_document", docId });
+    expect(check(call("update_document", [str(docId), hash32]))).toEqual({ fn: "update_document", docId });
+    expect(check(call("set_node_status", [str(docId), str("h1"), status, str("gh"), str("pr#1")]))).toEqual({
+      fn: "set_node_status",
+      docId,
+    });
+  });
+
+  it("refuses other contracts and functions", () => {
+    expect(() => check(register(wallet, { target: contract("token") }))).toThrow(/Only the Doqtri registry/);
+    expect(() => check(call("transfer", [str(docId), hash32]))).toThrow(/not allowed/);
+  });
+
+  it("refuses registering for someone else's wallet", () => {
+    expect(() => check(register(contract("victim")))).toThrow(/name your wallet/);
+  });
+
+  it("refuses wrong argument shapes", () => {
+    expect(() => check(call("update_document", [str(docId), xdr.ScVal.scvBytes(Buffer.alloc(31))]))).toThrow(/invalid argument/);
+    expect(() => check(call("set_node_status", [str(docId), str("h1"), str("Built"), str(""), str("")]))).toThrow(/invalid argument/);
+  });
+
+  it("requires exactly one auth entry from the wallet for exactly this call", () => {
+    expect(() => check(register(wallet, { signer: contract("other") }))).toThrow(/from your wallet/);
+    expect(() => check(register(wallet, { nested: true }))).toThrow(/from your wallet/);
+    expect(() => check(register(wallet, { entries: 2 }))).toThrow(/exactly one auth entry/);
+    const mismatched = register();
+    mismatched.auth = call("update_document", [str(docId), hash32]).auth;
+    expect(() => check(mismatched)).toThrow(/from your wallet/);
   });
 });

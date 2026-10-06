@@ -191,3 +191,101 @@ export function deployedContractAddress(deployer: string, salt: Buffer, networkP
   );
   return StrKey.encodeContract(hash(preimage.toXDR()));
 }
+
+export const REGISTRY_FUNCTIONS = ["register_document", "update_document", "set_node_status"] as const;
+export type RegistryFunction = (typeof REGISTRY_FUNCTIONS)[number];
+
+export type RegistryWrite = { fn: RegistryFunction; docId: string };
+
+/** The address an auth entry signs for, for V1 and V2 address credentials. */
+function credentialAddress(entry: xdr.SorobanAuthorizationEntry): string | null {
+  const credentials = entry.credentials();
+  switch (credentials.switch().name) {
+    case "sorobanCredentialsAddress":
+      return Address.fromScAddress(credentials.address().address()).toString();
+    case "sorobanCredentialsAddressV2":
+      return Address.fromScAddress(credentials.addressV2().address()).toString();
+    default:
+      return null;
+  }
+}
+
+function isString(value: xdr.ScVal | undefined): value is xdr.ScVal {
+  return value?.switch().name === "scvString";
+}
+
+function isHash(value: xdr.ScVal | undefined): boolean {
+  return value?.switch().name === "scvBytes" && value.bytes().length === 32;
+}
+
+/**
+ * A DoqtriRegistry write signed by the caller's own smart wallet: one
+ * invocation of one registry function on exactly `registry`, with the
+ * argument shapes the contract declares, and one auth entry from `wallet`
+ * authorizing exactly that invocation and nothing nested.
+ *
+ * The caller still has to check that `docId` is one of the user's notes.
+ */
+export function validateRegistryWrite(
+  { func, auth }: RelaySubmission,
+  expected: { registry: string; wallet: string },
+): RegistryWrite {
+  if (func.switch().name !== "hostFunctionTypeInvokeContract") {
+    throw new RelayRejection("Only registry calls are accepted here");
+  }
+  const invoke = func.invokeContract();
+  if (Address.fromScAddress(invoke.contractAddress()).toString() !== expected.registry) {
+    throw new RelayRejection("Only the Doqtri registry can be called");
+  }
+  const fn = invoke.functionName().toString() as RegistryFunction;
+  if (!REGISTRY_FUNCTIONS.includes(fn)) {
+    throw new RelayRejection("That registry function is not allowed");
+  }
+
+  const args = invoke.args();
+  let docArg: xdr.ScVal | undefined;
+  if (fn === "register_document") {
+    if (
+      args.length !== 3 ||
+      args[0].switch().name !== "scvAddress" ||
+      Address.fromScAddress(args[0].address()).toString() !== expected.wallet ||
+      !isString(args[1]) ||
+      !isHash(args[2])
+    ) {
+      throw new RelayRejection("register_document must name your wallet as the owner");
+    }
+    docArg = args[1];
+  } else if (fn === "update_document") {
+    if (args.length !== 2 || !isString(args[0]) || !isHash(args[1])) {
+      throw new RelayRejection("update_document has an invalid argument shape");
+    }
+    docArg = args[0];
+  } else {
+    if (
+      args.length !== 5 ||
+      !isString(args[0]) ||
+      !isString(args[1]) ||
+      args[2].switch().name !== "scvVec" ||
+      !isString(args[3]) ||
+      !isString(args[4])
+    ) {
+      throw new RelayRejection("set_node_status has an invalid argument shape");
+    }
+    docArg = args[0];
+  }
+
+  if (auth.length !== 1) {
+    throw new RelayRejection("A registry write must carry exactly one auth entry");
+  }
+  const root = auth[0].rootInvocation();
+  if (
+    credentialAddress(auth[0]) !== expected.wallet ||
+    root.subInvocations().length !== 0 ||
+    root.function().switch().name !== "sorobanAuthorizedFunctionTypeContractFn" ||
+    !root.function().contractFn().toXDR().equals(invoke.toXDR())
+  ) {
+    throw new RelayRejection("The signature must come from your wallet for exactly this call");
+  }
+
+  return { fn, docId: docArg.str().toString() };
+}

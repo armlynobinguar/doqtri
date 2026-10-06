@@ -25,7 +25,7 @@ import {
   shortenAddress,
 } from "@/lib/wallet";
 import { exchangeWalletSession } from "@/lib/wallet-session";
-import { createPasskeyWallet } from "@/lib/passkey-wallet";
+import { createPasskeyWallet, setPasskeyWallet } from "@/lib/passkey-wallet";
 import type { VaultIdentity } from "@/lib/types";
 
 const BALANCE_POLL_MS = 30_000;
@@ -74,7 +74,14 @@ export function WalletProvider({
   children: React.ReactNode;
 }) {
   const sessionAddress = identity.kind === "wallet" ? identity.address : null;
+  const smartWallet = identity.kind === "email" ? identity.smartWallet : null;
   const router = useRouter();
+
+  // The registry client signs as a C… address by looking its passkey up here.
+  useEffect(() => {
+    setPasskeyWallet(smartWallet);
+    return () => setPasskeyWallet(null);
+  }, [smartWallet]);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [balance, setBalance] = useState<AccountBalance | null>(null);
   const [balanceError, setBalanceError] = useState(false);
@@ -126,10 +133,9 @@ export function WalletProvider({
 
   const ensureWallet = useCallback(async () => {
     if (!sessionAddress) {
-      throw new DoqtriError(
-        "NO_WALLET",
-        "Email accounts can't sign Stellar transactions yet. Passkey wallets are on the way.",
-      );
+      // Email accounts sign with their passkey wallet; the relay pays.
+      if (smartWallet) return smartWallet.address;
+      throw new DoqtriError("NO_WALLET", "Create your passkey wallet first, from the account menu.");
     }
     let address = walletAddress ?? (await getWalletAddress());
     if (!address) address = await connectWallet();
@@ -143,7 +149,7 @@ export function WalletProvider({
       );
     }
     return address;
-  }, [walletAddress, sessionAddress]);
+  }, [walletAddress, sessionAddress, smartWallet]);
 
   const reconnect = useCallback(async () => {
     setWalletAddress(await connectWallet());

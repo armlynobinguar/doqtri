@@ -63,10 +63,10 @@ export function ShipPanel({ docId, title, markdown }: Props) {
   const [fundingError, setFundingError] = useState<string | null>(null);
   const [funding, setFunding] = useState(false);
   const unfunded = wallet.balance?.funded === false;
-  // Email accounts sign with a passkey wallet; anchoring through it is phase 4
-  // of progress/002, so until then they can only create the wallet here.
-  const noWallet = wallet.sessionAddress === null;
+  // Email accounts sign with a passkey wallet; until they create one there is
+  // nothing to sign with.
   const smartWallet = wallet.identity.kind === "email" ? wallet.identity.smartWallet : null;
+  const noWallet = wallet.sessionAddress === null && smartWallet === null;
   const [creatingWallet, setCreatingWallet] = useState(false);
 
   async function createSmartWallet() {
@@ -286,30 +286,21 @@ export function ShipPanel({ docId, title, markdown }: Props) {
           data-testid="no-wallet-notice"
           className="text-muted-foreground grid gap-1.5 rounded-md border px-2.5 py-2 text-[11px]"
         >
-          {smartWallet ? (
-            <span>
-              Your passkey wallet is ready. Anchoring from it is coming next; until then, notes stay
-              private and unanchored.
-            </span>
-          ) : (
-            <>
-              <span>
-                Anchoring on Stellar needs a wallet. Create one with a passkey — your fingerprint,
-                face, or device PIN. Doqtri covers the fees.
-              </span>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={creatingWallet}
-                className="h-6 justify-self-start px-2 text-[11px] max-lg:h-9 max-lg:text-[12px]"
-                onClick={() => void createSmartWallet()}
-              >
-                {creatingWallet ? <Loader2Icon className="animate-spin" /> : null}
-                {creatingWallet ? "Creating wallet…" : "Create passkey wallet"}
-              </Button>
-            </>
-          )}
+          <span>
+            Anchoring on Stellar needs a wallet. Create one with a passkey — your fingerprint,
+            face, or device PIN. Doqtri covers the fees.
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={creatingWallet}
+            className="h-6 justify-self-start px-2 text-[11px] max-lg:h-9 max-lg:text-[12px]"
+            onClick={() => void createSmartWallet()}
+          >
+            {creatingWallet ? <Loader2Icon className="animate-spin" /> : null}
+            {creatingWallet ? "Creating wallet…" : "Create passkey wallet"}
+          </Button>
         </div>
       ) : null}
 

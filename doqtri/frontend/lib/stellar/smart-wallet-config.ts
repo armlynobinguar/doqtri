@@ -46,3 +46,6 @@ export const SHARED_DEPLOYER_SEED = "openzeppelin-smart-account-kit";
 
 /** The relay route the kit posts `{ func, auth }` to. */
 export const RELAY_PATH = "/api/chain/relay";
+
+/** The kit appends `/api/lookup/<credential hex>` (app/api/chain/indexer/…). */
+export const INDEXER_PATH = "/api/chain/indexer";

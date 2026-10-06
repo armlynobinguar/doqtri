@@ -1,5 +1,11 @@
 /**
- * Typed DoqtriRegistry client — WASM-generated bindings + Freighter signing.
+ * Typed DoqtriRegistry client — WASM-generated bindings.
+ *
+ * Two kinds of signer, told apart by the source address:
+ * - `G…` (Freighter and other wallets): the account is the transaction source,
+ *   signs the envelope, and pays the fee, so funding is checked first.
+ * - `C…` (an email account's passkey smart wallet): the wallet only signs the
+ *   call's auth entry; /api/chain/relay submits it and Channels pays.
  */
 import type { NodeStatus } from "@/lib/stellar/types";
 import {
@@ -11,6 +17,8 @@ import {
 import { CONTRACT_ID, NETWORK_PASSPHRASE, RPC_URL } from "@/lib/stellar/config";
 import { hexToBytes32 } from "@/lib/stellar/hash";
 import { signSorobanTx } from "@/lib/wallet";
+import { passkeyWalletFor, signAndRelay } from "@/lib/passkey-wallet";
+import { rpc, scValToNative, StrKey, type contract } from "@stellar/stellar-sdk";
 import { assertCanPay, assertFunded } from "@/lib/stellar/horizon";
 import { DoqtriError, mapWalletError } from "@/lib/stellar/errors";
 
@@ -63,7 +71,14 @@ function readClient() {
   });
 }
 
+function isSmartWallet(source: string): boolean {
+  return StrKey.isValidContract(source);
+}
+
 function writeClient(publicKey: string) {
+  // A smart wallet cannot be a transaction source; simulate from the SDK's
+  // null account and let the relay's Channels account supply the real one.
+  if (isSmartWallet(publicKey)) return readClient();
   return new Client({
     contractId: CONTRACT_ID,
     networkPassphrase: NETWORK_PASSPHRASE,
@@ -146,10 +161,41 @@ function receipt(
 
 /**
  * The pre-flight funding check: runs after simulation, when the real fee is
- * known, and before the wallet is asked to sign anything.
+ * known, and before the wallet is asked to sign anything. Smart wallets pay
+ * nothing, so there is nothing to check.
  */
 async function preflight(source: string, tx: { built?: { fee: string } }): Promise<void> {
+  if (isSmartWallet(source)) return;
   await assertCanPay(source, Number(tx.built?.fee ?? 0));
+}
+
+async function assertSourceFunded(source: string): Promise<void> {
+  if (!isSmartWallet(source)) await assertFunded(source);
+}
+
+/** Signs and submits with whichever signer `source` is; returns the receipt. */
+async function send<T>(
+  source: string,
+  tx: contract.AssembledTransaction<T>,
+  hasVersion: boolean,
+): Promise<WriteReceipt> {
+  if (!isSmartWallet(source)) return receipt(await tx.signAndSend(), hasVersion);
+
+  const txHash = await signAndRelay(tx, passkeyWalletFor(source));
+  if (!hasVersion) return { txHash };
+  // The relay waited for the ledger, so the result is final; read the version
+  // it returned instead of re-querying the document.
+  try {
+    const result = await new rpc.Server(RPC_URL).getTransaction(txHash);
+    if (result.status === rpc.Api.GetTransactionStatus.SUCCESS && result.returnValue) {
+      const value = scValToNative(result.returnValue) as unknown;
+      const version = Number((value as { ok?: unknown })?.ok ?? value);
+      if (Number.isFinite(version)) return { txHash, version };
+    }
+  } catch {
+    // The write landed; only the version label is missing.
+  }
+  return { txHash };
 }
 
 function mapInvokeError(e: unknown): never {
@@ -223,14 +269,14 @@ export const DoqtriRegistry = {
     docId: string,
     contentHashHex: string,
   ): Promise<WriteReceipt> {
-    await assertFunded(source);
+    await assertSourceFunded(source);
     try {
       const tx = await writeClient(source).register_document({
         owner: source,
         doc_id: docId,
         content_hash: hexToBuffer(contentHashHex),
       });
-      // Detect already-exists from simulation before prompting Freighter
+      // Detect already-exists from simulation before prompting the signer
       try {
         unwrapResult(tx.result, "register failed", simulationError(tx));
       } catch (e) {
@@ -240,8 +286,7 @@ export const DoqtriRegistry = {
         throw e;
       }
       await preflight(source, tx);
-      const sent = await tx.signAndSend();
-      return receipt(sent, true);
+      return await send(source, tx, true);
     } catch (e) {
       if (e instanceof DoqtriError && e.code === "ALREADY_EXISTS") {
         return DoqtriRegistry.updateDocument(source, docId, contentHashHex);
@@ -259,15 +304,14 @@ export const DoqtriRegistry = {
     docId: string,
     contentHashHex: string,
   ): Promise<WriteReceipt> {
-    await assertFunded(source);
+    await assertSourceFunded(source);
     try {
       const tx = await writeClient(source).update_document({
         doc_id: docId,
         new_hash: hexToBuffer(contentHashHex),
       });
       await preflight(source, tx);
-      const sent = await tx.signAndSend();
-      return receipt(sent, true);
+      return await send(source, tx, true);
     } catch (e) {
       mapInvokeError(e);
     }
@@ -281,7 +325,7 @@ export const DoqtriRegistry = {
     tool: string,
     artifactRef: string,
   ): Promise<WriteReceipt> {
-    await assertFunded(source);
+    await assertSourceFunded(source);
     try {
       const tx = await writeClient(source).set_node_status({
         doc_id: docId,
@@ -291,8 +335,7 @@ export const DoqtriRegistry = {
         artifact_ref: artifactRef,
       });
       await preflight(source, tx);
-      const sent = await tx.signAndSend();
-      return receipt(sent, false);
+      return await send(source, tx, false);
     } catch (e) {
       mapInvokeError(e);
     }

@@ -205,7 +205,7 @@ function EmailAccountMenu({
   className,
 }: {
   email: string;
-  smartWallet: string | null;
+  smartWallet: { address: string } | null;
   className?: string;
 }) {
   const wallet = useWallet();
@@ -262,14 +262,18 @@ function EmailAccountMenu({
             <>
               <DropdownMenuItem
                 onClick={() =>
-                  void navigator.clipboard.writeText(smartWallet).then(() => toast.success("Address copied"))
+                  void navigator.clipboard
+                    .writeText(smartWallet.address)
+                    .then(() => toast.success("Address copied"))
                 }
               >
                 <CopyIcon />
-                <span className="font-mono">{shortenAddress(smartWallet)}</span>
+                <span className="font-mono">{shortenAddress(smartWallet.address)}</span>
                 <span className="text-muted-foreground ml-auto text-[11px]">copy</span>
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => window.open(expertContractUrl(smartWallet), "_blank", "noopener")}>
+              <DropdownMenuItem
+                onClick={() => window.open(expertContractUrl(smartWallet.address), "_blank", "noopener")}
+              >
                 <ExternalLinkIcon />
                 View on stellar.expert
               </DropdownMenuItem>

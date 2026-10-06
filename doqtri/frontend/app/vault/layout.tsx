@@ -38,13 +38,23 @@ export default async function VaultLayout({
   if (address) {
     identity = { kind: "wallet", address };
   } else {
-    // RLS: only the caller's own wallet row is visible.
-    const { data: wallet } = await supabase
-      .from("smart_wallets")
-      .select("address")
-      .eq("network", NETWORK)
-      .maybeSingle();
-    identity = { kind: "email", email: user.email ?? "", smartWallet: wallet?.address ?? null };
+    // RLS: only the caller's own wallet and passkeys are visible.
+    const [{ data: wallet }, { data: passkey }] = await Promise.all([
+      supabase.from("smart_wallets").select("address").eq("network", NETWORK).maybeSingle(),
+      supabase
+        .from("wallet_passkeys")
+        .select("credential_id")
+        .eq("network", NETWORK)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+    identity = {
+      kind: "email",
+      email: user.email ?? "",
+      smartWallet:
+        wallet && passkey ? { address: wallet.address, credentialId: passkey.credential_id } : null,
+    };
   }
 
   return (

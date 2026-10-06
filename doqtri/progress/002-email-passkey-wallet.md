@@ -1,6 +1,6 @@
 # 002 — Email sign-up with an automatic passkey wallet
 
-**Status:** In progress — §0–§3 done (wallet creation verified on testnet); §4 next
+**Status:** In progress — §0–§4 done (create + anchor verified on testnet); §5 (audit history) next, required before merging
 **Opened:** 2026-10-06
 **Supersedes:** the wallet-only sign-in in `proxy.ts` ("not a separate email
 sign-in") and `components/auth/login-form.tsx`. Freighter sign-in stays; email
@@ -271,24 +271,46 @@ authenticated cannot execute the function, RLS on all four tables.
 - [ ] Mainnet: set `CHANNELS_API_KEY` (mainnet key) in Vercel Production before
       merging; until §4 ships, mainnet users can create a wallet but not use it.
 
-### 4. Signing and relaying writes
+### 4. Signing and relaying writes — **Done 2026-10-08 (testnet verified)**
 
-- [ ] Split `contract-client.ts` writes behind a signer:
-  - `FreighterSigner` — today's path, unchanged (`signAndSend`, funding preflight).
-  - `PasskeySigner` — simulate with the relayer's public key as source, sign the
-    `SorobanAuthorizationEntry` for the `C…` address with the passkey, POST
-    `{ func, auth }` to the relay route. No Horizon funding checks.
-- [ ] `POST /api/chain/relay` (server, session required). It is the fee faucet,
-      so it validates everything before spending:
-  - `func` is `invokeContract` on **exactly** `CONTRACT_ID`
-  - function name ∈ `register_document | update_document | set_node_status`
-  - the owner / signer address in `auth` is **this user's** `smart_wallets.address`
-  - `doc_id` is a `documents.id` owned by this user (RLS read)
-  - per-user rate limit and the global daily budget
-  - submit via `@openzeppelin/relayer-plugin-channels` (server-side only; it
-    CORS-fails in the browser), poll for the result, insert `chain_writes`, return `{ txHash, version }`
-- [ ] `errors.ts`: passkey cancel (`NotAllowedError`), relay refused (quota),
-      relay down, wallet archived. Freighter copy only on the Freighter path.
+- [x] `contract-client.ts`: the source address picks the signer. `G…` keeps
+      the Freighter path (source, envelope signature, funding checks). `C…`
+      simulates from the SDK's null account, skips funding checks, and calls
+      `signAndRelay` (passkey signs the auth entry, relay submits); the new
+      version is read from the confirmed transaction's return value.
+- [x] Relay write branch: caller's wallet on this network required;
+      `validateRegistryWrite` (exactly the registry contract, one of the three
+      functions with the contract's argument shapes, `register_document` owner =
+      caller's wallet, one auth entry from that wallet for exactly that call, no
+      nested invocations); **note must be the caller's** (`documents.user_id`);
+      `consume_chain_quota` writes (100/user, 5000 global per day); simulation
+      cap; Channels; ledger confirmation; `chain_writes` row.
+- [x] UI: `ensureWallet` returns the passkey wallet for email accounts; Register,
+      Update, and node-status buttons and GitHub Sync work once a wallet exists.
+- [x] Found and fixed during testing:
+      - WebAuthn user ids are capped at 64 bytes and the kit builds them from
+        `name:timestamp:random`; emails over ~28 bytes failed wallet creation.
+        `passkeyUserName` caps the name (unit-tested incl. non-ASCII).
+      - After a reload the kit re-verifies the wallet's birth before signing and
+        needs an indexer for that. `GET /api/chain/indexer/api/lookup/<hex>`
+        serves the kit's schema-2 format from Supabase (caller's own wallet
+        only); the kit then verifies the claimed creation tx itself (RPC, then
+        Horizon via `horizonUrl`).
+      - The kit's `defaultPolicies` must list the threshold-1 policy or it
+        rejects our wallets as having unexpected constructor policies.
+      - Kit storage moved to IndexedDB: the verified connection survives
+        reloads, so each write is **one** passkey prompt (was two after reload).
+- [x] Verified on testnet through the real UI (fresh user, virtual
+      authenticator): create wallet → reload → Register hash (tx `7afc38f1…`) →
+      edit → Update hash (`6ade1de5…`, "Updated to v2"); one passkey signature
+      per write; on-chain owner = the wallet, version 2; two `chain_writes` rows.
+      Relay refuses someone else's note (403), another wallet as owner (403),
+      unsigned auth (422 at simulation).
+- Note: an unsigned or failing write still consumes one quota slot (quota is
+  charged before simulation, to protect RPC as well as Channels).
+- Test data: 9 `e2e-passkey…@doqtri.test` users, 6 testnet wallets, 7 notes in
+  the production project. `on delete restrict` means removing them needs the
+  wallet rows (testnet) deleted first.
 
 ### 5. History for contract-account owners
 
