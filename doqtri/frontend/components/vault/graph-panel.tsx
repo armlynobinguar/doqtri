@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { useRouter } from "next/navigation";
 import type { NodeObject } from "react-force-graph-2d";
 import type {
   ForceGraphBridgeProps,
@@ -12,6 +11,7 @@ import { useNodePointer } from "@/components/vault/use-node-pointer";
 import { buildGraph, type GraphNode } from "@/lib/wikilinks";
 import { GRAPH_COLORS } from "@/lib/theme";
 import type { Doc } from "@/lib/types";
+import { useNavigate } from "@/components/vault/navigation";
 
 type NodeDatum = GraphNode;
 type SimNode = NodeObject<NodeDatum>;
@@ -85,7 +85,7 @@ export function GraphPanel({
   docs: Doc[];
   activeId?: string;
 }) {
-  const router = useRouter();
+  const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<GraphInstance<SimNode> | undefined>(undefined);
   const nodesRef = useRef<SimNode[]>([]);
@@ -133,7 +133,7 @@ export function GraphPanel({
     hitTest: hitsNode,
     // Ghost nodes have no note behind them yet.
     isClickable: (node) => !node.ghost,
-    onClick: (node) => router.push(`/vault/${String(node.id)}`),
+    onClick: (node) => navigate(`/vault/${String(node.id)}`),
     onDragEnd: (node) => {
       // Hand the node back to the layout, as force-graph's own drag did.
       node.fx = undefined;

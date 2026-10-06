@@ -4,14 +4,15 @@ import dynamic from "next/dynamic";
 import { FileTextIcon, SparklesIcon } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
+import { DoqtriLoader } from "@/components/brand/doqtri-loader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 // Touches `window`, so it must never be server-rendered.
 const MDEditor = dynamic(() => import("@uiw/react-md-editor"), {
   ssr: false,
   loading: () => (
-    <div className="text-label flex h-full items-center justify-center text-[12px]">
-      Loading editor…
+    <div className="flex h-full items-center justify-center">
+      <DoqtriLoader className="w-14" />
     </div>
   ),
 });

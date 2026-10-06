@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
+import { NavLink } from "@/components/vault/navigation";
 import { useRouter } from "next/navigation";
 import { ExternalLinkIcon, Loader2Icon, RefreshCwIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -107,13 +107,13 @@ export function MindmapPanel({
           <Tooltip>
             <TooltipTrigger
               render={
-                <Link
+                <NavLink
                   href={`/vault/${docId}/mindmap`}
                   aria-label="Open full mindmap"
                   className="text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10 flex size-5 items-center justify-center rounded transition-colors"
                 >
                   <ExternalLinkIcon className="size-3" strokeWidth={2} />
-                </Link>
+                </NavLink>
               }
             />
             <TooltipContent side="bottom">Open full mindmap</TooltipContent>

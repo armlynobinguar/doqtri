@@ -1,18 +1,18 @@
 "use client";
 
 import { useMemo } from "react";
-import { useRouter } from "next/navigation";
 import { MindmapCanvas } from "@/components/vault/mindmap-canvas";
 import { buildGlobalMindmap } from "@/lib/global-mindmap";
 import { MINDMAP_COLORS } from "@/lib/theme";
 import type { Doc } from "@/lib/types";
+import { useNavigate } from "@/components/vault/navigation";
 
 /**
  * The vault-wide mindmap. Concepts from every document in one map, with the
  * ones several documents reach drawn as hubs.
  */
 export function GlobalMindmap({ docs }: { docs: Doc[] }) {
-  const router = useRouter();
+  const navigate = useNavigate();
   const graph = useMemo(() => buildGlobalMindmap(docs), [docs]);
 
   const documentCount = docs.length;
@@ -50,7 +50,7 @@ export function GlobalMindmap({ docs }: { docs: Doc[] }) {
         // them on top of each other instead of spreading them out.
         layout="free"
         onNodeClick={(node) => {
-          if (node.href) router.push(node.href);
+          if (node.href) navigate(node.href);
         }}
         // Only notes open anything; concepts and hubs are labels.
         isClickable={(node) => Boolean(node.href)}

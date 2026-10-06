@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { NavLink } from "@/components/vault/navigation";
 import { useMemo } from "react";
 import { CornerDownLeftIcon } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -43,7 +43,7 @@ export function BacklinksList({
           <ul className="pb-2">
             {backlinks.map((doc) => (
               <li key={doc.id}>
-                <Link
+                <NavLink
                   href={`/vault/${doc.id}`}
                   className="text-muted-foreground hover:bg-secondary hover:text-foreground flex items-center gap-1.5 px-3 py-1 text-[12.5px] transition-colors"
                 >
@@ -52,7 +52,7 @@ export function BacklinksList({
                     strokeWidth={1.75}
                   />
                   <span className="truncate">{doc.title}</span>
-                </Link>
+                </NavLink>
               </li>
             ))}
           </ul>

@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { NavLink } from "@/components/vault/navigation";
 import {
   FileTextIcon,
   ChevronDownIcon,
@@ -116,7 +116,7 @@ export function FileExplorer({
                         : "text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-foreground",
                     )}
                   >
-                    <Link
+                    <NavLink
                       href={`/vault/${note.id}`}
                       aria-current={isActive ? "page" : undefined}
                       className="flex min-w-0 flex-1 items-center gap-2 py-[5px] pl-2.5"
@@ -126,7 +126,7 @@ export function FileExplorer({
                         strokeWidth={1.75}
                       />
                       <span className="truncate">{note.title}</span>
-                    </Link>
+                    </NavLink>
                     <NoteRowAction
                       note={note}
                       anchored={anchored}
