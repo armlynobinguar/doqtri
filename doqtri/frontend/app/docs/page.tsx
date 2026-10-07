@@ -196,10 +196,9 @@ export default function DocsPage() {
             </p>
             <ul className={styles.list}>
               <li>
-                <b>Register hash</b> — first anchor; creates version <code>1</code> with you as owner.
-              </li>
-              <li>
-                <b>Update hash</b> — after the note changes; anchors the new hash as the next version.
+                <b>Save &amp; anchor</b> — saves the note, then anchors exactly what was saved. The first anchor
+                creates version <code>1</code> with you as owner; each later one anchors the new hash as the next
+                version. It stays disabled while the note matches its latest anchor.
               </li>
               <li>
                 Only the hash goes on-chain — never the note&rsquo;s text. Earlier versions stay in the ledger&rsquo;s

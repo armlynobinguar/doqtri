@@ -1,7 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CircleCheckIcon, CopyIcon, DownloadIcon, LinkIcon, Loader2Icon } from "lucide-react";
+import {
+  AnchorIcon,
+  CircleCheckIcon,
+  CopyIcon,
+  DownloadIcon,
+  LinkIcon,
+  Loader2Icon,
+  RefreshCwIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 import { MAX_USER_FEE_STROOPS, USER_PAYS_FEES } from "@/lib/stellar/smart-wallet-config";
 import { formatXlm } from "@/lib/stellar/wallet-balance";
@@ -27,6 +35,8 @@ type Props = {
   docId: string;
   title: string;
   markdown: string;
+  /** Saves the note now and resolves with the exact text stored. */
+  onSave: () => Promise<string>;
 };
 
 type Receipt = WriteReceipt & {
@@ -48,11 +58,13 @@ async function copy(text: string, what: string) {
   }
 }
 
-export function ShipPanel({ docId, title, markdown }: Props) {
+export function ShipPanel({ docId, title, markdown, onSave }: Props) {
   const [chainDoc, setChainDoc] = useState<ChainDocument | null>(null);
   const [localHash, setLocalHash] = useState<string | null>(null);
   const [history, setHistory] = useState<DocumentHistory | null>(null);
   const [busy, setBusy] = useState(false);
+  // Which half of Save & anchor is running, for the button label.
+  const [anchorStep, setAnchorStep] = useState<"saving" | "signing" | null>(null);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [nodeId, setNodeId] = useState("root");
   const [status, setStatus] = useState<NodeStatus>("Planned");
@@ -120,6 +132,9 @@ export function ShipPanel({ docId, title, markdown }: Props) {
   const chainVersion = chainDoc?.version ?? null;
   const unanchored =
     chainDoc != null && localHash != null && localHash !== chainDoc.contentHash;
+  // The contract bumps the version even for an unchanged hash, so re-anchoring
+  // identical text would spend a fee on nothing.
+  const upToDate = chainDoc != null && !unanchored;
 
   const refreshChain = useCallback(async () => {
     const doc = await DoqtriRegistry.getDocument(docId);
@@ -205,13 +220,22 @@ export function ShipPanel({ docId, title, markdown }: Props) {
     toast.error(e instanceof Error ? e.message : fallback);
   }
 
-  async function anchor() {
+  async function saveAndAnchor() {
     setBusy(true);
     setReceipt(null);
     setFundingError(null);
     try {
-      const contentHash = await sha256Hex(markdown);
+      // Save first and hash what was stored: anchoring text Supabase doesn't
+      // hold would leave the audit page unable to match it.
+      setAnchorStep("saving");
+      const saved = await onSave();
+      const contentHash = await sha256Hex(saved);
+      if (chainDoc != null && contentHash === chainDoc.contentHash) {
+        toast.success(`Saved — v${chainDoc.version} already anchors this text`);
+        return;
+      }
       const registering = chainVersion == null;
+      setAnchorStep("signing");
       const result = await withWallet(async (address) => {
         if (registering) {
           return DoqtriRegistry.registerDocument(address, docId, contentHash);
@@ -225,14 +249,15 @@ export function ShipPanel({ docId, title, markdown }: Props) {
       });
       toast.success(
         registering
-          ? "Registered on Stellar"
-          : `Updated to v${result.version ?? "?"}`,
+          ? `Saved & registered as v${result.version ?? 1}`
+          : `Saved & updated to v${result.version ?? "?"}`,
       );
       await refreshChain();
       void wallet.refreshBalance();
     } catch (e) {
-      reportError(e, "Anchor failed");
+      reportError(e, "Save & anchor failed");
     } finally {
+      setAnchorStep(null);
       setBusy(false);
     }
   }
@@ -414,12 +439,17 @@ export function ShipPanel({ docId, title, markdown }: Props) {
       <Button
         type="button"
         size="sm"
-        disabled={busy || unfunded || noWallet || lowBalance}
+        disabled={busy || unfunded || noWallet || lowBalance || upToDate}
+        title={upToDate ? "This version of the note is already anchored" : undefined}
         className="w-full max-lg:h-10"
-        onClick={() => void anchor()}
+        onClick={() => void saveAndAnchor()}
       >
-        {busy ? <Loader2Icon className="animate-spin" /> : null}
-        {chainVersion == null ? "Register hash" : "Update hash"}
+        {anchorStep ? <Loader2Icon className="animate-spin" /> : <AnchorIcon />}
+        {anchorStep === "saving"
+          ? "Saving…"
+          : anchorStep === "signing"
+            ? "Signing…"
+            : "Save & anchor"}
       </Button>
       {paysOwnFees && !lowBalance ? (
         <p className="text-muted-foreground text-[11px]" data-testid="fee-note">
@@ -451,7 +481,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
             disabled={unanchored || localHash == null}
             title={
               unanchored
-                ? "The note has changed since it was anchored. Update the hash first."
+                ? "The note has changed since it was anchored. Save & anchor it first."
                 : "Download the exact text whose hash is on-chain"
             }
             onClick={downloadAnchored}
@@ -537,7 +567,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
         className="w-full max-lg:h-10"
         onClick={() => void syncNode()}
       >
-        {busy ? <Loader2Icon className="animate-spin" /> : null}
+        {busy && anchorStep === null ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
         Sync node status
       </Button>
 
