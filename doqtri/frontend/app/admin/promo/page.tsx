@@ -89,22 +89,22 @@ export default async function PromoAdminPage() {
 
   return (
     <div className="flex min-h-svh flex-col">
-      <header className="border-border flex items-center justify-between gap-4 border-b px-4 py-3 sm:px-8">
-        <Link href="/vault" className="flex items-center gap-2 text-[15px] font-bold tracking-tight">
+      <header className="flex items-center justify-between gap-4 border-b border-[var(--glass-lo)] px-4 py-4 sm:px-8">
+        <Link href="/vault" className="flex items-center gap-2 text-[17px] font-extrabold tracking-[-0.045em]">
           <DoqtriMark className="h-auto w-6" glow={false} title="" />
           Doqtri
-          <span className="text-label font-mono text-[11px] font-normal tracking-[0.14em] uppercase">
+          <span className="eyebrow ml-1 text-[10px]">
             Admin
           </span>
         </Link>
-        <Link href="/promo" className="text-muted-foreground hover:text-foreground text-[13px]">
+        <Link href="/promo" className="eyebrow hover:text-foreground transition-colors">
           View portal
         </Link>
       </header>
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-8">
-        <h1 className="text-2xl font-semibold tracking-tight">Beta launch promo entries</h1>
-        <p className="text-muted-foreground mt-1 text-[14px]">
+        <h1 className="display text-3xl">Beta launch promo entries</h1>
+        <p className="text-muted-foreground mt-3 text-[14px]">
           Promo <code className="font-mono text-[13px]">{MINDMAP_PROMO.id}</code> ·{" "}
           {MINDMAP_PROMO.active ? "open for entries" : "closed"} · prize pool {MINDMAP_PROMO.prizePool}
         </p>

@@ -15,6 +15,10 @@ const NODES: { id: string; label: string; x: number; y: number; status: Status }
   { id: "audit", label: "Audit", x: 650, y: 340, status: "Planned" },
 ];
 
+// Each node is a glass pill: status glyph on the left, label beside it.
+const PILL_W = 196;
+const PILL_H = 48;
+
 const EDGES = [
   ["root", "ingest"],
   ["root", "compile"],
@@ -53,7 +57,8 @@ export function LandingMindmap() {
               key={`${from}-${to}`}
               className={styles.edge}
               style={{ animationDelay: `${i * 0.1}s` }}
-              d={`M ${a.x} ${a.y} C ${a.x} ${(a.y + b.y) / 2}, ${b.x} ${(a.y + b.y) / 2}, ${b.x} ${b.y}`}
+              // Pill bottom to pill top, so the thin connectors never cross a label.
+              d={`M ${a.x} ${a.y + PILL_H / 2} C ${a.x} ${(a.y + b.y) / 2}, ${b.x} ${(a.y + b.y) / 2}, ${b.x} ${b.y - PILL_H / 2}`}
             />
           );
         })}
@@ -64,14 +69,22 @@ export function LandingMindmap() {
             style={{ animationDelay: `${0.15 + i * 0.07}s` }}
             transform={`translate(${node.x} ${node.y})`}
           >
-            <circle r={20} className={styles.circle} />
-            <g transform="translate(-10.8 -10.8) scale(0.9)" className={styles.glyph}>
+            <rect
+              x={-PILL_W / 2}
+              y={-PILL_H / 2}
+              width={PILL_W}
+              height={PILL_H}
+              rx={14}
+              className={styles.pill}
+            />
+            <line x1={-PILL_W / 2 + 14} x2={PILL_W / 2 - 14} y1={-PILL_H / 2 + 0.5} y2={-PILL_H / 2 + 0.5} className={styles.sheen} />
+            <g transform={`translate(${-PILL_W / 2 + 14} -10.8) scale(0.9)`} className={styles.glyph}>
               <GlyphPath glyph={STATUS_GLYPH[node.status]} />
             </g>
-            <text className={styles.label} y={38}>
+            <text className={styles.label} x={-PILL_W / 2 + 46} y={1}>
               {node.label}
             </text>
-            <text className={styles.status} y={53}>
+            <text className={styles.status} y={PILL_H / 2 + 16}>
               {node.status}
             </text>
           </g>

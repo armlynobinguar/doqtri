@@ -35,22 +35,22 @@ export function RightPanel({
   const { rightTab, setRightTab } = useVaultStatus();
 
   return (
-    <div className="bg-muted flex h-full min-h-0 flex-col">
-      <div className="border-border flex h-9 shrink-0 items-center border-b px-1">
+    <div className="bg-sidebar flex h-full min-h-0 flex-col">
+      <div className="border-border flex h-11 shrink-0 items-center border-b px-2">
         <Tabs
           value={rightTab}
           onValueChange={(value) => setRightTab(value as RightTab)}
         >
-          <TabsList variant="line" className="h-8 bg-transparent">
+          <TabsList className="h-8">
             <TabsTrigger
               value="graph"
-              className="data-active:text-foreground text-muted-foreground px-2.5 text-[12px] after:bg-primary!"
+              className="text-muted-foreground px-3 text-[12px]"
             >
               Graph
             </TabsTrigger>
             <TabsTrigger
               value="mindmap"
-              className="data-active:text-foreground text-muted-foreground px-2.5 text-[12px] after:bg-primary!"
+              className="text-muted-foreground px-3 text-[12px]"
             >
               Mindmap
             </TabsTrigger>

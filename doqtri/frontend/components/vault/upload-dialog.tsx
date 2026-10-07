@@ -170,7 +170,7 @@ export function UploadDialog({
               <>
                 PDF, DOCX, PPTX, or text. The document is converted to markdown with
                 headings and{" "}
-                <code className="text-primary font-mono text-[12px]">[[wikilinks]]</code>
+                <code className="text-foreground font-mono text-[12px]">[[wikilinks]]</code>
                 , which you then own and edit, and a mindmap of its concepts is built
                 at the same time.
               </>
@@ -196,7 +196,7 @@ export function UploadDialog({
         {failure && copy ? (
           <div
             role="alert"
-            className="border-destructive/40 bg-destructive/5 grid gap-1 rounded-md border px-3 py-2 text-[13px]"
+            className="glass relative grid gap-1 rounded-xl py-2 pr-3 pl-6 text-[13px] before:absolute before:top-[14px] before:left-2.5 before:size-1.5 before:rounded-full before:bg-destructive before:shadow-[0_0_6px_var(--destructive)]"
           >
             <span className="font-medium">{copy.message}</span>
             {failure.message !== copy.message ? (
@@ -256,7 +256,7 @@ export function UploadDialog({
 function StageRow({ label, status }: { label: string; status: StageStatus }) {
   const icon = {
     pending: <CircleIcon className="size-3.5 opacity-40" />,
-    active: <Loader2Icon className="text-primary size-3.5 animate-spin" />,
+    active: <Loader2Icon className="text-foreground size-3.5 animate-spin" />,
     done: <CheckIcon className="text-success size-3.5" />,
     skipped: <MinusIcon className="size-3.5 opacity-60" />,
     failed: <XIcon className="text-destructive size-3.5" />,

@@ -140,9 +140,9 @@ export default async function AuditPage(props: PageProps<"/d/[docId]">) {
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 py-10 sm:px-6 [--mark-fill:var(--brand-elevated)]">
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <Link href="/" className="inline-flex items-center gap-2 font-bold tracking-tight">
+        <Link href="/" className="inline-flex items-center gap-2 text-[17px] font-extrabold tracking-[-0.045em]">
           <DoqtriMark className="h-auto w-7" glow={false} title="" />
-          Doqtri <span className="text-muted-foreground font-normal">audit</span>
+          Doqtri <span className="eyebrow ml-1 text-[10px]">audit</span>
         </Link>
         <StatusTag tone="onchain">Stellar {network}</StatusTag>
       </header>
@@ -153,7 +153,7 @@ export default async function AuditPage(props: PageProps<"/d/[docId]">) {
         <EmptyState docId={docId} state={audit.state} />
       )}
 
-      <footer className="text-muted-foreground border-border border-t pt-4 text-[12px]">
+      <footer className="text-muted-foreground border-t border-[var(--glass-lo)] pt-5 text-[12px]">
         Read directly from the DoqtriRegistry contract{" "}
         <a
           className="text-primary font-mono underline-offset-2 hover:underline"
@@ -192,8 +192,8 @@ function EmptyState({
   }[state];
 
   return (
-    <section className="bg-card grid gap-2 rounded-xl border px-5 py-6">
-      <h1 className="text-lg font-bold tracking-tight">{copy.title}</h1>
+    <section className="glass grid gap-2 rounded-2xl px-6 py-7">
+      <h1 className="display text-2xl">{copy.title}</h1>
       <p className="text-muted-foreground text-[14px]">{copy.body}</p>
       <p className="text-muted-foreground font-mono text-[12px] break-all">{docId}</p>
     </section>
@@ -228,14 +228,14 @@ function Anchored({
     <>
       <section className="grid gap-4">
         <div className="flex flex-wrap items-baseline gap-3">
-          <h1 className="text-2xl font-bold tracking-tight">
+          <h1 className="display text-3xl sm:text-4xl">
             Anchored document
           </h1>
           <StatusTag tone="verified" className="font-mono">
             v{doc.version}
           </StatusTag>
         </div>
-        <dl className="bg-card grid gap-x-6 gap-y-3 rounded-xl border px-5 py-4 text-[13px] sm:grid-cols-[max-content_1fr]">
+        <dl className="glass grid gap-x-6 gap-y-3.5 rounded-2xl px-6 py-5 text-[13px] sm:grid-cols-[max-content_1fr] sm:items-baseline">
           <Field label="Document id">
             <span className="font-mono break-all">{docId}</span>
           </Field>
@@ -285,7 +285,7 @@ function Anchored({
       </section>
 
       <section className="grid gap-3">
-        <h2 className="text-lg font-bold tracking-tight">Check a copy</h2>
+        <h2 className="text-xl font-extrabold tracking-[-0.03em]">Check a copy</h2>
         <p className="text-muted-foreground text-[14px]">
           If you were sent this document, confirm it is exactly what the owner
           anchored.
@@ -294,7 +294,7 @@ function Anchored({
       </section>
 
       <section className="grid gap-3">
-        <h2 className="text-lg font-bold tracking-tight">Version history</h2>
+        <h2 className="text-xl font-extrabold tracking-[-0.03em]">Version history</h2>
         {history?.incomplete ? (
           <p data-testid="history-incomplete" className="text-warning text-[13px]">
             The contract reports v{doc.version}, but only {history.versions.length} of its
@@ -303,7 +303,7 @@ function Anchored({
           </p>
         ) : null}
         {history && history.versions.length > 0 ? (
-          <ol className="bg-card divide-border divide-y rounded-xl border text-[13px]">
+          <ol className="glass divide-y divide-[var(--glass-lo)] rounded-2xl text-[13px]">
             {[...history.versions].reverse().map((v) => (
               <li
                 key={v.txHash}
@@ -333,10 +333,10 @@ function Anchored({
       </section>
 
       <section className="grid gap-3">
-        <h2 className="text-lg font-bold tracking-tight">Build status</h2>
+        <h2 className="text-xl font-extrabold tracking-[-0.03em]">Build status</h2>
         {history && history.nodes.length > 0 ? (
           <>
-            <ul className="bg-card divide-border divide-y rounded-xl border text-[13px]">
+            <ul className="glass divide-y divide-[var(--glass-lo)] rounded-2xl text-[13px]">
               {history.nodes.map((node) => (
                 <li
                   key={node.nodeId}
@@ -383,9 +383,9 @@ function Anchored({
         )}
       </section>
 
-      <section className="bg-card grid gap-4 rounded-xl border px-5 py-4 text-[13px] sm:grid-cols-2">
+      <section className="glass grid gap-5 rounded-2xl px-6 py-5 text-[13px] sm:grid-cols-2">
         <div className="grid content-start gap-1.5">
-          <h2 className="font-semibold">What this proves</h2>
+          <h2 className="eyebrow text-foreground/80">What this proves</h2>
           <ul className="text-muted-foreground list-disc space-y-1 pl-4">
             <li>The owner&apos;s wallet signed this exact hash at the time shown.</li>
             <li>A copy that matches has not changed by a single byte since.</li>
@@ -393,7 +393,7 @@ function Anchored({
           </ul>
         </div>
         <div className="grid content-start gap-1.5">
-          <h2 className="font-semibold">What it does not prove</h2>
+          <h2 className="eyebrow text-foreground/80">What it does not prove</h2>
           <ul className="text-muted-foreground list-disc space-y-1 pl-4">
             <li>
               Availability: only the hash is on-chain, so the text cannot be
@@ -414,7 +414,7 @@ function Anchored({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <>
-      <dt className="text-muted-foreground">{label}</dt>
+      <dt className="eyebrow text-[10px]">{label}</dt>
       <dd className="min-w-0">{children}</dd>
     </>
   );

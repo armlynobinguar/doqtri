@@ -75,12 +75,12 @@ export function RenameNoteDialog({
         <form onSubmit={confirm} className="grid gap-4">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <PencilIcon className="text-primary size-4" strokeWidth={1.75} />
+              <PencilIcon className="text-foreground size-4" strokeWidth={1.5} />
               Rename note
             </DialogTitle>
             <DialogDescription className="text-muted-foreground leading-relaxed">
               Other notes that link to{" "}
-              <code className="text-primary font-mono text-[12px]">
+              <code className="text-foreground font-mono text-[12px]">
                 [[{title}]]
               </code>{" "}
               keep that link, which becomes unresolved. The note&apos;s text is

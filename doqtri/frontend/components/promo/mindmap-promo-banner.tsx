@@ -39,8 +39,8 @@ export function MindmapPromoBanner() {
   }
 
   return (
-    <div className="border-border bg-elevated flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-[12px]">
-      <GiftIcon className="text-success size-3.5 shrink-0" strokeWidth={1.75} />
+    <div className="flex shrink-0 items-center gap-2 border-b border-[var(--glass-lo)] bg-[var(--glass)] px-3 py-1.5 text-[12px] shadow-[inset_0_1px_0_0_var(--glass-hi)]">
+      <GiftIcon className="text-foreground size-3.5 shrink-0" strokeWidth={1.5} />
       <p className="min-w-0 flex-1 truncate">
         <span className="text-foreground font-medium">
           Win from a {MINDMAP_PROMO.prizePool} prize pool!
@@ -52,7 +52,7 @@ export function MindmapPromoBanner() {
       </p>
       <Link
         href={PROMO_PATH}
-        className="text-foreground hover:bg-secondary flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-medium underline-offset-4 hover:underline"
+        className="bg-primary text-primary-foreground flex shrink-0 items-center gap-1 rounded-full px-2.5 py-0.5 font-semibold transition-colors hover:bg-[color-mix(in_oklch,var(--primary),white_18%)]"
       >
         Submit here
         <ArrowRightIcon className="size-3" />

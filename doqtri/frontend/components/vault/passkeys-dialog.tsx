@@ -91,7 +91,7 @@ export function PasskeysDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                 </Button>
               </div>
               {confirming === passkey.credentialId ? (
-                <div className="bg-destructive/5 border-destructive/30 grid gap-2 rounded-md border px-2.5 py-2 text-[12px]">
+                <div className="glass relative grid gap-2 rounded-xl py-2 pr-2.5 pl-6 text-[12px] before:absolute before:top-[13px] before:left-2.5 before:size-1.5 before:rounded-full before:bg-destructive before:shadow-[0_0_6px_var(--destructive)]">
                   <span>
                     Remove this passkey? It will no longer open your wallet. You&apos;ll approve the change with a passkey.
                   </span>

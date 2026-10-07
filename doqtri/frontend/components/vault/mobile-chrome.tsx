@@ -60,9 +60,9 @@ export function MobileTopBar({
         className="text-sidebar-foreground hover:text-foreground active:bg-sidebar-accent focus-visible:ring-ring flex size-10 shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:ring-1 focus-visible:outline-hidden disabled:opacity-50"
       >
         {creating ? (
-          <Loader2Icon className="size-5 animate-spin" strokeWidth={1.75} />
+          <Loader2Icon className="size-5 animate-spin" strokeWidth={1.5} />
         ) : (
-          <FilePlusIcon className="size-5" strokeWidth={1.75} />
+          <FilePlusIcon className="size-5" strokeWidth={1.5} />
         )}
       </button>
     </header>
@@ -80,7 +80,7 @@ function SaveIndicator({ state }: { state: SaveState }) {
         state === "error"
           ? "text-destructive"
           : state === "saved"
-            ? "text-success"
+            ? "text-muted-foreground [&_svg]:text-success"
             : "text-label",
       )}
     >
@@ -125,13 +125,13 @@ export function MobileTabBar({
             className={cn(
               "focus-visible:ring-ring relative flex h-14 flex-col items-center justify-center gap-1 text-[10.5px] font-medium transition-colors focus-visible:ring-1 focus-visible:outline-hidden focus-visible:ring-inset",
               isActive
-                ? "text-foreground before:bg-primary before:absolute before:top-0 before:left-1/2 before:h-0.5 before:w-8 before:-translate-x-1/2 before:rounded-full"
+                ? "text-foreground before:bg-foreground before:absolute before:top-0 before:left-1/2 before:h-0.5 before:w-8 before:-translate-x-1/2 before:rounded-full before:shadow-[0_0_10px_var(--foreground)]"
                 : "text-sidebar-foreground/70 active:text-foreground",
             )}
           >
             <Icon
-              className={cn("size-5", isActive && "text-primary")}
-              strokeWidth={1.75}
+              className={cn("size-5", isActive && "text-foreground")}
+              strokeWidth={1.5}
               aria-hidden
             />
             {label}

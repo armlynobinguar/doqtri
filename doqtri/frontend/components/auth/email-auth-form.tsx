@@ -123,8 +123,8 @@ export function EmailAuthForm({ mode }: { mode: Mode }) {
 
   return (
     <form className="flex flex-col gap-2.5" onSubmit={(e) => void submit(e)} noValidate>
-      <label className="flex flex-col gap-1 text-[12px]">
-        <span className="text-muted-foreground">Email</span>
+      <label className="flex flex-col gap-2 text-[12px]">
+        <span className="eyebrow text-[10px]">Email</span>
         <Input
           type="email"
           name="email"
@@ -134,8 +134,8 @@ export function EmailAuthForm({ mode }: { mode: Mode }) {
           onChange={(e) => setEmail(e.target.value)}
         />
       </label>
-      <label className="flex flex-col gap-1 text-[12px]">
-        <span className="text-muted-foreground flex justify-between">
+      <label className="flex flex-col gap-2 text-[12px]">
+        <span className="eyebrow flex justify-between text-[10px]">
           Password
           {!signUp ? (
             <Link href="/forgot-password" className="hover:text-foreground underline-offset-2 hover:underline">
@@ -173,7 +173,7 @@ export function EmailAuthForm({ mode }: { mode: Mode }) {
         </Button>
       ) : null}
 
-      <Button type="submit" size="lg" disabled={busy || waitingForCaptcha} className="mt-1 w-full">
+      <Button type="submit" size="lg" disabled={busy || waitingForCaptcha} className="mt-2 w-full rounded-full">
         {busy ? <Loader2Icon className="animate-spin" /> : null}
         {signUp ? "Create account" : "Sign in"}
       </Button>

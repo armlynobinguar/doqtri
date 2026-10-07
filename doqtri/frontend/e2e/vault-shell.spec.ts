@@ -53,12 +53,12 @@ test.describe("vault shell", () => {
     const bodyBg = await page.evaluate(
       () => getComputedStyle(document.body).backgroundColor,
     );
-    expect(await toRgb(bodyBg)).toBe("#0c0f14");
+    expect(await toRgb(bodyBg)).toBe("#08090b");
 
     const accentVar = await page.evaluate(() =>
       getComputedStyle(document.documentElement).getPropertyValue("--primary").trim(),
     );
-    expect(await toRgb(accentVar)).toBe("#4a9df0");
+    expect(await toRgb(accentVar)).toBe("#dcdcf2");
   });
 
   test("the explorer/editor divider resizes", async ({ page }) => {

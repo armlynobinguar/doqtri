@@ -58,21 +58,19 @@ export function FileExplorer({
   return (
     <aside className="bg-sidebar flex h-full min-h-0 flex-col">
       <header className="border-border flex h-10 shrink-0 pointer-coarse:h-12 items-center justify-between gap-1 border-b pr-1.5 pl-3">
-        <span className="text-label text-[11px] font-medium tracking-wider uppercase">
-          Vault
-        </span>
+        <span className="eyebrow">Vault</span>
         <div className="flex items-center">
           <Tooltip>
             <TooltipTrigger
               aria-label="New note"
               disabled={creating}
               onClick={onNewNote}
-              className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-7 items-center justify-center rounded-md transition-colors pointer-coarse:size-10 focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden disabled:opacity-50"
+              className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-7 items-center justify-center rounded-lg transition-colors pointer-coarse:size-10 focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden disabled:opacity-50"
             >
               {creating ? (
-                <Loader2Icon className="size-4 animate-spin" strokeWidth={1.75} />
+                <Loader2Icon className="size-4 animate-spin" strokeWidth={1.5} />
               ) : (
-                <FilePlusIcon className="size-4" strokeWidth={1.75} />
+                <FilePlusIcon className="size-4" strokeWidth={1.5} />
               )}
             </TooltipTrigger>
             <TooltipContent side="bottom">New note  ⌘N</TooltipContent>
@@ -81,9 +79,9 @@ export function FileExplorer({
             <TooltipTrigger
               aria-label="Upload document"
               onClick={onUploadClick}
-              className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-7 items-center justify-center rounded-md transition-colors pointer-coarse:size-10 focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden"
+              className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-7 items-center justify-center rounded-lg transition-colors pointer-coarse:size-10 focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden"
             >
-              <UploadIcon className="size-4" strokeWidth={1.75} />
+              <UploadIcon className="size-4" strokeWidth={1.5} />
             </TooltipTrigger>
             <TooltipContent side="bottom">Upload document</TooltipContent>
           </Tooltip>
@@ -92,9 +90,9 @@ export function FileExplorer({
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="pb-4">
-          <div className="text-sidebar-foreground/80 flex items-center gap-1 px-2 py-1 text-[13px]">
-            <ChevronDownIcon className="size-3.5 shrink-0" strokeWidth={2} />
-            <span className="truncate">Notes</span>
+          <div className="text-sidebar-foreground/80 flex items-center gap-1.5 px-3 pt-3 pb-1.5 text-[13px]">
+            <ChevronDownIcon className="text-label size-3 shrink-0" strokeWidth={1.5} />
+            <span className="eyebrow truncate">Notes</span>
             <span className="text-label ml-auto pr-1 text-[11px] tabular-nums">
               {notes.length}
             </span>
@@ -113,10 +111,11 @@ export function FileExplorer({
                   <li
                     key={note.id}
                     className={cn(
-                      "group mx-1.5 flex items-center rounded-md pr-1 text-[13px] transition-colors pointer-coarse:text-[15px]",
+                      "group mx-2 my-px flex items-center rounded-lg border pr-1 text-[13px] transition-colors pointer-coarse:text-[15px]",
+                      // The active note is a raised glass row, lit from above.
                       isActive
-                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                        : "text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-foreground",
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground border-[var(--glass-lo)] shadow-[inset_0_1px_0_0_var(--glass-hi)]"
+                        : "text-sidebar-foreground border-transparent hover:bg-[var(--glass)] hover:text-foreground",
                     )}
                   >
                     <NavLink
@@ -125,8 +124,8 @@ export function FileExplorer({
                       className="flex min-w-0 flex-1 items-center gap-2 py-[5px] pl-2.5 pointer-coarse:gap-3 pointer-coarse:py-3"
                     >
                       <FileTextIcon
-                        className={cn("size-3.5 shrink-0", isActive ? "text-primary" : "opacity-60")}
-                        strokeWidth={1.75}
+                        className={cn("size-3.5 shrink-0", isActive ? "text-foreground" : "opacity-60")}
+                        strokeWidth={1.5}
                       />
                       <span className="truncate">{note.title}</span>
                     </NavLink>
@@ -176,9 +175,9 @@ function FailedImports({
 
   return (
     <div className="mt-3">
-      <div className="text-sidebar-foreground/80 flex items-center gap-1 px-2 py-1 text-[13px]">
-        <TriangleAlertIcon className="text-destructive size-3.5 shrink-0" strokeWidth={2} />
-        <span className="truncate">Failed imports</span>
+      <div className="text-sidebar-foreground/80 flex items-center gap-1.5 px-3 pt-3 pb-1.5 text-[13px]">
+        <TriangleAlertIcon className="text-destructive size-3 shrink-0" strokeWidth={1.5} />
+        <span className="eyebrow truncate">Failed imports</span>
         <span className="text-label ml-auto pr-1 text-[11px] tabular-nums">{items.length}</span>
       </div>
       <ul>
@@ -194,17 +193,17 @@ function FailedImports({
               type="button"
               aria-label={`Retry import of ${item.filename}`}
               onClick={() => onRetry({ ingestId: item.id, filename: item.filename })}
-              className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-6 items-center justify-center rounded-md pointer-coarse:size-10"
+              className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-6 items-center justify-center rounded-lg pointer-coarse:size-10"
             >
-              <RotateCcwIcon className="size-3.5" strokeWidth={1.75} />
+              <RotateCcwIcon className="size-3.5" strokeWidth={1.5} />
             </button>
             <button
               type="button"
               aria-label={`Dismiss failed import of ${item.filename}`}
               onClick={() => void dismiss(item.id)}
-              className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-6 items-center justify-center rounded-md pointer-coarse:size-10"
+              className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-6 items-center justify-center rounded-lg pointer-coarse:size-10"
             >
-              <XIcon className="size-3.5" strokeWidth={1.75} />
+              <XIcon className="size-3.5" strokeWidth={1.5} />
             </button>
           </li>
         ))}
@@ -229,9 +228,9 @@ function RenameRowAction({
       <TooltipTrigger
         aria-label={`Rename ${note.title}`}
         onClick={() => onRename(note)}
-        className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent focus-visible:ring-ring flex size-6 shrink-0 items-center justify-center rounded-md opacity-0 transition-opacity group-hover:opacity-100 pointer-coarse:size-10 pointer-coarse:opacity-70 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:outline-hidden"
+        className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent focus-visible:ring-ring flex size-6 shrink-0 items-center justify-center rounded-lg opacity-0 transition-opacity group-hover:opacity-100 pointer-coarse:size-10 pointer-coarse:opacity-70 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:outline-hidden"
       >
-        <PencilIcon className="size-3.5" strokeWidth={1.75} />
+        <PencilIcon className="size-3.5" strokeWidth={1.5} />
       </TooltipTrigger>
       <TooltipContent side="right">Rename note</TooltipContent>
     </Tooltip>
@@ -290,12 +289,12 @@ function NoteRowAction({
         aria-label={`Delete ${note.title}`}
         disabled={deleting}
         onClick={() => onDelete(note)}
-        className="text-sidebar-foreground/70 hover:text-destructive hover:bg-sidebar-accent focus-visible:ring-ring flex size-6 shrink-0 items-center justify-center rounded-md opacity-0 transition-opacity group-hover:opacity-100 pointer-coarse:size-10 pointer-coarse:opacity-70 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:outline-hidden disabled:opacity-100"
+        className="text-sidebar-foreground/70 hover:text-destructive hover:bg-sidebar-accent focus-visible:ring-ring flex size-6 shrink-0 items-center justify-center rounded-lg opacity-0 transition-opacity group-hover:opacity-100 pointer-coarse:size-10 pointer-coarse:opacity-70 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:outline-hidden disabled:opacity-100"
       >
         {deleting ? (
-          <Loader2Icon className="size-3.5 animate-spin" strokeWidth={1.75} />
+          <Loader2Icon className="size-3.5 animate-spin" strokeWidth={1.5} />
         ) : (
-          <Trash2Icon className="size-3.5" strokeWidth={1.75} />
+          <Trash2Icon className="size-3.5" strokeWidth={1.5} />
         )}
       </TooltipTrigger>
       <TooltipContent side="right">Delete note</TooltipContent>

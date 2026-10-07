@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { GiftIcon } from "lucide-react";
 import { ConnectWalletButton } from "@/components/auth/connect-wallet-button";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { PromoSubmissionForm } from "@/components/promo/promo-submission-form";
@@ -50,10 +51,10 @@ export default async function PromoPage() {
 
   return (
     <div className="flex min-h-svh flex-col">
-      <header className="border-border flex items-center justify-between gap-4 border-b px-4 py-3 sm:px-8">
+      <header className="flex items-center justify-between gap-4 px-4 py-4 sm:px-8">
         <Link
           href={user ? "/vault" : "/"}
-          className="flex items-center gap-2 text-[15px] font-bold tracking-tight"
+          className="flex items-center gap-2 text-[17px] font-extrabold tracking-[-0.04em]"
           aria-label={user ? "Back to your vault" : "Doqtri home"}
         >
           <DoqtriMark className="h-auto w-6" glow={false} title="" />
@@ -62,7 +63,7 @@ export default async function PromoPage() {
         {user && (
           <Link
             href="/vault/mindmap"
-            className="text-muted-foreground hover:text-foreground text-[13px]"
+            className="eyebrow hover:text-foreground transition-colors"
           >
             Open your mindmap
           </Link>
@@ -70,17 +71,30 @@ export default async function PromoPage() {
       </header>
 
       <main className="mx-auto w-full max-w-2xl flex-1 px-4 py-10 sm:py-14">
-        <p className="text-success font-mono text-[11px] tracking-[0.18em] uppercase">
+        <p className="eyebrow text-foreground inline-flex rounded-full border border-[var(--glass-hi)] px-4 py-2 text-[10px]">
           Beta launch
         </p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
-          Join the beta and win from a {MINDMAP_PROMO.prizePool} prize pool
+        <h1 className="display mt-6 text-4xl text-balance sm:text-5xl">
+          Doqtri beta is live
+          <span className="text-muted-foreground block">Map it. Win it.</span>
         </h1>
-        <p className="text-muted-foreground mt-3 text-[15px] leading-relaxed">
-          {`Doqtri beta is live. Write your first note on anything Web3, screenshot the mindmap it builds, and submit it here. Attach up to ${MINDMAP_PROMO.maxImages} screenshots: a single note’s map, your global mindmap, or both.`}
+        <p className="text-muted-foreground mt-4 text-[15px] leading-relaxed">
+          {`Write your first note on anything Web3, screenshot the mindmap it builds, and submit it here. Attach up to ${MINDMAP_PROMO.maxImages} screenshots: a single note’s map, your global mindmap, or both.`}
         </p>
 
-        <ol className="text-muted-foreground mt-6 grid gap-2 text-[14px] sm:grid-cols-2">
+        <div className="glass mt-8 flex items-center gap-5 rounded-3xl p-5 sm:p-7">
+          <span className="icon-tile size-14 rounded-2xl">
+            <GiftIcon className="size-6" strokeWidth={1.5} />
+          </span>
+          <div className="min-w-0">
+            <p className="eyebrow text-foreground/80">Join the beta and win a</p>
+            <p className="display mt-2 text-4xl sm:text-6xl">{MINDMAP_PROMO.prizePool}</p>
+            <p className="eyebrow text-foreground/80 mt-2">Prize pool</p>
+          </div>
+        </div>
+
+        <p className="eyebrow mt-10">How to join</p>
+        <ol className="text-muted-foreground mt-4 grid gap-3 text-[14px] sm:grid-cols-2">
           {[
             <>Sign up on Doqtri</>,
             <>
@@ -98,14 +112,14 @@ export default async function PromoPage() {
             <>Write your first note on anything Web3</>,
             <>Screenshot its mindmap and upload up to {MINDMAP_PROMO.maxImages} images below</>,
           ].map((step, i) => (
-            <li key={i} className="border-border bg-card flex gap-2.5 rounded-lg border p-3">
-              <span className="text-foreground font-mono text-[12px]">{i + 1}</span>
-              <span>{step}</span>
+            <li key={i} className="flex items-center gap-3.5">
+              <span className="icon-tile size-10 text-[17px] font-bold">{i + 1}</span>
+              <span className="leading-snug">{step}</span>
             </li>
           ))}
         </ol>
 
-        <section className="border-border bg-card mt-8 rounded-xl border p-4 sm:p-6">
+        <section className="glass mt-10 rounded-3xl p-5 sm:p-7">
           {!MINDMAP_PROMO.active ? (
             <p className="text-muted-foreground text-[14px]">
               This promo has ended. Thanks to everyone who took part.

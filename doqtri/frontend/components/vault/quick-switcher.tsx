@@ -55,7 +55,7 @@ export function QuickSwitcher({
                   navigate(`/vault/${note.id}`);
                 }}
               >
-                <FileTextIcon className="opacity-60" strokeWidth={1.75} />
+                <FileTextIcon className="opacity-60" strokeWidth={1.5} />
                 <span className="truncate">{note.title}</span>
               </CommandItem>
             ))}

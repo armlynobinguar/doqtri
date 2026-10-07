@@ -71,16 +71,16 @@ export function DocumentMindmap({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="border-border bg-background flex h-9 shrink-0 items-center justify-between gap-2 border-b px-2 max-lg:h-11">
+      <header className="border-border bg-background flex h-11 shrink-0 items-center justify-between gap-2 border-b px-2 max-lg:h-11">
         <div className="flex min-w-0 items-center gap-1.5">
           <NavLink
             href={`/vault/${docId}`}
             aria-label="Back to note"
-            className="text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10 flex size-6 shrink-0 items-center justify-center rounded transition-colors pointer-coarse:size-9"
+            className="text-muted-foreground hover:text-foreground flex size-7 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[var(--glass-strong)] pointer-coarse:size-9"
           >
             <ArrowLeftIcon className="size-3.5" strokeWidth={1.75} />
           </NavLink>
-          <h1 className="text-foreground truncate text-[13px] font-medium">{title}</h1>
+          <h1 className="text-foreground truncate text-[14px] font-semibold tracking-tight">{title}</h1>
           <span className="text-label shrink-0 text-[11px] max-lg:hidden">
             {derived
               ? "· heading outline"
@@ -92,17 +92,17 @@ export function DocumentMindmap({
 
         <div className="flex shrink-0 items-center gap-1">
           <Button
-            variant="ghost"
+            variant="outline"
             size="sm"
             onClick={rebuild}
             disabled={building}
-            // Purple is reserved for AI-driven affordances.
-            className="text-accent hover:text-accent hover:bg-accent/10 h-7 gap-1.5 px-2 text-[12px]"
+            // The muted lavender is reserved for AI-driven affordances.
+            className="h-7 gap-1.5 px-2.5 text-[12px]"
           >
             {building ? (
               <Loader2Icon className="size-3.5 animate-spin" />
             ) : (
-              <SparklesIcon className="size-3.5" strokeWidth={1.75} />
+              <SparklesIcon className="text-accent size-3.5" strokeWidth={1.5} />
             )}
             <span className="max-sm:sr-only">{derived ? "Build mindmap" : "Rebuild"}</span>
           </Button>

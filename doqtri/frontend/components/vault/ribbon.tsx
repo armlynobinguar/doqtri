@@ -32,7 +32,7 @@ export function Ribbon({
   return (
     <nav
       aria-label="Primary"
-      className="bg-sidebar border-border hidden w-12 shrink-0 flex-col items-center gap-1 border-r py-2 lg:flex"
+      className="bg-sidebar border-border hidden w-14 shrink-0 flex-col items-center gap-1.5 border-r py-3 lg:flex"
     >
       <Link
         href="/"
@@ -47,13 +47,13 @@ export function Ribbon({
             aria-label={label}
             onClick={() => onAction(id)}
             className={cn(
-              "text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent relative flex size-8 items-center justify-center rounded-md transition-colors",
+              "text-sidebar-foreground/70 hover:text-foreground relative flex size-9 items-center justify-center rounded-[10px] border border-transparent transition-colors hover:bg-[var(--glass)]",
               "focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden",
               active === id &&
-                "text-foreground bg-sidebar-accent before:bg-primary before:absolute before:top-1.5 before:bottom-1.5 before:-left-2 before:w-0.5 before:rounded-full",
+                "text-foreground bg-sidebar-accent border-[var(--glass-lo)] shadow-[inset_0_1px_0_0_var(--glass-hi)] before:bg-foreground before:absolute before:top-2 before:bottom-2 before:-left-[7px] before:w-0.5 before:rounded-full before:shadow-[0_0_8px_var(--foreground)]",
             )}
           >
-            <Icon className="size-[17px]" strokeWidth={1.75} />
+            <Icon className="size-[17px]" strokeWidth={1.5} />
           </TooltipTrigger>
           <TooltipContent side="right">{label}</TooltipContent>
         </Tooltip>

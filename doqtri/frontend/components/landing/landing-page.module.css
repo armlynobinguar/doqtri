@@ -1,20 +1,15 @@
-/* Brand palette from the Doqtri banner: navy-charcoal ground, white ink. */
+/* Monochrome Glass: graphite ground, white ink, light as the only accent. */
 .page {
-  --brand-ground: #12151c;
-  --brand-panel: #1b1f2a;
-  --brand-disc: #232733;
-  --brand-ink: #eef1f6;
-  --brand-muted: #8d95a5;
-  --brand-line: rgba(238, 241, 246, 0.1);
-  --mark-fill: var(--brand-disc);
+  --brand-line: var(--border);
+  --mark-fill: var(--brand-elevated);
 
   position: relative;
   min-height: 100svh;
   display: flex;
   flex-direction: column;
   overflow-x: clip;
-  color: var(--brand-ink);
-  background: var(--brand-ground);
+  color: var(--foreground);
+  background: var(--background);
 }
 
 .atmosphere {
@@ -22,20 +17,20 @@
   position: fixed;
   inset: 0;
   z-index: 0;
+  /* A top light falling on the hero, a faint one behind the emblem. */
   background:
-    radial-gradient(ellipse 70% 55% at 78% 18%, rgba(238, 241, 246, 0.07), transparent 60%),
-    radial-gradient(ellipse 60% 40% at 10% 90%, rgba(141, 149, 165, 0.06), transparent 60%),
-    linear-gradient(180deg, #151923 0%, #12151c 55%, #0f1218 100%);
+    radial-gradient(ellipse 90% 55% at 50% -12%, rgba(255, 255, 255, 0.07), transparent 62%),
+    radial-gradient(ellipse 45% 40% at 78% 26%, rgba(220, 220, 242, 0.05), transparent 65%),
+    var(--background);
 }
 
+/* Film grain (the bg-grain utility's noise, inlined for the module). */
 .atmosphere::after {
   content: "";
   position: absolute;
   inset: 0;
-  opacity: 0.35;
-  background-image: radial-gradient(rgba(255, 255, 255, 0.04) 0.6px, transparent 0.6px);
-  background-size: 3px 3px;
-  mask-image: linear-gradient(180deg, black 0%, transparent 85%);
+  opacity: 0.9;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .05 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 .announcement,
@@ -57,24 +52,24 @@
   padding: 0.55rem 1rem;
   font-size: 0.82rem;
   text-align: center;
-  color: var(--brand-ink);
-  background: linear-gradient(90deg, rgba(67, 194, 122, 0.08), rgba(238, 241, 246, 0.06), rgba(67, 194, 122, 0.08));
+  color: var(--foreground);
+  background: var(--glass);
   border-bottom: 1px solid var(--brand-line);
   transition: background-color 0.2s ease;
 }
 
 .announcement:hover {
-  background-color: rgba(238, 241, 246, 0.04);
+  background-color: var(--glass-strong);
 }
 
 .announcementTag {
-  padding: 0.1rem 0.45rem;
-  font-family: var(--font-geist-mono), monospace;
-  font-size: 0.68rem;
-  letter-spacing: 0.12em;
+  padding: 0.25rem 0.7rem;
+  font-size: 0.62rem;
+  font-weight: 500;
+  letter-spacing: var(--label-tracking);
   text-transform: uppercase;
-  color: #43c27a;
-  border: 1px solid rgba(67, 194, 122, 0.45);
+  color: var(--foreground);
+  border: 1px solid var(--glass-hi);
   border-radius: 999px;
 }
 
@@ -96,8 +91,8 @@
   justify-content: space-between;
   gap: 1rem;
   padding: 0.9rem clamp(1rem, 4vw, 2.5rem);
-  background: rgba(18, 21, 28, 0.72);
-  backdrop-filter: blur(10px);
+  background: color-mix(in oklch, var(--background), transparent 28%);
+  backdrop-filter: blur(14px) saturate(1.2);
   border-bottom: 1px solid var(--brand-line);
 }
 
@@ -105,9 +100,9 @@
   display: inline-flex;
   align-items: center;
   gap: 0.55rem;
-  font-size: 1.1rem;
-  font-weight: 700;
-  letter-spacing: -0.04em;
+  font-size: 1.2rem;
+  font-weight: 800;
+  letter-spacing: -0.045em;
 }
 
 .navMark {
@@ -115,15 +110,23 @@
   height: auto;
 }
 
+/* The wide-tracked label row: "PLANNED / SHIPPED / PROVEN ON-CHAIN". */
 .navLinks {
   display: none;
-  gap: 1.5rem;
-  font-size: 0.85rem;
-  color: var(--brand-muted);
+  gap: 2rem;
+  font-size: 0.66rem;
+  font-weight: 500;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.navLinks a {
+  transition: color 0.15s ease;
 }
 
 .navLinks a:hover {
-  color: var(--brand-ink);
+  color: var(--foreground);
 }
 
 @media (min-width: 760px) {
@@ -154,32 +157,45 @@
   animation: rise 0.75s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-.heroChain {
-  --block-size: clamp(1.35rem, 3.4vw, 1.9rem);
-  margin-bottom: 1.4rem;
+/* The outlined capsule above the headline, like "BETA LAUNCH". */
+.heroTag {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 1.6rem;
+  padding: 0.55rem 1.1rem;
+  border: 1px solid var(--glass-hi);
+  border-radius: 999px;
+  font-size: 0.64rem;
+  font-weight: 500;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+  color: var(--foreground);
 }
 
 .brand {
-  font-size: clamp(3.75rem, 12vw, 7.5rem);
-  font-weight: 700;
-  letter-spacing: -0.06em;
-  line-height: 0.92;
-  margin-bottom: 0.9rem;
+  font-size: clamp(4rem, 13vw, 8rem);
+  font-weight: 800;
+  letter-spacing: -0.055em;
+  line-height: 0.9;
+  margin-bottom: 1rem;
 }
 
+/* The second, lighter line under the display word. */
 .headline {
-  font-size: clamp(1.2rem, 2.6vw, 1.6rem);
-  font-weight: 500;
-  letter-spacing: -0.03em;
-  line-height: 1.3;
-  margin-bottom: 0.8rem;
+  max-width: 16ch;
+  font-size: clamp(1.9rem, 4.6vw, 3.1rem);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1.02;
+  color: color-mix(in oklch, var(--foreground), transparent 28%);
+  margin-bottom: 1.2rem;
 }
 
 .support {
   max-width: 44ch;
-  margin-bottom: 1.9rem;
-  color: var(--brand-muted);
-  font-size: 1.05rem;
+  margin-bottom: 2rem;
+  color: var(--muted-foreground);
+  font-size: 1.08rem;
   line-height: 1.55;
 }
 
@@ -190,41 +206,35 @@
   align-items: center;
 }
 
-/* Brand CTA: white block on navy, like the marks. Overrides the app's blue primary. */
+/* The CTA is the shared Button's pearl primary, made a full pill here. */
 .cta {
-  background: var(--brand-ink);
-  color: var(--brand-ground);
-  /* The shared Button's default variant draws a border; the landing CTA has none. */
-  border-color: transparent;
-  font-weight: 600;
-  box-shadow: 0 0 0 1px rgba(238, 241, 246, 0.4), 0 0 18px rgba(238, 241, 246, 0.12);
-}
-
-.cta:hover:not(:disabled) {
-  background: #ffffff;
+  border-radius: 999px;
 }
 
 .cta:focus-visible {
-  outline: 2px solid var(--brand-ink);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
+/* Glass secondary pill. */
 .secondary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-height: 2.5rem;
-  padding: 0.55rem 1.1rem;
-  border-radius: calc(var(--radius) - 2px);
-  border: 1px solid rgba(238, 241, 246, 0.18);
+  padding: 0.55rem 1.2rem;
+  border-radius: 999px;
+  border: 1px solid var(--glass-lo);
+  background: var(--glass);
+  box-shadow: inset 0 1px 0 0 var(--glass-hi);
   font-size: 0.9rem;
   font-weight: 550;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .secondary:hover {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(238, 241, 246, 0.32);
+  background: var(--glass-strong);
+  border-color: var(--glass-hi);
 }
 
 /* The profile-picture emblem: mark + tagline inside a disc. */
@@ -235,15 +245,20 @@
   animation: rise 0.9s 0.1s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+/* A smoked-glass disc lit from above. */
 .disc {
   position: relative;
   width: min(100%, 26rem);
   aspect-ratio: 1;
   border-radius: 50%;
-  background: radial-gradient(circle at 50% 38%, #2a2f3c 0%, var(--brand-disc) 55%, #1d212b 100%);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.09), transparent 55%),
+    radial-gradient(circle at 50% 42%, var(--brand-elevated) 0%, var(--brand-surface) 70%);
+  border: 1px solid var(--glass-lo);
   box-shadow:
-    0 0 0 1px var(--brand-line),
-    0 30px 80px -30px rgba(0, 0, 0, 0.7);
+    inset 0 1px 0 0 var(--glass-hi),
+    var(--shadow-float),
+    0 0 90px -30px rgba(220, 220, 242, 0.25);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -253,51 +268,121 @@
 }
 
 .emblemMark {
-  width: 78%;
+  width: 74%;
   height: auto;
-  color: var(--brand-ink);
-  filter: drop-shadow(0 0 14px rgba(238, 241, 246, 0.18));
+  color: var(--foreground);
+  filter: drop-shadow(0 0 14px rgba(244, 245, 247, 0.16));
+}
+
+.discChain {
+  --block-size: clamp(0.85rem, 2.2vw, 1.1rem);
+  justify-content: center;
+  opacity: 0.55;
 }
 
 .tagline {
-  font-size: clamp(0.85rem, 2.4vw, 1.05rem);
+  font-size: clamp(0.56rem, 1.6vw, 0.66rem);
   font-weight: 500;
-  letter-spacing: -0.01em;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
   text-align: center;
-  color: var(--brand-ink);
+  color: var(--muted-foreground);
+}
+
+/* ------------------------------------------------------------------ loop */
+
+/* Plan / Build / Ship / Verify: icon tiles split by hairlines. */
+.loop {
+  list-style: none;
+  display: grid;
+  gap: 1.5rem;
+  max-width: 72rem;
+  width: 100%;
+  margin: 0 auto;
+  padding: 2rem clamp(1rem, 4vw, 2.5rem) 0;
+  border-top: 1px solid var(--brand-line);
+}
+
+@media (min-width: 560px) {
+  .loop {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 960px) {
+  .loop {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+  }
+
+  .loop li + li {
+    border-left: 1px solid var(--brand-line);
+    padding-left: 1.75rem;
+  }
+}
+
+.loop li {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.loopTile {
+  width: 3.25rem;
+  height: 3.25rem;
+}
+
+.loopTile svg {
+  width: 1.4rem;
+  height: 1.4rem;
+}
+
+.loop strong {
+  display: block;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0.2rem 0 0.25rem;
+}
+
+.loop p {
+  color: var(--muted-foreground);
+  font-size: 0.86rem;
+  line-height: 1.45;
+  max-width: 22ch;
 }
 
 /* ------------------------------------------------------------- sections */
 
 .eyebrow {
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
-  font-size: 0.72rem;
-  letter-spacing: 0.14em;
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: var(--label-tracking);
   text-transform: uppercase;
-  color: var(--brand-muted);
-  margin-bottom: 0.7rem;
+  color: var(--label);
+  margin-bottom: 1rem;
 }
 
 .sectionTitle {
-  font-size: clamp(1.5rem, 3.4vw, 2.2rem);
-  font-weight: 650;
+  font-size: clamp(1.8rem, 4vw, 2.75rem);
+  font-weight: 800;
   letter-spacing: -0.045em;
-  line-height: 1.15;
+  line-height: 1.04;
   margin-bottom: 0.9rem;
   max-width: 24ch;
 }
 
 .sectionSupport {
-  color: var(--brand-muted);
+  color: var(--muted-foreground);
   font-size: 1rem;
   line-height: 1.6;
   max-width: 52ch;
 }
 
 .sectionSupport code {
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-family: var(--font-code), ui-monospace, monospace;
   font-size: 0.9em;
-  color: var(--brand-ink);
+  color: var(--foreground);
 }
 
 /* Keep anchored sections clear of the sticky nav. */
@@ -333,41 +418,45 @@
 }
 
 .blockCard {
-  padding: 1.5rem;
-  border-radius: 14px;
-  background: var(--brand-panel);
-  border: 1px solid var(--brand-line);
-  transition: border-color 0.2s ease, transform 0.2s ease;
+  padding: 1.75rem;
+  border-radius: 20px;
+  background: var(--glass);
+  border: 1px solid var(--glass-lo);
+  box-shadow: inset 0 1px 0 0 var(--glass-hi);
+  transition: border-color 0.2s ease, transform 0.2s ease, background 0.2s ease;
 }
 
 .blockCard:hover {
-  border-color: rgba(238, 241, 246, 0.24);
+  border-color: var(--glass-hi);
+  background: var(--glass-strong);
   transform: translateY(-2px);
 }
 
 .blockIcon {
   width: 2.25rem;
   height: 2.25rem;
-  margin-bottom: 1rem;
-  filter: drop-shadow(0 0 8px rgba(238, 241, 246, 0.25));
+  margin-bottom: 1.25rem;
+  filter: drop-shadow(0 0 8px rgba(244, 245, 247, 0.2));
 }
 
 .blockCard h3 {
-  font-size: 1.1rem;
-  font-weight: 600;
+  font-size: 1.2rem;
+  font-weight: 700;
   letter-spacing: -0.03em;
   margin-bottom: 0.45rem;
 }
 
 .blockCard p {
-  color: var(--brand-muted);
+  color: var(--muted-foreground);
   font-size: 0.93rem;
   line-height: 1.55;
 }
 
 /* The banner band: a full-width panel like the X header. */
 .mapBand {
-  background: var(--brand-panel);
+  background:
+    radial-gradient(ellipse 60% 70% at 50% 100%, rgba(255, 255, 255, 0.04), transparent 70%),
+    var(--brand-surface);
   border-top: 1px solid var(--brand-line);
   border-bottom: 1px solid var(--brand-line);
   padding: clamp(3.5rem, 8vw, 5rem) clamp(1rem, 4vw, 2.5rem) 0;
@@ -401,20 +490,21 @@
 }
 
 .stepIcon {
-  width: 1.6rem;
-  height: 1.6rem;
+  width: 1.75rem;
+  height: 1.75rem;
   margin-top: 0.1rem;
 }
 
 .steps strong {
   display: block;
-  font-size: 1rem;
+  font-size: 1.05rem;
+  font-weight: 700;
   letter-spacing: -0.02em;
   margin-bottom: 0.25rem;
 }
 
 .steps p {
-  color: var(--brand-muted);
+  color: var(--muted-foreground);
   font-size: 0.92rem;
   line-height: 1.5;
 }
@@ -438,7 +528,7 @@
   width: 1.6rem;
   height: 1px;
   margin: 0 0.35rem;
-  background: rgba(238, 241, 246, 0.35);
+  background: color-mix(in oklch, var(--foreground), transparent 70%);
 }
 
 .lifecycleStep {
@@ -447,10 +537,11 @@
   gap: 0.5rem;
   padding: 0.45rem 0.8rem 0.45rem 0.5rem;
   border-radius: 999px;
-  border: 1px solid var(--brand-line);
-  background: var(--brand-panel);
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
-  font-size: 0.8rem;
+  border: 1px solid var(--glass-lo);
+  background: var(--glass);
+  box-shadow: inset 0 1px 0 0 var(--glass-hi);
+  font-size: 0.82rem;
+  font-weight: 600;
 }
 
 .lifecycleIcon {
@@ -480,7 +571,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  font-weight: 650;
+  font-weight: 800;
   letter-spacing: -0.03em;
 }
 
@@ -501,9 +592,11 @@
 }
 
 .footerMuted {
-  color: var(--brand-muted);
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
-  font-size: 0.72rem;
+  color: var(--label);
+  font-size: 0.62rem;
+  font-weight: 500;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
 }
 
 @keyframes rise {

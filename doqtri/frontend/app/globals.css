@@ -60,28 +60,34 @@
 }
 
 /*
- * Doqtri Dark Tech palette (see "Doqtri Dark Tech Brand System").
- * The app is dark-only, so :root and .dark carry identical values — this
- * prevents a light flash before the `dark` class on <html> is honored.
+ * Doqtri "Monochrome Glass" palette. The app is dark-only, so :root and .dark
+ * carry identical values — this prevents a light flash before the `dark` class
+ * on <html> is honored.
  *
- * Accent roles are fixed by the brand:
- *   blue   — links, focus, resolved notes, info
- *   green  — verified / success
- *   purple — on-chain proof and AI-derived affordances
+ * Hierarchy comes from light, weight and depth rather than hue: graphite
+ * surfaces, three text steps, and a single pale lavender-white primary. The
+ * semantic roles survive but are desaturated and used as small marks (dots,
+ * icon tints, hairlines), never as filled blocks:
+ *   success — verified
+ *   onchain — on-chain proof and AI-derived affordances
+ *   info    — links-in-prose, resolved notes
  */
 :root,
 .dark {
   /* Brand primitives */
-  --brand-bg: #0c0f14; /* page background */
-  --brand-surface: #11151c; /* card / surface */
-  --brand-elevated: #161b24; /* elevated surface */
-  --brand-border: #3f4552;
-  --brand-hover: #5a6273;
-  --brand-connector: #5a6273;
-  --brand-text: #e7e9ee;
-  --brand-purple: #b38bef;
-  --brand-green: #43c27a;
-  --brand-blue: #4a9df0;
+  --brand-bg: #08090b; /* page background */
+  --brand-surface: #0f1114; /* card / surface */
+  --brand-elevated: #15171b; /* elevated surface */
+  --brand-border: #2c2f36; /* control outlines */
+  --brand-hover: #474b55;
+  --brand-connector: #4a4e58;
+  --brand-text: #f4f5f7;
+  --brand-body: #a4a8b3;
+  --brand-label: #7c808a;
+  --brand-pearl: #dcdcf2; /* the one bright fill: primary pill */
+  --brand-purple: #a9a3dc;
+  --brand-green: #7cc4a0;
+  --brand-blue: #a3b8d9;
 
   --background: var(--brand-bg);
   --foreground: var(--brand-text);
@@ -89,44 +95,53 @@
   --card-foreground: var(--brand-text);
   --popover: var(--brand-elevated);
   --popover-foreground: var(--brand-text);
-  --primary: var(--brand-blue);
-  --primary-foreground: #0c0f14;
-  --secondary: #1b212c; /* active row */
+  --primary: var(--brand-pearl);
+  --primary-foreground: #0b0c10;
+  --secondary: #1a1c21; /* active row */
   --secondary-foreground: var(--brand-text);
   --muted: var(--brand-surface);
-  --muted-foreground: #8b93a3;
+  --muted-foreground: var(--brand-body);
   --accent: var(--brand-purple);
-  --accent-foreground: #0c0f14;
-  --destructive: #ef6b6b;
-  --border: #232a35; /* hairlines */
-  --input: var(--brand-border); /* control outlines */
-  --ring: var(--brand-blue);
+  --accent-foreground: #0b0c10;
+  --destructive: #e58585;
+  --border: #1d2025; /* hairlines */
+  --input: var(--brand-border);
+  --ring: #c9cadb;
 
   --elevated: var(--brand-elevated);
   --success: var(--brand-green);
   --onchain: var(--brand-purple);
   --info: var(--brand-blue);
-  --warning: #e8b155;
+  --warning: #d9b878;
 
-  --label: #6b7383; /* section labels */
+  --label: var(--brand-label); /* section labels */
   --ghost: var(--brand-connector); /* unresolved-link stroke */
 
-  --chart-1: var(--brand-blue);
+  /* Glass: translucent graphite lit from above. */
+  --glass: color-mix(in oklch, white 4%, transparent);
+  --glass-strong: color-mix(in oklch, white 7%, transparent);
+  --glass-hi: color-mix(in oklch, white 14%, transparent); /* top hairline */
+  --glass-lo: color-mix(in oklch, white 5%, transparent); /* body hairline */
+  --shadow-float:
+    0 24px 60px -20px rgb(0 0 0 / 0.75), 0 8px 20px -8px rgb(0 0 0 / 0.5);
+  --label-tracking: 0.28em;
+
+  --chart-1: var(--brand-pearl);
   --chart-2: var(--brand-purple);
   --chart-3: var(--brand-green);
   --chart-4: var(--brand-hover);
   --chart-5: var(--brand-border);
 
-  --radius: 0.5rem;
+  --radius: 0.75rem;
 
-  --sidebar: var(--brand-surface);
-  --sidebar-foreground: #a3aab8;
-  --sidebar-primary: var(--brand-blue);
-  --sidebar-primary-foreground: #0c0f14;
-  --sidebar-accent: #1b212c;
+  --sidebar: var(--brand-bg);
+  --sidebar-foreground: var(--brand-body);
+  --sidebar-primary: var(--brand-pearl);
+  --sidebar-primary-foreground: #0b0c10;
+  --sidebar-accent: var(--glass-strong);
   --sidebar-accent-foreground: var(--brand-text);
   --sidebar-border: var(--border);
-  --sidebar-ring: var(--brand-blue);
+  --sidebar-ring: var(--ring);
 }
 
 @layer base {
@@ -135,23 +150,88 @@
   }
   body {
     @apply bg-background text-foreground;
+    /* A soft top-light vignette instead of a flat black field. */
+    background-image:
+      radial-gradient(
+        120% 70% at 50% -10%,
+        color-mix(in oklch, white 5%, transparent),
+        transparent 60%
+      );
+    background-attachment: fixed;
+  }
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.02em;
   }
   html {
     @apply font-sans;
   }
   ::selection {
-    background-color: color-mix(in oklch, var(--brand-blue), transparent 65%);
+    background-color: color-mix(in oklch, var(--brand-pearl), transparent 70%);
   }
 }
 
 /*
- * Brand surface helpers. `.surface-glow` is the soft bright hairline the brand
- * system uses on primary buttons and highlighted cards.
+ * Brand surface helpers.
+ *
+ * `glass` is the default panel: translucent graphite with a brighter top
+ * hairline, so the surface reads as lit from above. `glass-float` adds the
+ * deep drop shadow and blur for things that hover over the page (dialogs,
+ * popovers, command palette). `surface-glow` is the soft bright halo kept for
+ * the one highlighted element on a screen.
  */
+@utility glass {
+  background-color: var(--glass);
+  border: 1px solid var(--glass-lo);
+  box-shadow: inset 0 1px 0 0 var(--glass-hi);
+}
+
+@utility glass-float {
+  background-color: color-mix(in srgb, var(--brand-elevated) 88%, transparent);
+  border: 1px solid var(--glass-lo);
+  box-shadow:
+    inset 0 1px 0 0 var(--glass-hi),
+    var(--shadow-float);
+  backdrop-filter: blur(20px);
+}
+
 @utility surface-glow {
   box-shadow:
-    0 0 0 1px color-mix(in oklch, var(--foreground), transparent 88%),
-    0 0 18px -4px color-mix(in oklch, var(--foreground), transparent 80%);
+    inset 0 1px 0 0 var(--glass-hi),
+    0 0 0 1px color-mix(in oklch, var(--foreground), transparent 90%),
+    0 0 24px -6px color-mix(in oklch, var(--brand-pearl), transparent 70%);
+}
+
+/* The wide-tracked uppercase label: "HOW TO JOIN", "PLANNED / SHIPPED". */
+@utility eyebrow {
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: var(--label-tracking);
+  color: var(--label);
+}
+
+/* A display headline: heavy, tight. Pair with a text-* size. */
+@utility display {
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 0.98;
+  color: var(--foreground);
+}
+
+/* An icon sitting in an outlined rounded tile. Size with size-*. */
+@utility icon-tile {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: calc(var(--radius) * 1.1);
+  background-color: var(--glass);
+  border: 1px solid var(--glass-lo);
+  box-shadow: inset 0 1px 0 0 var(--glass-hi);
+  color: var(--foreground);
 }
 
 @utility bg-grid {
@@ -160,6 +240,11 @@
     transparent 0.6px
   );
   background-size: 18px 18px;
+}
+
+/* Faint film grain, for large marketing surfaces. */
+@utility bg-grain {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .05 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 /* Thin, low-contrast scrollbars. */
@@ -211,19 +296,33 @@ html[data-color-mode] .w-md-editor {
  * therefore prefixed with `html[data-color-mode] .w-md-editor` so it wins on
  * specificity, never on load order.
  */
+/* The toolbar is a glass strip, its buttons quiet until hovered. */
 html[data-color-mode] .w-md-editor .w-md-editor-toolbar {
-  background-color: var(--muted);
+  background-color: var(--glass);
   border-bottom: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 0 var(--glass-lo);
+  padding: 4px 8px;
 }
 
 html[data-color-mode] .w-md-editor .w-md-editor-toolbar li > button {
   color: var(--muted-foreground);
+  border-radius: 8px;
 }
 
 html[data-color-mode] .w-md-editor .w-md-editor-toolbar li > button:hover,
 html[data-color-mode] .w-md-editor .w-md-editor-toolbar li > button:focus-visible {
-  background-color: var(--secondary);
+  background-color: var(--glass-strong);
   color: var(--foreground);
+}
+
+html[data-color-mode] .w-md-editor .w-md-editor-toolbar li.active > button {
+  background-color: var(--glass-strong);
+  color: var(--foreground);
+  box-shadow: inset 0 1px 0 0 var(--glass-hi);
+}
+
+html[data-color-mode] .w-md-editor .w-md-editor-toolbar-divider {
+  background-color: var(--border);
 }
 
 /*
@@ -300,6 +399,8 @@ html[data-color-mode] .wmde-markdown h3,
 html[data-color-mode] .wmde-markdown h4 {
   border-bottom: none;
   color: var(--foreground);
+  font-family: var(--font-sans);
+  letter-spacing: -0.02em;
 }
 
 html[data-color-mode] .wmde-markdown a {
@@ -307,13 +408,14 @@ html[data-color-mode] .wmde-markdown a {
 }
 
 html[data-color-mode] .wmde-markdown code {
-  background-color: var(--secondary);
+  background-color: var(--glass-strong);
+  border-radius: 6px;
   font-family: var(--font-code), ui-monospace, monospace;
 }
 
 html[data-color-mode] .wmde-markdown pre {
   background-color: var(--card);
-  border: 1px solid var(--input);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
 }
 

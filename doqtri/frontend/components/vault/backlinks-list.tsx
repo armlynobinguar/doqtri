@@ -25,10 +25,8 @@ export function BacklinksList({
       data-testid="backlinks"
       className="border-border flex h-[136px] shrink-0 flex-col border-t"
     >
-      <header className="flex h-7 shrink-0 items-center gap-1.5 px-3">
-        <span className="text-label text-[11px] font-medium tracking-wider uppercase">
-          Backlinks
-        </span>
+      <header className="flex h-9 shrink-0 items-center gap-2 px-3">
+        <span className="eyebrow">Backlinks</span>
         <span className="text-label text-[11px] tabular-nums">
           {backlinks.length}
         </span>
@@ -45,11 +43,11 @@ export function BacklinksList({
               <li key={doc.id}>
                 <NavLink
                   href={`/vault/${doc.id}`}
-                  className="text-muted-foreground hover:bg-secondary hover:text-foreground flex items-center gap-1.5 px-3 py-1 text-[12.5px] transition-colors"
+                  className="text-muted-foreground hover:text-foreground mx-1.5 flex items-center gap-1.5 rounded-lg px-2 py-1 text-[12.5px] transition-colors hover:bg-[var(--glass)]"
                 >
                   <CornerDownLeftIcon
                     className="size-3 shrink-0 opacity-50"
-                    strokeWidth={1.75}
+                    strokeWidth={1.5}
                   />
                   <span className="truncate">{doc.title}</span>
                 </NavLink>

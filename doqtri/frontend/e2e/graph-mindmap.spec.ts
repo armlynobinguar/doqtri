@@ -85,7 +85,7 @@ test.describe("derived views", () => {
     await expect(canvas).toBeVisible();
     await page.waitForTimeout(4000); // let the layout settle
 
-    // A resolved note's dot, found by its fill colour (#4a9df0).
+    // A resolved note's dot, found by its fill colour (#c9cadf).
     const dot = await canvas.evaluate((el: HTMLCanvasElement) => {
       const ctx = el.getContext("2d")!;
       const { data, width, height } = ctx.getImageData(0, 0, el.width, el.height);
@@ -95,7 +95,7 @@ test.describe("derived views", () => {
         for (let x = 0; x < width; x++) {
           const i = (y * width + x) * 4;
           const near = (v: number, t: number) => Math.abs(v - t) < 12;
-          if (near(data[i], 0x4a) && near(data[i + 1], 0x9d) && near(data[i + 2], 0xf0)) {
+          if (near(data[i], 0xc9) && near(data[i + 1], 0xca) && near(data[i + 2], 0xdf)) {
             hits.push([x, y]);
           }
         }
@@ -179,9 +179,9 @@ test.describe("derived views", () => {
         if (!ctx) return 0;
         const { data } = ctx.getImageData(0, 0, el.width, el.height);
         let accent = 0;
-        // #4a9df0 resolved-node fill
+        // #c9cadf resolved-node fill
         for (let i = 0; i < data.length; i += 4) {
-          if (data[i] === 0x4a && data[i + 1] === 0x9d && data[i + 2] === 0xf0) accent += 1;
+          if (data[i] === 0xc9 && data[i + 1] === 0xca && data[i + 2] === 0xdf) accent += 1;
         }
         return accent;
       });
