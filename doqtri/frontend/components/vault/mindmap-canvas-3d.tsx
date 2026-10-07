@@ -14,6 +14,14 @@ import {
 } from "@/components/vault/mindmap-canvas";
 import { fontFamily, fontWeight } from "@/components/vault/mindmap-fonts";
 import {
+  focusAlpha,
+  linkFocusAlpha,
+  linkIsLit,
+  useMindmapFocus,
+  type FocusState,
+} from "@/components/vault/use-mindmap-focus";
+import { FocusLockButton, placeLockButton } from "@/components/vault/focus-lock-button";
+import {
   canvasToBlob,
   loadWatermarkLogo,
   paintBackdrop,
@@ -27,11 +35,19 @@ import {
   particlesPerLink,
   type MindmapStyle,
 } from "@/lib/mindmap-style";
-import type { MapNode, MapNodeKind } from "@/lib/mindmap-graph";
+import {
+  revealAlpha,
+  ZOOM_REVEAL_MIN_NODES,
+  type MapNode,
+  type MapNodeKind,
+} from "@/lib/mindmap-graph";
 
 type Node3D = NodeObject<MapNode> & { fz?: number };
 type Link3D = { source: Node3D | string; target: Node3D | string };
 type Instance = ForceGraphMethods<Node3D, Link3D>;
+
+/** How long a touch must last on a node to count as a hold. */
+const LONG_PRESS_MS = 450;
 
 /** Label height per kind, in world units, before the text scale. */
 const TEXT_HEIGHT: Record<MapNodeKind, number> = {
@@ -83,6 +99,45 @@ function starfield(style: MindmapStyle): THREE.Points {
   return new THREE.Points(geometry, material);
 }
 
+/**
+ * Pushes the focus state onto the scene: every material of an unrelated node
+ * or link fades toward the dimmed opacity. Each material's own opacity is
+ * remembered the first time, so lit objects return to exactly what the style
+ * gave them.
+ */
+function applyFocus3D(graphData: { nodes: Node3D[]; links: Link3D[] }, state: FocusState) {
+  const fade = (object: THREE.Object3D | undefined, alpha: number) => {
+    object?.traverse((child) => {
+      const material = (child as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+      for (const m of Array.isArray(material) ? material : material ? [material] : []) {
+        m.userData.baseOpacity ??= m.opacity;
+        m.transparent = true;
+        m.opacity = (m.userData.baseOpacity as number) * alpha;
+      }
+    });
+  };
+  for (const node of graphData.nodes as (Node3D & { __threeObj?: THREE.Object3D })[]) {
+    fade(node.__threeObj, focusAlpha(state, node.id));
+  }
+  for (const link of graphData.links as (Link3D & { __lineObj?: THREE.Mesh | THREE.Line })[]) {
+    const s = endpoint(link.source);
+    const t = endpoint(link.target);
+    const line = link.__lineObj;
+    if (!s || !t || !line) continue;
+    const alpha = linkFocusAlpha(state, s.id, t.id);
+    const material = line.material as THREE.Material;
+    // three-forcegraph shares one material between every link of a colour, so
+    // a link gets its own copy before it is dimmed — or every link of that
+    // colour would dim with it.
+    if (alpha < 1 && !material.userData.focusOwned) {
+      const own = material.clone();
+      own.userData = { focusOwned: true, baseOpacity: material.opacity };
+      line.material = own;
+    }
+    if ((line.material as THREE.Material).userData.focusOwned) fade(line, alpha);
+  }
+}
+
 function disposeObject(object: THREE.Object3D) {
   object.traverse((child) => {
     const mesh = child as THREE.Mesh;
@@ -111,6 +166,8 @@ export default function MindmapCanvas3D({
   onSelect,
   handleRef,
   onSettled,
+  lockedId = null,
+  onLockChange,
 }: MindmapCanvasProps & { look: MindmapStyle }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<Instance | undefined>(undefined);
@@ -120,6 +177,9 @@ export default function MindmapCanvas3D({
   const [ready, setReady] = useState(false);
 
   const lookup = useLookup(graph, look);
+
+  /** When and how the latest press started, to tell a touch hold from a tap. */
+  const pressRef = useRef<{ at: number; type: string }>({ at: 0, type: "mouse" });
   const loadedFont = useLoadedFont(look.font);
 
   useEffect(() => {
@@ -144,6 +204,95 @@ export default function MindmapCanvas3D({
   useEffect(() => {
     framedRef.current = false;
   }, [graphData]);
+
+  const focusOn = look.focus && !editing;
+  const focus = useMindmapFocus(graph, focusOn, (state) => applyFocus3D(graphData, state), lockedId);
+  const lockButtonRef = useRef<HTMLButtonElement>(null);
+  const boxedLabels = look.three.node === "label" && look.shape !== "underline";
+  const revealOn = look.zoomReveal && graph.nodes.length >= ZOOM_REVEAL_MIN_NODES;
+  const lookRef = useRef(look);
+  useEffect(() => {
+    lookRef.current = look;
+  });
+
+  // The camera can orbit with nothing else changing, so the lock is placed on
+  // its own animation loop rather than on graph events.
+  useEffect(() => {
+    if (!ready) return;
+    const byId = new Map(graphData.nodes.map((node) => [node.id, node]));
+    const scratch = new THREE.Vector3();
+    const right = new THREE.Vector3();
+    let frame = 0;
+
+    /**
+     * Zoom reveal: a node shows once its label would be readable from where
+     * the camera is — its world height over the distance, times the focal
+     * length — by the same rule as 2D. A focused branch is always shown.
+     * Links and their particles follow their ends.
+     */
+    const reveal = (fg: Instance, state: FocusState) => {
+      const camera = fg.camera() as THREE.PerspectiveCamera;
+      const height = fg.renderer().domElement.clientHeight || 1;
+      const focal = height / 2 / Math.tan((camera.fov * Math.PI) / 360);
+      const style = lookRef.current;
+      const shown = new Set<string>();
+      for (const node of graphData.nodes as (Node3D & { __threeObj?: THREE.Object3D })[]) {
+        const object = node.__threeObj;
+        if (!object) continue;
+        let visible = true;
+        if (revealOn && node.depth > 1 && !(state.set?.has(node.id) && state.t > 0)) {
+          const textHeight =
+            (TEXT_HEIGHT[node.kind] ?? TEXT_HEIGHT.concept) * style.textScale * (style.overrides[node.id]?.scale ?? 1);
+          const distance = camera.position.distanceTo(scratch.set(node.x ?? 0, node.y ?? 0, node.z ?? 0)) || 1;
+          visible = revealAlpha((textHeight * focal) / distance, node.depth) >= 0.5;
+        }
+        if (object.visible !== visible) object.visible = visible;
+        if (visible) shown.add(node.id);
+      }
+      for (const link of graphData.links as (Link3D & {
+        __lineObj?: THREE.Object3D;
+        __photonsObj?: THREE.Object3D;
+      })[]) {
+        const s = endpoint(link.source);
+        const t = endpoint(link.target);
+        if (!s || !t) continue;
+        const both = shown.has(s.id) && shown.has(t.id);
+        if (link.__lineObj && link.__lineObj.visible !== both) link.__lineObj.visible = both;
+        // Particles only run along the lit branch; a dimmed link has none.
+        const photons = both && linkIsLit(state, s.id, t.id);
+        if (link.__photonsObj && link.__photonsObj.visible !== photons) link.__photonsObj.visible = photons;
+      }
+    };
+
+    const place = () => {
+      const fg = fgRef.current;
+      const state = focus.stateRef.current;
+      if (fg) reveal(fg, state);
+      const node = state.id ? byId.get(state.id) : undefined;
+      let at: { x: number; y: number } | null = null;
+      const object = (node as (Node3D & { __threeObj?: THREE.Object3D }) | undefined)?.__threeObj;
+      if (fg && node && object && state.set && state.t > 0.5) {
+        // Beside the label's right edge, wherever the label sits — on the
+        // node itself, or above an orb or crystal — however the camera turns.
+        let label: THREE.Sprite | null = null;
+        object.traverse((child) => {
+          if ((child as THREE.Sprite).isSprite) label = child as THREE.Sprite;
+        });
+        const sprite = label as THREE.Sprite | null;
+        const centre = sprite ? sprite.getWorldPosition(scratch) : scratch.set(node.x ?? 0, node.y ?? 0, node.z ?? 0);
+        const half = sprite ? sprite.scale.x / 2 : 6;
+        right.setFromMatrixColumn(fg.camera().matrixWorld, 0).multiplyScalar(half);
+        const point = fg.graph2ScreenCoords(centre.x + right.x, centre.y + right.y, centre.z + right.z);
+        // A boxed label can take the badge slightly over its edge; bare text
+        // needs a gap or the badge covers the last letter.
+        at = { x: point.x + (boxedLabels ? -6 : 4), y: point.y - 12 };
+      }
+      placeLockButton(lockButtonRef.current, at, state.id !== null && state.id === lockedId);
+      frame = requestAnimationFrame(place);
+    };
+    frame = requestAnimationFrame(place);
+    return () => cancelAnimationFrame(frame);
+  }, [ready, graphData, lockedId, focus.stateRef, boxedLabels, revealOn]);
 
   // Frame the map once it has had a moment to spread out, rather than waiting
   // for the engine to stop: the default camera sits far back, and the full
@@ -323,6 +472,16 @@ export default function MindmapCanvas3D({
     };
   }, [look, lookup, family, weight, selectedId]);
 
+  // Rebuilt node objects come back at full opacity; put the current focus on them.
+  useEffect(() => {
+    if (!ready) return;
+    // The library swaps the objects in on its next update, a frame later.
+    const id = requestAnimationFrame(() => applyFocus3D(graphData, focus.stateRef.current));
+    return () => cancelAnimationFrame(id);
+    // Focus changes are applied by the hook itself; this only covers rebuilds.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, nodeObject]);
+
   useImperativeHandle(
     handleRef,
     (): MindmapCanvasHandle => ({
@@ -393,9 +552,21 @@ export default function MindmapCanvas3D({
   return (
     <div
       ref={containerRef}
-      className="relative min-h-0 flex-1 overflow-hidden"
+      onPointerDownCapture={(event) => {
+        pressRef.current = { at: performance.now(), type: event.pointerType };
+      }}
+      className="relative min-h-0 flex-1 overflow-hidden select-none [-webkit-touch-callout:none]"
       style={{ backgroundColor: look.palette.background }}
     >
+      <FocusLockButton
+        buttonRef={lockButtonRef}
+        onPointerEnter={() => focus.hover(focus.stateRef.current.id)}
+        onToggle={() => {
+          const id = focus.stateRef.current.id;
+          if (id) onLockChange?.(lockedId === id ? null : id);
+        }}
+      />
+
       {size.width > 0 && (
         <ForceGraph3D<Node3D, Link3D>
           ref={fgRef as React.MutableRefObject<Instance | undefined>}
@@ -429,7 +600,21 @@ export default function MindmapCanvas3D({
           showPointerCursor={(object) =>
             Boolean(object && "kind" in object && (editing || isClickable(object as MapNode)))
           }
+          onNodeHover={(node) => {
+            if (pressRef.current.type !== "mouse") return;
+            // Picking can still find a node the zoom has hidden; it is not there.
+            const shown = node && (node as Node3D & { __threeObj?: THREE.Object3D }).__threeObj?.visible !== false;
+            focus.hover(shown ? node.id : null);
+          }}
+          onBackgroundClick={() => focus.clear()}
           onNodeClick={(node) => {
+            if ((node as Node3D & { __threeObj?: THREE.Object3D }).__threeObj?.visible === false) return;
+            // On touch, a press held long enough is a focus, not a click.
+            const press = pressRef.current;
+            if (focusOn && press.type !== "mouse" && performance.now() - press.at >= LONG_PRESS_MS) {
+              focus.hold(node.id);
+              return;
+            }
             if (editing) onSelect?.(node);
             else if (isClickable(node)) onNodeClick?.(node);
           }}

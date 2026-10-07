@@ -8,6 +8,8 @@ import type {
   MindmapGraphNode,
 } from "@/components/vault/force-graph-2d";
 import { useNodePointer } from "@/components/vault/use-node-pointer";
+import { linkIsLit, useMindmapFocus } from "@/components/vault/use-mindmap-focus";
+import { FocusLockButton, placeLockButton } from "@/components/vault/focus-lock-button";
 import { fontFamily, fontWeight, loadFont } from "@/components/vault/mindmap-fonts";
 import {
   canvasToBlob,
@@ -16,7 +18,11 @@ import {
   linkOffscreen,
   loadWatermarkLogo,
   measureNode,
+  fittedBoost,
+  isLit,
+  labelBoost,
   nodeOffscreen,
+  nodeReveal,
   paintBackdrop,
   paintGraphPattern,
   renderSnapshot,
@@ -30,6 +36,10 @@ import {
   createRadialForce,
   createOverlapResolver,
   isPinned,
+  fitBoosts,
+  layoutGroups,
+  PILL_GAP,
+  type BoostItem,
   type Extent,
   separateOnce,
 } from "@/lib/mindmap-layout";
@@ -43,7 +53,12 @@ import {
   type MindmapStyle,
   type NodeLook,
 } from "@/lib/mindmap-style";
-import { LARGE_MAP_NODES, type MapNode, type MindmapGraph } from "@/lib/mindmap-graph";
+import {
+  LARGE_MAP_NODES,
+  ZOOM_REVEAL_MIN_NODES,
+  type MapNode,
+  type MindmapGraph,
+} from "@/lib/mindmap-graph";
 
 type GraphNode = MindmapGraphNode;
 type GraphInstance = MindmapGraphInstance;
@@ -55,6 +70,9 @@ const ForceGraph2D = dynamic(
   () => import("@/components/vault/force-graph-2d"),
   { ssr: false },
 ) as unknown as React.ComponentType<MindmapForceGraphProps>;
+
+/** How far out the view may zoom, as a share of the zoom that fits the whole map. */
+const MIN_ZOOM_OF_FIT = 0.5;
 
 /** How long each frame may spend clearing overlaps once a layout stops. */
 const SETTLE_SLICE_MS = 12;
@@ -95,6 +113,10 @@ export type MindmapCanvasProps = {
   selectedId?: string | null;
   onSelect?: (node: MapNode) => void;
   handleRef?: React.Ref<MindmapCanvasHandle>;
+  /** A node whose highlight is locked on, if any. */
+  lockedId?: string | null;
+  /** Lock a node's highlight, or unlock with null. */
+  onLockChange?: (id: string | null) => void;
   /** Fired once the first layout has settled and been framed. */
   onSettled?: () => void;
 };
@@ -146,10 +168,14 @@ export function MindmapCanvas({
   onSelect,
   handleRef,
   onSettled,
+  lockedId = null,
+  onLockChange,
 }: MindmapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<GraphInstance | undefined>(undefined);
   const [size, setSize] = useState({ width: 0, height: 0 });
+  /** The furthest the view may zoom out, set once the map has been framed. */
+  const [minZoom, setMinZoom] = useState<number | undefined>(undefined);
   const layout = look.layout;
 
   /**
@@ -169,6 +195,9 @@ export function MindmapCanvas({
   /** Node sizes by id for the current painter; cleared whenever it changes. */
   const extentsRef = useRef(new Map<string, Extent>());
 
+  /** Fitted outline-label enlargements for the current frame. */
+  const boostsRef = useRef(new Map<string, number>());
+
   /** The graph-space rectangle on screen, refreshed every frame for culling. */
   const viewRef = useRef<ViewBounds | null>(null);
 
@@ -176,6 +205,21 @@ export function MindmapCanvas({
 
   const lookup = useLookup(graph, look);
   const loadedFont = useLoadedFont(look.font);
+
+  // Focus redraws through force-graph's zoom trigger (see requestRedraw); the
+  // instance is only known later, so this reads it from the ref at call time.
+  const focus = useMindmapFocus(
+    graph,
+    look.focus && !editing,
+    () => {
+      const instance = graphRef.current;
+      if (instance) instance.zoom(instance.zoom());
+    },
+    lockedId,
+  );
+  const lockButtonRef = useRef<HTMLButtonElement>(null);
+  /** Live nodes by id, for placing the lock beside the focused one. */
+  const nodeIndexRef = useRef(new Map<string, GraphNode>());
 
   const painter = useMemo<Painter>(
     () => ({
@@ -185,8 +229,12 @@ export function MindmapCanvas({
       look: lookup,
       selectedId,
       large,
+      focus: focus.stateRef,
+      reveal: look.zoomReveal && graph.nodes.length >= ZOOM_REVEAL_MIN_NODES,
+      boosts: boostsRef,
+      dpr: typeof window === "undefined" ? 1 : window.devicePixelRatio,
     }),
-    [look, loadedFont, lookup, selectedId, large],
+    [look, loadedFont, lookup, selectedId, large, focus.stateRef, graph.nodes.length],
   );
   const painterRef = useRef(painter);
   useEffect(() => {
@@ -210,13 +258,31 @@ export function MindmapCanvas({
   // force-graph mutates the objects it is given with simulation state, so it
   // gets copies. Rebuilding also resets the layout, which is correct here:
   // a different graph is a different map.
+  // Each connected group of the map gets its own radial tree and its own
+  // patch of the canvas (see layoutGroups): branches start beside their
+  // parents, and groups that share nothing never start on top of each other.
+  const places = useMemo(() => layoutGroups(graph.nodes, graph.links, RING_DISTANCE), [graph]);
+
   const graphData = useMemo(
     () => ({
-      nodes: graph.nodes.map((node) => ({ ...node })),
+      nodes: graph.nodes.map((node) => {
+        const place = places.get(node.id);
+        return place ? { ...node, x: place.x, y: place.y } : { ...node };
+      }),
       links: graph.links.map((link) => ({ ...link })),
     }),
-    [graph],
+    [graph, places],
   );
+
+  /** How many links touch each node: the bigger hubs win label collisions. */
+  const degree = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const { source, target } of graph.links) {
+      counts.set(source, (counts.get(source) ?? 0) + 1);
+      counts.set(target, (counts.get(target) ?? 0) + 1);
+    }
+    return counts;
+  }, [graph]);
 
   /*
    * The overlap passes ask for every node's size many times per tick. Measuring
@@ -306,25 +372,40 @@ export function MindmapCanvas({
       // Gravity keeps the free layout's disconnected clusters from drifting
       // apart, and keeps the tree layouts' cross axis together; the radial
       // mode already holds every node at a fixed distance from the centre.
+      // Both pull toward each node's own group, not one shared centre, so the
+      // groups the layout started apart stay apart. Group centres spread with
+      // the spacing, as the groups themselves do.
+      const placeOf = (node: GraphNode) => places.get(node.id);
       instance.d3Force(
         "gravity",
-        layout !== "radial" ? createGravityForce<GraphNode>(0.12) : null,
+        layout !== "radial"
+          ? createGravityForce<GraphNode>(0.12, (node) => {
+              const place = placeOf(node);
+              return place ? { x: place.centreX * spacing, y: place.centreY * spacing } : { x: 0, y: 0 };
+            })
+          : null,
       );
       instance.d3Force(
         "radial",
         layout === "radial"
-          ? createRadialForce<GraphNode>(RING_DISTANCE * spacing)
+          ? createRadialForce<GraphNode>(RING_DISTANCE * spacing, (node) => {
+              const place = placeOf(node);
+              return place
+                ? { ring: place.ring, x: place.centreX * spacing, y: place.centreY * spacing }
+                : { ring: node.depth, x: 0, y: 0 };
+            })
           : null,
       );
 
       framedRef.current = false;
       instance.d3ReheatSimulation();
     },
-    [layout, spacing, extentOf],
+    [layout, spacing, extentOf, places],
   );
 
   useEffect(() => {
     nodesRef.current = graphData.nodes as GraphNode[];
+    nodeIndexRef.current = new Map(nodesRef.current.map((node) => [node.id, node]));
     linksRef.current = graphData.links as PaintLink[];
     framedRef.current = false;
 
@@ -338,9 +419,15 @@ export function MindmapCanvas({
     containerRef,
     instanceRef: graphRef,
     getNodes: visibleNodes,
-    hitTest: (node, x, y) => {
+    hitTest: (node, x, y, k) => {
+      // A level the zoom has not revealed yet cannot be pointed at either.
+      if (nodeReveal(painterRef.current, node, k) < 0.5) return false;
+      // An enlarged outline node is hit where it is drawn, not where it lays out.
+      const boost = fittedBoost(painterRef.current, node, k);
       const { halfWidth, halfHeight } = extentOf(node);
-      return Math.abs(x - (node.x ?? 0)) <= halfWidth && Math.abs(y - (node.y ?? 0)) <= halfHeight;
+      return (
+        Math.abs(x - (node.x ?? 0)) <= halfWidth * boost && Math.abs(y - (node.y ?? 0)) <= halfHeight * boost
+      );
     },
     isClickable: (node) =>
       editing ? onSelect !== undefined : onNodeClick !== undefined && isClickable(node as MapNode),
@@ -358,6 +445,11 @@ export function MindmapCanvas({
       node.fy = undefined;
       graphRef.current?.d3ReheatSimulation();
     },
+    onHover: (node) => focus.hover(node?.id ?? null),
+    // Only while focus is on: otherwise a hold would swallow the tap that
+    // selects a node in edit mode.
+    onLongPress: look.focus && !editing ? (node) => focus.hold(node.id) : undefined,
+    onPressEmpty: focus.clear,
     tooltip: (node) =>
       editing
         ? "Click to style this node"
@@ -389,7 +481,8 @@ export function MindmapCanvas({
       snapshot: async (request) => {
         const instance = graphRef.current;
         const center = instance?.centerAt() as unknown as { x: number; y: number } | undefined;
-        const canvas = renderSnapshot(nodesRef.current, linksRef.current, painterRef.current, {
+        // Exports are the map as styled, never dimmed by a stray hover.
+        const canvas = renderSnapshot(nodesRef.current, linksRef.current, { ...painterRef.current, focus: undefined, reveal: false }, {
           width: request.width,
           height: request.height,
           title: request.title,
@@ -430,9 +523,18 @@ export function MindmapCanvas({
   return (
     <div
       ref={containerRef}
-      className="relative min-h-0 flex-1 overflow-hidden"
+      className="relative min-h-0 flex-1 overflow-hidden select-none [-webkit-touch-callout:none]"
       style={{ backgroundColor: look.palette.background }}
     >
+      <FocusLockButton
+        buttonRef={lockButtonRef}
+        onPointerEnter={() => focus.hover(focus.stateRef.current.id)}
+        onToggle={() => {
+          const id = focus.stateRef.current.id;
+          if (id) onLockChange?.(lockedId === id ? null : id);
+        }}
+      />
+
       {size.width > 0 && (
         <ForceGraph2D
           instanceRef={graphRef}
@@ -449,6 +551,7 @@ export function MindmapCanvas({
           onDagError={() => {}}
           // A big map cools faster: it has more to settle, but every tick costs
           // more, and the overlap pass cleans up what the forces leave.
+          minZoom={minZoom}
           cooldownTicks={large ? 120 : 200}
           d3AlphaDecay={large ? 0.04 : 0.022}
           d3VelocityDecay={0.35}
@@ -468,9 +571,45 @@ export function MindmapCanvas({
           linkDirectionalParticles={particlesPerLink(look, graph.links.length)}
           linkDirectionalParticleSpeed={look.link.particleSpeed}
           linkDirectionalParticleWidth={look.link.particleSize}
-          linkDirectionalParticleColor={(link: PaintLink) =>
-            typeof link.target === "object" ? lookup(link.target).accent : look.palette.link
-          }
+          // Drawn here rather than by force-graph so a focus can skip the
+          // dimmed links' particles entirely instead of fading them.
+          linkDirectionalParticleCanvasObject={(
+            x: number,
+            y: number,
+            link: PaintLink,
+            ctx: CanvasRenderingContext2D,
+            globalScale: number,
+          ) => {
+            const { source, target } = link;
+            if (typeof source !== "object" || typeof target !== "object") return;
+            if (!linkIsLit(focus.stateRef.current, source.id, target.id)) return;
+            const painterNow = painterRef.current;
+            if (
+              nodeReveal(painterNow, source, globalScale) < 0.5 ||
+              nodeReveal(painterNow, target, globalScale) < 0.5
+            ) {
+              return;
+            }
+            ctx.fillStyle = lookup(target).accent;
+            ctx.beginPath();
+            ctx.arc(x, y, look.link.particleSize / 2 / Math.sqrt(globalScale), 0, Math.PI * 2);
+            ctx.fill();
+          }}
+          onRenderFramePost={() => {
+            // Keep the lock beside the focused node, which may be moving.
+            const state = focus.stateRef.current;
+            const instance = graphRef.current;
+            const node = state.id ? nodeIndexRef.current.get(state.id) : undefined;
+            let at: { x: number; y: number } | null = null;
+            if (node && state.set && state.t > 0.5 && instance && !isHidden(look, node.id)) {
+              const halfWidth = extentOf(node).halfWidth * fittedBoost(painter, node, instance.zoom());
+              const point = instance.graph2ScreenCoords((node.x ?? 0) + halfWidth, node.y ?? 0);
+              // Overlapping the pill's edge, so the pointer never crosses a gap
+              // of empty canvas — which would read as leaving the node.
+              at = { x: point.x - 6, y: point.y - 12 };
+            }
+            placeLockButton(lockButtonRef.current, at, state.id !== null && state.id === lockedId);
+          }}
           // Hover, click and drag come from useNodePointer, by geometry.
           enablePointerInteraction={false}
           enableNodeDrag={false}
@@ -479,6 +618,36 @@ export function MindmapCanvas({
             paintBackdrop(ctx, width, height, painterRef.current.style);
             paintGraphPattern(ctx, width, height, painterRef.current.style);
             viewRef.current = viewBounds(ctx, 20);
+
+            // Outline labels drawn enlarged must not run into each other: fit
+            // each one's enlargement to the room around it, for this zoom.
+            const painterNow = painterRef.current;
+            const zoom = graphRef.current?.zoom();
+            if (painterNow.reveal && zoom) {
+              const items: BoostItem[] = [];
+              for (const node of nodesRef.current) {
+                const lit = isLit(painterNow, node);
+                if ((node.depth > 1 && !lit) || isHidden(painterNow.style, node.id)) continue;
+                const { halfWidth, halfHeight } = extentOf(node);
+                items.push({
+                  id: node.id,
+                  x: node.x ?? 0,
+                  y: node.y ?? 0,
+                  halfWidth,
+                  halfHeight,
+                  want: labelBoost(painterNow, node, zoom),
+                  // The locked node, then its highlighted branch, then roots,
+                  // then the most connected: a highlight keeps its size and
+                  // the dimmed labels around it give way.
+                  priority:
+                    (node.id === lockedId ? 1_000_000 : 0) +
+                    (lit ? 100_000 : 0) +
+                    (node.depth === 0 ? 10_000 : 0) +
+                    (degree.get(node.id) ?? 0),
+                });
+              }
+              boostsRef.current = fitBoosts(items, PILL_GAP);
+            }
             // Fonts, emoji and sizes change what a node occupies; clear any
             // overlap that opened up before it is drawn. Only on a settled map:
             // while the layout runs, the per-tick pass handles it, and a full
@@ -506,6 +675,13 @@ export function MindmapCanvas({
               resizedRef.current = false;
               graphRef.current?.zoomToFit(400, 40);
               onSettledRef.current?.();
+              // Once framed, stop zooming out far past the whole map — there is
+              // nothing out there, and it only shrinks the map to a speck.
+              // Read after the framing animation has landed.
+              setTimeout(() => {
+                const zoom = graphRef.current?.zoom();
+                if (zoom) setMinZoom(zoom * MIN_ZOOM_OF_FIT);
+              }, 450);
             });
           }}
           nodeCanvasObject={(node: GraphNode, ctx: CanvasRenderingContext2D) => {

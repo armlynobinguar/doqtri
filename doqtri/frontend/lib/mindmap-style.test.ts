@@ -15,7 +15,7 @@ import {
   displayLabel,
   particlesPerLink,
 } from "@/lib/mindmap-style";
-import { overviewGraph, type MindmapGraph } from "@/lib/mindmap-graph";
+import { createFocusIndex, overviewGraph, revealAlpha, type MindmapGraph } from "@/lib/mindmap-graph";
 
 function seeded(seed: number) {
   let s = seed;
@@ -282,5 +282,72 @@ describe("particlesPerLink", () => {
   });
   it("turns them off on a very big map", () => {
     expect(particlesPerLink(style, 1213)).toBe(0);
+  });
+});
+
+describe("createFocusIndex", () => {
+  // root → a, b; a → a1, a2; b → b1; a1 → x
+  const graph: MindmapGraph = {
+    nodes: ["root", "a", "b", "a1", "a2", "b1", "x", "c", "d", "e"].map((id, i) => ({
+      id,
+      label: id,
+      kind: "concept" as const,
+      depth: i,
+    })),
+    links: [
+      { source: "root", target: "a" },
+      { source: "root", target: "b" },
+      { source: "a", target: "a1" },
+      { source: "a", target: "a2" },
+      { source: "b", target: "b1" },
+      { source: "a1", target: "x" },
+      { source: "root", target: "c" },
+      { source: "root", target: "d" },
+      { source: "root", target: "e" },
+    ],
+  };
+  const focus = createFocusIndex(graph);
+
+  it("lights the node, its subtree, and its path to the root", () => {
+    expect([...focus("a")!].sort()).toEqual(["a", "a1", "a2", "root", "x"]);
+  });
+
+  it("lights only the path for a leaf", () => {
+    expect([...focus("x")!].sort()).toEqual(["a", "a1", "root", "x"]);
+  });
+
+  it("dims nothing when nearly the whole map is related", () => {
+    expect(focus("root")).toBeNull();
+  });
+
+  it("keeps every route up from a node with two parents", () => {
+    const hub = createFocusIndex({
+      nodes: ["d1", "d2", "d3", "hub", "z1", "z2", "z3"].map((id) => ({ id, label: id, kind: "concept" as const, depth: 0 })),
+      links: [
+        { source: "d1", target: "hub" },
+        { source: "d2", target: "hub" },
+      ],
+    });
+    expect([...hub("hub")!].sort()).toEqual(["d1", "d2", "hub"]);
+  });
+});
+
+describe("revealAlpha", () => {
+  it("always shows the root and its first ring", () => {
+    expect(revealAlpha(0.1, 0)).toBe(1);
+    expect(revealAlpha(0.1, 1)).toBe(1);
+  });
+
+  it("fades a level in as its labels grow legible", () => {
+    expect(revealAlpha(3, 2)).toBe(0);
+    expect(revealAlpha(5.5, 2)).toBeCloseTo(0.5);
+    expect(revealAlpha(8, 2)).toBe(1);
+  });
+
+  it("reveals deeper levels only at closer zoom", () => {
+    // A size that fully shows level 2 still hides level 3.
+    expect(revealAlpha(7, 2)).toBe(1);
+    expect(revealAlpha(7, 3)).toBe(0);
+    expect(revealAlpha(10, 3)).toBe(1);
   });
 });

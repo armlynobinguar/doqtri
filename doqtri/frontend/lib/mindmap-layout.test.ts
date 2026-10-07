@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   PILL_GAP,
+  connectedComponents,
+  fitBoosts,
+  layoutGroups,
+  packCircles,
   createOverlapResolver,
   createRadialForce,
   hasOverlap,
   isPinned,
   resolveOverlaps,
+  seedRadialPositions,
   separateOnce,
   type Extent,
   type Positioned,
@@ -306,5 +311,160 @@ describe("createOverlapResolver", () => {
     ];
     const step = createOverlapResolver(nodes, extentOf);
     expect(step(10_000)).toBe(true);
+  });
+});
+
+describe("seedRadialPositions", () => {
+  const nodes = ["r", "a", "b", "a1", "a2", "a3", "b1"].map((id, i) => ({ id, depth: i === 0 ? 0 : id.length }));
+  const links = [
+    { source: "r", target: "a" },
+    { source: "r", target: "b" },
+    { source: "a", target: "a1" },
+    { source: "a", target: "a2" },
+    { source: "a", target: "a3" },
+    { source: "b", target: "b1" },
+  ];
+  const at = seedRadialPositions(nodes, links, 70);
+  const angle = (id: string) => Math.atan2(at.get(id)!.y, at.get(id)!.x);
+  const radius = (id: string) => Math.hypot(at.get(id)!.x, at.get(id)!.y);
+
+  it("puts the root in the middle and each level on its own ring", () => {
+    expect(radius("r")).toBeCloseTo(0);
+    expect(radius("a")).toBeCloseTo(70);
+    expect(radius("a1")).toBeCloseTo(140);
+  });
+
+  it("keeps children inside their parent's slice of the circle", () => {
+    const gap = (x: number, y: number) => {
+      const d = Math.abs(x - y) % (2 * Math.PI);
+      return Math.min(d, 2 * Math.PI - d);
+    };
+    // "a" carries three leaves to b's one, so it owns three quarters of the
+    // circle; its children fan out across that, centred on it.
+    expect(gap(angle("a2"), angle("a"))).toBeLessThan(1e-9);
+    expect(gap(angle("a1"), angle("a"))).toBeCloseTo(Math.PI / 2);
+    expect(gap(angle("a3"), angle("a"))).toBeCloseTo(Math.PI / 2);
+    // A lone child sits straight out from its parent.
+    expect(gap(angle("b1"), angle("b"))).toBeLessThan(1e-9);
+  });
+
+  it("gives a forest a shared first ring", () => {
+    const forest = seedRadialPositions(
+      [
+        { id: "d1", depth: 0 },
+        { id: "d2", depth: 0 },
+      ],
+      [],
+      50,
+    );
+    expect(Math.hypot(forest.get("d1")!.x, forest.get("d1")!.y)).toBeCloseTo(50);
+    expect(forest.get("d1")).not.toEqual(forest.get("d2"));
+  });
+});
+
+describe("connectedComponents", () => {
+  it("separates nodes that never reach one another", () => {
+    const groups = connectedComponents(
+      ["a", "b", "c", "d", "e"].map((id) => ({ id })),
+      [
+        { source: "a", target: "b" },
+        { source: "d", target: "c" },
+      ],
+    );
+    expect(groups).toEqual([["a", "b"], ["c", "d"], ["e"]]);
+  });
+});
+
+describe("packCircles", () => {
+  it("never overlaps two circles", () => {
+    const radii = [120, 40, 40, 300, 10, 75, 75, 75, 200, 5];
+    const centres = packCircles(radii, 20);
+    for (let i = 0; i < radii.length; i++) {
+      for (let j = i + 1; j < radii.length; j++) {
+        const d = Math.hypot(centres[i].x - centres[j].x, centres[i].y - centres[j].y);
+        expect(d).toBeGreaterThanOrEqual(radii[i] + radii[j] + 20 - 1e-6);
+      }
+    }
+  });
+
+  it("keeps the arrangement compact", () => {
+    const radii = Array.from({ length: 12 }, () => 50);
+    const centres = packCircles(radii, 10);
+    const reach = Math.max(...centres.map((c) => Math.hypot(c.x, c.y) + 50));
+    // Twelve circles of radius 50 cover ~94k units²; a loose spiral would sprawl far past that.
+    expect(reach).toBeLessThan(260);
+  });
+});
+
+describe("layoutGroups", () => {
+  const tree = (prefix: string, kids: number) => ({
+    nodes: [
+      { id: `${prefix}`, depth: 0 },
+      ...Array.from({ length: kids }, (_, i) => ({ id: `${prefix}${i}`, depth: 1 })),
+    ],
+    links: Array.from({ length: kids }, (_, i) => ({ source: prefix, target: `${prefix}${i}` })),
+  });
+
+  it("keeps a single tree around the origin", () => {
+    const { nodes, links } = tree("r", 4);
+    const places = layoutGroups(nodes, links, 70);
+    expect(places.get("r")).toMatchObject({ x: 0, y: 0, centreX: 0, centreY: 0, ring: 0 });
+    expect(places.get("r0")!.ring).toBe(1);
+  });
+
+  it("gives unrelated trees their own space", () => {
+    const a = tree("a", 6);
+    const b = tree("b", 3);
+    const places = layoutGroups([...a.nodes, ...b.nodes], [...a.links, ...b.links], 70, 60);
+    const centre = (id: string) => ({ x: places.get(id)!.centreX, y: places.get(id)!.centreY });
+    expect(centre("a")).not.toEqual(centre("b"));
+
+    // Every node of one tree is further from the other tree's centre than that
+    // tree's own reach: the groups' circles do not meet.
+    const reach = (prefix: string, nodes: { id: string }[]) =>
+      Math.max(...nodes.map((n) => Math.hypot(places.get(n.id)!.x - centre(prefix).x, places.get(n.id)!.y - centre(prefix).y)));
+    const reachB = reach("b", b.nodes);
+    for (const node of a.nodes) {
+      const p = places.get(node.id)!;
+      expect(Math.hypot(p.x - centre("b").x, p.y - centre("b").y)).toBeGreaterThan(reachB);
+    }
+  });
+});
+
+describe("fitBoosts", () => {
+  const item = (id: string, x: number, want: number, priority = 0) => ({
+    id,
+    x,
+    y: 0,
+    halfWidth: 10,
+    halfHeight: 4,
+    want,
+    priority,
+  });
+
+  it("keeps the full enlargement where there is room", () => {
+    expect(fitBoosts([item("a", 0, 3), item("b", 500, 3)], 2).get("a")).toBe(3);
+  });
+
+  it("shrinks colliding enlargements, the lower priority first", () => {
+    const boosts = fitBoosts([item("low", 0, 3, 1), item("high", 45, 3, 5)], 2);
+    expect(boosts.get("high")).toBe(3);
+    expect(boosts.get("low")!).toBeLessThan(3);
+    // What is left fits: the two boxes no longer meet.
+    const gapX = 45 - 10 * boosts.get("high")! - 10 * boosts.get("low")!;
+    expect(gapX >= 2 || boosts.get("low") === 1).toBe(true);
+  });
+
+  it("grows only into the room a fixed label leaves", () => {
+    // 25 apart: "big" clears "fixed" up to 10·b + 10 + 2 < 25, so b < 1.3.
+    const boosts = fitBoosts([item("fixed", 25, 1), item("big", 0, 4)], 2);
+    expect(boosts.get("fixed")).toBe(1);
+    expect(boosts.get("big")!).toBeGreaterThan(1);
+    expect(boosts.get("big")!).toBeLessThan(1.3);
+  });
+
+  it("never shrinks below natural size", () => {
+    const boosts = fitBoosts([item("fixed", 5, 1), item("big", 0, 4)], 2);
+    expect(boosts.get("big")).toBe(1);
   });
 });

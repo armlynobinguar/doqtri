@@ -18,6 +18,7 @@ import {
   RotateCcwIcon,
   Undo2Icon,
   LayersIcon,
+  LockIcon,
   XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -52,6 +53,7 @@ import {
 import {
   LARGE_MAP_NODES,
   overviewGraph,
+  ZOOM_REVEAL_MIN_NODES,
   type MapNode,
   type MapNodeKind,
   type MindmapGraph,
@@ -223,13 +225,24 @@ export function MindmapStudio({
 
   const editing = open && tab === "node";
   const selected = selectedId ? shown.nodes.find((node) => node.id === selectedId) ?? null : null;
+
+  // A locked highlight, if any. Looked up on the drawn nodes, so switching to
+  // an overview that leaves the node out simply drops the lock.
+  const [lockedId, setLockedId] = useState<string | null>(null);
+  const locked = style.focus && lockedId ? (shown.nodes.find((node) => node.id === lockedId) ?? null) : null;
   const caption = style.caption.text.trim() || title;
   const light = isLight(style.palette.background);
 
   const Canvas = style.view === "3d" ? MindmapCanvas3D : MindmapCanvas;
 
   return (
-    <div ref={rootRef} className="relative flex min-h-0 flex-1 flex-col" style={{ backgroundColor: style.palette.background }}>
+    <div
+      ref={rootRef}
+      // Read by the lock badge, which hides in zen mode so screenshots stay clean.
+      data-zen={zen}
+      className="relative flex min-h-0 flex-1 flex-col"
+      style={{ backgroundColor: style.palette.background }}
+    >
       {scale === "ask" ? (
         <LargeMapGate
           total={total}
@@ -249,6 +262,8 @@ export function MindmapStudio({
           onSelect={(node) => setSelectedId(node.id)}
           handleRef={handleRef}
           onSettled={() => setSettledKey(runKey)}
+          lockedId={locked?.id ?? null}
+          onLockChange={setLockedId}
         />
       )}
 
@@ -323,6 +338,13 @@ export function MindmapStudio({
         </button>
       ) : (
         <div className="absolute top-2 right-2 z-20 flex items-center gap-1">
+          {locked && (
+            <ToolButton label={`Unlock the highlight on ${locked.label}`} active onClick={() => setLockedId(null)}>
+              <LockIcon className="text-accent size-3.5" />
+              <span className="max-w-[140px] truncate text-[11px] font-semibold max-sm:max-w-[72px]">{locked.label}</span>
+              <XIcon className="size-3 opacity-70" />
+            </ToolButton>
+          )}
           {isLarge && (
             <ToolButton
               label={
@@ -534,11 +556,19 @@ function GateChoice({
   );
 }
 
+/**
+ * Rounds a drawn coordinate. The server's and the browser's trig can differ in
+ * the last digit, which React reports as a hydration mismatch on the SVG.
+ */
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 /** A handful of big nodes: the map's outline, nothing more. */
 function FewNodesArt() {
   const around = [0, 1, 2, 3, 4].map((i) => {
     const angle = -Math.PI / 2 + (i * 2 * Math.PI) / 5;
-    return { x: 36 + Math.cos(angle) * 22, y: 36 + Math.sin(angle) * 22 };
+    return { x: round2(36 + Math.cos(angle) * 22), y: round2(36 + Math.sin(angle) * 22) };
   });
   return (
     <svg viewBox="0 0 72 72" className="h-full w-auto" fill="none" aria-hidden>
@@ -564,7 +594,7 @@ function ManyNodesArt() {
   const points = rings.map(({ count, radius, r, offset }) =>
     Array.from({ length: count }, (_, i) => {
       const angle = offset + (i * 2 * Math.PI) / count;
-      return { x: 36 + Math.cos(angle) * radius, y: 36 + Math.sin(angle) * radius, r };
+      return { x: round2(36 + Math.cos(angle) * radius), y: round2(36 + Math.sin(angle) * radius), r };
     }),
   );
   // Each node links to the nearest node one ring in, like a tree fanning out.
@@ -1242,6 +1272,24 @@ function StudioPanel({
                 </>
               )}
               <Range label="Spacing" value={style.spacing} min={0.5} max={2.5} step={0.05} onChange={(v) => set("spacing", v)} format={(v) => `${Math.round(v * 100)}%`} />
+            </Section>
+            <Section title="Focus">
+              <Toggle label="Dim the rest on hover" checked={style.focus} onChange={(v) => set("focus", v)} />
+              <p className="text-label text-[11px] leading-relaxed">
+                Pointing at a node lights its branch and its path to the centre. On touch screens, press and hold a
+                node; tap empty space to let go.
+              </p>
+            </Section>
+            <Section title="Detail">
+              <Toggle
+                label="Reveal detail as you zoom"
+                checked={style.zoomReveal}
+                onChange={(v) => set("zoomReveal", v)}
+              />
+              <p className="text-label text-[11px] leading-relaxed">
+                On maps of {ZOOM_REVEAL_MIN_NODES}+ nodes, deeper levels appear as you zoom in — like street names on
+                a map. Hovering a branch shows what is inside it. Snapshots always include everything.
+              </p>
             </Section>
             <Section title="Backdrop">
               <ChipGrid columns={4}>
