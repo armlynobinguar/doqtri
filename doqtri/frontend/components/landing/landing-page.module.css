@@ -38,11 +38,50 @@
   mask-image: linear-gradient(180deg, black 0%, transparent 85%);
 }
 
+.announcement,
 .nav,
 .main,
 .footer {
   position: relative;
   z-index: 1;
+}
+
+/* --------------------------------------------------------- announcement */
+
+.announcement {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem 0.75rem;
+  padding: 0.55rem 1rem;
+  font-size: 0.82rem;
+  text-align: center;
+  color: var(--brand-ink);
+  background: linear-gradient(90deg, rgba(67, 194, 122, 0.08), rgba(238, 241, 246, 0.06), rgba(67, 194, 122, 0.08));
+  border-bottom: 1px solid var(--brand-line);
+  transition: background-color 0.2s ease;
+}
+
+.announcement:hover {
+  background-color: rgba(238, 241, 246, 0.04);
+}
+
+.announcementTag {
+  padding: 0.1rem 0.45rem;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #43c27a;
+  border: 1px solid rgba(67, 194, 122, 0.45);
+  border-radius: 999px;
+}
+
+.announcementCta {
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 /* ------------------------------------------------------------------ nav */

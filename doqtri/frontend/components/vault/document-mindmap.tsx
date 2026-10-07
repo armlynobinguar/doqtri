@@ -7,6 +7,7 @@ import { ArrowLeftIcon, Loader2Icon, NetworkIcon, SparklesIcon } from "lucide-re
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { MindmapCanvas } from "@/components/vault/mindmap-canvas";
+import { MindmapPromoBanner } from "@/components/promo/mindmap-promo-banner";
 import { graphFromMindmap } from "@/lib/mindmap-graph";
 import { mindmapFromHeadings, type DocMindmap } from "@/lib/mindmap-types";
 
@@ -121,6 +122,8 @@ export function DocumentMindmap({
           />
         </div>
       </header>
+
+      <MindmapPromoBanner />
 
       <MindmapCanvas
         graph={graph}

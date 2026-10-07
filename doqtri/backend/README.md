@@ -29,6 +29,8 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20260928000200_add_documents_publish_headings.sql
 20261002000000_create_ai_usage.sql        # NOT yet applied: apply before deploying
 20261006000000_create_node_links.sql      # NOT yet applied: apply before deploying
+20261009000000_create_promo_submissions.sql
+20261009000100_add_promo_submission_status.sql
 ```
 
 The remote records its own version stamps (e.g. `20260929114657` for
@@ -60,6 +62,11 @@ Two supporting tables:
   by `/api/github/status` to suggest the next node status. Owners select,
   insert and delete their own rows, and can only link their own documents.
   Nothing in it touches the chain; the owner signs any status change.
+- `public.promo_submissions` — one mindmap-showcase entry per user (1-4
+  screenshot paths in the private `promo-submissions` bucket, plus an optional
+  caption and contact). Written only by `/api/promo/submissions` with the
+  service role; owners can read their own row. `status` (pending, shortlisted,
+  winner, rejected) is set from `/admin/promo` and resets on resubmission.
 
 The notes table itself is still the only content store. There are deliberately **no** graph tables: nodes and
 edges are parsed from `markdown` at render time by `lib/wikilinks.ts`, so the
