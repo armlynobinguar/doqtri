@@ -13,31 +13,37 @@ import {
   canvasToBlob,
   drawLink,
   drawNode,
+  linkOffscreen,
   loadWatermarkLogo,
   measureNode,
+  nodeOffscreen,
   paintBackdrop,
   paintGraphPattern,
   renderSnapshot,
+  viewBounds,
   type PaintLink,
   type Painter,
+  type ViewBounds,
 } from "@/components/vault/mindmap-paint";
 import {
   createGravityForce,
   createRadialForce,
+  createOverlapResolver,
   isPinned,
-  resolveOverlaps,
+  type Extent,
   separateOnce,
 } from "@/lib/mindmap-layout";
 import {
   assignBranches,
   DEFAULT_STYLE,
   isHidden,
+  particlesPerLink,
   resolveLook,
   type FontKey,
   type MindmapStyle,
   type NodeLook,
 } from "@/lib/mindmap-style";
-import type { MapNode, MindmapGraph } from "@/lib/mindmap-graph";
+import { LARGE_MAP_NODES, type MapNode, type MindmapGraph } from "@/lib/mindmap-graph";
 
 type GraphNode = MindmapGraphNode;
 type GraphInstance = MindmapGraphInstance;
@@ -49,6 +55,9 @@ const ForceGraph2D = dynamic(
   () => import("@/components/vault/force-graph-2d"),
   { ssr: false },
 ) as unknown as React.ComponentType<MindmapForceGraphProps>;
+
+/** How long each frame may spend clearing overlaps once a layout stops. */
+const SETTLE_SLICE_MS = 12;
 
 /** Spacing between the rings of the radial layout, in graph units. */
 const RING_DISTANCE = 70;
@@ -86,6 +95,8 @@ export type MindmapCanvasProps = {
   selectedId?: string | null;
   onSelect?: (node: MapNode) => void;
   handleRef?: React.Ref<MindmapCanvasHandle>;
+  /** Fired once the first layout has settled and been framed. */
+  onSettled?: () => void;
 };
 
 /**
@@ -134,6 +145,7 @@ export function MindmapCanvas({
   selectedId = null,
   onSelect,
   handleRef,
+  onSettled,
 }: MindmapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<GraphInstance | undefined>(undefined);
@@ -154,6 +166,14 @@ export function MindmapCanvas({
   /** Set when node sizes change, so the next frame clears any new overlap. */
   const resizedRef = useRef(false);
 
+  /** Node sizes by id for the current painter; cleared whenever it changes. */
+  const extentsRef = useRef(new Map<string, Extent>());
+
+  /** The graph-space rectangle on screen, refreshed every frame for culling. */
+  const viewRef = useRef<ViewBounds | null>(null);
+
+  const large = graph.nodes.length > LARGE_MAP_NODES;
+
   const lookup = useLookup(graph, look);
   const loadedFont = useLoadedFont(look.font);
 
@@ -164,12 +184,14 @@ export function MindmapCanvas({
       weight: fontWeight(loadedFont),
       look: lookup,
       selectedId,
+      large,
     }),
-    [look, loadedFont, lookup, selectedId],
+    [look, loadedFont, lookup, selectedId, large],
   );
   const painterRef = useRef(painter);
   useEffect(() => {
     painterRef.current = painter;
+    extentsRef.current = new Map();
     resizedRef.current = true;
   }, [painter]);
 
@@ -196,11 +218,62 @@ export function MindmapCanvas({
     [graph],
   );
 
-  const extentOf = useCallback((node: GraphNode) => measureNode(painterRef.current, node), []);
+  /*
+   * The overlap passes ask for every node's size many times per tick. Measuring
+   * builds a cache key from the font, shape and label each time, which at a
+   * thousand nodes is most of the tick — so sizes are kept by node id here and
+   * only re-measured when the painter changes.
+   */
+  const extentOf = useCallback((node: GraphNode) => {
+    const cache = extentsRef.current;
+    let extent = cache.get(node.id);
+    if (!extent) {
+      extent = measureNode(painterRef.current, node);
+      cache.set(node.id, extent);
+    }
+    return extent;
+  }, []);
   const visibleNodes = useCallback(
     () => nodesRef.current.filter((node) => !isHidden(painterRef.current.style, node.id)),
     [],
   );
+
+  const onSettledRef = useRef(onSettled);
+  useEffect(() => {
+    onSettledRef.current = onSettled;
+  });
+
+  /** The animation frame of an in-progress settle, so a new one replaces it. */
+  const settleFrameRef = useRef(0);
+  useEffect(() => () => cancelAnimationFrame(settleFrameRef.current), []);
+
+  /**
+   * Clears every remaining overlap, a frame-sized slice at a time, then calls
+   * `done`. On a big map the full clean-up is most of a second of work; run as
+   * one call it froze the page right as the map finished building.
+   */
+  const settle = useCallback(
+    (done: () => void) => {
+      cancelAnimationFrame(settleFrameRef.current);
+      const step = createOverlapResolver(visibleNodes(), extentOf);
+      const run = () => {
+        if (step(SETTLE_SLICE_MS)) done();
+        else settleFrameRef.current = requestAnimationFrame(run);
+      };
+      run();
+    },
+    [visibleNodes, extentOf],
+  );
+
+  /**
+   * Asks force-graph for one more frame. Once its engine has stopped it only
+   * redraws on its own triggers, and setting the zoom — even to the same
+   * value — is one of them.
+   */
+  const requestRedraw = useCallback(() => {
+    const instance = graphRef.current;
+    if (instance) instance.zoom(instance.zoom());
+  }, []);
 
   const spacing = look.spacing;
 
@@ -374,8 +447,10 @@ export function MindmapCanvas({
           // A merged concept can close a loop in the global map; the tree
           // layouts then just place what they can instead of throwing.
           onDagError={() => {}}
-          cooldownTicks={200}
-          d3AlphaDecay={0.022}
+          // A big map cools faster: it has more to settle, but every tick costs
+          // more, and the overlap pass cleans up what the forces leave.
+          cooldownTicks={large ? 120 : 200}
+          d3AlphaDecay={large ? 0.04 : 0.022}
           d3VelocityDecay={0.35}
           nodeVisibility={(node: GraphNode) => !isHidden(look, node.id)}
           linkVisibility={(link: PaintLink) =>
@@ -385,8 +460,12 @@ export function MindmapCanvas({
           }
           linkCurvature={look.link.curvature}
           linkCanvasObjectMode={() => "replace"}
-          linkCanvasObject={(link: PaintLink, ctx: CanvasRenderingContext2D) => drawLink(ctx, link, painter)}
-          linkDirectionalParticles={look.link.particles}
+          linkCanvasObject={(link: PaintLink, ctx: CanvasRenderingContext2D) => {
+            const view = viewRef.current;
+            if (view && linkOffscreen(view, link, look.link.curvature)) return;
+            drawLink(ctx, link, painter);
+          }}
+          linkDirectionalParticles={particlesPerLink(look, graph.links.length)}
           linkDirectionalParticleSpeed={look.link.particleSpeed}
           linkDirectionalParticleWidth={look.link.particleSize}
           linkDirectionalParticleColor={(link: PaintLink) =>
@@ -399,11 +478,14 @@ export function MindmapCanvas({
             const { width, height } = ctx.canvas;
             paintBackdrop(ctx, width, height, painterRef.current.style);
             paintGraphPattern(ctx, width, height, painterRef.current.style);
-            if (resizedRef.current) {
-              // Fonts, emoji and sizes change what a node occupies; clear any
-              // overlap that opened up before it is drawn.
+            viewRef.current = viewBounds(ctx, 20);
+            // Fonts, emoji and sizes change what a node occupies; clear any
+            // overlap that opened up before it is drawn. Only on a settled map:
+            // while the layout runs, the per-tick pass handles it, and a full
+            // resolve over the starting pile would stall the page.
+            if (resizedRef.current && framedRef.current) {
               resizedRef.current = false;
-              resolveOverlaps(visibleNodes(), extentOf);
+              settle(requestRedraw);
             }
           }}
           // Runs after d3 has integrated the tick, so the separation it applies
@@ -415,13 +497,22 @@ export function MindmapCanvas({
           onEngineStop={() => {
             // The engine has stopped, so nothing will integrate away a residual
             // overlap. Resolve what is left outright, then frame the result.
-            resolveOverlaps(visibleNodes(), extentOf);
-            if (!framedRef.current) {
+            settle(() => {
+              if (framedRef.current) {
+                requestRedraw();
+                return;
+              }
               framedRef.current = true;
+              resizedRef.current = false;
               graphRef.current?.zoomToFit(400, 40);
-            }
+              onSettledRef.current?.();
+            });
           }}
-          nodeCanvasObject={(node: GraphNode, ctx: CanvasRenderingContext2D) => drawNode(ctx, node, painter)}
+          nodeCanvasObject={(node: GraphNode, ctx: CanvasRenderingContext2D) => {
+            const view = viewRef.current;
+            if (view && nodeOffscreen(view, node, extentOf(node))) return;
+            drawNode(ctx, node, painter);
+          }}
         />
       )}
     </div>

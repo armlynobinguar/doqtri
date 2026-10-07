@@ -805,3 +805,18 @@ export function displayLabel(style: MindmapStyle, node: { id: string; label: str
 export function isHidden(style: MindmapStyle, id: string): boolean {
   return style.overrides[id]?.hidden === true;
 }
+
+/** Most particles a map animates at once, across all of its links. */
+export const PARTICLE_BUDGET = 600;
+
+/**
+ * Particles per link, held to `PARTICLE_BUDGET` across the whole map.
+ *
+ * Each particle is drawn every frame forever, so on a map with a thousand links
+ * even one apiece is a thousand extra draws per frame. A small map gets what
+ * the style asks for; a big one gets fewer, down to none.
+ */
+export function particlesPerLink(style: MindmapStyle, linkCount: number): number {
+  if (linkCount <= 0) return style.link.particles;
+  return Math.min(style.link.particles, Math.floor(PARTICLE_BUDGET / linkCount));
+}

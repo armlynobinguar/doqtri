@@ -17,6 +17,7 @@ import {
   PaletteIcon,
   RotateCcwIcon,
   Undo2Icon,
+  LayersIcon,
   XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -25,6 +26,7 @@ import {
   type MindmapCanvasHandle,
   type MindmapCanvasProps,
 } from "@/components/vault/mindmap-canvas";
+import { DoqtriLoader } from "@/components/brand/doqtri-loader";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { cssFontFamily, FONT_LABELS } from "@/components/vault/mindmap-fonts";
 import { useMindmapStyle } from "@/hooks/use-mindmap-style";
@@ -37,6 +39,7 @@ import {
   FONT_KEYS,
   isLight,
   mix,
+  particlesPerLink,
   PRESETS,
   randomStyle,
   SHAPES,
@@ -46,7 +49,13 @@ import {
   type NodeOverride,
   type NodeShape,
 } from "@/lib/mindmap-style";
-import type { MapNode, MapNodeKind, MindmapGraph } from "@/lib/mindmap-graph";
+import {
+  LARGE_MAP_NODES,
+  overviewGraph,
+  type MapNode,
+  type MapNodeKind,
+  type MindmapGraph,
+} from "@/lib/mindmap-graph";
 import { cn } from "@/lib/utils";
 
 const MindmapCanvas3D = dynamic(() => import("@/components/vault/mindmap-canvas-3d"), {
@@ -196,8 +205,24 @@ export function MindmapStudio({
     setZenFallback(true);
   }
 
+  /*
+   * Big maps ask first. "overview" draws only the shallowest levels that fit
+   * the overview budget; "all" draws everything. Small maps never ask.
+   */
+  const total = graph.nodes.length;
+  const isLarge = total > LARGE_MAP_NODES;
+  const [scale, setScale] = useState<"ask" | "overview" | "all">(isLarge ? "ask" : "all");
+  const overview = useMemo(() => overviewGraph(graph), [graph]);
+  const shown = scale === "overview" ? overview.graph : graph;
+
+  // A big map shows "Building mindmap…" until its layout has settled, once per
+  // view and scale — switching to 3D or to everything is a fresh build.
+  const runKey = `${style.view}|${scale}|${shown.nodes.length}`;
+  const [settledKey, setSettledKey] = useState<string | null>(null);
+  const building = isLarge && scale !== "ask" && settledKey !== runKey;
+
   const editing = open && tab === "node";
-  const selected = selectedId ? graph.nodes.find((node) => node.id === selectedId) ?? null : null;
+  const selected = selectedId ? shown.nodes.find((node) => node.id === selectedId) ?? null : null;
   const caption = style.caption.text.trim() || title;
   const light = isLight(style.palette.background);
 
@@ -205,18 +230,44 @@ export function MindmapStudio({
 
   return (
     <div ref={rootRef} className="relative flex min-h-0 flex-1 flex-col" style={{ backgroundColor: style.palette.background }}>
-      <Canvas
-        {...canvasProps}
-        graph={graph}
-        look={style}
-        editing={editing}
-        selectedId={editing ? selectedId : null}
-        onSelect={(node) => setSelectedId(node.id)}
-        handleRef={handleRef}
-      />
+      {scale === "ask" ? (
+        <LargeMapGate
+          total={total}
+          overviewCount={overview.graph.nodes.length}
+          onOverview={() => setScale("overview")}
+          onAll={() => setScale("all")}
+        />
+      ) : (
+        <Canvas
+          // A different set of nodes is a different map; start its layout fresh.
+          key={scale}
+          {...canvasProps}
+          graph={shown}
+          look={style}
+          editing={editing}
+          selectedId={editing ? selectedId : null}
+          onSelect={(node) => setSelectedId(node.id)}
+          handleRef={handleRef}
+          onSettled={() => setSettledKey(runKey)}
+        />
+      )}
+
+      {building && (
+        <div
+          role="status"
+          className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3"
+          style={{ backgroundColor: style.palette.background }}
+        >
+          <DoqtriLoader className="w-20" messages={false} />
+          <p className="text-foreground text-[13px] font-medium">Building mindmap…</p>
+          <p className="text-label text-[11.5px]">
+            Laying out {shown.nodes.length.toLocaleString()} nodes
+          </p>
+        </div>
+      )}
 
       {/* The caption is part of the picture, so screenshots taken by hand get it too. */}
-      {(style.caption.show || style.caption.watermark) && graph.nodes.length > 0 && (
+      {(style.caption.show || style.caption.watermark) && shown.nodes.length > 0 && scale !== "ask" && !building && (
         <div
           aria-hidden
           className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-4 p-5"
@@ -261,7 +312,7 @@ export function MindmapStudio({
         </div>
       )}
 
-      {zen ? (
+      {scale === "ask" ? null : zen ? (
         <button
           type="button"
           onClick={toggleZen}
@@ -272,6 +323,27 @@ export function MindmapStudio({
         </button>
       ) : (
         <div className="absolute top-2 right-2 z-20 flex items-center gap-1">
+          {isLarge && (
+            <ToolButton
+              label={
+                scale === "overview"
+                  ? `Showing ${shown.nodes.length} of ${total} nodes — click to render all`
+                  : `Showing all ${total} nodes — click for the overview`
+              }
+              active={scale === "overview"}
+              onClick={() => {
+                setSelectedId(null);
+                setScale(scale === "overview" ? "all" : "overview");
+              }}
+            >
+              <LayersIcon className="size-3.5" />
+              <span className="text-[11px] font-semibold max-sm:hidden">
+                {scale === "overview"
+                  ? `Overview · ${shown.nodes.length.toLocaleString()} of ${total.toLocaleString()}`
+                  : `All ${total.toLocaleString()}`}
+              </span>
+            </ToolButton>
+          )}
           <ToolButton
             label={style.view === "3d" ? "Switch to 2D" : "Switch to 3D"}
             active={style.view === "3d"}
@@ -337,7 +409,8 @@ export function MindmapStudio({
             if (next !== "node") setSelectedId(null);
           }}
           selected={selected}
-          nodes={graph.nodes}
+          nodes={shown.nodes}
+          linkCount={shown.links.length}
           clearSelection={() => setSelectedId(null)}
           title={title}
           undo={undo}
@@ -347,6 +420,184 @@ export function MindmapStudio({
         />
       )}
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------------ */
+/* Large maps                                                                */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Asked before a big map draws anything.
+ *
+ * Laying out a thousand-plus nodes takes real time and draws every one of them
+ * every frame, which a phone or an older laptop feels. The overview keeps the
+ * outer shape — every branch, minus its finest detail — at a fraction of the
+ * cost, and everything is one click away from either.
+ */
+function LargeMapGate({
+  total,
+  overviewCount,
+  onOverview,
+  onAll,
+}: {
+  total: number;
+  overviewCount: number;
+  onOverview: () => void;
+  onAll: () => void;
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center p-4">
+      <div className="glass-float flex w-full max-w-[400px] flex-col gap-5 rounded-2xl p-6 backdrop-blur">
+        <div className="flex flex-col items-center gap-3 text-center">
+          <span className="bg-accent/15 text-accent flex size-10 items-center justify-center rounded-full">
+            <LayersIcon className="size-4.5" />
+          </span>
+          <div className="flex flex-col gap-1.5">
+            <h2 className="text-foreground text-[15px] font-semibold">Large mindmap — render it?</h2>
+            <p className="text-muted-foreground text-[12.5px] leading-relaxed text-balance">
+              This map has <b className="text-foreground font-semibold">{total.toLocaleString()} nodes</b>. Drawing
+              all of them at once can slow the page down on some devices.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2.5">
+          <GateChoice
+            primary
+            art={<FewNodesArt />}
+            title="Overview"
+            detail={`${overviewCount.toLocaleString()} nodes`}
+            note="Every branch, less detail"
+            onClick={onOverview}
+          />
+          <GateChoice
+            art={<ManyNodesArt />}
+            title="Render all"
+            detail={`${total.toLocaleString()} nodes`}
+            note="May take a few seconds"
+            onClick={onAll}
+          />
+        </div>
+
+        <p className="text-label text-center text-[11px]">You can switch between them any time.</p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One of the two ways to open a large map, as a tall card: the illustration
+ * says how much will be drawn before the words do.
+ */
+function GateChoice({
+  art,
+  title,
+  detail,
+  note,
+  primary,
+  onClick,
+}: {
+  art: React.ReactNode;
+  title: string;
+  detail: string;
+  note: string;
+  primary?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={`${title}: ${detail}. ${note}.`}
+      className={cn(
+        "group flex flex-col items-center gap-3 rounded-xl border px-3 pt-4 pb-3.5 text-center transition-colors",
+        primary
+          ? "border-accent/40 bg-accent/10 hover:bg-accent/15 hover:border-accent/60"
+          : "border-[var(--glass-lo)] bg-[var(--glass)] hover:bg-[var(--glass-strong)] hover:border-[var(--glass-hi)]",
+      )}
+    >
+      <span
+        className={cn(
+          "flex h-[72px] w-full items-center justify-center transition-transform duration-300 group-hover:scale-105",
+          primary ? "text-accent" : "text-foreground/85",
+        )}
+      >
+        {art}
+      </span>
+      <span className="flex flex-col gap-0.5">
+        <span className="text-foreground text-[13.5px] leading-tight font-semibold">{title}</span>
+        <span className="text-foreground/80 text-[12px] font-medium tabular-nums">{detail}</span>
+        <span className="text-label mt-0.5 text-[11px] leading-snug">{note}</span>
+      </span>
+    </button>
+  );
+}
+
+/** A handful of big nodes: the map's outline, nothing more. */
+function FewNodesArt() {
+  const around = [0, 1, 2, 3, 4].map((i) => {
+    const angle = -Math.PI / 2 + (i * 2 * Math.PI) / 5;
+    return { x: 36 + Math.cos(angle) * 22, y: 36 + Math.sin(angle) * 22 };
+  });
+  return (
+    <svg viewBox="0 0 72 72" className="h-full w-auto" fill="none" aria-hidden>
+      <circle cx="36" cy="36" r="30" stroke="currentColor" strokeOpacity="0.15" strokeDasharray="2 3" />
+      {around.map((p, i) => (
+        <line key={i} x1="36" y1="36" x2={p.x} y2={p.y} stroke="currentColor" strokeOpacity="0.45" strokeWidth="1.5" />
+      ))}
+      {around.map((p, i) => (
+        <circle key={i} cx={p.x} cy={p.y} r="6" fill="currentColor" fillOpacity="0.18" stroke="currentColor" strokeWidth="1.6" />
+      ))}
+      <circle cx="36" cy="36" r="9" fill="currentColor" fillOpacity="0.3" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
+/** A dense constellation in rings: the whole map, down to the last detail. */
+function ManyNodesArt() {
+  const rings = [
+    { count: 6, radius: 12, r: 2.6, offset: 0 },
+    { count: 12, radius: 21, r: 1.8, offset: 0.26 },
+    { count: 22, radius: 29, r: 1.2, offset: 0.1 },
+  ];
+  const points = rings.map(({ count, radius, r, offset }) =>
+    Array.from({ length: count }, (_, i) => {
+      const angle = offset + (i * 2 * Math.PI) / count;
+      return { x: 36 + Math.cos(angle) * radius, y: 36 + Math.sin(angle) * radius, r };
+    }),
+  );
+  // Each node links to the nearest node one ring in, like a tree fanning out.
+  const links = points.slice(1).flatMap((ring, depth) =>
+    ring.map((p) => {
+      const parent = points[depth].reduce((best, q) =>
+        Math.hypot(q.x - p.x, q.y - p.y) < Math.hypot(best.x - p.x, best.y - p.y) ? q : best,
+      );
+      return { from: parent, to: p, depth: depth + 1 };
+    }),
+  );
+  return (
+    <svg viewBox="0 0 72 72" className="h-full w-auto" fill="none" aria-hidden>
+      {points[0].map((p, i) => (
+        <line key={`c${i}`} x1="36" y1="36" x2={p.x} y2={p.y} stroke="currentColor" strokeOpacity="0.5" strokeWidth="1" />
+      ))}
+      {links.map((l, i) => (
+        <line
+          key={i}
+          x1={l.from.x}
+          y1={l.from.y}
+          x2={l.to.x}
+          y2={l.to.y}
+          stroke="currentColor"
+          strokeOpacity={l.depth === 1 ? 0.4 : 0.28}
+          strokeWidth={l.depth === 1 ? 0.9 : 0.7}
+        />
+      ))}
+      {points.flat().map((p, i) => (
+        <circle key={i} cx={p.x} cy={p.y} r={p.r} fill="currentColor" fillOpacity={p.r > 2 ? 0.9 : p.r > 1.5 ? 0.7 : 0.5} />
+      ))}
+      <circle cx="36" cy="36" r="4" fill="currentColor" />
+    </svg>
   );
 }
 
@@ -608,6 +859,7 @@ function StudioPanel({
   title,
   undo,
   canUndo,
+  linkCount,
   reset,
   onClose,
 }: {
@@ -621,6 +873,7 @@ function StudioPanel({
   title: string;
   undo: () => void;
   canUndo: boolean;
+  linkCount: number;
   reset: () => void;
   onClose: () => void;
 }) {
@@ -928,6 +1181,13 @@ function StudioPanel({
               <Range label="Per link" value={style.link.particles} min={0} max={6} step={1} onChange={(v) => setLink("particles", v)} />
               <Range label="Speed" value={style.link.particleSpeed} min={0.001} max={0.03} step={0.001} onChange={(v) => setLink("particleSpeed", v)} format={(v) => `${Math.round(v * 1000)}`} />
               <Range label="Size" value={style.link.particleSize} min={0.5} max={6} step={0.1} onChange={(v) => setLink("particleSize", v)} />
+              {particlesPerLink(style, linkCount) < style.link.particles && (
+                <p className="text-label text-[11px] leading-relaxed">
+                  {particlesPerLink(style, linkCount) === 0
+                    ? `Off on this map: ${linkCount.toLocaleString()} links is too many to animate smoothly.`
+                    : `Held to ${particlesPerLink(style, linkCount)} per link here, so ${linkCount.toLocaleString()} links stay smooth.`}
+                </p>
+              )}
             </Section>
           </>
         )}

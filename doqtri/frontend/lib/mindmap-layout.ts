@@ -38,6 +38,23 @@ export function isPinned(node: Positioned): boolean {
 }
 
 /**
+ * Every node's extent, and the node indices sorted by left edge.
+ *
+ * The sweep below walks this order and stops looking for partners once the next
+ * pill starts to the right of the current one's right edge — anything further
+ * along starts later still, so it cannot overlap either. That turns the pair
+ * scan from every-node-against-every-node into roughly each node against its
+ * horizontal neighbours, which is what lets maps of a thousand-plus nodes lay
+ * out without stalling the page.
+ */
+function sweepOrder<T extends Positioned>(nodes: T[], extentOf: (node: T) => Extent) {
+  const extents = nodes.map(extentOf);
+  const left = nodes.map((node, i) => (node.x ?? 0) - extents[i].halfWidth);
+  const order = nodes.map((_, i) => i).sort((i, j) => left[i] - left[j]);
+  return { extents, order };
+}
+
+/**
  * Pushes overlapping pills apart, once, in place. Returns whether anything
  * moved, so callers can iterate to a fixed point.
  *
@@ -50,24 +67,30 @@ export function isPinned(node: Positioned): boolean {
  * together — usually a link spring — does not immediately do it again, which is
  * what would otherwise show up as jitter.
  *
- * O(n²) per pass. A vault's mindmap is tens to a few hundred nodes, and the
- * early-out on the x axis rejects almost every pair before it does real work.
+ * Pairs are found by a sweep over the left edges (see `sweepOrder`). Pushes
+ * made during the pass can leave the order slightly stale, so a pair nudged
+ * into contact mid-pass may wait for the next one; callers already iterate.
  */
 export function separateOnce<T extends Positioned>(
   nodes: T[],
   extentOf: (node: T) => Extent,
   strength: number,
 ): boolean {
+  const { extents, order } = sweepOrder(nodes, extentOf);
   let moved = false;
 
-  for (let i = 0; i < nodes.length; i++) {
-    const a = nodes[i];
-    const ea = extentOf(a);
+  for (let oi = 0; oi < order.length; oi++) {
+    const a = nodes[order[oi]];
+    const ea = extents[order[oi]];
     const aFixed = isPinned(a);
 
-    for (let j = i + 1; j < nodes.length; j++) {
-      const b = nodes[j];
-      const eb = extentOf(b);
+    for (let oj = oi + 1; oj < order.length; oj++) {
+      const b = nodes[order[oj]];
+      const eb = extents[order[oj]];
+
+      // Past this point every pill starts beyond a's right edge plus the gap.
+      const reach = (a.x ?? 0) + ea.halfWidth + PILL_GAP;
+      if ((b.x ?? 0) - eb.halfWidth - reach >= EPSILON) break;
 
       const dx = (b.x ?? 0) - (a.x ?? 0);
       const overlapX = ea.halfWidth + eb.halfWidth + PILL_GAP - Math.abs(dx);
@@ -133,6 +156,35 @@ export function resolveOverlaps<T extends Positioned>(
     if (!separateOnce(nodes, extentOf, 1)) return;
     if (!hasOverlap(nodes, extentOf)) return;
   }
+}
+
+/**
+ * `resolveOverlaps`, in slices: each `step` runs passes for at most `budgetMs`
+ * and returns true once the map is clean or the pass cap is spent.
+ *
+ * On a thousand-node map the full resolve can take most of a second, which as
+ * one synchronous call is a frozen page. Spread over animation frames, the
+ * same work leaves every frame short. The pass cap is shared across slices, so
+ * a degenerate pile still ends.
+ */
+export function createOverlapResolver<T extends Positioned>(
+  nodes: T[],
+  extentOf: (node: T) => Extent,
+  now: () => number = () => performance.now(),
+) {
+  let passes = 0;
+  let done = false;
+
+  return function step(budgetMs: number): boolean {
+    if (done) return true;
+    const deadline = now() + budgetMs;
+    do {
+      if (passes >= MAX_RESOLVE_PASSES) return (done = true);
+      passes++;
+      if (!separateOnce(nodes, extentOf, 1) || !hasOverlap(nodes, extentOf)) return (done = true);
+    } while (now() < deadline);
+    return false;
+  };
 }
 
 /**
@@ -209,17 +261,21 @@ export function createRadialForce<T extends Positioned & { depth: number }>(
  *
  * Deliberately ignores `PILL_GAP`: this asks the visual question — are two
  * pills drawn on top of each other — not whether they are comfortably spaced.
+ * Nothing moves here, so the sweep is exact.
  */
 export function hasOverlap<T extends Positioned>(
   nodes: T[],
   extentOf: (node: T) => Extent,
 ): boolean {
-  for (let i = 0; i < nodes.length; i++) {
-    for (let j = i + 1; j < nodes.length; j++) {
-      const a = nodes[i];
-      const b = nodes[j];
-      const ea = extentOf(a);
-      const eb = extentOf(b);
+  const { extents, order } = sweepOrder(nodes, extentOf);
+  for (let oi = 0; oi < order.length; oi++) {
+    const a = nodes[order[oi]];
+    const ea = extents[order[oi]];
+    const right = (a.x ?? 0) + ea.halfWidth;
+    for (let oj = oi + 1; oj < order.length; oj++) {
+      const b = nodes[order[oj]];
+      const eb = extents[order[oj]];
+      if ((b.x ?? 0) - eb.halfWidth >= right) break;
 
       const gapX = Math.abs((b.x ?? 0) - (a.x ?? 0)) - (ea.halfWidth + eb.halfWidth);
       const gapY = Math.abs((b.y ?? 0) - (a.y ?? 0)) - (ea.halfHeight + eb.halfHeight);

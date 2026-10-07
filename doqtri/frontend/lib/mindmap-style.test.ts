@@ -13,8 +13,9 @@ import {
   randomStyle,
   resolveLook,
   displayLabel,
+  particlesPerLink,
 } from "@/lib/mindmap-style";
-import type { MindmapGraph } from "@/lib/mindmap-graph";
+import { overviewGraph, type MindmapGraph } from "@/lib/mindmap-graph";
 
 function seeded(seed: number) {
   let s = seed;
@@ -232,5 +233,54 @@ describe("displayLabel", () => {
     const style = { ...DEFAULT_STYLE, overrides: { a: { emoji: "🚀" } } };
     expect(displayLabel(style, { id: "a", label: "Launch" })).toBe("🚀 Launch");
     expect(displayLabel(style, { id: "b", label: "Plain" })).toBe("Plain");
+  });
+});
+
+describe("overviewGraph", () => {
+  // root, 3 themes, 9 concepts, 27 details
+  const big: MindmapGraph = { nodes: [{ id: "r", label: "R", kind: "root", depth: 0 }], links: [] };
+  for (let t = 0; t < 3; t++) {
+    big.nodes.push({ id: `t${t}`, label: "T", kind: "theme", depth: 1 });
+    big.links.push({ source: "r", target: `t${t}` });
+    for (let c = 0; c < 3; c++) {
+      big.nodes.push({ id: `c${t}${c}`, label: "C", kind: "concept", depth: 2 });
+      big.links.push({ source: `t${t}`, target: `c${t}${c}` });
+      for (let d = 0; d < 3; d++) {
+        big.nodes.push({ id: `d${t}${c}${d}`, label: "D", kind: "detail", depth: 3 });
+        big.links.push({ source: `c${t}${c}`, target: `d${t}${c}${d}` });
+      }
+    }
+  }
+
+  it("keeps whole levels that fit the budget", () => {
+    const { graph, depth } = overviewGraph(big, 20);
+    expect(depth).toBe(2);
+    expect(graph.nodes).toHaveLength(13);
+    expect(graph.links).toHaveLength(12);
+    for (const link of graph.links) {
+      expect(graph.nodes.some((n) => n.id === link.source)).toBe(true);
+      expect(graph.nodes.some((n) => n.id === link.target)).toBe(true);
+    }
+  });
+
+  it("returns everything when it all fits", () => {
+    expect(overviewGraph(big, 1000).graph.nodes).toHaveLength(40);
+  });
+
+  it("always keeps the root level", () => {
+    expect(overviewGraph(big, 0).graph.nodes).toHaveLength(1);
+  });
+});
+
+describe("particlesPerLink", () => {
+  const style = { ...DEFAULT_STYLE, link: { ...DEFAULT_STYLE.link, particles: 4 } };
+  it("gives a small map what it asks for", () => {
+    expect(particlesPerLink(style, 50)).toBe(4);
+  });
+  it("thins them out on a big map", () => {
+    expect(particlesPerLink(style, 300)).toBe(2);
+  });
+  it("turns them off on a very big map", () => {
+    expect(particlesPerLink(style, 1213)).toBe(0);
   });
 });

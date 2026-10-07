@@ -19,7 +19,14 @@ import {
   paintBackdrop,
   paintCaption,
 } from "@/components/vault/mindmap-paint";
-import { displayLabel, isHidden, isLight, mix, type MindmapStyle } from "@/lib/mindmap-style";
+import {
+  displayLabel,
+  isHidden,
+  isLight,
+  mix,
+  particlesPerLink,
+  type MindmapStyle,
+} from "@/lib/mindmap-style";
 import type { MapNode, MapNodeKind } from "@/lib/mindmap-graph";
 
 type Node3D = NodeObject<MapNode> & { fz?: number };
@@ -103,6 +110,7 @@ export default function MindmapCanvas3D({
   selectedId = null,
   onSelect,
   handleRef,
+  onSettled,
 }: MindmapCanvasProps & { look: MindmapStyle }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<Instance | undefined>(undefined);
@@ -414,7 +422,7 @@ export default function MindmapCanvas3D({
           linkOpacity={look.link.opacity * 0.85}
           linkWidth={look.link.width * 0.35}
           linkCurvature={look.link.curvature}
-          linkDirectionalParticles={look.link.particles}
+          linkDirectionalParticles={particlesPerLink(look, graph.links.length)}
           linkDirectionalParticleSpeed={look.link.particleSpeed}
           linkDirectionalParticleWidth={look.link.particleSize * 0.9}
           linkDirectionalParticleColor={linkTone}
@@ -441,6 +449,7 @@ export default function MindmapCanvas3D({
             if (!framedRef.current) {
               framedRef.current = true;
               fgRef.current?.zoomToFit(600, 40);
+              onSettled?.();
             }
           }}
         />
