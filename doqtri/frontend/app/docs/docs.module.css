@@ -78,6 +78,15 @@
   border-radius: 999px;
 }
 
+/* Email sign-in beside the wallet button; wraps on narrow screens. */
+.navActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 /* --------------------------------------------------------------- layout */
 
 .layout {

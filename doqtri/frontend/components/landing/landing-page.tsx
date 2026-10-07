@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Box, FileText, Link2, Network, type LucideIcon } from "lucide-react";
 import { ConnectWalletButton } from "@/components/auth/connect-wallet-button";
+import { EmailSignInLink } from "@/components/auth/email-sign-in-link";
 import { BlockChain } from "@/components/brand/block-chain";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { BlockGlyph, type Glyph } from "@/components/brand/glyphs";
@@ -72,7 +73,10 @@ export function LandingPage() {
           <a href="#proof">Proof</a>
           <Link href="/docs">Docs</Link>
         </nav>
-        <ConnectWalletButton size="sm" className={styles.cta} />
+        <div className={styles.navActions}>
+          <EmailSignInLink size="sm" className={styles.cta} />
+          <ConnectWalletButton size="sm" className={styles.cta} />
+        </div>
       </header>
 
       <main className={styles.main}>
@@ -89,6 +93,7 @@ export function LandingPage() {
             </p>
             <div className={styles.actions}>
               <ConnectWalletButton size="lg" label="Open your vault" className={styles.cta} />
+              <EmailSignInLink size="lg" className={styles.cta} />
               <Link className={styles.secondary} href="/signup">
                 Sign up with email
               </Link>
@@ -204,8 +209,9 @@ export function LandingPage() {
             Anyone can open a document&rsquo;s public audit page and read its version history and node status straight
             from the contract — not from our database.
           </p>
-          <div className={styles.proofCta}>
+          <div className={`${styles.proofCta} ${styles.actions}`}>
             <ConnectWalletButton size="lg" label="Open your vault" className={styles.cta} />
+            <EmailSignInLink size="lg" className={styles.cta} />
           </div>
         </section>
       </main>
