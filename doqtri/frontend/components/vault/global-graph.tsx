@@ -18,9 +18,9 @@ export function GlobalGraph({ docs }: { docs: Doc[] }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="border-border bg-background flex h-9 shrink-0 items-center justify-between gap-2 border-b px-3 max-lg:justify-center">
+      <header className="border-border bg-background flex h-11 shrink-0 items-center justify-between gap-2 border-b px-3 max-lg:justify-center">
         {/* The mobile top bar already names the view. */}
-        <h1 className="text-foreground truncate text-[13px] font-medium max-lg:sr-only">
+        <h1 className="text-foreground truncate text-[14px] font-semibold tracking-tight max-lg:sr-only">
           Graph view
         </h1>
 

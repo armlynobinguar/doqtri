@@ -28,7 +28,7 @@ export function StatusBar({
   return (
     <footer
       className={cn(
-        "bg-sidebar border-border text-label flex h-6 shrink-0 items-center gap-4 border-t px-3 text-[11px] select-none",
+        "bg-sidebar border-border text-label flex h-7 shrink-0 items-center gap-4 border-t px-3 text-[11px] select-none",
         className,
       )}
     >
@@ -46,7 +46,7 @@ export function StatusBar({
             saveState === "error"
               ? "text-destructive"
               : saveState === "saved"
-                ? "text-success flex items-center gap-1"
+                ? "text-muted-foreground flex items-center gap-1 [&_svg]:text-success"
                 : "flex items-center gap-1"
           }
           role="status"

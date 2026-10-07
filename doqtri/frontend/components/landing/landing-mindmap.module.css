@@ -14,8 +14,8 @@
 
 .edge {
   fill: none;
-  stroke: rgba(238, 241, 246, 0.28);
-  stroke-width: 1.5;
+  stroke: color-mix(in oklch, var(--foreground), transparent 75%);
+  stroke-width: 1.2;
   stroke-dasharray: 420;
   stroke-dashoffset: 420;
 }
@@ -32,61 +32,78 @@
   animation: fade 0.55s ease forwards;
 }
 
-.circle {
-  fill: #232733;
-  stroke: #eef1f6;
-  stroke-width: 2;
+/* Glass pill: translucent graphite, a brighter top sheen, a soft drop. */
+.pill {
+  fill: color-mix(in srgb, var(--brand-elevated), white 3%);
+  stroke: color-mix(in oklch, white 9%, transparent);
+  stroke-width: 1;
+  filter: drop-shadow(0 10px 18px rgb(0 0 0 / 0.55));
+}
+
+.sheen {
+  stroke: color-mix(in oklch, white 22%, transparent);
+  stroke-width: 1;
 }
 
 .glyph {
   fill: none;
-  stroke: #eef1f6;
+  stroke: var(--foreground);
   stroke-width: 2.2;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
 /* Brightness tracks progress: planned nodes are dim, verified ones glow. */
-.planned .circle {
-  stroke: rgba(238, 241, 246, 0.35);
-  stroke-dasharray: 3 4;
+.planned .pill {
+  stroke-dasharray: 4 4;
 }
-.planned .glyph {
-  stroke: rgba(238, 241, 246, 0.45);
+.planned .glyph,
+.planned .label {
+  opacity: 0.5;
 }
-.building .circle {
-  stroke: rgba(238, 241, 246, 0.6);
+.building .glyph,
+.building .label {
+  opacity: 0.75;
 }
-.verified .circle {
-  stroke-width: 3;
-  filter: drop-shadow(0 0 6px rgba(238, 241, 246, 0.45));
+.verified .pill {
+  stroke: color-mix(in oklch, white 22%, transparent);
+  filter: drop-shadow(0 0 10px color-mix(in oklch, var(--primary), transparent 75%))
+    drop-shadow(0 10px 18px rgb(0 0 0 / 0.55));
+}
+.verified .glyph {
+  stroke: var(--success);
 }
 
 .label {
-  fill: #eef1f6;
-  font-size: 12px;
-  font-weight: 500;
-  text-anchor: middle;
+  fill: var(--foreground);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  dominant-baseline: middle;
 }
 
 .status {
-  fill: #8d95a5;
-  font-size: 9.5px;
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  fill: var(--label);
+  font-size: 9px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.24em;
   text-anchor: middle;
-  letter-spacing: 0.04em;
+  /* Knock the connectors out behind the label so it never reads struck through. */
+  paint-order: stroke;
+  stroke: var(--background);
+  stroke-width: 5px;
+  stroke-linejoin: round;
 }
 
 /*
  * A phone draws the 960-unit map at about a third of its size, which leaves
- * 12-unit labels a few pixels tall. Labels grow to stay readable, hanging below
- * the node so they clear it; the status line goes, since the glyph in each
- * node already carries it.
+ * 15-unit labels a few pixels tall. Labels grow to stay readable inside the
+ * pill; the status line goes, since the glyph in each node already carries it.
  */
 @media (max-width: 639px) {
   .label {
-    font-size: 28px;
-    dominant-baseline: hanging;
+    font-size: 22px;
   }
 
   .status {

@@ -115,9 +115,9 @@ export function PromoSubmissionForm({ submission }: { submission: PromoSubmissio
   return (
     <form onSubmit={submit} className="flex flex-col gap-5">
       {submission && (
-        <div className="border-success/40 bg-success/5 rounded-lg border p-3">
-          <p className="text-success flex items-center gap-2 text-[13px] font-medium">
-            <CheckCircle2Icon className="size-4" />
+        <div className="glass rounded-2xl p-4">
+          <p className="text-foreground flex items-center gap-2 text-[13px] font-medium">
+            <CheckCircle2Icon className="text-success size-4" />
             Entry received{" "}
             {new Date(submission.updatedAt).toLocaleDateString(undefined, {
               month: "short",
@@ -132,7 +132,7 @@ export function PromoSubmissionForm({ submission }: { submission: PromoSubmissio
                 key={url}
                 src={url}
                 alt="Submitted screenshot"
-                className="border-border aspect-video w-full rounded border object-cover"
+                className="aspect-video w-full rounded-lg border border-[var(--glass-lo)] object-cover"
               />
             ))}
           </div>
@@ -143,7 +143,7 @@ export function PromoSubmissionForm({ submission }: { submission: PromoSubmissio
       )}
 
       <div>
-        <label className="text-[13px] font-medium" htmlFor="promo-files">
+        <label className="eyebrow text-foreground/80 leading-relaxed" htmlFor="promo-files">
           Screenshots{" "}
           <span className="text-label font-normal">
             ({picked.length}/{MINDMAP_PROMO.maxImages})
@@ -161,8 +161,8 @@ export function PromoSubmissionForm({ submission }: { submission: PromoSubmissio
             add(event.dataTransfer.files);
           }}
           className={cn(
-            "border-input mt-2 grid grid-cols-2 gap-2 rounded-lg border border-dashed p-2 sm:grid-cols-4",
-            dragging && "border-foreground/60 bg-elevated",
+            "mt-3 grid grid-cols-2 gap-2 rounded-2xl border border-dashed border-[var(--glass-hi)] bg-black/20 p-2 sm:grid-cols-4",
+            dragging && "border-foreground/60 bg-[var(--glass-strong)]",
           )}
         >
           {picked.map((p, i) => (
@@ -172,7 +172,7 @@ export function PromoSubmissionForm({ submission }: { submission: PromoSubmissio
               <img
                 src={p.preview}
                 alt={p.file.name}
-                className="border-border aspect-video w-full rounded border object-cover"
+                className="aspect-video w-full rounded-lg border border-[var(--glass-lo)] object-cover"
               />
               <button
                 type="button"
@@ -190,7 +190,7 @@ export function PromoSubmissionForm({ submission }: { submission: PromoSubmissio
               type="button"
               onClick={() => inputRef.current?.click()}
               disabled={busy}
-              className="text-muted-foreground hover:text-foreground hover:bg-elevated flex aspect-video flex-col items-center justify-center gap-1 rounded text-[12px] transition-colors"
+              className="text-muted-foreground hover:text-foreground flex aspect-video flex-col items-center justify-center gap-1 rounded-lg text-[12px] transition-colors hover:bg-[var(--glass-strong)]"
             >
               <ImagePlusIcon className="size-5" strokeWidth={1.5} />
               Add screenshot
@@ -216,12 +216,12 @@ export function PromoSubmissionForm({ submission }: { submission: PromoSubmissio
       </div>
 
       <div>
-        <label className="text-[13px] font-medium" htmlFor="promo-caption">
+        <label className="eyebrow text-foreground/80 leading-relaxed" htmlFor="promo-caption">
           What does it map? <span className="text-label font-normal">(optional)</span>
         </label>
         <Textarea
           id="promo-caption"
-          className="mt-2"
+          className="mt-3"
           value={caption}
           onChange={(event) => setCaption(event.target.value)}
           maxLength={MINDMAP_PROMO.maxCaption}
@@ -230,13 +230,13 @@ export function PromoSubmissionForm({ submission }: { submission: PromoSubmissio
       </div>
 
       <div>
-        <label className="text-[13px] font-medium" htmlFor="promo-contact">
+        <label className="eyebrow text-foreground/80 leading-relaxed" htmlFor="promo-contact">
           How do we reach you if you win?{" "}
           <span className="text-label font-normal">(optional)</span>
         </label>
         <Input
           id="promo-contact"
-          className="mt-2"
+          className="mt-3"
           value={contact}
           onChange={(event) => setContact(event.target.value)}
           maxLength={MINDMAP_PROMO.maxContact}
@@ -244,7 +244,7 @@ export function PromoSubmissionForm({ submission }: { submission: PromoSubmissio
         />
       </div>
 
-      <Button type="submit" size="lg" disabled={busy || picked.length === 0} className="self-start">
+      <Button type="submit" size="lg" disabled={busy || picked.length === 0} className="self-start rounded-full">
         {busy && <Loader2Icon className="animate-spin" />}
         {submission ? "Replace entry" : "Submit entry"}
       </Button>

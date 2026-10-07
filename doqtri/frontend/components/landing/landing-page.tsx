@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { Box, FileText, Link2, Network, type LucideIcon } from "lucide-react";
 import { ConnectWalletButton } from "@/components/auth/connect-wallet-button";
 import { BlockChain } from "@/components/brand/block-chain";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
@@ -27,6 +28,14 @@ const BLOCKS: { glyph: Glyph; title: string; body: string }[] = [
     title: "Anchored on Stellar",
     body: "Hashes and node status land in the DoqtriRegistry contract on Soroban, signed by your wallet. The ledger is the receipt.",
   },
+];
+
+// The four-step loop, read left to right under the hero.
+const LOOP: { icon: LucideIcon; title: string; body: string }[] = [
+  { icon: FileText, title: "Plan", body: "Turn ideas into structured documents." },
+  { icon: Network, title: "Build", body: "Organize and connect your knowledge." },
+  { icon: Box, title: "Ship", body: "Publish and execute." },
+  { icon: Link2, title: "Verify", body: "Proven on-chain." },
 ];
 
 const LIFECYCLE: { label: string; glyph: Glyph }[] = [
@@ -69,7 +78,7 @@ export function LandingPage() {
       <main className={styles.main}>
         <section className={styles.hero} id="top" aria-labelledby="brand">
           <div className={styles.heroCopy}>
-            <BlockChain className={styles.heroChain} />
+            <p className={styles.heroTag}>Planned / Shipped / Proven on-chain</p>
             <h1 id="brand" className={styles.brand}>
               Doqtri
             </h1>
@@ -92,10 +101,25 @@ export function LandingPage() {
           <figure className={styles.emblem}>
             <div className={styles.disc}>
               <DoqtriMark className={styles.emblemMark} />
+              <BlockChain className={styles.discChain} animate={false} />
               <figcaption className={styles.tagline}>Tested vs Shipped, Block by Block.</figcaption>
             </div>
           </figure>
         </section>
+
+        <ul className={styles.loop} aria-label="Plan, build, ship, verify">
+          {LOOP.map(({ icon: Icon, title, body }) => (
+            <li key={title}>
+              <span className={`icon-tile ${styles.loopTile}`}>
+                <Icon strokeWidth={1.5} />
+              </span>
+              <div>
+                <strong>{title}</strong>
+                <p>{body}</p>
+              </div>
+            </li>
+          ))}
+        </ul>
 
         <section className={styles.blocks} id="blocks" aria-labelledby="blocks-title">
           <p className={styles.eyebrow}>Three blocks</p>

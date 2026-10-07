@@ -44,8 +44,10 @@ export function HashCheck({
   return (
     <div className="grid gap-3">
       <label
-        className={`border-input bg-card flex cursor-pointer flex-col items-center gap-1.5 rounded-lg border border-dashed px-4 py-6 text-center text-[13px] transition-colors ${
-          dragging ? "border-primary bg-primary/5" : "hover:border-[var(--brand-hover)] hover:bg-elevated"
+        className={`flex cursor-pointer flex-col items-center gap-1.5 rounded-2xl border border-dashed bg-[var(--glass)] px-4 py-7 text-center text-[13px] transition-colors ${
+          dragging
+            ? "border-foreground/60 bg-[var(--glass-strong)]"
+            : "border-[var(--glass-hi)] hover:border-foreground/40 hover:bg-[var(--glass-strong)]"
         }`}
         onDragOver={(e) => {
           e.preventDefault();
@@ -59,7 +61,7 @@ export function HashCheck({
           if (file) void checkFile(file);
         }}
       >
-        <FileIcon className="text-muted-foreground size-5" />
+        <FileIcon className="text-foreground size-5" strokeWidth={1.5} />
         <span>Drop the .md file you received, or click to choose it</span>
         <span className="text-muted-foreground text-[12px]">
           Hashed locally in your browser — nothing is uploaded
@@ -77,7 +79,7 @@ export function HashCheck({
 
       <div className="grid gap-2">
         <textarea
-          className="border-input bg-card placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 min-h-24 rounded-lg border px-3 py-2 font-mono text-[12px] outline-none focus-visible:ring-3"
+          className="placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 min-h-24 rounded-xl border border-[var(--glass-lo)] bg-[var(--glass)] px-3 py-2 shadow-[inset_0_1px_0_0_var(--glass-hi)] font-mono text-[12px] outline-none focus-visible:ring-3"
           placeholder="…or paste the document text"
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -86,7 +88,7 @@ export function HashCheck({
           type="button"
           disabled={!text}
           onClick={() => void checkText()}
-          className="border-input bg-card text-foreground hover:border-[var(--brand-hover)] hover:bg-elevated h-8 justify-self-start rounded-lg border px-3 text-[12px] font-medium transition-colors disabled:opacity-50"
+          className="text-foreground h-8 justify-self-start rounded-full border border-[var(--glass-lo)] bg-[var(--glass)] px-4 text-[12px] font-medium shadow-[inset_0_1px_0_0_var(--glass-hi)] transition-colors hover:border-[var(--glass-hi)] hover:bg-[var(--glass-strong)] disabled:opacity-50"
         >
           Check pasted text
         </button>
@@ -95,10 +97,8 @@ export function HashCheck({
       {result ? (
         <div
           role="status"
-          className={`rounded-lg border px-3 py-2 text-[13px] ${
-            result.match != null
-              ? "border-success/50 bg-success/10"
-              : "border-destructive/50 bg-destructive/10"
+          className={`glass rounded-xl border-l-2 px-4 py-3 text-[13px] ${
+            result.match != null ? "border-l-success" : "border-l-destructive"
           }`}
         >
           {result.match != null ? (

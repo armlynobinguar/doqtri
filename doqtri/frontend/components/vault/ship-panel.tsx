@@ -332,18 +332,16 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
   }
 
   return (
-    <div className="border-border flex flex-col gap-2.5 border-t px-3 py-3 text-[12px]">
+    <div className="border-border flex flex-col gap-3 border-t px-3 py-3.5 text-[12px]">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-label text-[11px] font-medium tracking-wider uppercase">
-          Stellar proof
-        </span>
+        <span className="eyebrow">Stellar proof</span>
         <VersionBadge version={chainVersion} unanchored={unanchored} />
       </div>
 
       {noWallet ? (
         <div
           data-testid="no-wallet-notice"
-          className="text-muted-foreground grid gap-1.5 rounded-md border px-2.5 py-2 text-[11px]"
+          className="glass text-muted-foreground grid gap-1.5 rounded-xl px-2.5 py-2 text-[11px]"
         >
           <span>
             Anchoring on Stellar needs a wallet. Create one with a passkey — your fingerprint,
@@ -367,7 +365,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
         <div
           role="alert"
           data-testid="low-balance-notice"
-          className="border-warning/40 bg-warning/5 grid gap-1.5 rounded-md border px-2.5 py-2 text-[11px]"
+          className="glass relative grid gap-1.5 rounded-xl py-2 pr-2.5 pl-6 text-[11px] before:absolute before:top-[13px] before:left-2.5 before:size-1.5 before:rounded-full before:bg-warning before:shadow-[0_0_6px_var(--warning)]"
         >
           <span>
             Your wallet has {formatXlm(wallet.walletXlm!)} XLM. Each write takes its network fee from the wallet, so
@@ -390,7 +388,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
       {needsBackup && chainVersion != null ? (
         <div
           data-testid="backup-passkey-notice"
-          className="border-warning/40 bg-warning/5 grid gap-1.5 rounded-md border px-2.5 py-2 text-[11px]"
+          className="glass relative grid gap-1.5 rounded-xl py-2 pr-2.5 pl-6 text-[11px] before:absolute before:top-[13px] before:left-2.5 before:size-1.5 before:rounded-full before:bg-warning before:shadow-[0_0_6px_var(--warning)]"
         >
           <span>
             This note is anchored with your only passkey. Add a backup on another device or a security key, so
@@ -414,7 +412,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
         <div
           role="alert"
           data-testid="funding-warning"
-          className="grid gap-1.5 rounded-md border border-warning/40 bg-warning/5 px-2.5 py-2 text-[11px]"
+          className="glass relative grid gap-1.5 rounded-xl py-2 pr-2.5 pl-6 text-[11px] before:absolute before:top-[13px] before:left-2.5 before:size-1.5 before:rounded-full before:bg-warning before:shadow-[0_0_6px_var(--warning)]"
         >
           <span>
             {fundingError ??
@@ -512,7 +510,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
       <label className="text-muted-foreground grid gap-1">
         Node
         <select
-          className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-md border px-2 outline-none focus-visible:ring-3"
+          className="text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-[10px] border border-[var(--glass-lo)] bg-[var(--glass)] px-2.5 shadow-[inset_0_1px_0_0_var(--glass-hi)] outline-none focus-visible:ring-3"
           value={nodeId}
           onChange={(e) => setNodeId(e.target.value)}
         >
@@ -527,7 +525,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
       <label className="text-muted-foreground grid gap-1">
         Status
         <select
-          className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-md border px-2 outline-none focus-visible:ring-3"
+          className="text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-[10px] border border-[var(--glass-lo)] bg-[var(--glass)] px-2.5 shadow-[inset_0_1px_0_0_var(--glass-hi)] outline-none focus-visible:ring-3"
           value={status}
           onChange={(e) => setStatus(e.target.value as NodeStatus)}
         >
@@ -542,7 +540,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
       <label className="text-muted-foreground grid gap-1">
         Tool
         <input
-          className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-md border px-2 outline-none focus-visible:ring-3"
+          className="text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-[10px] border border-[var(--glass-lo)] bg-[var(--glass)] px-2.5 shadow-[inset_0_1px_0_0_var(--glass-hi)] outline-none focus-visible:ring-3"
           placeholder="n8n / Make / Retool"
           value={tool}
           onChange={(e) => setTool(e.target.value)}
@@ -552,7 +550,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
       <label className="text-muted-foreground grid gap-1">
         Artifact
         <input
-          className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-md border px-2 outline-none focus-visible:ring-3"
+          className="text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-[10px] border border-[var(--glass-lo)] bg-[var(--glass)] px-2.5 shadow-[inset_0_1px_0_0_var(--glass-hi)] outline-none focus-visible:ring-3"
           placeholder="wf_id or URL"
           value={artifact}
           onChange={(e) => setArtifact(e.target.value)}
@@ -620,7 +618,7 @@ function ReceiptCard({ receipt }: { receipt: Receipt }) {
         : `Node “${receipt.nodeId}” synced`;
 
   return (
-    <div className="border-input bg-card grid gap-1 rounded-md border px-2 py-1.5 text-[11px]">
+    <div className="glass grid gap-1 rounded-xl px-2.5 py-2 text-[11px]">
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-1.5 font-medium">
           <CircleCheckIcon className="text-success size-3.5" strokeWidth={2} aria-hidden />
@@ -632,7 +630,7 @@ function ReceiptCard({ receipt }: { receipt: Receipt }) {
       </div>
       <div className="flex items-center justify-between gap-2 font-mono">
         <a
-          className="text-primary underline-offset-2 hover:underline"
+          className="text-foreground underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground"
           href={expertTxUrl(receipt.txHash)}
           target="_blank"
           rel="noreferrer"
@@ -675,7 +673,7 @@ function VersionHistory({ history }: { history: DocumentHistory }) {
               {shortHash(v.contentHash)}
             </span>
             <a
-              className="text-primary underline-offset-2 hover:underline"
+              className="text-foreground underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground"
               href={expertTxUrl(v.txHash)}
               target="_blank"
               rel="noreferrer"

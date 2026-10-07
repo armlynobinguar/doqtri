@@ -42,16 +42,15 @@ export function EditorPane({
         v1 — the explorer and ⌘K are the navigation model.
       */}
       {compact ? null : (
-        <div className="border-border bg-background flex h-9 shrink-0 items-center justify-between gap-2 border-b pr-2">
+        <div className="border-border bg-background flex h-11 shrink-0 items-center justify-between gap-2 border-b px-2">
           <Tabs value="active" className="min-w-0">
-            <TabsList variant="line" className="h-9 border-0 bg-transparent">
+            {/* The open note as a raised pill in a segmented glass strip. */}
+            <TabsList className="h-8">
               <TabsTrigger
                 value="active"
-                // The active tab underline is one of the four places the single
-                // accent is allowed to appear.
-                className="data-active:text-foreground text-muted-foreground max-w-[280px] gap-1.5 px-3 text-[13px] after:bg-primary!"
+                className="text-muted-foreground max-w-[280px] gap-1.5 px-3 text-[13px]"
               >
-                <FileTextIcon className="size-3.5 shrink-0 opacity-60" strokeWidth={1.75} />
+                <FileTextIcon className="size-3.5 shrink-0 opacity-70" strokeWidth={1.5} />
                 <span className="truncate">{title}</span>
               </TabsTrigger>
             </TabsList>
@@ -64,10 +63,11 @@ export function EditorPane({
                   variant="ghost"
                   size="sm"
                   onClick={onRegenerate}
-                  // Purple is reserved for AI-driven affordances.
-                  className="text-accent hover:text-accent hover:bg-accent/10 h-7 gap-1.5 px-2 text-[12px]"
+                  // The muted lavender is reserved for AI-driven affordances,
+                  // and only tints the icon.
+                  className="h-7 gap-1.5 px-2.5 text-[12px]"
                 >
-                  <SparklesIcon className="size-3.5" strokeWidth={1.75} />
+                  <SparklesIcon className="text-accent size-3.5" strokeWidth={1.5} />
                   Regenerate
                 </Button>
               }

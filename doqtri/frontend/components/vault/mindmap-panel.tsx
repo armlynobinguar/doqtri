@@ -86,8 +86,8 @@ export function MindmapPanel({
               disabled={building}
               onClick={rebuild}
               className={
-                // Purple is reserved for AI affordances, and this is one.
-                "text-accent/80 hover:text-accent hover:bg-accent/10 flex size-5 items-center justify-center rounded transition-colors pointer-coarse:size-9 disabled:opacity-50 " +
+                // The muted lavender is reserved for AI affordances, and this is one.
+                "text-accent/80 hover:text-accent flex size-6 items-center justify-center rounded-md transition-colors hover:bg-[var(--glass-strong)] pointer-coarse:size-9 disabled:opacity-50 " +
                 (derived || stale ? "" : "opacity-60")
               }
             >
@@ -110,7 +110,7 @@ export function MindmapPanel({
                 <NavLink
                   href={`/vault/${docId}/mindmap`}
                   aria-label="Open full mindmap"
-                  className="text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10 flex size-5 items-center justify-center rounded transition-colors pointer-coarse:size-9"
+                  className="text-muted-foreground hover:text-foreground flex size-6 items-center justify-center rounded-md transition-colors hover:bg-[var(--glass-strong)] pointer-coarse:size-9"
                 >
                   <ExternalLinkIcon className="size-3" strokeWidth={2} />
                 </NavLink>

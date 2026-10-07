@@ -37,8 +37,12 @@ function randomLine(except: number) {
 }
 
 // The ring walks the mark's own triangle, ✓ → Ø → # → ✓, along the arrows.
+// The ring is drawn at ✓ and the path is relative to it: SMIL only starts once
+// the page has loaded — exactly when a loader is on screen — so the static
+// position must already be correct. An absolute path on an unplaced circle
+// leaves the ring parked at the SVG origin until then.
 const [A, B, C] = NODES;
-const PATH = `M${A.x} ${A.y} L${B.x} ${B.y} L${C.x} ${C.y} Z`;
+const PATH = `M0 0 L${B.x - A.x} ${B.y - A.y} L${C.x - A.x} ${C.y - A.y} Z`;
 const SIDE = Math.hypot(B.x - A.x, B.y - A.y);
 const BASE = C.x - B.x;
 const TOTAL = SIDE * 2 + BASE;
@@ -50,11 +54,11 @@ const AT_C = ((SIDE + BASE) / TOTAL).toFixed(4);
 const DUR = "2.7s";
 const TIMES = "0;0.16;0.333;0.493;0.666;0.826;1";
 const EASE = "0 0 1 1;0.65 0 0.35 1;0 0 1 1;0.65 0 0.35 1;0 0 1 1;0.65 0 0.35 1";
-const PURPLE = "#b38bef";
-const GREEN = "#43c27a";
-const BLUE = "#4a9df0";
+const PURPLE = "#a9a3dc";
+const GREEN = "#7cc4a0";
+const BLUE = "#a3b8d9";
 // The mark's resting colour (--brand-text); SMIL values cannot read CSS vars.
-const IDLE = "#e7e9ee";
+const IDLE = "#f4f5f7";
 
 // When the ring lands on each node, as a fraction of the lap.
 const ARRIVALS = [
@@ -133,7 +137,7 @@ export function DoqtriLoader({ className, messages = true }: Props) {
               <animate attributeName="opacity" dur={DUR} repeatCount="indefinite" {...pulse(at, 0, 0.6, 0)} />
             </circle>
           ))}
-          <circle r={R + 8} strokeWidth="3" stroke={PURPLE}>
+          <circle cx={A.x} cy={A.y} r={R + 8} strokeWidth="3" stroke={PURPLE}>
             <animateMotion
               dur={DUR}
               repeatCount="indefinite"

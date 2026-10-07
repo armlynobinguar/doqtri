@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { StatusTag } from "@/components/ui/status-tag";
 import { PROMO_STATUSES, type PromoStatus } from "@/lib/promo";
 import { cn } from "@/lib/utils";
 
@@ -20,11 +21,11 @@ export type PromoEntry = {
 
 type Filter = PromoStatus | "all";
 
-const STATUS_STYLE: Record<PromoStatus, string> = {
-  pending: "text-muted-foreground border-border",
-  shortlisted: "text-info border-info/50",
-  winner: "text-success border-success/50 bg-success/10",
-  rejected: "text-destructive border-destructive/40",
+const STATUS_TONE: Record<PromoStatus, "planned" | "info" | "verified" | "danger"> = {
+  pending: "planned",
+  shortlisted: "info",
+  winner: "verified",
+  rejected: "danger",
 };
 
 const ACTIONS: { status: PromoStatus; label: string }[] = [
@@ -86,10 +87,10 @@ export function PromoReviewList({ entries: initial }: { entries: PromoEntry[] })
             aria-selected={filter === f}
             onClick={() => setFilter(f)}
             className={cn(
-              "border-border rounded-full border px-3 py-1 text-[12px] capitalize transition-colors",
+              "rounded-full border px-3 py-1 text-[12px] capitalize transition-colors",
               filter === f
-                ? "bg-elevated text-foreground border-foreground/50"
-                : "text-muted-foreground hover:text-foreground",
+                ? "text-foreground border-[var(--glass-hi)] bg-[var(--glass-strong)] shadow-[inset_0_1px_0_0_var(--glass-hi)]"
+                : "text-muted-foreground border-[var(--glass-lo)] hover:text-foreground",
             )}
           >
             {f} <span className="text-label">{f === "all" ? entries.length : counts[f]}</span>
@@ -104,7 +105,7 @@ export function PromoReviewList({ entries: initial }: { entries: PromoEntry[] })
       ) : (
         <ul className="mt-5 grid gap-4 lg:grid-cols-2">
           {shown.map((entry) => (
-            <li key={entry.id} className="border-border bg-card rounded-xl border p-4">
+            <li key={entry.id} className="glass rounded-2xl p-5">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="truncate font-mono text-[12px]" title={entry.owner}>
@@ -116,14 +117,9 @@ export function PromoReviewList({ entries: initial }: { entries: PromoEntry[] })
                       ` · replaced ${formatDate(entry.updatedAt)}`}
                   </p>
                 </div>
-                <span
-                  className={cn(
-                    "shrink-0 rounded-full border px-2 py-0.5 text-[11px] capitalize",
-                    STATUS_STYLE[entry.status],
-                  )}
-                >
+                <StatusTag tone={STATUS_TONE[entry.status]} className="capitalize">
                   {entry.status}
-                </span>
+                </StatusTag>
               </div>
 
               <div className="mt-3 grid grid-cols-2 gap-2">
@@ -135,7 +131,7 @@ export function PromoReviewList({ entries: initial }: { entries: PromoEntry[] })
                       src={url}
                       alt={`Screenshot ${i + 1}`}
                       loading="lazy"
-                      className="border-border aspect-video w-full rounded border object-cover transition-opacity hover:opacity-85"
+                      className="aspect-video w-full rounded-lg border border-[var(--glass-lo)] object-cover transition-opacity hover:opacity-85"
                     />
                   </a>
                 ))}

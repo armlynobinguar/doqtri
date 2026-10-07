@@ -267,7 +267,7 @@ export function GitHubLinks({
         <div className="grid gap-1.5">
           <select
             aria-label="Heading to link"
-            className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-md border px-2 outline-none focus-visible:ring-3"
+            className="text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-[10px] border border-[var(--glass-lo)] bg-[var(--glass)] px-2.5 shadow-[inset_0_1px_0_0_var(--glass-hi)] outline-none focus-visible:ring-3"
             value={selectedNode}
             onChange={(e) => setLinkNode(e.target.value)}
           >
@@ -280,7 +280,7 @@ export function GitHubLinks({
           <div className="flex gap-1.5">
             <input
               aria-label="GitHub issue or pull request"
-              className="border-input bg-card text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base min-w-0 flex-1 rounded-md border px-2 outline-none focus-visible:ring-3"
+              className="text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-[10px] border border-[var(--glass-lo)] bg-[var(--glass)] min-w-0 flex-1 px-2.5 shadow-[inset_0_1px_0_0_var(--glass-hi)] outline-none focus-visible:ring-3"
               placeholder="owner/repo#12 or PR URL"
               value={refText}
               onChange={(e) => setRefText(e.target.value)}
@@ -347,7 +347,7 @@ function LinkItem({
   const moving = s != null && isReadyToSync(chainStatus, s);
 
   return (
-    <li className="border-border grid gap-1 rounded-md border px-2 py-1.5">
+    <li className="glass grid gap-1 rounded-xl px-2.5 py-2">
       <div className="flex items-start justify-between gap-2">
         <span className="text-foreground truncate text-[12px]" title={link.node_label}>
           {link.node_label || link.node_id}

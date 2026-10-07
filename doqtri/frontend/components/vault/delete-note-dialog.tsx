@@ -64,7 +64,7 @@ export function DeleteNoteDialog({
               This cannot be undone.
             </strong>{" "}
             Other notes that link to it keep their{" "}
-            <code className="text-primary font-mono text-[12px]">
+            <code className="text-foreground font-mono text-[12px]">
               [[wikilinks]]
             </code>
             , which become unresolved.

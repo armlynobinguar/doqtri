@@ -49,12 +49,12 @@ export function RegenerateDialog({
       <DialogContent className="sm:max-w-[440px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <SparklesIcon className="text-accent size-4" strokeWidth={1.75} />
+            <SparklesIcon className="text-accent size-4" strokeWidth={1.5} />
             Regenerate this note
           </DialogTitle>
           <DialogDescription className="text-muted-foreground leading-relaxed">
             AI will rewrite the heading structure and add{" "}
-            <code className="text-primary font-mono text-[12px]">
+            <code className="text-foreground font-mono text-[12px]">
               [[wikilinks]]
             </code>{" "}
             to your other notes.{" "}
@@ -76,7 +76,6 @@ export function RegenerateDialog({
           <Button
             onClick={confirm}
             disabled={busy}
-            className="bg-accent text-accent-foreground hover:bg-accent/90"
           >
             {busy ? (
               <>

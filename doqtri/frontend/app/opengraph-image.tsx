@@ -2,15 +2,18 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ImageResponse } from "next/og";
 
-// Link preview in the style of the X banner: block chain + wordmark + tagline.
+// Link preview in the Monochrome Glass style: label row, heavy wordmark, a
+// lighter second line, and the mark sitting on a smoked-glass disc.
 export const alt = "Doqtri — planned vs shipped, proven on-chain.";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
 // Brand palette mirrors (app/globals.css); ImageResponse cannot read CSS variables.
-const INK = "#e7e9ee";
-const BG = "#0c0f14";
-const MUTED = "#8b93a3";
+const INK = "#f4f5f7";
+const BG = "#08090b";
+const SURFACE = "#0f1114";
+const MUTED = "#a4a8b3";
+const LABEL = "#7c808a";
 const GLYPHS: Record<string, string> = {
   check: '<path d="M6.2 12.4 10.2 16.3 17.8 7.9"/>',
   stellar: '<circle cx="12" cy="12" r="6.4"/><path d="M5 17.6 19 6.4"/>',
@@ -41,7 +44,7 @@ export default async function Image() {
     readFile(join(process.cwd(), "assets/fonts/Geist-Bold.ttf")),
     readFile(join(process.cwd(), "assets/fonts/Geist-Medium.ttf")),
   ]);
-  const chainWidth = 560;
+  const chainWidth = 400;
 
   return new ImageResponse(
     (
@@ -53,20 +56,45 @@ export default async function Image() {
           alignItems: "center",
           justifyContent: "space-between",
           padding: "0 90px",
-          background: `radial-gradient(ellipse 60% 70% at 85% 30%, rgba(179, 139, 239, 0.10), transparent 70%), ${BG}`,
+          background: `radial-gradient(ellipse 80% 60% at 50% -10%, rgba(255, 255, 255, 0.08), transparent 65%), ${BG}`,
           color: INK,
           fontFamily: "Geist",
         }}
       >
         <div style={{ display: "flex", flexDirection: "column" }}>
+          <div style={{ fontSize: 18, fontWeight: 500, letterSpacing: "0.32em", color: LABEL, textTransform: "uppercase" }}>
+            Planned / Shipped / Proven on-chain
+          </div>
+          <div style={{ fontSize: 168, fontWeight: 700, letterSpacing: "-0.06em", marginTop: 22, lineHeight: 0.95 }}>Doqtri</div>
+          <div style={{ fontSize: 46, fontWeight: 700, letterSpacing: "-0.035em", color: MUTED, marginTop: 14, lineHeight: 1.05 }}>
+            Planned vs shipped, proven on-chain.
+          </div>
           {/* ImageResponse renders through Satori, which only understands plain <img>; next/image does not apply. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={dataUri(chainSvg())} width={chainWidth} height={Math.round((chainWidth * 24) / 290)} alt="" />
-          <div style={{ fontSize: 150, fontWeight: 700, letterSpacing: "-0.05em", marginTop: 26, lineHeight: 1 }}>Doqtri</div>
-          <div style={{ fontSize: 28, fontWeight: 500, color: MUTED, marginTop: 22 }}>Living documents → executable mindmaps → on-chain proof.</div>
+          <img
+            src={dataUri(chainSvg())}
+            width={chainWidth}
+            height={Math.round((chainWidth * 24) / 290)}
+            alt=""
+            style={{ marginTop: 40, opacity: 0.45 }}
+          />
         </div>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={dataUri(mark)} width={330} height={297} alt="" />
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 360,
+            height: 360,
+            borderRadius: 9999,
+            background: `radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.09), transparent 55%), ${SURFACE}`,
+            border: "1px solid rgba(255, 255, 255, 0.08)",
+            boxShadow: "0 30px 80px -20px rgba(0, 0, 0, 0.8)",
+          }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={dataUri(mark)} width={250} height={225} alt="" />
+        </div>
       </div>
     ),
     {

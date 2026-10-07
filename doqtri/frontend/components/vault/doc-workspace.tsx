@@ -196,7 +196,7 @@ export function DocWorkspace({
           <div
             role="tablist"
             aria-label="Note views"
-            className="bg-muted border-border grid h-9 flex-1 grid-cols-3 rounded-lg border p-0.5 sm:max-w-sm"
+            className="grid h-9 flex-1 grid-cols-3 rounded-xl border border-[var(--glass-lo)] bg-black/30 p-[3px] sm:max-w-sm"
           >
             {MOBILE_VIEWS.map(({ id, label }) => (
               <button
@@ -206,10 +206,10 @@ export function DocWorkspace({
                 aria-selected={mobileView === id}
                 onClick={() => setMobileView(id)}
                 className={cn(
-                  "focus-visible:ring-ring rounded-md text-[13px] font-medium transition-colors focus-visible:ring-1 focus-visible:outline-hidden",
+                  "focus-visible:ring-ring rounded-[9px] border text-[13px] font-medium transition-colors focus-visible:ring-1 focus-visible:outline-hidden",
                   mobileView === id
-                    ? "bg-secondary text-foreground shadow-sm"
-                    : "text-muted-foreground active:text-foreground",
+                    ? "text-foreground border-[var(--glass-lo)] bg-[var(--glass-strong)] shadow-[inset_0_1px_0_0_var(--glass-hi)]"
+                    : "text-muted-foreground border-transparent active:text-foreground",
                 )}
               >
                 {label}
@@ -220,10 +220,10 @@ export function DocWorkspace({
             type="button"
             aria-label="Regenerate with AI"
             onClick={() => setRegenerateOpen(true)}
-            // Purple is reserved for AI-driven affordances.
-            className="text-accent active:bg-accent/10 focus-visible:ring-ring ml-auto flex size-9 shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:ring-1 focus-visible:outline-hidden"
+            // The muted lavender is reserved for AI-driven affordances.
+            className="icon-tile text-accent focus-visible:ring-ring ml-auto size-9 transition-colors active:bg-[var(--glass-strong)] focus-visible:ring-1 focus-visible:outline-hidden"
           >
-            <SparklesIcon className="size-[18px]" strokeWidth={1.75} />
+            <SparklesIcon className="size-[18px]" strokeWidth={1.5} />
           </button>
         </div>
 
@@ -255,7 +255,7 @@ export function DocWorkspace({
           </div>
         )}
         {mobileView === "ship" && (
-          <div className="bg-muted min-h-0 flex-1 overflow-y-auto [&>*:first-child]:border-t-0">
+          <div className="bg-sidebar min-h-0 flex-1 overflow-y-auto [&>*:first-child]:border-t-0">
             <ShipPanel docId={active.id} title={active.title} markdown={markdown} onSave={saveNow} />
           </div>
         )}
@@ -277,7 +277,7 @@ export function DocWorkspace({
           />
         </ResizablePanel>
 
-        <ResizableHandle className="hover:bg-primary/40 transition-colors" />
+        <ResizableHandle className="hover:bg-foreground/25 transition-colors" />
 
         <ResizablePanel
           id="right"

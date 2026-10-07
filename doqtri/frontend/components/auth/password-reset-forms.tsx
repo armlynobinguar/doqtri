@@ -50,8 +50,8 @@ export function ForgotPasswordForm() {
 
   return (
     <form className="flex flex-col gap-2.5" onSubmit={(e) => void submit(e)}>
-      <label className="flex flex-col gap-1 text-[12px]">
-        <span className="text-muted-foreground">Email</span>
+      <label className="flex flex-col gap-2 text-[12px]">
+        <span className="eyebrow text-[10px]">Email</span>
         <Input
           type="email"
           name="email"
@@ -71,7 +71,7 @@ export function ForgotPasswordForm() {
         type="submit"
         size="lg"
         disabled={busy || (Boolean(TURNSTILE_SITE_KEY) && !captchaToken)}
-        className="mt-1 w-full"
+        className="mt-2 w-full rounded-full"
       >
         {busy ? <Loader2Icon className="animate-spin" /> : null}
         Send reset link
@@ -112,8 +112,8 @@ export function ResetPasswordForm() {
 
   return (
     <form className="flex flex-col gap-2.5" onSubmit={(e) => void submit(e)}>
-      <label className="flex flex-col gap-1 text-[12px]">
-        <span className="text-muted-foreground">New password</span>
+      <label className="flex flex-col gap-2 text-[12px]">
+        <span className="eyebrow text-[10px]">New password</span>
         <Input
           type="password"
           name="password"
@@ -129,7 +129,7 @@ export function ResetPasswordForm() {
           {error}
         </p>
       ) : null}
-      <Button type="submit" size="lg" disabled={busy} className="mt-1 w-full">
+      <Button type="submit" size="lg" disabled={busy} className="mt-2 w-full rounded-full">
         {busy ? <Loader2Icon className="animate-spin" /> : null}
         Save password
       </Button>

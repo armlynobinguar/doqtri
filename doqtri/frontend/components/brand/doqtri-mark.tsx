@@ -5,9 +5,9 @@ import { GlyphPath, type Glyph } from "./glyphs";
 // (bottom-left) and shipped (bottom-right); anchored feeds shipped.
 // `tint` is the ring color in the brand's color variant of the mark.
 export const NODES: { glyph: Glyph; x: number; y: number; tint: string }[] = [
-  { glyph: "check", x: 100, y: 38, tint: "var(--brand-purple, #b38bef)" },
-  { glyph: "stellar", x: 38, y: 142, tint: "var(--brand-green, #43c27a)" },
-  { glyph: "hash", x: 162, y: 142, tint: "var(--brand-blue, #4a9df0)" },
+  { glyph: "check", x: 100, y: 38, tint: "var(--brand-purple, #a9a3dc)" },
+  { glyph: "stellar", x: 38, y: 142, tint: "var(--brand-green, #7cc4a0)" },
+  { glyph: "hash", x: 162, y: 142, tint: "var(--brand-blue, #a3b8d9)" },
 ];
 export const R = 28;
 const EDGES: [number, number][] = [
@@ -91,7 +91,7 @@ export function DoqtriMark({
       <g filter={glow ? `url(#glow-${id})` : undefined}>
         {NODES.map((n, i) => (
           <g key={n.glyph} transform={`translate(${n.x} ${n.y})`} color={tone === "color" ? n.tint : undefined}>
-            <circle r={R} fill="var(--mark-fill, #11151c)" stroke="currentColor" strokeWidth="4.5" />
+            <circle r={R} fill="var(--mark-fill, #0f1114)" stroke="currentColor" strokeWidth="4.5" />
             <circle r={R - 6} stroke="currentColor" strokeOpacity="0.35" strokeWidth="1.4" />
             <g transform="translate(-19.2 -19.2) scale(1.6)" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <GlyphPath glyph={n.glyph} />

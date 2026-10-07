@@ -299,7 +299,7 @@ function VaultShellInner({
               >
                 {explorer}
               </ResizablePanel>
-              <ResizableHandle className="hover:bg-primary/40 transition-colors max-lg:hidden" />
+              <ResizableHandle className="hover:bg-foreground/25 transition-colors max-lg:hidden" />
             </>
           )}
 
