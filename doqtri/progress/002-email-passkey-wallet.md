@@ -1,6 +1,6 @@
 # 002 — Email sign-up with an automatic passkey wallet
 
-**Status:** In progress — §0–§5 done and verified on testnet; ready to merge. §7 (backup passkeys) next
+**Status:** Shipped §0–§5 (production); §7 backup passkeys done on branch `feat/backup-passkeys`, verified on testnet
 **Opened:** 2026-10-06
 **Supersedes:** the wallet-only sign-in in `proxy.ts` ("not a separate email
 sign-in") and `components/auth/login-form.tsx`. Freighter sign-in stays; email
@@ -349,15 +349,47 @@ authenticated cannot execute the function, RLS on all four tables.
 - [ ] Backup nudge after the first anchor until a second passkey exists.
 - [ ] `github-links.tsx`: show "N approvals needed" before Sync in passkey mode.
 
-### 7. Recovery
+### 7. Recovery: backup passkeys — **Done 2026-10-08 (testnet verified)**
 
-- [ ] **Add passkey**: a new WebAuthn credential, then an `add_signer` call on
-      the wallet, authorised by an **existing** passkey, relayed via §4
-      (allowlist the wallet's own `add_signer` for the caller's own wallet only).
-- [ ] **Remove passkey**: same, refusing to remove the last one.
-- [ ] Lost-all-passkeys path: documented, no on-chain recovery. The account and
-      notes remain; new anchors require a new wallet (new owner), and the old
-      documents stay read-only on-chain.
+- [x] **Add a passkey** (account menu → Passkeys, or the ship-panel reminder):
+      the browser creates it — the user picks this device, a phone over the QR
+      flow, or a security key — then a passkey the wallet already accepts
+      approves `add_signer` (`kit.signers.addPasskey` + `signAndSubmitAdmin`).
+- [x] **Remove a passkey**, approved by any remaining one; in-page
+      confirmation; the last passkey's button is disabled and the relay refuses
+      it (409) after checking the ledger.
+- [x] Relay branch: `validateWalletAdmin` — `add_signer` / `remove_signer` on
+      the **caller's own wallet** only, rule 0 only, adding only an External
+      signer on the canonical verifier, one auth entry from the wallet for
+      exactly that call. Reads the wallet's live signers
+      (`lib/stellar/wallet-signers.ts`, `get_context_rule(0)`) to refuse
+      duplicates, more than 10 passkeys, unknown signer ids (404), and removing
+      the last one. Counts as a write in `chain_usage`. Keeps `wallet_passkeys`
+      in step.
+- [x] Signing with whichever passkey the device has: the kit signs with exactly
+      one named passkey, so `connectWith` uses the stored session, else asks the
+      user to pick a passkey once per device (kit discovery prompt).
+- [x] Found during testing: the kit only connects a **backup** passkey on the
+      device that added it (it keeps a local "approved secondary" record; on
+      any other device it looks for a wallet derived from the backup and fails).
+      `rememberWalletPasskeys` seeds those records from the server's list
+      before the pick prompt, with the wallet's creation ledger and
+      constructor-args hash read from the public creation transaction. The kit
+      still verifies the creation on the ledger and that the chosen passkey is
+      a live signer; the contract still verifies every signature.
+- [x] Reminder: once a note is anchored from a wallet with one passkey, the ship
+      panel offers "Add a backup passkey".
+- [x] Passkeys are labelled by credential id and date (positions shift when
+      one is removed).
+- [x] Verified on testnet, two simulated devices: device 1 creates the wallet
+      (A), anchors, sees the reminder, adds B (approved by A); device 2 holds
+      **only B** and no session — updates the note (pick + sign), then removes A
+      (approved by B); B is left, its remove button disabled; on-chain signer
+      list matches the database. Relay refusals: last passkey 409, someone
+      else's wallet 403, unknown signer 404. Testnet fees: `add_signer`
+      0.0282 XLM, `remove_signer` 0.0031 XLM.
+- Not built: a recovery key (Ed25519 words, canonical Ed25519 verifier) for
+  users who want an offline backup. Losing every passkey still loses the wallet.
 
 ### 8. Tests
 

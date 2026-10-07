@@ -39,21 +39,30 @@ export default async function VaultLayout({
     identity = { kind: "wallet", address };
   } else {
     // RLS: only the caller's own wallet and passkeys are visible.
-    const [{ data: wallet }, { data: passkey }] = await Promise.all([
-      supabase.from("smart_wallets").select("address").eq("network", NETWORK).maybeSingle(),
+    const [{ data: wallet }, { data: passkeys }] = await Promise.all([
+      supabase.from("smart_wallets").select("address, created_tx").eq("network", NETWORK).maybeSingle(),
       supabase
         .from("wallet_passkeys")
-        .select("credential_id")
+        .select("credential_id, public_key, created_at")
         .eq("network", NETWORK)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle(),
+        .order("created_at", { ascending: true }),
     ]);
     identity = {
       kind: "email",
       email: user.email ?? "",
       smartWallet:
-        wallet && passkey ? { address: wallet.address, credentialId: passkey.credential_id } : null,
+        wallet && passkeys?.length
+          ? {
+              address: wallet.address,
+              createdTx: wallet.created_tx,
+              passkeys: passkeys.map((p) => ({
+                credentialId: p.credential_id as string,
+                // bytea arrives as "\x" + hex over PostgREST.
+                publicKey: String(p.public_key).replace(/^\\x/, ""),
+                createdAt: p.created_at as string,
+              })),
+            }
+          : null,
     };
   }
 

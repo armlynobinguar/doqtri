@@ -289,3 +289,79 @@ export function validateRegistryWrite(
 
   return { fn, docId: docArg.str().toString() };
 }
+
+export type WalletAdminCall =
+  | { fn: "add_signer"; credentialId: Buffer; publicKey: Buffer }
+  | { fn: "remove_signer"; signerId: number };
+
+/**
+ * A passkey change on the caller's own wallet, as `kit.signers.addPasskey`
+ * and `kit.signers.remove` build it: `add_signer` or `remove_signer` on the
+ * wallet itself, on its default rule (0), adding only an External signer on
+ * the canonical WebAuthn verifier, with one auth entry from the wallet for
+ * exactly that call.
+ *
+ * The wallet contract is what requires an existing signer to approve the
+ * change; this only keeps the relay from paying for anything else. The caller
+ * still has to refuse removing the last passkey.
+ */
+export function validateWalletAdmin(
+  { func, auth }: RelaySubmission,
+  expected: { wallet: string; webauthnVerifier: string },
+): WalletAdminCall {
+  if (func.switch().name !== "hostFunctionTypeInvokeContract") {
+    throw new RelayRejection("Only wallet calls are accepted here");
+  }
+  const invoke = func.invokeContract();
+  if (Address.fromScAddress(invoke.contractAddress()).toString() !== expected.wallet) {
+    throw new RelayRejection("Only your own wallet can be changed");
+  }
+  const fn = invoke.functionName().toString();
+  const args = invoke.args();
+  if (args.length !== 2 || args[0].switch().name !== "scvU32" || args[0].u32() !== 0) {
+    throw new RelayRejection("Passkey changes must target the wallet's default rule");
+  }
+
+  let call: WalletAdminCall;
+  if (fn === "add_signer") {
+    const signer = args[1].switch().name === "scvVec" ? args[1].vec() ?? [] : [];
+    if (
+      signer.length !== 3 ||
+      signer[0].switch().name !== "scvSymbol" ||
+      signer[0].sym().toString() !== "External" ||
+      signer[1].switch().name !== "scvAddress" ||
+      signer[2].switch().name !== "scvBytes"
+    ) {
+      throw new RelayRejection("Only passkey signers can be added");
+    }
+    if (Address.fromScAddress(signer[1].address()).toString() !== expected.webauthnVerifier) {
+      throw new RelayRejection("New passkeys must use the canonical WebAuthn verifier");
+    }
+    const keyData = Buffer.from(signer[2].bytes());
+    if (keyData.length <= 65 || keyData[0] !== 0x04) {
+      throw new RelayRejection("Signer key data is not a WebAuthn public key and credential id");
+    }
+    call = { fn, publicKey: keyData.subarray(0, 65), credentialId: keyData.subarray(65) };
+  } else if (fn === "remove_signer") {
+    if (args[1].switch().name !== "scvU32") {
+      throw new RelayRejection("remove_signer has an invalid argument shape");
+    }
+    call = { fn, signerId: args[1].u32() };
+  } else {
+    throw new RelayRejection("Only adding or removing a passkey is allowed");
+  }
+
+  if (auth.length !== 1) {
+    throw new RelayRejection("A wallet change must carry exactly one auth entry");
+  }
+  const root = auth[0].rootInvocation();
+  if (
+    credentialAddress(auth[0]) !== expected.wallet ||
+    root.subInvocations().length !== 0 ||
+    root.function().switch().name !== "sorobanAuthorizedFunctionTypeContractFn" ||
+    !root.function().contractFn().toXDR().equals(invoke.toXDR())
+  ) {
+    throw new RelayRejection("The change must be approved by your wallet for exactly this call");
+  }
+  return call;
+}

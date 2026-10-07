@@ -6,6 +6,7 @@ import {
   parseRelayBody,
   RelayRejection,
   validateRegistryWrite,
+  validateWalletAdmin,
   validateWalletDeploy,
   type RelaySubmission,
 } from "./relay-validation";
@@ -231,5 +232,80 @@ describe("registry write validation", () => {
     const mismatched = register();
     mismatched.auth = call("update_document", [str(docId), hash32]).auth;
     expect(() => check(mismatched)).toThrow(/from your wallet/);
+  });
+});
+
+describe("wallet admin validation (passkey changes)", () => {
+  const wallet = contract("wallet");
+  const verifier = expected.webauthnVerifier;
+  const keyData = Buffer.concat([publicKey, Buffer.from("backup-credential")]);
+  const passkeySigner = (v = verifier, kd = keyData, kind = "External") =>
+    xdr.ScVal.scvVec([xdr.ScVal.scvSymbol(kind), Address.fromString(v).toScVal(), xdr.ScVal.scvBytes(kd)]);
+
+  function call(fn: string, args: xdr.ScVal[], o: { target?: string; signer?: string; nested?: boolean; entries?: number } = {}) {
+    const invoke = new xdr.InvokeContractArgs({
+      contractAddress: Address.fromString(o.target ?? wallet).toScAddress(),
+      functionName: fn,
+      args,
+    });
+    const node = (children: xdr.SorobanAuthorizedInvocation[] = []) =>
+      new xdr.SorobanAuthorizedInvocation({
+        function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(invoke),
+        subInvocations: children,
+      });
+    const entry = new xdr.SorobanAuthorizationEntry({
+      credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(
+        new xdr.SorobanAddressCredentials({
+          address: Address.fromString(o.signer ?? wallet).toScAddress(),
+          nonce: xdr.Int64.fromString("3"),
+          signatureExpirationLedger: 100,
+          signature: xdr.ScVal.scvVoid(),
+        }),
+      ),
+      rootInvocation: node(o.nested ? [node()] : []),
+    });
+    return {
+      func: xdr.HostFunction.hostFunctionTypeInvokeContract(invoke),
+      auth: Array.from({ length: o.entries ?? 1 }, () => entry),
+    };
+  }
+  const check = (s: RelaySubmission) => validateWalletAdmin(s, { wallet, webauthnVerifier: verifier });
+  const rule = (id = 0) => xdr.ScVal.scvU32(id);
+
+  it("accepts adding a passkey and returns its key and credential", () => {
+    const result = check(call("add_signer", [rule(), passkeySigner()]));
+    expect(result.fn).toBe("add_signer");
+    if (result.fn === "add_signer") {
+      expect(result.publicKey.equals(publicKey)).toBe(true);
+      expect(result.credentialId.toString()).toBe("backup-credential");
+    }
+  });
+
+  it("accepts removing a signer by id", () => {
+    expect(check(call("remove_signer", [rule(), xdr.ScVal.scvU32(4)]))).toEqual({ fn: "remove_signer", signerId: 4 });
+  });
+
+  it("refuses changing someone else's wallet or other functions", () => {
+    expect(() => check(call("add_signer", [rule(), passkeySigner()], { target: contract("victim") }))).toThrow(/your own wallet/);
+    expect(() => check(call("upgrade", [rule(), passkeySigner()]))).toThrow(/Only adding or removing/);
+    expect(() => check(call("execute", [rule(), passkeySigner()]))).toThrow(/Only adding or removing/);
+  });
+
+  it("refuses signers that are not passkeys on the canonical verifier", () => {
+    expect(() => check(call("add_signer", [rule(), passkeySigner(contract("attacker-verifier"))]))).toThrow(/canonical WebAuthn verifier/);
+    expect(() => check(call("add_signer", [rule(), passkeySigner(verifier, keyData, "Delegated")]))).toThrow(/Only passkey signers/);
+    const delegated = xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Delegated"), Address.fromString(contract("x")).toScVal()]);
+    expect(() => check(call("add_signer", [rule(), delegated]))).toThrow(/Only passkey signers/);
+    expect(() => check(call("add_signer", [rule(), passkeySigner(verifier, publicKey)]))).toThrow(/not a WebAuthn public key/);
+  });
+
+  it("refuses rules other than the default one", () => {
+    expect(() => check(call("add_signer", [rule(1), passkeySigner()]))).toThrow(/default rule/);
+  });
+
+  it("requires exactly one approval from the wallet for exactly this call", () => {
+    expect(() => check(call("add_signer", [rule(), passkeySigner()], { signer: contract("other") }))).toThrow(/approved by your wallet/);
+    expect(() => check(call("add_signer", [rule(), passkeySigner()], { nested: true }))).toThrow(/approved by your wallet/);
+    expect(() => check(call("add_signer", [rule(), passkeySigner()], { entries: 2 }))).toThrow(/exactly one auth entry/);
   });
 });
