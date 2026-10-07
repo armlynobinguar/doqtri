@@ -3,8 +3,13 @@ import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/sup
 import { walletAddressFromEmail } from "@/lib/wallet-address";
 import { CONTRACT_ID, NETWORK_PASSPHRASE } from "@/lib/stellar/config";
 import {
+  DOQTRI_RELAYER,
+  FEE_FORWARDER,
+  MAX_USER_FEE_STROOPS,
+  NATIVE_XLM,
   NETWORK,
   SHARED_DEPLOYER_SEED,
+  USER_PAYS_FEES,
   SMART_ACCOUNT_WASM_HASH,
   THRESHOLD_POLICY,
   WEBAUTHN_VERIFIER,
@@ -14,6 +19,7 @@ import {
   deployerAddress,
   parseRelayBody,
   RelayRejection,
+  validateForwardedWrite,
   validateRegistryWrite,
   validateWalletAdmin,
   validateWalletDeploy,
@@ -21,6 +27,7 @@ import {
 } from "@/lib/stellar/relay-validation";
 import { simulateWithinCap, submitAndConfirm } from "@/lib/stellar/channels";
 import { readWalletPasskeys } from "@/lib/stellar/wallet-signers";
+import { submitPaidWrite } from "@/lib/stellar/direct-submit";
 
 /**
  * Fee-sponsored submission for passkey smart wallets (progress/002).
@@ -79,7 +86,12 @@ export async function POST(request: Request) {
       submission.func.switch().name === "hostFunctionTypeInvokeContract"
         ? Address.fromScAddress(submission.func.invokeContract().contractAddress()).toString()
         : null;
-    if (target === CONTRACT_ID) return await relayRegistryWrite(user.id, submission);
+    if (target === CONTRACT_ID) {
+      // Where users pay their own fees, an unwrapped write would skip paying.
+      if (USER_PAYS_FEES) return fail("Registry writes must go through the fee forwarder.", 403);
+      return await relayRegistryWrite(user.id, submission);
+    }
+    if (USER_PAYS_FEES && target === FEE_FORWARDER) return await relayPaidWrite(user.id, submission);
     return await relayWalletAdmin(user.id, submission, new URL(request.url).hostname);
   } catch (error) {
     if (error instanceof RelayRejection) return fail(error.message, error.status);
@@ -158,6 +170,65 @@ async function relayRegistryWrite(userId: string, submission: RelaySubmission) {
   if (error) console.error(`[chain/relay] ${write.fn} ${sent.hash} not indexed: ${error.message}`);
 
   return Response.json({ success: true, data: sent });
+}
+
+/**
+ * A registry write the user's wallet pays for (progress/003): validated like a
+ * direct write, then priced and submitted by Doqtri's relayer straight to RPC.
+ * Channels is not involved.
+ */
+async function relayPaidWrite(userId: string, submission: RelaySubmission) {
+  const admin = createSupabaseAdminClient();
+  const { data: wallet } = await admin
+    .from("smart_wallets")
+    .select("address")
+    .eq("user_id", userId)
+    .eq("network", NETWORK)
+    .maybeSingle();
+  if (!wallet) return fail("Create your passkey wallet first.", 409);
+
+  const write = validateForwardedWrite(submission, {
+    forwarder: FEE_FORWARDER!,
+    xlm: NATIVE_XLM,
+    registry: CONTRACT_ID,
+    wallet: wallet.address,
+    relayer: DOQTRI_RELAYER!,
+    maxFeeCap: MAX_USER_FEE_STROOPS,
+  });
+
+  const { data: doc } = await admin
+    .from("documents")
+    .select("id")
+    .eq("id", write.docId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!doc) return fail("That note isn't in your vault.", 403);
+
+  // Still rate-limited: the user pays the fee, but each request costs our
+  // relayer a submission and RPC calls.
+  const refused = await chargeQuota(userId, "write", WRITES_PER_USER, WRITES_GLOBAL);
+  if (refused) return refused;
+
+  const walletEntry = submission.auth.find(
+    (entry) => entry.credentials().switch().name !== "sorobanCredentialsSourceAccount" &&
+      Address.fromScAddress(
+        entry.credentials().switch().name === "sorobanCredentialsAddress"
+          ? entry.credentials().address().address()
+          : entry.credentials().addressV2().address(),
+      ).toString() === wallet.address,
+  )!;
+  const { hash, feeStroops } = await submitPaidWrite(submission.func, walletEntry, write.maxFee);
+
+  const { error } = await admin.from("chain_writes").insert({
+    network: NETWORK,
+    tx_hash: hash,
+    document_id: write.docId,
+    fn: write.fn,
+    owner: wallet.address,
+  });
+  if (error) console.error(`[chain/relay] ${write.fn} ${hash} not indexed: ${error.message}`);
+
+  return Response.json({ success: true, data: { hash, status: "confirmed", feeStroops: feeStroops.toString() } });
 }
 
 /**

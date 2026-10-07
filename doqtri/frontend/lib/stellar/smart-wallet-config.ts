@@ -7,7 +7,8 @@
  * OpenZeppelin/stellar-contracts@1e513890). The account wasm hash is the same
  * on testnet and mainnet; the verifier and policy are per-network contracts.
  */
-import { IS_MAINNET } from "@/lib/stellar/config";
+import { Asset } from "@stellar/stellar-sdk";
+import { IS_MAINNET, NETWORK_PASSPHRASE } from "@/lib/stellar/config";
 
 export type StellarNetwork = "testnet" | "mainnet";
 
@@ -49,3 +50,32 @@ export const RELAY_PATH = "/api/chain/relay";
 
 /** The kit appends `/api/lookup/<credential hex>` (app/api/chain/indexer/…). */
 export const INDEXER_PATH = "/api/chain/indexer";
+
+// ---------------------------------------------------------------------------
+// User-paid fees (progress/003). Testnet only for now: on a network without a
+// forwarder, email users' writes stay sponsored through Channels.
+
+/** Doqtri's FeeForwarder (fee-forwarder/, OpenZeppelin fee abstraction). */
+const FORWARDERS: Partial<Record<StellarNetwork, string>> = {
+  testnet: "CCBBXJSS7DUT34QDJOMZLAYMYOT4Q73NUSY573G4STXFUBSYXDKUBUHV",
+};
+
+/** Doqtri's relayer account: approves each forwarded call and receives the fee. */
+const RELAYERS: Partial<Record<StellarNetwork, string>> = {
+  testnet: "GCY3QATELG5SQGVV56UF3RIXAFELDQTHP2PFLGG3SFJJETCGBEFUDB5M",
+};
+
+export const FEE_FORWARDER: string | null = FORWARDERS[NETWORK] ?? null;
+export const DOQTRI_RELAYER: string | null = RELAYERS[NETWORK] ?? null;
+
+/** The native XLM token contract on this network: what users pay fees in. */
+export const NATIVE_XLM = Asset.native().contractId(NETWORK_PASSPHRASE);
+
+/** Whether email users pay their own anchoring fees on this network. */
+export const USER_PAYS_FEES = FEE_FORWARDER !== null && DOQTRI_RELAYER !== null;
+
+/**
+ * The most a user signs to pay for one write: 0.5 XLM, matching the relay's
+ * resource-fee cap. They are charged the actual cost, never more than this.
+ */
+export const MAX_USER_FEE_STROOPS = BigInt(5_000_000);

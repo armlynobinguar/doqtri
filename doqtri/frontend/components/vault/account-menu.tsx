@@ -25,6 +25,8 @@ import {
 import { useWallet } from "@/components/vault/wallet-provider";
 import { expertContractUrl, IS_MAINNET } from "@/lib/stellar/config";
 import { PasskeysDialog } from "@/components/vault/passkeys-dialog";
+import { USER_PAYS_FEES } from "@/lib/stellar/smart-wallet-config";
+import { formatXlm as formatStroops } from "@/lib/stellar/wallet-balance";
 import { shortenAddress } from "@/lib/wallet";
 import { cn } from "@/lib/utils";
 
@@ -213,6 +215,19 @@ function EmailAccountMenu({
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
   const [passkeysOpen, setPasskeysOpen] = useState(false);
+  const [toppingUp, setToppingUp] = useState(false);
+
+  async function topUp() {
+    setToppingUp(true);
+    try {
+      await wallet.topUp();
+      toast.success("Wallet topped up with test XLM");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "The top-up failed. Try again.");
+    } finally {
+      setToppingUp(false);
+    }
+  }
 
   async function createWallet() {
     setCreating(true);
@@ -274,7 +289,26 @@ function EmailAccountMenu({
                   <span className="font-mono">{shortenAddress(smartWallet.address)}</span>
                   <span className="text-muted-foreground ml-auto text-[11px]">copy</span>
                 </DropdownMenuItem>
-                <DropdownMenuItem data-testid="open-passkeys" onClick={() => setPasskeysOpen(true)}>
+                {USER_PAYS_FEES ? (
+                <>
+                  <div className="grid gap-0.5 px-1.5 pb-1 text-[12px]" data-testid="wallet-xlm">
+                    <span>
+                      {wallet.walletXlm === null ? "Balance …" : `${formatStroops(wallet.walletXlm)} XLM`}
+                    </span>
+                    <span className="text-muted-foreground">Pays the network fee for each write you anchor.</span>
+                  </div>
+                  <DropdownMenuItem
+                    disabled={toppingUp}
+                    closeOnClick={false}
+                    data-testid="top-up"
+                    onClick={() => void topUp()}
+                  >
+                    {toppingUp ? <Loader2Icon className="animate-spin" /> : <DropletIcon />}
+                    {toppingUp ? "Topping up…" : "Top up with test XLM"}
+                  </DropdownMenuItem>
+                </>
+              ) : null}
+              <DropdownMenuItem data-testid="open-passkeys" onClick={() => setPasskeysOpen(true)}>
                   <KeyRoundIcon />
                   Passkeys
                   <span className="text-muted-foreground ml-auto text-[11px] tabular-nums">

@@ -10,7 +10,7 @@
  * These checks bound spending; they do not prove wallet ownership. Ownership
  * is the session (the route) plus the passkey signature (the contract).
  */
-import { Address, hash, Keypair, StrKey, xdr } from "@stellar/stellar-sdk";
+import { Address, hash, Keypair, scValToBigInt, StrKey, xdr } from "@stellar/stellar-sdk";
 
 export class RelayRejection extends Error {
   constructor(
@@ -237,18 +237,40 @@ export function validateRegistryWrite(
   if (Address.fromScAddress(invoke.contractAddress()).toString() !== expected.registry) {
     throw new RelayRejection("Only the Doqtri registry can be called");
   }
-  const fn = invoke.functionName().toString() as RegistryFunction;
+  const { fn, docId } = validateRegistryCall(invoke.functionName().toString(), invoke.args(), expected.wallet);
+
+  if (auth.length !== 1) {
+    throw new RelayRejection("A registry write must carry exactly one auth entry");
+  }
+  const root = auth[0].rootInvocation();
+  if (
+    credentialAddress(auth[0]) !== expected.wallet ||
+    root.subInvocations().length !== 0 ||
+    root.function().switch().name !== "sorobanAuthorizedFunctionTypeContractFn" ||
+    !root.function().contractFn().toXDR().equals(invoke.toXDR())
+  ) {
+    throw new RelayRejection("The signature must come from your wallet for exactly this call");
+  }
+
+  return { fn, docId };
+}
+
+/**
+ * One of the three registry functions with the argument shapes the contract
+ * declares; `register_document` must name `wallet` as the owner. Shared by
+ * direct and forwarded writes.
+ */
+export function validateRegistryCall(fnName: string, args: xdr.ScVal[], wallet: string): RegistryWrite {
+  const fn = fnName as RegistryFunction;
   if (!REGISTRY_FUNCTIONS.includes(fn)) {
     throw new RelayRejection("That registry function is not allowed");
   }
-
-  const args = invoke.args();
   let docArg: xdr.ScVal | undefined;
   if (fn === "register_document") {
     if (
       args.length !== 3 ||
       args[0].switch().name !== "scvAddress" ||
-      Address.fromScAddress(args[0].address()).toString() !== expected.wallet ||
+      Address.fromScAddress(args[0].address()).toString() !== wallet ||
       !isString(args[1]) ||
       !isHash(args[2])
     ) {
@@ -273,20 +295,6 @@ export function validateRegistryWrite(
     }
     docArg = args[0];
   }
-
-  if (auth.length !== 1) {
-    throw new RelayRejection("A registry write must carry exactly one auth entry");
-  }
-  const root = auth[0].rootInvocation();
-  if (
-    credentialAddress(auth[0]) !== expected.wallet ||
-    root.subInvocations().length !== 0 ||
-    root.function().switch().name !== "sorobanAuthorizedFunctionTypeContractFn" ||
-    !root.function().contractFn().toXDR().equals(invoke.toXDR())
-  ) {
-    throw new RelayRejection("The signature must come from your wallet for exactly this call");
-  }
-
   return { fn, docId: docArg.str().toString() };
 }
 
@@ -364,4 +372,96 @@ export function validateWalletAdmin(
     throw new RelayRejection("The change must be approved by your wallet for exactly this call");
   }
   return call;
+}
+
+export type ForwardedWrite = RegistryWrite & { maxFee: bigint; expirationLedger: number };
+
+function addressOf(value: xdr.ScVal | undefined): string | null {
+  return value?.switch().name === "scvAddress" ? Address.fromScAddress(value.address()).toString() : null;
+}
+
+function sameScVals(a: xdr.ScVal[], b: xdr.ScVal[]): boolean {
+  return a.length === b.length && a.every((v, i) => v.toXDR().equals(b[i].toXDR()));
+}
+
+/**
+ * A registry write wrapped in Doqtri's FeeForwarder, so the user's wallet pays
+ * the fee (progress/003):
+ *
+ *   forward(fee_token, fee_amount, max_fee_amount, expiration_ledger,
+ *           registry, fn, args, user = wallet, relayer = Doqtri)
+ *
+ * The wallet's single auth entry must be that `forward` call (over everything
+ * except the fee amount and relayer, as the forwarder requires) with exactly
+ * two sub-invocations: approving the forwarder to spend at most the max fee
+ * in XLM, and the registry call itself. Any relayer auth entry the browser
+ * sends is dropped; the server signs its own for the fee it sets.
+ */
+export function validateForwardedWrite(
+  { func, auth }: RelaySubmission,
+  expected: { forwarder: string; xlm: string; registry: string; wallet: string; relayer: string; maxFeeCap: bigint },
+): ForwardedWrite {
+  if (func.switch().name !== "hostFunctionTypeInvokeContract") {
+    throw new RelayRejection("Only forwarded registry calls are accepted here");
+  }
+  const invoke = func.invokeContract();
+  if (
+    Address.fromScAddress(invoke.contractAddress()).toString() !== expected.forwarder ||
+    invoke.functionName().toString() !== "forward"
+  ) {
+    throw new RelayRejection("Only Doqtri's fee forwarder can be called");
+  }
+  const a = invoke.args();
+  if (a.length !== 9) throw new RelayRejection("forward has an invalid argument shape");
+  const [feeToken, feeAmount, maxFee, expiration, target, targetFn, targetArgs, user, relayer] = a;
+
+  if (addressOf(feeToken) !== expected.xlm) throw new RelayRejection("Fees must be paid in XLM");
+  if (feeAmount.switch().name !== "scvI128" || maxFee.switch().name !== "scvI128") {
+    throw new RelayRejection("Fee amounts have an invalid shape");
+  }
+  const max = scValToBigInt(maxFee);
+  if (max <= BigInt(0) || max > expected.maxFeeCap) {
+    throw new RelayRejection("The maximum fee is outside the allowed range");
+  }
+  if (expiration.switch().name !== "scvU32") throw new RelayRejection("The fee approval has no valid expiry");
+  if (addressOf(target) !== expected.registry) throw new RelayRejection("Only the Doqtri registry can be called");
+  if (targetFn.switch().name !== "scvSymbol" || targetArgs.switch().name !== "scvVec") {
+    throw new RelayRejection("The forwarded call has an invalid shape");
+  }
+  const inner = targetArgs.vec() ?? [];
+  const write = validateRegistryCall(targetFn.sym().toString(), inner, expected.wallet);
+  if (addressOf(user) !== expected.wallet) throw new RelayRejection("Only your own wallet can pay for this");
+  if (addressOf(relayer) !== expected.relayer) throw new RelayRejection("The fee must go to Doqtri's relayer");
+
+  const walletEntries = auth.filter((entry) => credentialAddress(entry) === expected.wallet);
+  if (walletEntries.length !== 1 || auth.some((e) => ![expected.wallet, expected.relayer].includes(credentialAddress(e) ?? ""))) {
+    throw new RelayRejection("A forwarded write must carry exactly one approval from your wallet");
+  }
+  const root = walletEntries[0].rootInvocation();
+  const rootFn = root.function();
+  const subs = root.subInvocations();
+  const fnOf = (inv: xdr.SorobanAuthorizedInvocation) =>
+    inv.function().switch().name === "sorobanAuthorizedFunctionTypeContractFn" ? inv.function().contractFn() : null;
+  const approve = subs.map(fnOf).find((f) => f && Address.fromScAddress(f.contractAddress()).toString() === expected.xlm);
+  const call = subs.map(fnOf).find((f) => f && Address.fromScAddress(f.contractAddress()).toString() === expected.registry);
+  const walletAddr = Address.fromString(expected.wallet).toScVal();
+  const forwarderAddr = Address.fromString(expected.forwarder).toScVal();
+  if (
+    rootFn.switch().name !== "sorobanAuthorizedFunctionTypeContractFn" ||
+    Address.fromScAddress(rootFn.contractFn().contractAddress()).toString() !== expected.forwarder ||
+    rootFn.contractFn().functionName().toString() !== "forward" ||
+    !sameScVals(rootFn.contractFn().args(), [feeToken, maxFee, expiration, target, targetFn, targetArgs]) ||
+    subs.length !== 2 ||
+    subs.some((s) => s.subInvocations().length !== 0) ||
+    !approve ||
+    approve.functionName().toString() !== "approve" ||
+    !sameScVals(approve.args(), [walletAddr, forwarderAddr, maxFee, expiration]) ||
+    !call ||
+    call.functionName().toString() !== targetFn.sym().toString() ||
+    !sameScVals(call.args(), inner)
+  ) {
+    throw new RelayRejection("Your wallet's approval must cover exactly this forwarded call");
+  }
+
+  return { ...write, maxFee: max, expirationLedger: expiration.u32() };
 }

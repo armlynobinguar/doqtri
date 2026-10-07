@@ -21,7 +21,7 @@ import { Buffer } from "buffer";
 import { CONTRACT_ID, HORIZON_URL, RPC_URL } from "@/lib/stellar/config";
 import { docLedgerKey } from "@/lib/stellar/anchored";
 import { DoqtriRegistry } from "@/lib/stellar/contract-client";
-import { NETWORK } from "@/lib/stellar/smart-wallet-config";
+import { FEE_FORWARDER, NETWORK } from "@/lib/stellar/smart-wallet-config";
 
 export type ChainVersion = {
   version: number;
@@ -102,6 +102,7 @@ function enumTag(value: unknown): string {
 export function decodeInvocation(
   op: HorizonOperation,
   contractId: string,
+  forwarder: string | null = FEE_FORWARDER,
 ): Invocation | null {
   if (op.type !== "invoke_host_function") return null;
   if (op.transaction_successful === false) return null;
@@ -110,10 +111,20 @@ export function decodeInvocation(
 
   try {
     const contract = Address.fromScVal(decode(params[0].value)).toString();
-    if (contract !== contractId) return null;
-
-    const fn = String(scValToNative(decode(params[1].value)));
-    const args = params.slice(2).map((p) => scValToNative(decode(p.value)));
+    let fn = String(scValToNative(decode(params[1].value)));
+    let args: unknown[];
+    if (contract === contractId) {
+      args = params.slice(2).map((p) => scValToNative(decode(p.value)));
+    } else if (forwarder && contract === forwarder && fn === "forward" && params.length >= 9) {
+      // A user-paid write (progress/003): forward(fee_token, fee_amount,
+      // max_fee_amount, expiration_ledger, target, target_fn, target_args, …).
+      // The registry call is the wrapped one.
+      if (Address.fromScVal(decode(params[6].value)).toString() !== contractId) return null;
+      fn = String(scValToNative(decode(params[7].value)));
+      args = (decode(params[8].value).vec() ?? []).map((v) => scValToNative(v));
+    } else {
+      return null;
+    }
 
     switch (fn) {
       // register_document(owner, doc_id, content_hash)
