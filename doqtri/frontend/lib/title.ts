@@ -40,3 +40,17 @@ export function uniqueTitle(title: string, taken: string[]): string {
   while (used.has(normalize(`${title} ${counter}`))) counter += 1;
   return `${title} ${counter}`;
 }
+
+/** The longest title a note can be given, by creation or by rename. */
+export const MAX_TITLE_LENGTH = 120;
+
+/**
+ * Whether `title` would collide with one of `taken`, under the same
+ * case- and trim-insensitive comparison as uniqueTitle. A rename passes the
+ * other notes' titles only, so changing just the case of a title is allowed.
+ */
+export function isTitleTaken(title: string, taken: string[]): boolean {
+  const normalize = (value: string) => value.trim().toLowerCase();
+  const wanted = normalize(title);
+  return taken.some((other) => normalize(other) === wanted);
+}

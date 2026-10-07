@@ -3,7 +3,7 @@ import {
   createSupabaseServerClient,
   createSupabaseAdminClient,
 } from "@/lib/supabase/server";
-import { uniqueTitle } from "@/lib/title";
+import { MAX_TITLE_LENGTH, uniqueTitle } from "@/lib/title";
 
 /**
  * Create a blank Obsidian-style note. Headings become the mindmap live;
@@ -23,7 +23,7 @@ export async function POST(request: Request) {
   try {
     const body = (await request.json()) as { title?: unknown };
     if (typeof body.title === "string" && body.title.trim()) {
-      requestedTitle = body.title.trim().slice(0, 120);
+      requestedTitle = body.title.trim().slice(0, MAX_TITLE_LENGTH);
     }
   } catch {
     // empty body is fine — default Untitled
