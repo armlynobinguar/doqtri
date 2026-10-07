@@ -13,6 +13,7 @@ import {
   canvasToBlob,
   drawLink,
   drawNode,
+  loadWatermarkLogo,
   measureNode,
   paintBackdrop,
   paintGraphPattern,
@@ -320,6 +321,7 @@ export function MindmapCanvas({
           height: request.height,
           title: request.title,
           watermark: request.watermark,
+          logo: request.watermark ? await loadWatermarkLogo(painterRef.current.style) : null,
           frame:
             request.fit || !instance || !center
               ? { kind: "fit" }

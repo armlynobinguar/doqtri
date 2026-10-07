@@ -465,7 +465,49 @@ export type SnapshotOptions = {
   /** Caption drawn bottom-left, or nothing. */
   title?: string;
   watermark: boolean;
+  /** The mark drawn beside the watermark, from `loadWatermarkLogo`. */
+  logo?: HTMLImageElement | null;
 };
+
+const MARK_URL = "/doqtri-mark.svg";
+/** The colours the mark file is drawn in, swapped out per theme. */
+const MARK_INK = "#f4f5f7";
+const MARK_FILL = "#15171b";
+
+let markSource: Promise<string | null> | null = null;
+
+/**
+ * The Doqtri mark, recoloured to sit on this style's background.
+ *
+ * The file in public/ is drawn light-on-dark; on a light theme that would be a
+ * white smudge, so its two colours are replaced before it is rasterised. Null
+ * when it cannot be loaded — the watermark then falls back to text alone
+ * rather than failing the export.
+ */
+export async function loadWatermarkLogo(style: MindmapStyle): Promise<HTMLImageElement | null> {
+  markSource ??= fetch(MARK_URL)
+    .then((res) => (res.ok ? res.text() : null))
+    .catch(() => null);
+  const svg = await markSource;
+  if (!svg) {
+    markSource = null;
+    return null;
+  }
+
+  const light = isLight(style.palette.background);
+  const tinted = svg
+    .replaceAll(MARK_INK, light ? "#111111" : MARK_INK)
+    .replaceAll(MARK_FILL, style.palette.background);
+
+  const image = new Image();
+  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(tinted)}`;
+  try {
+    await image.decode();
+    return image;
+  } catch {
+    return null;
+  }
+}
 
 /** Caption and watermark, shared with the 3D export. Drawn in output pixels. */
 export function paintCaption(
@@ -476,6 +518,7 @@ export function paintCaption(
   family: string,
   title: string | undefined,
   watermark: boolean,
+  logo?: HTMLImageElement | null,
 ) {
   const unit = Math.min(width, height);
   const margin = unit * 0.05;
@@ -503,7 +546,20 @@ export function paintCaption(
     ctx.font = `600 ${size}px ui-sans-serif, system-ui, sans-serif`;
     ctx.textAlign = "right";
     ctx.fillStyle = light ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.55)";
-    ctx.fillText("made with doqtri", width - margin, height - margin);
+    const label = "made with doqtri";
+    ctx.fillText(label, width - margin, height - margin);
+
+    if (logo) {
+      // The mark sits left of the words, centred on their x-height.
+      const logoHeight = size * 1.7;
+      const logoWidth = logoHeight * (200 / 180);
+      const textWidth = ctx.measureText(label).width;
+      const x = width - margin - textWidth - size * 0.5 - logoWidth;
+      const y = height - margin - size * 0.36 - logoHeight / 2;
+      ctx.globalAlpha = 0.85;
+      ctx.drawImage(logo, x, y, logoWidth, logoHeight);
+      ctx.globalAlpha = 1;
+    }
   }
   ctx.restore();
 }
@@ -565,7 +621,7 @@ export function renderSnapshot(
   for (const link of links) drawLink(ctx, link, painter);
   for (const node of visible) drawNode(ctx, node, painter);
 
-  paintCaption(ctx, width, height, painter.style, painter.family, options.title, options.watermark);
+  paintCaption(ctx, width, height, painter.style, painter.family, options.title, options.watermark, options.logo);
   return canvas;
 }
 
