@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { MindmapCanvas } from "@/components/vault/mindmap-canvas";
+import { MindmapStudio } from "@/components/vault/mindmap-studio";
 import { buildGlobalMindmap } from "@/lib/global-mindmap";
 import { MINDMAP_COLORS } from "@/lib/theme";
 import type { Doc } from "@/lib/types";
@@ -48,11 +48,13 @@ export function GlobalMindmap({ docs }: { docs: Doc[] }) {
 
       <MindmapPromoBanner />
 
-      <MindmapCanvas
+      <MindmapStudio
+        scope="global"
+        title="Global mindmap"
         graph={graph}
         // A forest, not one tree: several notes are roots, so rings would stack
         // them on top of each other instead of spreading them out.
-        layout="free"
+        defaultLayout="free"
         onNodeClick={(node) => {
           if (node.href) navigate(node.href);
         }}

@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { ArrowLeftIcon, Loader2Icon, NetworkIcon, SparklesIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { MindmapCanvas } from "@/components/vault/mindmap-canvas";
+import { MindmapStudio } from "@/components/vault/mindmap-studio";
 import { MindmapPromoBanner } from "@/components/promo/mindmap-promo-banner";
 import { graphFromMindmap } from "@/lib/mindmap-graph";
 import { mindmapFromHeadings, type DocMindmap } from "@/lib/mindmap-types";
@@ -125,7 +125,10 @@ export function DocumentMindmap({
 
       <MindmapPromoBanner />
 
-      <MindmapCanvas
+      <MindmapStudio
+        scope={`doc:${docId}`}
+        title={title}
+        defaultLayout="radial"
         graph={graph}
         // Every node belongs to this one note, so there is only one place a
         // click can usefully go.
