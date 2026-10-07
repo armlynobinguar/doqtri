@@ -2,6 +2,7 @@
 
 import { NavLink } from "@/components/vault/navigation";
 import {
+  LayoutTemplateIcon,
   FileTextIcon,
   ChevronDownIcon,
   LinkIcon,
@@ -34,6 +35,7 @@ export function FileExplorer({
   activeId,
   onNewNote,
   onUploadClick,
+  onTemplatesClick,
   creating = false,
   failedImports = [],
   onRetryImport,
@@ -46,6 +48,7 @@ export function FileExplorer({
   activeId?: string;
   onNewNote: () => void;
   onUploadClick: () => void;
+  onTemplatesClick?: () => void;
   creating?: boolean;
   failedImports?: FailedImport[];
   onRetryImport?: (target: RetryTarget) => void;
@@ -75,6 +78,19 @@ export function FileExplorer({
             </TooltipTrigger>
             <TooltipContent side="bottom">New note  ⌘N</TooltipContent>
           </Tooltip>
+          {onTemplatesClick ? (
+            <Tooltip>
+              <TooltipTrigger
+                aria-label="New from template"
+                data-testid="open-templates"
+                onClick={onTemplatesClick}
+                className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-7 items-center justify-center rounded-lg transition-colors pointer-coarse:size-10 focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden"
+              >
+                <LayoutTemplateIcon className="size-4" strokeWidth={1.5} />
+              </TooltipTrigger>
+              <TooltipContent side="bottom">New from template</TooltipContent>
+            </Tooltip>
+          ) : null}
           <Tooltip>
             <TooltipTrigger
               aria-label="Upload document"

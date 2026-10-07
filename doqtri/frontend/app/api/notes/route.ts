@@ -6,9 +6,12 @@ import {
 import { MAX_TITLE_LENGTH, uniqueTitle } from "@/lib/title";
 
 /**
- * Create a blank Obsidian-style note. Headings become the mindmap live;
- * [[wikilinks]] feed the graph. No upload / AI required.
+ * Create an Obsidian-style note, blank or from a template body. Headings
+ * become the mindmap live; [[wikilinks]] feed the graph. No upload / AI required.
  */
+/** Upper bound on a template body, in characters. */
+const MAX_TEMPLATE_BODY = 50_000;
+
 export async function POST(request: Request) {
   const supabase = await createSupabaseServerClient();
   const {
@@ -20,10 +23,17 @@ export async function POST(request: Request) {
   }
 
   let requestedTitle = "Untitled";
+  let templateBody: string | null = null;
   try {
-    const body = (await request.json()) as { title?: unknown };
+    const body = (await request.json()) as { title?: unknown; body?: unknown };
     if (typeof body.title === "string" && body.title.trim()) {
       requestedTitle = body.title.trim().slice(0, MAX_TITLE_LENGTH);
+    }
+    if (typeof body.body === "string" && body.body.trim()) {
+      if (body.body.length > MAX_TEMPLATE_BODY) {
+        return NextResponse.json({ error: "Template is too long" }, { status: 413 });
+      }
+      templateBody = body.body;
     }
   } catch {
     // empty body is fine — default Untitled
@@ -44,16 +54,19 @@ export async function POST(request: Request) {
     (existing ?? []).map((row: { title: string }) => row.title),
   );
 
-  const markdown = [
-    `# ${title}`,
-    "",
-    "## Overview",
-    "",
-    "Write like Obsidian. Headings become the mindmap. Link ideas with [[wikilinks]].",
-    "",
-    "## Next",
-    "",
-  ].join("\n");
+  const markdown =
+    templateBody !== null
+      ? `# ${title}\n\n${templateBody}`
+      : [
+          `# ${title}`,
+          "",
+          "## Overview",
+          "",
+          "Write like Obsidian. Headings become the mindmap. Link ideas with [[wikilinks]].",
+          "",
+          "## Next",
+          "",
+        ].join("\n");
 
   const { data: inserted, error: insertError } = await admin
     .from("documents")

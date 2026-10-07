@@ -1,15 +1,15 @@
 /**
- * Creates a blank note (Obsidian-style) via the API.
- * Returns the new document id.
+ * Creates a note (Obsidian-style) via the API: blank, or seeded with a template
+ * `body` (markdown without the `# Title` line). Returns the new document id.
  */
-export async function createBlankNote(title?: string): Promise<{
+export async function createBlankNote(title?: string, body?: string): Promise<{
   id: string;
   title: string;
 }> {
   const res = await fetch("/api/notes", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(title ? { title } : {}),
+    body: JSON.stringify({ ...(title ? { title } : {}), ...(body ? { body } : {}) }),
   });
   const payload = (await res.json().catch(() => null)) as {
     error?: string;

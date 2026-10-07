@@ -18,6 +18,8 @@ import { RenameNoteDialog } from "@/components/vault/rename-note-dialog";
 import { SettingsDialog } from "@/components/vault/settings-dialog";
 import { AccountMenu } from "@/components/vault/account-menu";
 import { LogOutButton } from "@/components/vault/log-out-button";
+import { TemplatesDialog } from "@/components/vault/templates-dialog";
+import type { NoteTemplate } from "@/lib/templates";
 import { MobileTabBar, MobileTopBar } from "@/components/vault/mobile-chrome";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useIsCompactVault } from "@/hooks/use-mobile";
@@ -85,6 +87,7 @@ function VaultShellInner({
   const [uploadOpen, setUploadOpen] = useState(false);
   const [retryTarget, setRetryTarget] = useState<RetryTarget | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
   const [ribbonActive, setRibbonActive] = useState<RibbonAction>("files");
   const [creating, setCreating] = useState(false);
   const [anchored, setAnchored] = useState<ReadonlySet<string>>(new Set());
@@ -111,12 +114,14 @@ function VaultShellInner({
         ? "Global mindmap"
         : (notes.find((note) => note.id === activeId)?.title ?? "Vault");
 
-  const handleNewNote = useCallback(async () => {
+  // Blank by default; a template seeds the title and body instead.
+  const handleNewNote = useCallback(async (template?: NoteTemplate) => {
     if (creating) return;
     setCreating(true);
     setDrawerOpen(false);
     try {
-      const { id, title } = await createBlankNote();
+      const { id, title } = await createBlankNote(template?.title, template?.body);
+      setTemplatesOpen(false);
       toast.success(`Created “${title}”`);
       // Navigate first, then refresh: a refresh issued before the push is
       // superseded by it, and the push reuses the cached layout, so the
@@ -224,6 +229,9 @@ function VaultShellInner({
         case "search":
           setSwitcherOpen(true);
           break;
+        case "templates":
+          setTemplatesOpen(true);
+          break;
         case "graph":
         case "mindmap":
           // Routes rather than panel tabs: the vault-wide views need the whole
@@ -248,6 +256,10 @@ function VaultShellInner({
         setDrawerOpen(false);
         setRetryTarget(null);
         setUploadOpen(true);
+      }}
+      onTemplatesClick={() => {
+        setDrawerOpen(false);
+        setTemplatesOpen(true);
       }}
       failedImports={failedImports}
       onRetryImport={(target) => {
@@ -353,6 +365,12 @@ function VaultShellInner({
         </SheetContent>
       </Sheet>
 
+      <TemplatesDialog
+        open={templatesOpen}
+        onOpenChange={setTemplatesOpen}
+        creating={creating}
+        onUse={(template) => void handleNewNote(template)}
+      />
       <QuickSwitcher
         notes={notes}
         open={switcherOpen}
