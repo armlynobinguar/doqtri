@@ -74,7 +74,7 @@ export function LandingPage() {
           <Link href="/docs">Docs</Link>
         </nav>
         <div className={styles.navActions}>
-          <EmailSignInLink size="sm" className={styles.cta} />
+          <EmailSignInLink size="sm" className={`${styles.cta} ${styles.navEmail}`} />
           <ConnectWalletButton size="sm" className={styles.cta} />
         </div>
       </header>

@@ -141,6 +141,17 @@
   gap: 0.5rem;
 }
 
+/* Phones: the hero carries the email sign-in, so the header keeps one button. */
+.navEmail {
+  display: none;
+}
+
+@media (min-width: 560px) {
+  .navEmail {
+    display: inline-flex;
+  }
+}
+
 /* ----------------------------------------------------------------- hero */
 
 .hero {
