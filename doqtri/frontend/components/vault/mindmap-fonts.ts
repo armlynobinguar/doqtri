@@ -1,22 +1,21 @@
-import {
-  Caveat,
-  Orbitron,
-  Playfair_Display,
-  Press_Start_2P,
-  Space_Grotesk,
-} from "next/font/google";
+import localFont from "next/font/local";
 import type { FontKey } from "@/lib/mindmap-style";
 
 /*
  * Display faces for the mindmap studio. Not preloaded: the browser only
  * fetches a face once a map is drawn in it, so a vault that never leaves the
  * default font never pays for these.
+ *
+ * Self-hosted (Latin subset, OFL) rather than next/font/google: Turbopack
+ * intermittently failed to resolve the Google font files at build time
+ * ("next/font/google queries have exactly one entry"), which broke CI and dev.
+ * All but the pixel face are variable fonts covering 500–700.
  */
-const grotesk = Space_Grotesk({ subsets: ["latin"], weight: ["500", "700"], preload: false });
-const orbitron = Orbitron({ subsets: ["latin"], weight: ["500", "700"], preload: false });
-const serif = Playfair_Display({ subsets: ["latin"], weight: ["500", "700"], preload: false });
-const hand = Caveat({ subsets: ["latin"], weight: ["500", "700"], preload: false });
-const pixel = Press_Start_2P({ subsets: ["latin"], weight: "400", preload: false });
+const grotesk = localFont({ src: "./fonts/space-grotesk.woff2", weight: "500 700", preload: false });
+const orbitron = localFont({ src: "./fonts/orbitron.woff2", weight: "500 700", preload: false });
+const serif = localFont({ src: "./fonts/playfair-display.woff2", weight: "500 700", preload: false });
+const hand = localFont({ src: "./fonts/caveat.woff2", weight: "500 700", preload: false });
+const pixel = localFont({ src: "./fonts/press-start-2p.woff2", weight: "400", preload: false });
 
 const SYSTEM = "ui-sans-serif, system-ui, sans-serif";
 
