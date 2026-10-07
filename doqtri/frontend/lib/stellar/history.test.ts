@@ -167,3 +167,55 @@ describe("passkey-wallet history (from the write index)", () => {
     expect(withCompleteness(history, 3).incomplete).toBe(true);
   });
 });
+
+describe("user-paid writes (wrapped in the fee forwarder)", () => {
+  const FORWARDER = "CCBBXJSS7DUT34QDJOMZLAYMYOT4Q73NUSY573G4STXFUBSYXDKUBUHV";
+  const XLM = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+  const WALLET = "CCNDHVHSKXUYRXOKJI4PFBCZFGZRL4X4ZYLHVJCU3CI63G63UJGZZITE";
+  const forward = (target: string, fn: string, args: xdr.ScVal[], opts = {}) =>
+    op(
+      "forward",
+      [
+        new Address(XLM).toScVal(),
+        nativeToScVal(BigInt(600000), { type: "i128" }),
+        nativeToScVal(BigInt(5000000), { type: "i128" }),
+        nativeToScVal(5000, { type: "u32" }),
+        new Address(target).toScVal(),
+        xdr.ScVal.scvSymbol(fn),
+        xdr.ScVal.scvVec(args),
+        new Address(WALLET).toScVal(),
+        new Address(OWNER).toScVal(),
+      ],
+      { contract: FORWARDER, ...opts },
+    );
+
+  it("decodes the registry call inside forward", () => {
+    const wrapped = forward(CONTRACT, "register_document", [new Address(WALLET).toScVal(), str(DOC), bytes(hashOf(7))]);
+    expect(decodeInvocation(wrapped, CONTRACT, FORWARDER)).toEqual({
+      fn: "register_document",
+      docId: DOC,
+      hash: hashOf(7).toString("hex"),
+    });
+  });
+
+  it("ignores forwarded calls to other contracts, and forwarders it doesn't know", () => {
+    const elsewhere = forward(OTHER_CONTRACT, "update_document", [str(DOC), bytes(hashOf(8))]);
+    expect(decodeInvocation(elsewhere, CONTRACT, FORWARDER)).toBeNull();
+    const wrapped = forward(CONTRACT, "update_document", [str(DOC), bytes(hashOf(8))]);
+    expect(decodeInvocation(wrapped, CONTRACT, null)).toBeNull();
+  });
+
+  it("builds versions from a mix of direct and forwarded writes", () => {
+    // Unit tests run on the testnet config, where this forwarder is configured.
+    const history = buildHistory(
+      [register(DOC, 1, { tx: "direct" }), forward(CONTRACT, "update_document", [str(DOC), bytes(hashOf(2))], { tx: "paid" })],
+      DOC,
+      CONTRACT,
+      OWNER,
+    );
+    expect(history.versions.map((v) => [v.version, v.txHash])).toEqual([
+      [1, "direct"],
+      [2, "paid"],
+    ]);
+  });
+});

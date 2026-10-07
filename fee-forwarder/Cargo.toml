@@ -1,0 +1,28 @@
+[package]
+name = "doqtri-fee-forwarder"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Doqtri's FeeForwarder: users pay their own anchoring fees in XLM (progress/003)."
+
+[lib]
+crate-type = ["cdylib"]
+doctest = false
+
+# Standalone workspace: the registry contract stays on soroban-sdk 22, while the
+# OpenZeppelin fee-abstraction crate needs 28.
+[workspace]
+
+[dependencies]
+soroban-sdk = "=25.3.2"
+stellar-fee-abstraction = "=0.7.1"
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true

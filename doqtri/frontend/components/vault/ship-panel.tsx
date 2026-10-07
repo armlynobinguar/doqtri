@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { CircleCheckIcon, CopyIcon, DownloadIcon, LinkIcon, Loader2Icon } from "lucide-react";
 import { toast } from "sonner";
+import { MAX_USER_FEE_STROOPS, USER_PAYS_FEES } from "@/lib/stellar/smart-wallet-config";
+import { formatXlm } from "@/lib/stellar/wallet-balance";
 import { Button } from "@/components/ui/button";
 import { StatusTag } from "@/components/ui/status-tag";
 import {
@@ -71,6 +73,23 @@ export function ShipPanel({ docId, title, markdown }: Props) {
   const [addingPasskey, setAddingPasskey] = useState(false);
   // Once something is anchored, losing the only passkey would lock it.
   const needsBackup = smartWallet !== null && smartWallet.passkeys.length < 2;
+  // Where users pay their own fees, a wallet below the most one write can cost
+  // can't anchor until it's topped up.
+  const paysOwnFees = USER_PAYS_FEES && smartWallet !== null;
+  const lowBalance = paysOwnFees && wallet.walletXlm !== null && wallet.walletXlm < MAX_USER_FEE_STROOPS;
+  const [toppingUp, setToppingUp] = useState(false);
+
+  async function topUp() {
+    setToppingUp(true);
+    try {
+      await wallet.topUp();
+      toast.success("Wallet topped up with test XLM");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "The top-up failed. Try again.");
+    } finally {
+      setToppingUp(false);
+    }
+  }
 
   async function addBackupPasskey() {
     setAddingPasskey(true);
@@ -319,6 +338,30 @@ export function ShipPanel({ docId, title, markdown }: Props) {
         </div>
       ) : null}
 
+      {lowBalance ? (
+        <div
+          role="alert"
+          data-testid="low-balance-notice"
+          className="border-warning/40 bg-warning/5 grid gap-1.5 rounded-md border px-2.5 py-2 text-[11px]"
+        >
+          <span>
+            Your wallet has {formatXlm(wallet.walletXlm!)} XLM. Each write takes its network fee from the wallet, so
+            it needs at least {formatXlm(MAX_USER_FEE_STROOPS)} XLM to anchor.
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={toppingUp}
+            className="h-6 justify-self-start px-2 text-[11px] max-lg:h-9 max-lg:text-[12px]"
+            onClick={() => void topUp()}
+          >
+            {toppingUp ? <Loader2Icon className="animate-spin" /> : null}
+            {toppingUp ? "Topping up…" : "Top up with test XLM"}
+          </Button>
+        </div>
+      ) : null}
+
       {needsBackup && chainVersion != null ? (
         <div
           data-testid="backup-passkey-notice"
@@ -371,13 +414,18 @@ export function ShipPanel({ docId, title, markdown }: Props) {
       <Button
         type="button"
         size="sm"
-        disabled={busy || unfunded || noWallet}
+        disabled={busy || unfunded || noWallet || lowBalance}
         className="w-full max-lg:h-10"
         onClick={() => void anchor()}
       >
         {busy ? <Loader2Icon className="animate-spin" /> : null}
         {chainVersion == null ? "Register hash" : "Update hash"}
       </Button>
+      {paysOwnFees && !lowBalance ? (
+        <p className="text-muted-foreground text-[11px]" data-testid="fee-note">
+          Each write pays its network fee from your wallet, never more than {formatXlm(MAX_USER_FEE_STROOPS)} XLM.
+        </p>
+      ) : null}
 
       {receipt ? <ReceiptCard receipt={receipt} /> : null}
 
@@ -485,7 +533,7 @@ export function ShipPanel({ docId, title, markdown }: Props) {
         type="button"
         size="sm"
         variant="secondary"
-        disabled={busy || unfunded || noWallet}
+        disabled={busy || unfunded || noWallet || lowBalance}
         className="w-full max-lg:h-10"
         onClick={() => void syncNode()}
       >

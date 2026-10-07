@@ -5,6 +5,7 @@ import {
   deployerAddress,
   parseRelayBody,
   RelayRejection,
+  validateForwardedWrite,
   validateRegistryWrite,
   validateWalletAdmin,
   validateWalletDeploy,
@@ -307,5 +308,90 @@ describe("wallet admin validation (passkey changes)", () => {
     expect(() => check(call("add_signer", [rule(), passkeySigner()], { signer: contract("other") }))).toThrow(/approved by your wallet/);
     expect(() => check(call("add_signer", [rule(), passkeySigner()], { nested: true }))).toThrow(/approved by your wallet/);
     expect(() => check(call("add_signer", [rule(), passkeySigner()], { entries: 2 }))).toThrow(/exactly one auth entry/);
+  });
+});
+
+describe("forwarded write validation (user pays)", () => {
+  const forwarder = contract("forwarder");
+  const xlm = contract("xlm");
+  const registry = contract("registry-fwd");
+  const wallet = contract("wallet-fwd");
+  const relayer = Keypair.random().publicKey();
+  const docId = "3f1c2a9e-0000-4000-8000-0000000000aa";
+  const cap = BigInt(5_000_000);
+  const expected = { forwarder, xlm, registry, wallet, relayer, maxFeeCap: cap };
+  const addr = (a: string) => Address.fromString(a).toScVal();
+  const i128 = (n: bigint) => nativeToScVal(n, { type: "i128" });
+  const regArgs = (owner = wallet) => [addr(owner), xdr.ScVal.scvString(docId), xdr.ScVal.scvBytes(Buffer.alloc(32, 2))];
+
+  type O = {
+    forwarderAddr?: string; token?: string; max?: bigint; target?: string; fn?: string; args?: xdr.ScVal[];
+    user?: string; relayerAddr?: string; rootMax?: bigint; spender?: string; callArgs?: xdr.ScVal[];
+    extraSub?: boolean; dropApprove?: boolean; extraEntry?: string; withRelayerEntry?: boolean;
+  };
+  function build(o: O = {}): RelaySubmission {
+    const max = o.max ?? BigInt(1_000_000);
+    const exp = xdr.ScVal.scvU32(5000);
+    const fn = o.fn ?? "register_document";
+    const args = o.args ?? regArgs();
+    const fwdArgs = [addr(o.token ?? xlm), i128(BigInt(1)), i128(max), exp, addr(o.target ?? registry), xdr.ScVal.scvSymbol(fn), xdr.ScVal.scvVec(args), addr(o.user ?? wallet), addr(o.relayerAddr ?? relayer)];
+    const fwd = new xdr.InvokeContractArgs({ contractAddress: Address.fromString(o.forwarderAddr ?? forwarder).toScAddress(), functionName: "forward", args: fwdArgs });
+    const cfn = (c: string, name: string, a: xdr.ScVal[], subs: xdr.SorobanAuthorizedInvocation[] = []) =>
+      new xdr.SorobanAuthorizedInvocation({
+        function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+          new xdr.InvokeContractArgs({ contractAddress: Address.fromString(c).toScAddress(), functionName: name, args: a }),
+        ),
+        subInvocations: subs,
+      });
+    const subs = [
+      ...(o.dropApprove ? [] : [cfn(xlm, "approve", [addr(wallet), addr(o.spender ?? forwarder), i128(max), exp])]),
+      cfn(registry, fn, o.callArgs ?? args),
+      ...(o.extraSub ? [cfn(xlm, "transfer", [addr(wallet), addr(relayer), i128(BigInt(1))])] : []),
+    ];
+    const root = cfn(forwarder, "forward", [addr(o.token ?? xlm), i128(o.rootMax ?? max), exp, addr(o.target ?? registry), xdr.ScVal.scvSymbol(fn), xdr.ScVal.scvVec(args)], subs);
+    const entry = (who: string, inv: xdr.SorobanAuthorizedInvocation) =>
+      new xdr.SorobanAuthorizationEntry({
+        credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(
+          new xdr.SorobanAddressCredentials({ address: Address.fromString(who).toScAddress(), nonce: xdr.Int64.fromString("9"), signatureExpirationLedger: 100, signature: xdr.ScVal.scvVoid() }),
+        ),
+        rootInvocation: inv,
+      });
+    const auth = [entry(wallet, root)];
+    if (o.withRelayerEntry) auth.push(entry(relayer, cfn(forwarder, "forward", fwdArgs)));
+    if (o.extraEntry) auth.push(entry(o.extraEntry, root));
+    return { func: xdr.HostFunction.hostFunctionTypeInvokeContract(fwd), auth };
+  }
+  const check = (s: RelaySubmission) => validateForwardedWrite(s, expected);
+
+  it("accepts a forwarded register and reports the note and fee cap", () => {
+    expect(check(build())).toEqual({ fn: "register_document", docId, maxFee: BigInt(1_000_000), expirationLedger: 5000 });
+    expect(check(build({ withRelayerEntry: true })).docId).toBe(docId);
+  });
+
+  it("refuses other forwarders, tokens, targets, payers and fee recipients", () => {
+    expect(() => check(build({ forwarderAddr: contract("evil-forwarder") }))).toThrow(/fee forwarder/);
+    expect(() => check(build({ token: contract("usdc") }))).toThrow(/paid in XLM/);
+    expect(() => check(build({ target: contract("token") }))).toThrow(/Only the Doqtri registry/);
+    expect(() => check(build({ user: contract("victim") }))).toThrow(/your own wallet/);
+    expect(() => check(build({ relayerAddr: Keypair.random().publicKey() }))).toThrow(/Doqtri's relayer/);
+  });
+
+  it("caps what the user can be asked to pay", () => {
+    expect(() => check(build({ max: cap + BigInt(1) }))).toThrow(/outside the allowed range/);
+    expect(() => check(build({ max: BigInt(0) }))).toThrow(/outside the allowed range/);
+  });
+
+  it("still applies the registry rules to the wrapped call", () => {
+    expect(() => check(build({ args: regArgs(contract("someone-else")) }))).toThrow(/name your wallet/);
+    expect(() => check(build({ fn: "transfer" }))).toThrow(/not allowed/);
+  });
+
+  it("requires the wallet's approval to cover exactly this call", () => {
+    expect(() => check(build({ rootMax: BigInt(999) }))).toThrow(/exactly this forwarded call/);
+    expect(() => check(build({ spender: contract("thief") }))).toThrow(/exactly this forwarded call/);
+    expect(() => check(build({ callArgs: [addr(wallet), xdr.ScVal.scvString("other-doc"), xdr.ScVal.scvBytes(Buffer.alloc(32, 2))] }))).toThrow(/exactly this forwarded call/);
+    expect(() => check(build({ extraSub: true }))).toThrow(/exactly this forwarded call/);
+    expect(() => check(build({ dropApprove: true }))).toThrow(/exactly this forwarded call/);
+    expect(() => check(build({ extraEntry: contract("stranger") }))).toThrow(/exactly one approval/);
   });
 });

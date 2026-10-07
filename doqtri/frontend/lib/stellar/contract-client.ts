@@ -5,7 +5,9 @@
  * - `G…` (Freighter and other wallets): the account is the transaction source,
  *   signs the envelope, and pays the fee, so funding is checked first.
  * - `C…` (an email account's passkey smart wallet): the wallet only signs the
- *   call's auth entry; /api/chain/relay submits it and Channels pays.
+ *   call's auth entry; /api/chain/relay submits it. Where users pay their own
+ *   fees (progress/003) the call is wrapped in the FeeForwarder and the wallet
+ *   pays Doqtri's relayer in XLM; otherwise Channels pays.
  */
 import type { NodeStatus } from "@/lib/stellar/types";
 import {
@@ -17,7 +19,8 @@ import {
 import { CONTRACT_ID, NETWORK_PASSPHRASE, RPC_URL } from "@/lib/stellar/config";
 import { hexToBytes32 } from "@/lib/stellar/hash";
 import { signSorobanTx } from "@/lib/wallet";
-import { passkeyWalletFor, signAndRelay } from "@/lib/passkey-wallet";
+import { passkeyWalletFor, payAndRelay, signAndRelay } from "@/lib/passkey-wallet";
+import { USER_PAYS_FEES } from "@/lib/stellar/smart-wallet-config";
 import { rpc, scValToNative, StrKey, type contract } from "@stellar/stellar-sdk";
 import { assertCanPay, assertFunded } from "@/lib/stellar/horizon";
 import { DoqtriError, mapWalletError } from "@/lib/stellar/errors";
@@ -181,7 +184,8 @@ async function send<T>(
 ): Promise<WriteReceipt> {
   if (!isSmartWallet(source)) return receipt(await tx.signAndSend(), hasVersion);
 
-  const txHash = await signAndRelay(tx, passkeyWalletFor(source));
+  const wallet = passkeyWalletFor(source);
+  const txHash = USER_PAYS_FEES ? (await payAndRelay(tx, wallet)).hash : await signAndRelay(tx, wallet);
   if (!hasVersion) return { txHash };
   // The relay waited for the ledger, so the result is final; read the version
   // it returned instead of re-querying the document.

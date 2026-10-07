@@ -9,12 +9,27 @@
  * imported lazily: it touches browser-only APIs and is only needed when an
  * email user creates or uses a wallet.
  */
-import { hash, xdr, type contract } from "@stellar/stellar-sdk";
+import {
+  Account,
+  Address,
+  Contract,
+  hash,
+  nativeToScVal,
+  rpc,
+  TransactionBuilder,
+  xdr,
+  type contract,
+} from "@stellar/stellar-sdk";
+import { formatXlm, xlmBalanceStroops } from "@/lib/stellar/wallet-balance";
 import { Buffer } from "buffer";
 import type { WalletPasskey } from "@/lib/types";
 import { HORIZON_URL, NETWORK_PASSPHRASE, RPC_URL } from "@/lib/stellar/config";
 import {
+  DOQTRI_RELAYER,
+  FEE_FORWARDER,
   INDEXER_PATH,
+  MAX_USER_FEE_STROOPS,
+  NATIVE_XLM,
   RELAY_PATH,
   SMART_ACCOUNT_WASM_HASH,
   THRESHOLD_POLICY,
@@ -327,4 +342,94 @@ export async function removePasskey(wallet: PasskeyWalletRef, credentialId: stri
     throw new Error(passkeyErrorMessage(error, "The passkey could not be removed."));
   }
   if (!result.success) throw new Error(result.error?.message || "The passkey could not be removed.");
+}
+
+// ---------------------------------------------------------------------------
+// User-paid writes (progress/003): the wallet pays its own fee through the
+// FeeForwarder, and Doqtri's relayer submits it.
+
+/** How long the user's fee approval stays valid, in ledgers (~1.5 hours). */
+const FEE_APPROVAL_LEDGERS = 1_000;
+const NULL_ACCOUNT = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+
+/** One context rule id per call the wallet authorizes: the root and every sub-call. */
+function callsIn(invocation: xdr.SorobanAuthorizedInvocation): number {
+  return 1 + invocation.subInvocations().reduce((n, sub) => n + callsIn(sub), 0);
+}
+
+export type PaidWrite = { hash: string; feeStroops: bigint };
+
+/**
+ * Wraps `tx`'s registry call in `forward(...)` so the wallet pays for it, has
+ * the passkey sign the wallet's approval (one prompt), and sends it to the
+ * relay, which prices and submits it. `tx` must be built without a source.
+ */
+export async function payAndRelay<T>(tx: contract.AssembledTransaction<T>, wallet: PasskeyWalletRef): Promise<PaidWrite> {
+  if (!FEE_FORWARDER || !DOQTRI_RELAYER) throw new Error("Paid writes aren't available on this network.");
+  const op = tx.built?.operations[0] as { func?: xdr.HostFunction } | undefined;
+  if (!op?.func || op.func.switch().name !== "hostFunctionTypeInvokeContract") {
+    throw new Error("Nothing to sign for this note.");
+  }
+  const call = op.func.invokeContract();
+
+  const balance = await xlmBalanceStroops(wallet.address);
+  if (balance < MAX_USER_FEE_STROOPS) {
+    throw new Error(`Your wallet has ${formatXlm(balance)} XLM, not enough for this write. Use Top up in the account menu.`);
+  }
+
+  const server = new rpc.Server(RPC_URL);
+  const { sequence } = await server.getLatestLedger();
+  const forward = new Contract(FEE_FORWARDER).call(
+    "forward",
+    Address.fromString(NATIVE_XLM).toScVal(),
+    nativeToScVal(BigInt(1), { type: "i128" }), // the relay sets the real fee
+    nativeToScVal(MAX_USER_FEE_STROOPS, { type: "i128" }),
+    nativeToScVal(sequence + FEE_APPROVAL_LEDGERS, { type: "u32" }),
+    Address.fromScAddress(call.contractAddress()).toScVal(),
+    xdr.ScVal.scvSymbol(call.functionName().toString()),
+    xdr.ScVal.scvVec(call.args()),
+    Address.fromString(wallet.address).toScVal(),
+    Address.fromString(DOQTRI_RELAYER).toScVal(),
+  );
+  const draft = new TransactionBuilder(new Account(NULL_ACCOUNT, "0"), { fee: "100", networkPassphrase: NETWORK_PASSPHRASE })
+    .addOperation(forward)
+    .setTimeout(60)
+    .build();
+  const simulation = await server.simulateTransaction(draft);
+  if (!rpc.Api.isSimulationSuccess(simulation) || !simulation.result) {
+    throw new Error("This write would fail on-chain. Reload and try again.");
+  }
+  const func = (draft.operations[0] as unknown as { func: xdr.HostFunction }).func;
+  const walletEntry = simulation.result.auth.find(
+    (entry) =>
+      entry.credentials().switch().name === "sorobanCredentialsAddress" &&
+      Address.fromScAddress(entry.credentials().address().address()).toString() === wallet.address,
+  );
+  if (!walletEntry) throw new Error("This write doesn't need your wallet's approval.");
+
+  const k = await kit();
+  await connectWith(k, wallet);
+  let signed: xdr.SorobanAuthorizationEntry;
+  try {
+    signed = await k.signAuthEntry(walletEntry, {
+      contextRuleIds: Array(callsIn(walletEntry.rootInvocation())).fill(0),
+    });
+  } catch (error) {
+    throw new Error(passkeyErrorMessage(error, "Signing with your passkey failed."));
+  }
+
+  const res = await fetch(RELAY_PATH, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ func: func.toXDR("base64"), auth: [signed.toXDR("base64")] }),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    success?: boolean;
+    error?: string;
+    data?: { hash?: string; feeStroops?: string };
+  };
+  if (!res.ok || !body.success || !body.data?.hash) {
+    throw new Error(body.error || "The write could not be submitted.");
+  }
+  return { hash: body.data.hash, feeStroops: BigInt(body.data.feeStroops ?? "0") };
 }

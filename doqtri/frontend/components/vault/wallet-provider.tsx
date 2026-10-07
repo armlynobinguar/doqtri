@@ -32,6 +32,8 @@ import {
   setPasskeyWallet,
 } from "@/lib/passkey-wallet";
 import type { VaultIdentity } from "@/lib/types";
+import { USER_PAYS_FEES } from "@/lib/stellar/smart-wallet-config";
+import { xlmBalanceStroops } from "@/lib/stellar/wallet-balance";
 
 const BALANCE_POLL_MS = 30_000;
 
@@ -70,6 +72,10 @@ type WalletContextValue = {
   addPasskey: () => Promise<void>;
   /** Email accounts: remove one passkey (never the last). */
   removePasskey: (credentialId: string) => Promise<void>;
+  /** Email accounts where users pay fees: the passkey wallet's XLM, in stroops; null until read. */
+  walletXlm: bigint | null;
+  /** Testnet: fill the passkey wallet with free test XLM. */
+  topUp: () => Promise<void>;
   fund: () => Promise<void>;
 };
 
@@ -85,6 +91,32 @@ export function WalletProvider({
   const sessionAddress = identity.kind === "wallet" ? identity.address : null;
   const smartWallet = identity.kind === "email" ? identity.smartWallet : null;
   const router = useRouter();
+
+  const [walletXlm, setWalletXlm] = useState<bigint | null>(null);
+  const smartAddress = smartWallet?.address ?? null;
+  const refreshWalletXlm = useCallback(async () => {
+    if (!USER_PAYS_FEES || !smartAddress) return;
+    try {
+      setWalletXlm(await xlmBalanceStroops(smartAddress));
+    } catch {
+      // Leave the last known value; the next refresh tries again.
+    }
+  }, [smartAddress]);
+  useEffect(() => {
+    const first = setTimeout(() => void refreshWalletXlm(), 0);
+    const timer = setInterval(() => void refreshWalletXlm(), BALANCE_POLL_MS);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
+  }, [refreshWalletXlm]);
+
+  const topUp = useCallback(async () => {
+    const res = await fetch("/api/chain/topup", { method: "POST" });
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    if (!res.ok) throw new Error(body.error ?? "The top-up failed. Try again.");
+    await refreshWalletXlm();
+  }, [refreshWalletXlm]);
 
   // The registry client signs as a C… address by looking its passkey up here.
   useEffect(() => {
@@ -117,14 +149,17 @@ export function WalletProvider({
   }, [sessionAddress]);
 
   const refreshBalance = useCallback(async () => {
-    if (!sessionAddress) return;
+    if (!sessionAddress) {
+      await refreshWalletXlm();
+      return;
+    }
     try {
       setBalance(await getAccountBalance(sessionAddress));
       setBalanceError(false);
     } catch {
       setBalanceError(true);
     }
-  }, [sessionAddress]);
+  }, [sessionAddress, refreshWalletXlm]);
 
   useEffect(() => {
     // The first read is deferred a tick so no state is set synchronously
@@ -187,6 +222,9 @@ export function WalletProvider({
   const createSmartWallet = useCallback(async () => {
     if (identity.kind !== "email") throw new Error("Wallet accounts already have a wallet.");
     const { address } = await createPasskeyWallet(identity.email);
+    // A new wallet pays for its own writes: fill it with test XLM right away.
+    // Best effort; the Top up button covers a failure.
+    if (USER_PAYS_FEES) await fetch("/api/chain/topup", { method: "POST" }).catch(() => undefined);
     router.refresh();
     return address;
   }, [identity, router]);
@@ -238,6 +276,8 @@ export function WalletProvider({
       createSmartWallet,
       addPasskey,
       removePasskey,
+      walletXlm,
+      topUp,
       fund,
     }),
     [
@@ -255,6 +295,8 @@ export function WalletProvider({
       createSmartWallet,
       addPasskey,
       removePasskey,
+      walletXlm,
+      topUp,
       fund,
     ],
   );

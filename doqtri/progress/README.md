@@ -19,4 +19,5 @@ contradicts a v1 non-goal, the file says so explicitly and supersedes it.
 | # | Feature | Status | File |
 |---|---------|--------|------|
 | 001 | Document mindmap + global mindmap | Shipped | [001-document-mindmap.md](001-document-mindmap.md) |
-| 002 | Email sign-up with passkey smart wallet | In progress | [002-email-passkey-wallet.md](002-email-passkey-wallet.md) |
+| 002 | Email sign-up with passkey smart wallet | Shipped | [002-email-passkey-wallet.md](002-email-passkey-wallet.md) |
+| 003 | Testnet production and user-paid fees | In progress | [003-testnet-user-pays.md](003-testnet-user-pays.md) |

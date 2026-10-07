@@ -3,3 +3,4 @@
 
 # Legacy Stellar frontend — use doqtri/frontend instead
 /web/
+/fee-forwarder/target
