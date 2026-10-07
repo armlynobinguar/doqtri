@@ -45,9 +45,11 @@ export async function proxy(request: NextRequest) {
   // Public audit pages and the docs must open for anyone, signed in or not.
   const isAuditRoute = pathname.startsWith("/d/");
   const isDocsRoute = pathname === "/docs" || pathname.startsWith("/docs/");
+  // The promo portal is linked from the landing; it shows sign-in when needed.
+  const isPromoRoute = pathname === "/promo";
   // Emailed links land on /auth/confirm signed out and leave signed in.
   const isAuthCallback = pathname.startsWith("/auth/");
-  if (isAuditRoute || isDocsRoute || isAuthCallback) return response;
+  if (isAuditRoute || isDocsRoute || isPromoRoute || isAuthCallback) return response;
 
   // Unauthenticated users may view the landing and the sign-in screens.
   // Everything else (including /reset-password, which the emailed link reaches

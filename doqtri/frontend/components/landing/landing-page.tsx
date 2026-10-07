@@ -6,6 +6,7 @@ import { BlockChain } from "@/components/brand/block-chain";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { BlockGlyph, type Glyph } from "@/components/brand/glyphs";
 import { LandingMindmap } from "@/components/landing/landing-mindmap";
+import { MINDMAP_PROMO, PROMO_PATH } from "@/lib/promo";
 import styles from "./landing-page.module.css";
 
 const X_URL = "https://x.com/usedoqtri";
@@ -39,6 +40,16 @@ export function LandingPage() {
   return (
     <div className={styles.page}>
       <div className={styles.atmosphere} aria-hidden />
+
+      {MINDMAP_PROMO.active && (
+        <Link href={PROMO_PATH} className={styles.announcement}>
+          <span className={styles.announcementTag}>Beta launch</span>
+          <span>
+            Doqtri beta is live. Join and win from a {MINDMAP_PROMO.prizePool} prize pool!
+          </span>
+          <span className={styles.announcementCta}>How to join →</span>
+        </Link>
+      )}
 
       <header className={styles.nav}>
         <a href="#top" className={styles.navBrand} aria-label="Doqtri home">

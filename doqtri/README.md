@@ -86,6 +86,10 @@ can make in a rolling 24 hours. Over the cap these routes answer `429` with a
 (`backend/migrations/20261002000000_create_ai_usage.sql`); until that migration
 is applied the AI routes answer `503` rather than run uncounted.
 
+Optional: `DOQTRI_ADMINS` — comma-separated user ids, emails or Stellar wallet
+addresses allowed into `/admin/promo`, the review screen for beta launch promo
+entries (`/promo`). Unset means nobody; everyone else gets a 404.
+
 Optional: `GITHUB_TOKEN` — a fine-grained, **read-only** token used by
 `/api/github/status` to read the issues and pull requests linked to mindmap
 nodes. Without it only public repositories work and GitHub allows 60 requests an

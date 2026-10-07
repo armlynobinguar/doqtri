@@ -6,6 +6,7 @@ import { buildGlobalMindmap } from "@/lib/global-mindmap";
 import { MINDMAP_COLORS } from "@/lib/theme";
 import type { Doc } from "@/lib/types";
 import { useNavigate } from "@/components/vault/navigation";
+import { MindmapPromoBanner } from "@/components/promo/mindmap-promo-banner";
 
 /**
  * The vault-wide mindmap. Concepts from every document in one map, with the
@@ -44,6 +45,8 @@ export function GlobalMindmap({ docs }: { docs: Doc[] }) {
           />
         </div>
       </header>
+
+      <MindmapPromoBanner />
 
       <MindmapCanvas
         graph={graph}
