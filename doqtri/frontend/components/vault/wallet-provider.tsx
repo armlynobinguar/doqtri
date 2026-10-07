@@ -25,7 +25,12 @@ import {
   shortenAddress,
 } from "@/lib/wallet";
 import { exchangeWalletSession } from "@/lib/wallet-session";
-import { createPasskeyWallet, setPasskeyWallet } from "@/lib/passkey-wallet";
+import {
+  addPasskey as addWalletPasskey,
+  createPasskeyWallet,
+  removePasskey as removeWalletPasskey,
+  setPasskeyWallet,
+} from "@/lib/passkey-wallet";
 import type { VaultIdentity } from "@/lib/types";
 
 const BALANCE_POLL_MS = 30_000;
@@ -61,6 +66,10 @@ type WalletContextValue = {
   signOut: () => Promise<void>;
   /** Email accounts: one passkey prompt, then the deployed wallet's address. */
   createSmartWallet: () => Promise<string>;
+  /** Email accounts: create a passkey and add it to the wallet. */
+  addPasskey: () => Promise<void>;
+  /** Email accounts: remove one passkey (never the last). */
+  removePasskey: (credentialId: string) => Promise<void>;
   fund: () => Promise<void>;
 };
 
@@ -182,6 +191,21 @@ export function WalletProvider({
     return address;
   }, [identity, router]);
 
+  const addPasskey = useCallback(async () => {
+    if (identity.kind !== "email" || !identity.smartWallet) throw new Error("Create your passkey wallet first.");
+    await addWalletPasskey(identity.smartWallet, identity.email);
+    router.refresh();
+  }, [identity, router]);
+
+  const removePasskey = useCallback(
+    async (credentialId: string) => {
+      if (identity.kind !== "email" || !identity.smartWallet) throw new Error("Create your passkey wallet first.");
+      await removeWalletPasskey(identity.smartWallet, credentialId);
+      router.refresh();
+    },
+    [identity, router],
+  );
+
   const disconnect = useCallback(async () => {
     try {
       await disconnectWallet();
@@ -212,6 +236,8 @@ export function WalletProvider({
       disconnect,
       signOut,
       createSmartWallet,
+      addPasskey,
+      removePasskey,
       fund,
     }),
     [
@@ -227,6 +253,8 @@ export function WalletProvider({
       disconnect,
       signOut,
       createSmartWallet,
+      addPasskey,
+      removePasskey,
       fund,
     ],
   );

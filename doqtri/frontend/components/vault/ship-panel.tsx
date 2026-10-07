@@ -68,6 +68,21 @@ export function ShipPanel({ docId, title, markdown }: Props) {
   const smartWallet = wallet.identity.kind === "email" ? wallet.identity.smartWallet : null;
   const noWallet = wallet.sessionAddress === null && smartWallet === null;
   const [creatingWallet, setCreatingWallet] = useState(false);
+  const [addingPasskey, setAddingPasskey] = useState(false);
+  // Once something is anchored, losing the only passkey would lock it.
+  const needsBackup = smartWallet !== null && smartWallet.passkeys.length < 2;
+
+  async function addBackupPasskey() {
+    setAddingPasskey(true);
+    try {
+      await wallet.addPasskey();
+      toast.success("Backup passkey added");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "The passkey could not be added.");
+    } finally {
+      setAddingPasskey(false);
+    }
+  }
 
   async function createSmartWallet() {
     setCreatingWallet(true);
@@ -300,6 +315,29 @@ export function ShipPanel({ docId, title, markdown }: Props) {
           >
             {creatingWallet ? <Loader2Icon className="animate-spin" /> : null}
             {creatingWallet ? "Creating wallet…" : "Create passkey wallet"}
+          </Button>
+        </div>
+      ) : null}
+
+      {needsBackup && chainVersion != null ? (
+        <div
+          data-testid="backup-passkey-notice"
+          className="border-warning/40 bg-warning/5 grid gap-1.5 rounded-md border px-2.5 py-2 text-[11px]"
+        >
+          <span>
+            This note is anchored with your only passkey. Add a backup on another device or a security key, so
+            losing this one doesn&apos;t lock it.
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={addingPasskey}
+            className="h-6 justify-self-start px-2 text-[11px] max-lg:h-9 max-lg:text-[12px]"
+            onClick={() => void addBackupPasskey()}
+          >
+            {addingPasskey ? <Loader2Icon className="animate-spin" /> : null}
+            {addingPasskey ? "Adding passkey…" : "Add a backup passkey"}
           </Button>
         </div>
       ) : null}

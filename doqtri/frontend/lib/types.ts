@@ -21,6 +21,14 @@ export type FailedImport = {
   error_code: string | null;
 };
 
+/** One passkey on an email account's wallet (oldest first in lists). */
+export type WalletPasskey = {
+  credentialId: string;
+  /** Uncompressed P-256 public key, hex. */
+  publicKey: string;
+  createdAt: string;
+};
+
 /**
  * Who owns the vault. Wallet accounts sign in with a Stellar wallet; email
  * accounts sign in with a password and have no wallet until passkey wallets
@@ -31,8 +39,8 @@ export type VaultIdentity =
   | {
       kind: "email";
       email: string;
-      /** The user's passkey wallet on this network, with the passkey to sign as. */
-      smartWallet: { address: string; credentialId: string } | null;
+      /** The user's passkey wallet on this network, with every passkey it accepts. */
+      smartWallet: { address: string; createdTx: string; passkeys: WalletPasskey[] } | null;
     };
 
 /** What the explorer, tabs, and quick switcher need to list a note. */

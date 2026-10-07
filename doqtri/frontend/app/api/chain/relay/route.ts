@@ -1,3 +1,4 @@
+import { Address } from "@stellar/stellar-sdk";
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
 import { walletAddressFromEmail } from "@/lib/wallet-address";
 import { CONTRACT_ID, NETWORK_PASSPHRASE } from "@/lib/stellar/config";
@@ -14,10 +15,12 @@ import {
   parseRelayBody,
   RelayRejection,
   validateRegistryWrite,
+  validateWalletAdmin,
   validateWalletDeploy,
   type RelaySubmission,
 } from "@/lib/stellar/relay-validation";
 import { simulateWithinCap, submitAndConfirm } from "@/lib/stellar/channels";
+import { readWalletPasskeys } from "@/lib/stellar/wallet-signers";
 
 /**
  * Fee-sponsored submission for passkey smart wallets (progress/002).
@@ -28,9 +31,10 @@ import { simulateWithinCap, submitAndConfirm } from "@/lib/stellar/channels";
  * from a signed-in email account, pass the shape checks in relay-validation,
  * fit the per-user and global quota, and simulate under the fee cap.
  *
- * Two kinds of submission: a wallet deployment, and a DoqtriRegistry write
- * signed by the caller's own wallet for one of the caller's own notes. Each
- * relayed write is indexed in chain_writes, because Horizon cannot list a
+ * Three kinds of submission: a wallet deployment; a DoqtriRegistry write
+ * signed by the caller's own wallet for one of the caller's own notes; and a
+ * passkey change (add or remove) on the caller's own wallet. Each relayed
+ * registry write is indexed in chain_writes, because Horizon cannot list a
  * contract account's writes by owner.
  */
 
@@ -38,6 +42,8 @@ const DEPLOYS_PER_USER = positive(process.env.CHAIN_DEPLOYS_PER_USER_DAILY, 3);
 const DEPLOYS_GLOBAL = positive(process.env.CHAIN_DEPLOYS_GLOBAL_DAILY, 200);
 const WRITES_PER_USER = positive(process.env.CHAIN_WRITES_PER_USER_DAILY, 100);
 const WRITES_GLOBAL = positive(process.env.CHAIN_WRITES_GLOBAL_DAILY, 5000);
+/** Well under the contract's own cap of 15 signers per rule. */
+const MAX_PASSKEYS = 10;
 
 function positive(raw: string | undefined, fallback: number): number {
   const n = Number(raw);
@@ -69,7 +75,12 @@ export async function POST(request: Request) {
     if (submission.func.switch().name === "hostFunctionTypeCreateContractV2") {
       return await deployWallet(user.id, submission, new URL(request.url).hostname);
     }
-    return await relayRegistryWrite(user.id, submission);
+    const target =
+      submission.func.switch().name === "hostFunctionTypeInvokeContract"
+        ? Address.fromScAddress(submission.func.invokeContract().contractAddress()).toString()
+        : null;
+    if (target === CONTRACT_ID) return await relayRegistryWrite(user.id, submission);
+    return await relayWalletAdmin(user.id, submission, new URL(request.url).hostname);
   } catch (error) {
     if (error instanceof RelayRejection) return fail(error.message, error.status);
     console.error("[chain/relay] unexpected error", error);
@@ -145,6 +156,65 @@ async function relayRegistryWrite(userId: string, submission: RelaySubmission) {
   // The write is on-chain either way; a missing index row only hides it from
   // the history list until reconciled, so report success and log loudly.
   if (error) console.error(`[chain/relay] ${write.fn} ${sent.hash} not indexed: ${error.message}`);
+
+  return Response.json({ success: true, data: sent });
+}
+
+/**
+ * Adds or removes a passkey on the caller's wallet. The wallet contract makes
+ * an existing passkey approve the change; this checks the ledger so the last
+ * passkey can never be removed, then keeps wallet_passkeys in step.
+ */
+async function relayWalletAdmin(userId: string, submission: RelaySubmission, rpId: string) {
+  const admin = createSupabaseAdminClient();
+  const { data: wallet } = await admin
+    .from("smart_wallets")
+    .select("address")
+    .eq("user_id", userId)
+    .eq("network", NETWORK)
+    .maybeSingle();
+  if (!wallet) return fail("Create your passkey wallet first.", 409);
+
+  const change = validateWalletAdmin(submission, { wallet: wallet.address, webauthnVerifier: WEBAUTHN_VERIFIER });
+  const onChain = await readWalletPasskeys(wallet.address);
+
+  let removed: Buffer | null = null;
+  if (change.fn === "add_signer") {
+    if (onChain.some((p) => p.credentialId.equals(change.credentialId))) {
+      return fail("That passkey is already on your wallet.", 409);
+    }
+    if (onChain.length >= MAX_PASSKEYS) return fail(`A wallet can have at most ${MAX_PASSKEYS} passkeys.`, 409);
+  } else {
+    const target = onChain.find((p) => p.signerId === change.signerId);
+    if (!target) return fail("That passkey isn't on your wallet.", 404);
+    if (onChain.length <= 1) return fail("You can't remove your only passkey.", 409);
+    removed = target.credentialId;
+  }
+
+  const refused = await chargeQuota(userId, "write", WRITES_PER_USER, WRITES_GLOBAL);
+  if (refused) return refused;
+
+  await simulateWithinCap(submission.func, submission.auth);
+  const sent = await submitAndConfirm(submission.func, submission.auth);
+
+  if (change.fn === "add_signer") {
+    const { error } = await admin.from("wallet_passkeys").insert({
+      credential_id: change.credentialId.toString("base64url"),
+      user_id: userId,
+      network: NETWORK,
+      public_key: `\\x${change.publicKey.toString("hex")}`,
+      rp_id: rpId,
+    });
+    if (error) console.error(`[chain/relay] passkey added to ${wallet.address} (${sent.hash}) but not recorded: ${error.message}`);
+  } else if (removed) {
+    const { error } = await admin
+      .from("wallet_passkeys")
+      .delete()
+      .eq("network", NETWORK)
+      .eq("user_id", userId)
+      .eq("credential_id", removed.toString("base64url"));
+    if (error) console.error(`[chain/relay] passkey removed from ${wallet.address} (${sent.hash}) but row kept: ${error.message}`);
+  }
 
   return Response.json({ success: true, data: sent });
 }

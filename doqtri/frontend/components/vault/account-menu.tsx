@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useWallet } from "@/components/vault/wallet-provider";
 import { expertContractUrl, IS_MAINNET } from "@/lib/stellar/config";
+import { PasskeysDialog } from "@/components/vault/passkeys-dialog";
 import { shortenAddress } from "@/lib/wallet";
 import { cn } from "@/lib/utils";
 
@@ -205,12 +206,13 @@ function EmailAccountMenu({
   className,
 }: {
   email: string;
-  smartWallet: { address: string } | null;
+  smartWallet: { address: string; passkeys: unknown[] } | null;
   className?: string;
 }) {
   const wallet = useWallet();
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [passkeysOpen, setPasskeysOpen] = useState(false);
 
   async function createWallet() {
     setCreating(true);
@@ -235,75 +237,86 @@ function EmailAccountMenu({
   }
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        aria-label="Account"
-        data-testid="account-menu"
-        className={cn(
-          "hover:text-foreground focus-visible:ring-ring -mr-1.5 flex h-5 max-w-56 items-center gap-1.5 rounded px-1.5 focus-visible:ring-1 focus-visible:outline-hidden",
-          className,
-        )}
-      >
-        <span aria-hidden className="bg-success size-1.5 shrink-0 rounded-full shadow-[0_0_6px_var(--success)]" />
-        <span className="truncate">{email}</span>
-      </DropdownMenuTrigger>
-
-      <DropdownMenuContent side="top" align="end" className="w-64 text-[13px]">
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>Signed in with email</DropdownMenuLabel>
-          <div className="truncate px-1.5 pb-1 text-[12px]" title={email}>
-            {email}
-          </div>
-        </DropdownMenuGroup>
-
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>Passkey wallet · {IS_MAINNET ? "Mainnet" : "Testnet"}</DropdownMenuLabel>
-          {smartWallet ? (
-            <>
-              <DropdownMenuItem
-                onClick={() =>
-                  void navigator.clipboard
-                    .writeText(smartWallet.address)
-                    .then(() => toast.success("Address copied"))
-                }
-              >
-                <CopyIcon />
-                <span className="font-mono">{shortenAddress(smartWallet.address)}</span>
-                <span className="text-muted-foreground ml-auto text-[11px]">copy</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => window.open(expertContractUrl(smartWallet.address), "_blank", "noopener")}
-              >
-                <ExternalLinkIcon />
-                View on stellar.expert
-              </DropdownMenuItem>
-            </>
-          ) : (
-            <>
-              <div className="text-muted-foreground px-1.5 pb-1 text-[12px]">
-                A wallet unlocked by your fingerprint, face, or device PIN. It lets you anchor notes
-                on Stellar; Doqtri covers the fees.
-              </div>
-              <DropdownMenuItem
-                disabled={creating}
-                data-testid="create-passkey-wallet"
-                closeOnClick={false}
-                onClick={() => void createWallet()}
-              >
-                {creating ? <Loader2Icon className="animate-spin" /> : <KeyRoundIcon />}
-                {creating ? "Creating wallet…" : "Create passkey wallet"}
-              </DropdownMenuItem>
-            </>
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          aria-label="Account"
+          data-testid="account-menu"
+          className={cn(
+            "hover:text-foreground focus-visible:ring-ring -mr-1.5 flex h-5 max-w-56 items-center gap-1.5 rounded px-1.5 focus-visible:ring-1 focus-visible:outline-hidden",
+            className,
           )}
-        </DropdownMenuGroup>
+        >
+          <span aria-hidden className="bg-success size-1.5 shrink-0 rounded-full shadow-[0_0_6px_var(--success)]" />
+          <span className="truncate">{email}</span>
+        </DropdownMenuTrigger>
 
-        <DropdownMenuSeparator />
+        <DropdownMenuContent side="top" align="end" className="w-64 text-[13px]">
+          <DropdownMenuGroup>
+            <DropdownMenuLabel>Signed in with email</DropdownMenuLabel>
+            <div className="truncate px-1.5 pb-1 text-[12px]" title={email}>
+              {email}
+            </div>
+          </DropdownMenuGroup>
 
-        <DropdownMenuItem variant="destructive" disabled={busy} onClick={() => void signOut()}>
-          <LogOutIcon />
-          Sign out
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+          <DropdownMenuGroup>
+            <DropdownMenuLabel>Passkey wallet · {IS_MAINNET ? "Mainnet" : "Testnet"}</DropdownMenuLabel>
+            {smartWallet ? (
+              <>
+                <DropdownMenuItem
+                  onClick={() =>
+                    void navigator.clipboard
+                      .writeText(smartWallet.address)
+                      .then(() => toast.success("Address copied"))
+                  }
+                >
+                  <CopyIcon />
+                  <span className="font-mono">{shortenAddress(smartWallet.address)}</span>
+                  <span className="text-muted-foreground ml-auto text-[11px]">copy</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem data-testid="open-passkeys" onClick={() => setPasskeysOpen(true)}>
+                  <KeyRoundIcon />
+                  Passkeys
+                  <span className="text-muted-foreground ml-auto text-[11px] tabular-nums">
+                    {smartWallet.passkeys.length}
+                    {smartWallet.passkeys.length < 2 ? " · add a backup" : ""}
+                  </span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => window.open(expertContractUrl(smartWallet.address), "_blank", "noopener")}
+                >
+                  <ExternalLinkIcon />
+                  View on stellar.expert
+                </DropdownMenuItem>
+              </>
+            ) : (
+              <>
+                <div className="text-muted-foreground px-1.5 pb-1 text-[12px]">
+                  A wallet unlocked by your fingerprint, face, or device PIN. It lets you anchor notes
+                  on Stellar; Doqtri covers the fees.
+                </div>
+                <DropdownMenuItem
+                  disabled={creating}
+                  data-testid="create-passkey-wallet"
+                  closeOnClick={false}
+                  onClick={() => void createWallet()}
+                >
+                  {creating ? <Loader2Icon className="animate-spin" /> : <KeyRoundIcon />}
+                  {creating ? "Creating wallet…" : "Create passkey wallet"}
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuGroup>
+
+          <DropdownMenuSeparator />
+
+          <DropdownMenuItem variant="destructive" disabled={busy} onClick={() => void signOut()}>
+            <LogOutIcon />
+            Sign out
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <PasskeysDialog open={passkeysOpen} onOpenChange={setPasskeysOpen} />
+    </>
   );
 }
