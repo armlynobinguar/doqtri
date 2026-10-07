@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   PILL_GAP,
+  createOverlapResolver,
   createRadialForce,
   hasOverlap,
   isPinned,
@@ -228,5 +229,82 @@ describe("createRadialForce", () => {
     settle([node], 1);
     expect(Number.isFinite(node.x)).toBe(true);
     expect(Number.isFinite(node.y)).toBe(true);
+  });
+});
+
+describe("large maps", () => {
+  function scatter(count: number, spread: number, seed = 1): Pill[] {
+    let s = seed;
+    const rand = () => {
+      s = (s * 16807) % 2147483647;
+      return (s - 1) / 2147483646;
+    };
+    return Array.from({ length: count }, () =>
+      pill((rand() - 0.5) * spread, (rand() - 0.5) * spread, 20 + rand() * 60, 8 + rand() * 6),
+    );
+  }
+
+  /** The obvious every-pair check, to hold the sweep to. */
+  function bruteOverlap(nodes: Pill[]): boolean {
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i];
+        const b = nodes[j];
+        const gapX = Math.abs(b.x! - a.x!) - (a.w + b.w) / 2;
+        const gapY = Math.abs(b.y! - a.y!) - (a.h + b.h) / 2;
+        if (gapX < 0 && gapY < 0) return true;
+      }
+    }
+    return false;
+  }
+
+  it("finds exactly the overlaps an every-pair scan finds", () => {
+    for (const [count, spread] of [
+      [50, 100],
+      [200, 2000],
+      [400, 50_000],
+    ]) {
+      for (let seed = 1; seed <= 5; seed++) {
+        const nodes = scatter(count, spread, seed);
+        expect(hasOverlap(nodes, extentOf)).toBe(bruteOverlap(nodes));
+      }
+    }
+  });
+
+  it("untangles 1,500 pills without stalling", () => {
+    const nodes = scatter(1500, 4000);
+    const started = performance.now();
+    resolveOverlaps(nodes, extentOf);
+    const elapsed = performance.now() - started;
+
+    expect(bruteOverlap(nodes)).toBe(false);
+    // The every-pair version took tens of seconds here; leave CI headroom.
+    expect(elapsed).toBeLessThan(3000);
+  });
+});
+
+describe("createOverlapResolver", () => {
+  it("does the same job as resolveOverlaps, a slice at a time", () => {
+    const nodes = Array.from({ length: 30 }, (_, i) => pill((i % 3) * 2, Math.floor(i / 3) * 2));
+    let clock = 0;
+    // Every check of the clock advances it, so each slice runs exactly one pass.
+    const step = createOverlapResolver(nodes, extentOf, () => (clock += 1));
+
+    let slices = 0;
+    while (!step(1)) slices++;
+    expect(slices).toBeGreaterThan(0);
+    expect(hasOverlap(nodes, extentOf)).toBe(false);
+    // Finished stays finished.
+    expect(step(1)).toBe(true);
+  });
+
+  it("stops at the pass cap even if overlaps remain", () => {
+    // Pinned on top of each other: nothing can ever move.
+    const nodes = [
+      { ...pill(0, 0), fx: 0, fy: 0 },
+      { ...pill(0, 0), fx: 0, fy: 0 },
+    ];
+    const step = createOverlapResolver(nodes, extentOf);
+    expect(step(10_000)).toBe(true);
   });
 });

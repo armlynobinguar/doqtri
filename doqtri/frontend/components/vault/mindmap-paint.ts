@@ -30,6 +30,11 @@ export type Painter = {
   weight: number;
   look: (node: PaintNode) => NodeLook;
   selectedId?: string | null;
+  /**
+   * Set on maps big enough that per-frame effects add up: link glow is
+   * dropped, since a blurred shadow on a thousand lines is most of a frame.
+   */
+  large?: boolean;
 };
 
 /**
@@ -107,6 +112,57 @@ export function measureNode(painter: Painter, node: PaintNode): Extent {
   return extent;
 }
 
+/** On-screen text height, in device pixels, below which labels are not drawn. */
+const MIN_TEXT_PX = 3;
+
+/** The part of graph space the canvas currently shows, padded by `margin` units. */
+export type ViewBounds = { minX: number; minY: number; maxX: number; maxY: number };
+
+export function viewBounds(ctx: CanvasRenderingContext2D, margin: number): ViewBounds {
+  const { width, height } = ctx.canvas;
+  const inverse = ctx.getTransform().inverse();
+  const a = inverse.transformPoint(new DOMPoint(0, 0));
+  const b = inverse.transformPoint(new DOMPoint(width, height));
+  return {
+    minX: Math.min(a.x, b.x) - margin,
+    minY: Math.min(a.y, b.y) - margin,
+    maxX: Math.max(a.x, b.x) + margin,
+    maxY: Math.max(a.y, b.y) + margin,
+  };
+}
+
+/** Whether a node's box lies wholly outside the view, so drawing it is wasted. */
+export function nodeOffscreen(view: ViewBounds, node: PaintNode, extent: Extent): boolean {
+  const x = node.x ?? 0;
+  const y = node.y ?? 0;
+  return (
+    x + extent.halfWidth < view.minX ||
+    x - extent.halfWidth > view.maxX ||
+    y + extent.halfHeight < view.minY ||
+    y - extent.halfHeight > view.maxY
+  );
+}
+
+/**
+ * Whether a link certainly misses the view. Tests the box around both ends and
+ * the curve's control point, which contains the whole curve.
+ */
+export function linkOffscreen(view: ViewBounds, link: PaintLink, curvature: number): boolean {
+  const { source, target } = link;
+  if (typeof source !== "object" || typeof target !== "object") return false;
+  const sx = source.x ?? 0;
+  const sy = source.y ?? 0;
+  const tx = target.x ?? 0;
+  const ty = target.y ?? 0;
+  const cp = controlPoint(sx, sy, tx, ty, curvature) ?? { x: sx, y: sy };
+  return (
+    Math.max(sx, tx, cp.x) < view.minX ||
+    Math.min(sx, tx, cp.x) > view.maxX ||
+    Math.max(sy, ty, cp.y) < view.minY ||
+    Math.min(sy, ty, cp.y) > view.maxY
+  );
+}
+
 function isPinned(node: PaintNode): boolean {
   return node.fx !== undefined || node.fy !== undefined;
 }
@@ -158,9 +214,12 @@ export function drawNode(ctx: CanvasRenderingContext2D, node: PaintNode, painter
   const y = node.y ?? 0;
   const scale = pixelScale(ctx);
   const pinned = isPinned(node);
+  // Below a few pixels a label is unreadable anyway; drawing it is the single
+  // most expensive part of a node, so a zoomed-out big map skips it.
+  const legible = font * scale >= MIN_TEXT_PX;
 
   ctx.save();
-  if (style.glow > 0) {
+  if (style.glow > 0 && legible) {
     ctx.shadowColor = look.accent;
     ctx.shadowBlur = style.glow * 9 * scale;
   }
@@ -215,11 +274,13 @@ export function drawNode(ctx: CanvasRenderingContext2D, node: PaintNode, painter
   if (!(style.glow > 0 && style.fill === "outline")) ctx.shadowBlur = 0;
   else ctx.shadowBlur = style.glow * 5 * scale;
 
-  ctx.font = `${painter.weight} ${font}px ${painter.family}`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = look.text;
-  ctx.fillText(displayLabel(style, node), x, y + (style.shape === "underline" ? -hh * 0.1 : 0));
+  if (legible) {
+    ctx.font = `${painter.weight} ${font}px ${painter.family}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = look.text;
+    ctx.fillText(displayLabel(style, node), x, y + (style.shape === "underline" ? -hh * 0.1 : 0));
+  }
 
   if (painter.selectedId === node.id) {
     ctx.shadowBlur = 0;
@@ -279,7 +340,7 @@ export function drawLink(ctx: CanvasRenderingContext2D, link: PaintLink, painter
   } else {
     ctx.strokeStyle = withAlpha(style.palette.link, opacity);
   }
-  if (style.glow >= 0.5) {
+  if (style.glow >= 0.5 && !painter.large) {
     ctx.shadowColor = painter.look(target).accent;
     ctx.shadowBlur = style.glow * 4 * pixelScale(ctx);
   }

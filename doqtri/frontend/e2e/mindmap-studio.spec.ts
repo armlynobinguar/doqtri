@@ -171,3 +171,64 @@ test.describe("mindmap studio", () => {
     expect(png.readUInt32BE(20)).toBe(1920);
   });
 });
+
+/** A heading-only note that outlines to 1 + 12 + 120 + 1,080 = 1,213 nodes. */
+function hugeOutline(title: string): string {
+  const lines = [`# ${title}`, ""];
+  for (let a = 0; a < 12; a++) {
+    lines.push(`# Area ${a}`);
+    for (let b = 0; b < 10; b++) {
+      lines.push(`## Area ${a} part ${b}`);
+      for (let c = 0; c < 9; c++) lines.push(`### Item ${a}.${b}.${c}`);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+test.describe("large mindmaps", () => {
+  test.describe.configure({ timeout: 120_000 });
+  let docId: string;
+
+  test.beforeEach(async () => {
+    const title = uniqueTitle("Huge");
+    // No stored map: the heading outline has no per-level cap, so this is the
+    // way a real note gets a map this big.
+    docId = await seedNote(title, hugeOutline(title));
+  });
+
+  test.afterEach(async () => {
+    await deleteNote(docId);
+  });
+
+  test("asks before drawing, and the overview draws a slice", async ({ page }) => {
+    await page.goto(`/vault/${docId}/mindmap`);
+    await expect(page.getByRole("heading", { name: "Large mindmap — render it?" })).toBeVisible();
+    // Nothing is drawn until the viewer chooses.
+    await expect(page.locator("canvas")).toHaveCount(0);
+
+    await page.getByRole("button", { name: /^Overview:/ }).click();
+    await expect(page.getByText("Building mindmap…")).toBeVisible();
+    await expect(page.getByText("Building mindmap…")).toBeHidden({ timeout: 30_000 });
+    await expect(page.getByRole("button", { name: /^Showing \d+ of 1214 nodes/ })).toBeVisible();
+  });
+
+  test("rendering everything settles and keeps the page responsive", async ({ page }) => {
+    await page.goto(`/vault/${docId}/mindmap`);
+    await page.getByRole("button", { name: /^Render all:/ }).click();
+    await expect(page.getByText("Building mindmap…")).toBeVisible();
+
+    // The main thread must keep answering while the layout runs: the old
+    // every-pair overlap pass froze it for tens of seconds at this size.
+    let worstGap = 0;
+    const started = Date.now();
+    while (await page.getByText("Building mindmap…").isVisible()) {
+      const before = Date.now();
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+      worstGap = Math.max(worstGap, Date.now() - before);
+      expect(Date.now() - started, "layout never settled").toBeLessThan(60_000);
+    }
+    console.log(`settled in ${Date.now() - started}ms, worst frame ${worstGap}ms`);
+    expect(worstGap).toBeLessThan(500);
+    await expect(page.getByRole("button", { name: /^Showing all 1214 nodes/ })).toBeVisible();
+  });
+});
