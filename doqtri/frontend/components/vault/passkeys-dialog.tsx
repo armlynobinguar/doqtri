@@ -122,11 +122,18 @@ export function PasskeysDialog({ open, onOpenChange }: { open: boolean; onOpenCh
           ))}
         </ul>
 
-        <p className="text-muted-foreground text-[12px] leading-relaxed">
-          A passkey saved in iCloud Keychain or Google Password Manager is already copied to that account&apos;s
-          devices. For a real backup, add one somewhere else: a phone on the other platform, a second computer, or
-          a security key. When the browser asks where to save it, choose that device.
-        </p>
+        <div className="text-muted-foreground grid gap-1.5 text-[12px] leading-relaxed">
+          <p>
+            Adding a passkey needs one you already have, so start on a device that has one. To put the new passkey
+            on another phone or computer, choose <span className="text-foreground">Use a phone or tablet</span>{" "}
+            (or <span className="text-foreground">Save another way</span>) when the browser asks where to save it,
+            and scan the QR code with that device.
+          </p>
+          <p>
+            A passkey in iCloud Keychain or Google Password Manager is already copied to that account&apos;s devices.
+            For a real backup, add one somewhere else: a phone on the other platform, or a security key.
+          </p>
+        </div>
 
         <Button type="button" disabled={busy} onClick={() => void add()} data-testid="add-passkey">
           {adding ? <Loader2Icon className="animate-spin" /> : <PlusIcon />}

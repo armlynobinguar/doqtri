@@ -9,7 +9,7 @@
  * imported lazily: it touches browser-only APIs and is only needed when an
  * email user creates or uses a wallet.
  */
-import { hash, TransactionBuilder, xdr, type contract } from "@stellar/stellar-sdk";
+import { hash, xdr, type contract } from "@stellar/stellar-sdk";
 import { Buffer } from "buffer";
 import type { WalletPasskey } from "@/lib/types";
 import { HORIZON_URL, NETWORK_PASSPHRASE, RPC_URL } from "@/lib/stellar/config";
@@ -28,11 +28,21 @@ const WALLET_POLICY = { address: THRESHOLD_POLICY, type: "threshold" as const, i
 
 type Storage = InstanceType<typeof import("smart-account-kit").IndexedDBStorage>;
 
+/**
+ * Passkeys the next "pick a passkey" prompt may offer. The kit asks for any
+ * passkey on this site, so a device holding another Doqtri account's passkey
+ * would offer that one (it cannot sign for this wallet). While this is set,
+ * the prompt lists only the signed-in wallet's passkeys, and a device with
+ * none of them says so and offers another device instead.
+ */
+let pickFrom: string[] | null = null;
+
 let kitPromise: Promise<{ kit: Kit; storage: Storage }> | null = null;
 
 async function kitAndStorage(): Promise<{ kit: Kit; storage: Storage }> {
   if (typeof window === "undefined") throw new Error("Passkey wallets need a browser.");
-  kitPromise ??= import("smart-account-kit").then(({ SmartAccountKit, IndexedDBStorage }) => {
+  kitPromise ??= Promise.all([import("smart-account-kit"), import("@simplewebauthn/browser")]).then(
+    ([{ SmartAccountKit, IndexedDBStorage }, { startRegistration, startAuthentication }]) => {
     // Keeps the verified connection across reloads (the kit's session lasts
     // 7 days), so a returning user's next write needs one passkey prompt to
     // sign instead of a second one to re-prove ownership.
@@ -41,6 +51,22 @@ async function kitAndStorage(): Promise<{ kit: Kit; storage: Storage }> {
       storage,
       kit: new SmartAccountKit({
         storage,
+        webAuthn: {
+          startRegistration,
+          startAuthentication: (args) => {
+            const { optionsJSON } = args;
+            // Only the open-ended pick prompt is narrowed; signing already
+            // names its passkey.
+            if (!pickFrom || optionsJSON.allowCredentials?.length) return startAuthentication(args);
+            return startAuthentication({
+              ...args,
+              optionsJSON: {
+                ...optionsJSON,
+                allowCredentials: pickFrom.map((id) => ({ id, type: "public-key" as const })),
+              },
+            });
+          },
+        },
         rpcUrl: RPC_URL,
         networkPassphrase: NETWORK_PASSPHRASE,
         accountWasmHash: SMART_ACCOUNT_WASM_HASH,
@@ -57,7 +83,8 @@ async function kitAndStorage(): Promise<{ kit: Kit; storage: Storage }> {
         horizonUrl: HORIZON_URL,
       }),
     };
-  });
+    },
+  );
   return kitPromise;
 }
 
@@ -190,6 +217,11 @@ async function rememberWalletPasskeys(storage: Storage, wallet: PasskeyWalletRef
   }
 }
 
+/** Shown when the pick prompt fails: cancelled, or no passkey for this wallet here. */
+export const NO_PASSKEY_HERE =
+  "No passkey for this wallet was used. If this device doesn't have one, add it from a device that does: " +
+  "open Doqtri there, go to Passkeys → Add a passkey, choose “Use a phone or tablet”, and scan the QR code with this device.";
+
 /**
  * Connects the kit to `wallet` using a passkey this device can actually use,
  * and returns that passkey's credential id. The kit signs with exactly one
@@ -215,9 +247,13 @@ async function connectWith(k: Kit, wallet: PasskeyWalletRef): Promise<string> {
 
   try {
     await rememberWalletPasskeys(storage, wallet);
+    pickFrom = [...ids];
     await k.connectWallet({ fresh: true });
   } catch (error) {
+    if ((error as { name?: string })?.name === "NotAllowedError") throw new Error(NO_PASSKEY_HERE);
     throw new Error(passkeyErrorMessage(error, "Your passkey wallet could not be opened."));
+  } finally {
+    pickFrom = null;
   }
   if (!usable()) {
     await k.disconnect().catch(() => {});
