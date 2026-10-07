@@ -17,6 +17,7 @@ import { DeleteNoteDialog } from "@/components/vault/delete-note-dialog";
 import { RenameNoteDialog } from "@/components/vault/rename-note-dialog";
 import { SettingsDialog } from "@/components/vault/settings-dialog";
 import { AccountMenu } from "@/components/vault/account-menu";
+import { LogOutButton } from "@/components/vault/log-out-button";
 import { MobileTabBar, MobileTopBar } from "@/components/vault/mobile-chrome";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useIsCompactVault } from "@/hooks/use-mobile";
@@ -320,7 +321,12 @@ function VaultShellInner({
         noteCount={notes.length}
         wordCount={wordCount}
         saveState={saveState}
-        trailing={<AccountMenu />}
+        trailing={
+          <>
+            <AccountMenu />
+            <LogOutButton />
+          </>
+        }
       />
 
       <Sheet open={drawerOpen && isMobile} onOpenChange={setDrawerOpen}>
@@ -339,7 +345,10 @@ function VaultShellInner({
             <span className="text-label tabular-nums">
               {notes.length} {notes.length === 1 ? "note" : "notes"}
             </span>
-            <AccountMenu className="text-sidebar-foreground h-9 text-[12px]" />
+            <div className="flex items-center gap-1">
+              <AccountMenu className="text-sidebar-foreground h-9 text-[12px]" />
+              <LogOutButton className="h-9 text-[12px] [&_svg]:size-3.5" />
+            </div>
           </div>
         </SheetContent>
       </Sheet>
