@@ -1,0 +1,413 @@
+"use client";
+
+import { useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import ForceGraph3D, { type ForceGraphMethods, type NodeObject } from "react-force-graph-3d";
+import * as THREE from "three";
+import SpriteText from "three-spritetext";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import {
+  useLoadedFont,
+  useLookup,
+  type MindmapCanvasHandle,
+  type MindmapCanvasProps,
+} from "@/components/vault/mindmap-canvas";
+import { fontFamily, fontWeight } from "@/components/vault/mindmap-fonts";
+import { canvasToBlob, paintBackdrop, paintCaption } from "@/components/vault/mindmap-paint";
+import { displayLabel, isHidden, isLight, mix, type MindmapStyle } from "@/lib/mindmap-style";
+import type { MapNode, MapNodeKind } from "@/lib/mindmap-graph";
+
+type Node3D = NodeObject<MapNode> & { fz?: number };
+type Link3D = { source: Node3D | string; target: Node3D | string };
+type Instance = ForceGraphMethods<Node3D, Link3D>;
+
+/** Label height per kind, in world units, before the text scale. */
+const TEXT_HEIGHT: Record<MapNodeKind, number> = {
+  root: 9,
+  document: 7.5,
+  hub: 6.5,
+  theme: 6.5,
+  concept: 5,
+  detail: 4.2,
+};
+
+function endpoint(value: Node3D | string): Node3D | null {
+  return typeof value === "object" ? value : null;
+}
+
+/** The screen-filling backdrop as a texture, painted by the same code as 2D. */
+function backdropTexture(style: MindmapStyle): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1024;
+  canvas.height = 1024;
+  const ctx = canvas.getContext("2d");
+  // The grid and dots are flat-canvas ideas; in 3D they become a floor grid.
+  if (ctx) paintBackdrop(ctx, 1024, 1024, { ...style, vignette: style.vignette });
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function starfield(style: MindmapStyle): THREE.Points {
+  const count = 1800;
+  const positions = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
+  const tints = [new THREE.Color("#ffffff"), ...style.palette.branches.map((c) => new THREE.Color(c))];
+  for (let i = 0; i < count; i++) {
+    // Uniform on a thick shell well outside any map.
+    const radius = 1200 + Math.random() * 1800;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    positions[i * 3] = radius * Math.sin(phi) * Math.cos(theta);
+    positions[i * 3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
+    positions[i * 3 + 2] = radius * Math.cos(phi);
+    const tint = Math.random() > 0.8 ? tints[1 + (i % (tints.length - 1))] ?? tints[0] : tints[0];
+    colors.set([tint.r, tint.g, tint.b], i * 3);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  const material = new THREE.PointsMaterial({ size: 3, vertexColors: true, transparent: true, opacity: 0.9, sizeAttenuation: true });
+  return new THREE.Points(geometry, material);
+}
+
+function disposeObject(object: THREE.Object3D) {
+  object.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    mesh.geometry?.dispose();
+    const material = mesh.material as THREE.Material | THREE.Material[] | undefined;
+    if (Array.isArray(material)) material.forEach((m) => m.dispose());
+    else material?.dispose();
+  });
+}
+
+/**
+ * The mindmap in three dimensions: the same graph and style, as labels and orbs
+ * floating in space, with bloom for the glow and an orbiting camera.
+ *
+ * Loaded on demand — three.js is several hundred kilobytes, and only someone
+ * who flips the 3D switch should pay for it.
+ */
+export default function MindmapCanvas3D({
+  graph,
+  onNodeClick,
+  isClickable = () => onNodeClick !== undefined,
+  emptyMessage = "Nothing to map yet.",
+  look,
+  editing = false,
+  selectedId = null,
+  onSelect,
+  handleRef,
+}: MindmapCanvasProps & { look: MindmapStyle }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const fgRef = useRef<Instance | undefined>(undefined);
+  const bloomRef = useRef<UnrealBloomPass | null>(null);
+  const framedRef = useRef(false);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  const [ready, setReady] = useState(false);
+
+  const lookup = useLookup(graph, look);
+  const loadedFont = useLoadedFont(look.font);
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      setSize({ width: Math.floor(width), height: Math.floor(height) });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const graphData = useMemo(
+    () => ({
+      nodes: graph.nodes.map((node) => ({ ...node })) as Node3D[],
+      links: graph.links.map((link) => ({ ...link })) as Link3D[],
+    }),
+    [graph],
+  );
+
+  useEffect(() => {
+    framedRef.current = false;
+  }, [graphData]);
+
+  // Frame the map once it has had a moment to spread out, rather than waiting
+  // for the engine to stop: the default camera sits far back, and the full
+  // cooldown is several seconds of a speck in the middle of the screen.
+  useEffect(() => {
+    if (!ready) return;
+    const timer = setTimeout(() => fgRef.current?.zoomToFit(800, 40), 900);
+    return () => clearTimeout(timer);
+  }, [ready, graphData, look.three.layout, look.spacing]);
+
+  // The instance only exists once the graph has mounted, a render after us.
+  useEffect(() => {
+    if (ready || size.width === 0) return;
+    const id = requestAnimationFrame(() => {
+      if (fgRef.current) setReady(true);
+    });
+    return () => cancelAnimationFrame(id);
+  });
+
+  // Bloom, added once per instance and retuned as the style changes.
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!ready || !fg) return;
+    let bloom = bloomRef.current;
+    if (!bloom) {
+      bloom = new UnrealBloomPass(new THREE.Vector2(size.width, size.height), 1, 0.45, 0.5);
+      fg.postProcessingComposer().addPass(bloom);
+      bloomRef.current = bloom;
+    }
+    bloom.strength = look.three.bloom;
+    // Only the brightest things bloom — orbs, crystals, particles — so labels
+    // keep their edges. A light background would bloom everywhere, so it gets
+    // a stricter threshold still.
+    bloom.threshold = isLight(look.palette.background) ? 0.9 : 0.55;
+    bloom.enabled = look.three.bloom > 0;
+  }, [ready, look.three.bloom, look.palette.background, size.width, size.height]);
+
+  // Backdrop texture, starfield and floor grid.
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!ready || !fg) return;
+    const scene = fg.scene();
+    const texture = backdropTexture(look);
+    scene.background = texture;
+
+    const extras: THREE.Object3D[] = [];
+    if (look.backdrop === "stars" || look.backdrop === "aurora") extras.push(starfield(look));
+    if (look.backdrop === "grid" || look.backdrop === "dots") {
+      const tone = mix(look.palette.background, look.palette.link, 0.9);
+      const grid = new THREE.GridHelper(3000, 60, tone, tone);
+      grid.position.y = -260;
+      const material = grid.material as THREE.Material;
+      material.transparent = true;
+      material.opacity = 0.35;
+      extras.push(grid);
+    }
+    extras.forEach((object) => scene.add(object));
+
+    return () => {
+      extras.forEach((object) => {
+        scene.remove(object);
+        disposeObject(object);
+      });
+      if (scene.background === texture) scene.background = null;
+      texture.dispose();
+    };
+  }, [ready, look]);
+
+  // Camera spin.
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!ready || !fg) return;
+    const controls = fg.controls() as OrbitControls;
+    controls.autoRotate = look.three.autoRotate;
+    controls.autoRotateSpeed = look.three.rotateSpeed;
+  }, [ready, look.three.autoRotate, look.three.rotateSpeed]);
+
+  // Spread the forces out to the chosen spacing.
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!ready || !fg) return;
+    fg.d3Force("charge")?.strength(-140 * look.spacing);
+    fg.d3Force("link")?.distance(38 * look.spacing);
+    fg.d3ReheatSimulation();
+  }, [ready, look.spacing, graphData]);
+
+  const family = fontFamily(loadedFont);
+  const weight = fontWeight(loadedFont);
+
+  const nodeObject = useMemo(() => {
+    const kind3d = look.three.node;
+    return (node: Node3D): THREE.Object3D => {
+      const colors = lookup(node);
+      const scale = look.textScale * (look.overrides[node.id]?.scale ?? 1);
+      const height = (TEXT_HEIGHT[node.kind] ?? TEXT_HEIGHT.concept) * scale;
+      const sprite = new SpriteText(displayLabel(look, node), height, colors.text);
+      sprite.fontFace = family;
+      sprite.fontWeight = String(weight);
+      // A thin outline in the backdrop colour keeps text legible under bloom.
+      sprite.strokeWidth = 1.2;
+      sprite.strokeColor = look.palette.background;
+      const selected = node.id === selectedId;
+
+      if (kind3d === "label") {
+        const boxed = look.shape !== "underline";
+        sprite.backgroundColor = boxed ? colors.fill : false;
+        sprite.padding = boxed ? [height * 0.55, height * 0.32] : 0;
+        sprite.borderWidth = selected ? height * 0.12 : boxed ? Math.max(0.15, look.borderWidth * 0.35) : 0;
+        sprite.borderColor = selected ? "#ffffff" : colors.stroke;
+        sprite.borderRadius =
+          look.shape === "pill" || look.shape === "bubble" ? height * 0.8 : look.shape === "sharp" ? 0 : height * 0.3;
+        return sprite;
+      }
+
+      const group = new THREE.Group();
+      const radius = height * 0.75;
+      const accent = new THREE.Color(colors.accent);
+      if (kind3d === "orb") {
+        const orb = new THREE.Mesh(
+          new THREE.SphereGeometry(radius, 24, 16),
+          new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.92 }),
+        );
+        group.add(orb);
+      } else {
+        const shell = new THREE.Mesh(
+          new THREE.IcosahedronGeometry(radius * 1.2, 0),
+          new THREE.MeshBasicMaterial({ color: accent, wireframe: true }),
+        );
+        const core = new THREE.Mesh(
+          new THREE.IcosahedronGeometry(radius * 0.55, 0),
+          new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.55 }),
+        );
+        shell.rotation.set(node.depth * 0.7, node.depth * 1.3, 0);
+        group.add(shell, core);
+      }
+      if (selected) {
+        const halo = new THREE.Mesh(
+          new THREE.SphereGeometry(radius * 1.6, 16, 12),
+          new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.5 }),
+        );
+        group.add(halo);
+      }
+      sprite.position.y = radius + height * 0.9;
+      group.add(sprite);
+      return group;
+    };
+  }, [look, lookup, family, weight, selectedId]);
+
+  useImperativeHandle(
+    handleRef,
+    (): MindmapCanvasHandle => ({
+      releaseAll: () => {
+        for (const node of graphData.nodes) {
+          node.fx = undefined;
+          node.fy = undefined;
+          node.fz = undefined;
+        }
+        framedRef.current = false;
+        fgRef.current?.d3ReheatSimulation();
+      },
+      viewSize: () => size,
+      snapshot: async (request) => {
+        const fg = fgRef.current;
+        if (!fg) throw new Error("The 3D view is still loading");
+        if (request.fit) fg.zoomToFit(0, 30);
+
+        const renderer = fg.renderer() as THREE.WebGLRenderer;
+        const composer = fg.postProcessingComposer();
+        const previous = renderer.getPixelRatio();
+        const ratio = Math.min(4, Math.max(request.width / size.width, request.height / size.height));
+        const output = document.createElement("canvas");
+        output.width = request.width;
+        output.height = request.height;
+        const ctx = output.getContext("2d");
+        if (!ctx) throw new Error("Canvas is not available in this browser");
+
+        try {
+          renderer.setPixelRatio(ratio);
+          composer.setPixelRatio(ratio);
+          composer.render();
+          const source = renderer.domElement;
+          // Cover-crop the render into the requested frame.
+          const scale = Math.max(request.width / source.width, request.height / source.height);
+          const w = source.width * scale;
+          const h = source.height * scale;
+          ctx.drawImage(source, (request.width - w) / 2, (request.height - h) / 2, w, h);
+        } finally {
+          renderer.setPixelRatio(previous);
+          composer.setPixelRatio(previous);
+        }
+
+        paintCaption(ctx, request.width, request.height, look, family, request.title, request.watermark);
+        return canvasToBlob(output);
+      },
+    }),
+    [graphData, size, look, family],
+  );
+
+  if (graph.nodes.length === 0) {
+    return (
+      <div ref={containerRef} className="relative min-h-0 flex-1 overflow-hidden">
+        <p className="text-label absolute inset-0 flex items-center justify-center px-4 text-center text-[12px]">
+          {emptyMessage}
+        </p>
+      </div>
+    );
+  }
+
+  const dagMode = look.three.layout === "radial" ? "radialout" : look.three.layout === "tree" ? "td" : undefined;
+  const linkTone = (link: Link3D) => {
+    const target = endpoint(link.target);
+    return look.link.gradient && target ? lookup(target).accent : look.palette.link;
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative min-h-0 flex-1 overflow-hidden"
+      style={{ backgroundColor: look.palette.background }}
+    >
+      {size.width > 0 && (
+        <ForceGraph3D<Node3D, Link3D>
+          ref={fgRef as React.MutableRefObject<Instance | undefined>}
+          width={size.width}
+          height={size.height}
+          graphData={graphData}
+          controlType="orbit"
+          // Exports read the canvas back after rendering into it.
+          rendererConfig={{ antialias: true, alpha: false, preserveDrawingBuffer: true }}
+          backgroundColor={look.palette.background}
+          showNavInfo={false}
+          dagMode={dagMode}
+          dagLevelDistance={50 * look.spacing}
+          onDagError={() => {}}
+          cooldownTicks={160}
+          nodeThreeObject={nodeObject}
+          nodeVisibility={(node) => !isHidden(look, node.id)}
+          linkVisibility={(link) => {
+            const s = endpoint(link.source);
+            const t = endpoint(link.target);
+            return !(s && isHidden(look, s.id)) && !(t && isHidden(look, t.id));
+          }}
+          linkColor={linkTone}
+          linkOpacity={look.link.opacity * 0.85}
+          linkWidth={look.link.width * 0.35}
+          linkCurvature={look.link.curvature}
+          linkDirectionalParticles={look.link.particles}
+          linkDirectionalParticleSpeed={look.link.particleSpeed}
+          linkDirectionalParticleWidth={look.link.particleSize * 0.9}
+          linkDirectionalParticleColor={linkTone}
+          showPointerCursor={(object) =>
+            Boolean(object && "kind" in object && (editing || isClickable(object as MapNode)))
+          }
+          onNodeClick={(node) => {
+            if (editing) onSelect?.(node);
+            else if (isClickable(node)) onNodeClick?.(node);
+          }}
+          onNodeDragEnd={(node) => {
+            // Same as 2D: a node put somewhere by hand stays there.
+            node.fx = node.x;
+            node.fy = node.y;
+            node.fz = node.z;
+          }}
+          onNodeRightClick={(node) => {
+            node.fx = undefined;
+            node.fy = undefined;
+            node.fz = undefined;
+            fgRef.current?.d3ReheatSimulation();
+          }}
+          onEngineStop={() => {
+            if (!framedRef.current) {
+              framedRef.current = true;
+              fgRef.current?.zoomToFit(600, 40);
+            }
+          }}
+        />
+      )}
+    </div>
+  );
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import type {
   MindmapForceGraphProps,
@@ -8,16 +8,35 @@ import type {
   MindmapGraphNode,
 } from "@/components/vault/force-graph-2d";
 import { useNodePointer } from "@/components/vault/use-node-pointer";
-import { MINDMAP_COLORS } from "@/lib/theme";
+import { fontFamily, fontWeight, loadFont } from "@/components/vault/mindmap-fonts";
+import {
+  canvasToBlob,
+  drawLink,
+  drawNode,
+  measureNode,
+  paintBackdrop,
+  paintGraphPattern,
+  renderSnapshot,
+  type PaintLink,
+  type Painter,
+} from "@/components/vault/mindmap-paint";
 import {
   createGravityForce,
   createRadialForce,
   isPinned,
   resolveOverlaps,
   separateOnce,
-  type Extent,
 } from "@/lib/mindmap-layout";
-import type { MapNode, MapNodeKind, MindmapGraph } from "@/lib/mindmap-graph";
+import {
+  assignBranches,
+  DEFAULT_STYLE,
+  isHidden,
+  resolveLook,
+  type FontKey,
+  type MindmapStyle,
+  type NodeLook,
+} from "@/lib/mindmap-style";
+import type { MapNode, MindmapGraph } from "@/lib/mindmap-graph";
 
 type GraphNode = MindmapGraphNode;
 type GraphInstance = MindmapGraphInstance;
@@ -30,90 +49,27 @@ const ForceGraph2D = dynamic(
   { ssr: false },
 ) as unknown as React.ComponentType<MindmapForceGraphProps>;
 
-/**
- * Pill geometry per node kind, in graph units.
- *
- * The canvas draws labelled pills rather than dots: a mindmap is unreadable if
- * you have to zoom in far enough for the labels to appear, which is the
- * tradeoff the vault graph makes and this view cannot.
- */
-const PILL: Record<MapNodeKind, { font: number; padX: number; padY: number }> = {
-  root: { font: 7, padX: 7, padY: 4.5 },
-  document: { font: 6, padX: 6, padY: 4 },
-  hub: { font: 5.5, padX: 5.5, padY: 3.5 },
-  theme: { font: 5.5, padX: 5.5, padY: 3.5 },
-  concept: { font: 4.5, padX: 4.5, padY: 3 },
-  detail: { font: 4, padX: 4, padY: 2.5 },
-};
-
-const FONT_STACK = "ui-sans-serif, system-ui, sans-serif";
-
 /** Spacing between the rings of the radial layout, in graph units. */
 const RING_DISTANCE = 70;
 
-const extentCache = new Map<string, Extent>();
-let measureContext: CanvasRenderingContext2D | null | undefined;
+export type SnapshotRequest = {
+  width: number;
+  height: number;
+  /** Frame the whole map rather than what is on screen. */
+  fit: boolean;
+  title?: string;
+  watermark: boolean;
+};
 
-/**
- * Measures a pill once and caches it by kind and label.
- *
- * Measurement happens on a detached canvas rather than inside the paint
- * callback, because the collision force needs pill sizes before the first
- * frame is ever drawn. Same font, same metrics — and one cache means the
- * layout, the hit area, and the drawing can never disagree about a pill's size.
- */
-function measureExtent(kind: MapNodeKind, label: string): Extent {
-  const key = `${kind}|${label}`;
-  const cached = extentCache.get(key);
-  if (cached) return cached;
+/** What the studio can ask of either renderer. */
+export type MindmapCanvasHandle = {
+  releaseAll: () => void;
+  snapshot: (request: SnapshotRequest) => Promise<Blob>;
+  /** The on-screen size, in CSS pixels, for "match the view" exports. */
+  viewSize: () => { width: number; height: number };
+};
 
-  const style = PILL[kind] ?? PILL.concept;
-
-  if (measureContext === undefined) {
-    measureContext =
-      typeof document === "undefined"
-        ? null
-        : document.createElement("canvas").getContext("2d");
-  }
-
-  let textWidth: number;
-  if (measureContext) {
-    measureContext.font = `${style.font}px ${FONT_STACK}`;
-    textWidth = measureContext.measureText(label).width;
-  } else {
-    // Server render or a context-less browser: a rough estimate is fine, since
-    // nothing is visible yet and the real measurement lands on first paint.
-    textWidth = label.length * style.font * 0.55;
-  }
-
-  const extent: Extent = {
-    halfWidth: textWidth / 2 + style.padX,
-    halfHeight: style.font / 2 + style.padY,
-  };
-  extentCache.set(key, extent);
-  return extent;
-}
-
-function extentOf(node: GraphNode): Extent {
-  return measureExtent(node.kind, node.label);
-}
-
-/** Whether graph point (x, y) is on the node's pill. */
-function hitsPill(node: GraphNode, x: number, y: number): boolean {
-  const { halfWidth, halfHeight } = extentOf(node);
-  return (
-    Math.abs(x - (node.x ?? 0)) <= halfWidth &&
-    Math.abs(y - (node.y ?? 0)) <= halfHeight
-  );
-}
-
-export function MindmapCanvas({
-  graph,
-  onNodeClick,
-  isClickable = () => onNodeClick !== undefined,
-  emptyMessage = "Nothing to map yet.",
-  layout = "radial",
-}: {
+export type MindmapCanvasProps = {
   graph: MindmapGraph;
   onNodeClick?: (node: MapNode) => void;
   /**
@@ -122,16 +78,66 @@ export function MindmapCanvas({
    */
   isClickable?: (node: MapNode) => boolean;
   emptyMessage?: string;
-  /**
-   * `radial` rings a single tree outward from its root. `free` is an
-   * unconstrained force layout, which is what the vault-wide map wants: it is a
-   * forest with several roots, and rings would just stack them.
-   */
-  layout?: "radial" | "free";
-}) {
+  /** How the map looks, layout included. */
+  look?: MindmapStyle;
+  /** In edit mode a click selects the node instead of following it. */
+  editing?: boolean;
+  selectedId?: string | null;
+  onSelect?: (node: MapNode) => void;
+  handleRef?: React.Ref<MindmapCanvasHandle>;
+};
+
+/**
+ * Colour lookup for one style over one graph.
+ *
+ * Every frame asks for every node's colours, often twice (the node and its
+ * links), and resolving them mixes several colours — so they are worked out
+ * once per style change rather than per frame.
+ */
+export function useLookup(graph: MindmapGraph, look: MindmapStyle) {
+  const branches = useMemo(() => assignBranches(graph), [graph]);
+  return useMemo(() => {
+    const looks = new Map<string, NodeLook>(
+      graph.nodes.map((node) => [
+        node.id,
+        resolveLook(look, node, branches.branch.get(node.id) ?? 0, branches.maxDepth),
+      ]),
+    );
+    return (node: MapNode): NodeLook =>
+      looks.get(node.id) ?? resolveLook(look, node, 0, branches.maxDepth);
+  }, [graph, look, branches]);
+}
+
+/** The font a style asks for, once it has actually loaded. */
+export function useLoadedFont(key: FontKey): FontKey {
+  const [loaded, setLoaded] = useState<FontKey>("sans");
+  useEffect(() => {
+    let cancelled = false;
+    void loadFont(key).then(() => {
+      if (!cancelled) setLoaded(key);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [key]);
+  return loaded;
+}
+
+export function MindmapCanvas({
+  graph,
+  onNodeClick,
+  isClickable = () => onNodeClick !== undefined,
+  emptyMessage = "Nothing to map yet.",
+  look = DEFAULT_STYLE,
+  editing = false,
+  selectedId = null,
+  onSelect,
+  handleRef,
+}: MindmapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<GraphInstance | undefined>(undefined);
   const [size, setSize] = useState({ width: 0, height: 0 });
+  const layout = look.layout;
 
   /**
    * The live node objects, which the simulation mutates in place and which the
@@ -139,9 +145,32 @@ export function MindmapCanvas({
    * off the memo: a value produced during render is not ours to write to.
    */
   const nodesRef = useRef<GraphNode[]>([]);
+  const linksRef = useRef<PaintLink[]>([]);
 
   /** Whether this graph has been framed yet, so a drag cannot re-frame it. */
   const framedRef = useRef(false);
+
+  /** Set when node sizes change, so the next frame clears any new overlap. */
+  const resizedRef = useRef(false);
+
+  const lookup = useLookup(graph, look);
+  const loadedFont = useLoadedFont(look.font);
+
+  const painter = useMemo<Painter>(
+    () => ({
+      style: look,
+      family: fontFamily(loadedFont),
+      weight: fontWeight(loadedFont),
+      look: lookup,
+      selectedId,
+    }),
+    [look, loadedFont, lookup, selectedId],
+  );
+  const painterRef = useRef(painter);
+  useEffect(() => {
+    painterRef.current = painter;
+    resizedRef.current = true;
+  }, [painter]);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -166,6 +195,14 @@ export function MindmapCanvas({
     [graph],
   );
 
+  const extentOf = useCallback((node: GraphNode) => measureNode(painterRef.current, node), []);
+  const visibleNodes = useCallback(
+    () => nodesRef.current.filter((node) => !isHidden(painterRef.current.style, node.id)),
+    [],
+  );
+
+  const spacing = look.spacing;
+
   /**
    * Widens the default forces to suit pills.
    *
@@ -178,7 +215,7 @@ export function MindmapCanvas({
    */
   const applyForces = useCallback(
     (instance: GraphInstance) => {
-      instance.d3Force("charge")?.strength(-300).distanceMax(500);
+      instance.d3Force("charge")?.strength(-300 * spacing).distanceMax(500 * spacing);
 
       instance
         .d3Force("link")
@@ -189,30 +226,32 @@ export function MindmapCanvas({
           const span =
             (from ? extentOf(from).halfWidth : 0) +
             (to ? extentOf(to).halfWidth : 0);
-          return 46 + span;
+          return 46 * spacing + span;
         });
 
-      // Each layout gets one of these. Gravity keeps the free layout's
-      // disconnected clusters from drifting apart; the radial mode already
-      // holds every node at a fixed distance from the centre.
+      // Gravity keeps the free layout's disconnected clusters from drifting
+      // apart, and keeps the tree layouts' cross axis together; the radial
+      // mode already holds every node at a fixed distance from the centre.
       instance.d3Force(
         "gravity",
-        layout === "free" ? createGravityForce<GraphNode>(0.12) : null,
+        layout !== "radial" ? createGravityForce<GraphNode>(0.12) : null,
       );
       instance.d3Force(
         "radial",
         layout === "radial"
-          ? createRadialForce<GraphNode>(RING_DISTANCE)
+          ? createRadialForce<GraphNode>(RING_DISTANCE * spacing)
           : null,
       );
 
+      framedRef.current = false;
       instance.d3ReheatSimulation();
     },
-    [layout],
+    [layout, spacing, extentOf],
   );
 
   useEffect(() => {
     nodesRef.current = graphData.nodes as GraphNode[];
+    linksRef.current = graphData.links as PaintLink[];
     framedRef.current = false;
 
     // Null on the first pass: the graph is behind a dynamic import, so it
@@ -224,10 +263,14 @@ export function MindmapCanvas({
   useNodePointer<GraphNode>({
     containerRef,
     instanceRef: graphRef,
-    getNodes: () => nodesRef.current,
-    hitTest: hitsPill,
-    isClickable: (node) => onNodeClick !== undefined && isClickable(node as MapNode),
-    onClick: (node) => onNodeClick?.(node as MapNode),
+    getNodes: visibleNodes,
+    hitTest: (node, x, y) => {
+      const { halfWidth, halfHeight } = extentOf(node);
+      return Math.abs(x - (node.x ?? 0)) <= halfWidth && Math.abs(y - (node.y ?? 0)) <= halfHeight;
+    },
+    isClickable: (node) =>
+      editing ? onSelect !== undefined : onNodeClick !== undefined && isClickable(node as MapNode),
+    onClick: (node) => (editing ? onSelect?.(node as MapNode) : onNodeClick?.(node as MapNode)),
     /*
      * Pins the node where it was dropped — fx/fy already hold the drop point.
      * Handing it straight back to the simulation reads as the drag having been
@@ -242,7 +285,9 @@ export function MindmapCanvas({
       graphRef.current?.d3ReheatSimulation();
     },
     tooltip: (node) =>
-      node.summary ?? (isPinned(node) ? "Right-click to release" : undefined),
+      editing
+        ? "Click to style this node"
+        : (node.summary ?? (isPinned(node) ? "Right-click to release" : undefined)),
   });
 
   const releaseAll = useCallback(() => {
@@ -262,6 +307,37 @@ export function MindmapCanvas({
     graphRef.current?.d3ReheatSimulation();
   }, []);
 
+  useImperativeHandle(
+    handleRef,
+    () => ({
+      releaseAll,
+      viewSize: () => size,
+      snapshot: async (request) => {
+        const instance = graphRef.current;
+        const center = instance?.centerAt() as unknown as { x: number; y: number } | undefined;
+        const canvas = renderSnapshot(nodesRef.current, linksRef.current, painterRef.current, {
+          width: request.width,
+          height: request.height,
+          title: request.title,
+          watermark: request.watermark,
+          frame:
+            request.fit || !instance || !center
+              ? { kind: "fit" }
+              : {
+                  kind: "view",
+                  centerX: center.x,
+                  centerY: center.y,
+                  zoom: instance.zoom(),
+                  viewWidth: size.width,
+                  viewHeight: size.height,
+                },
+        });
+        return canvasToBlob(canvas);
+      },
+    }),
+    [releaseAll, size],
+  );
+
   // One container either way: the resize observer and pointer listeners attach
   // to it once, at mount, so it must exist even while there is nothing to map.
   if (graph.nodes.length === 0) {
@@ -274,22 +350,14 @@ export function MindmapCanvas({
     );
   }
 
-  return (
-    <div ref={containerRef} className="relative min-h-0 flex-1 overflow-hidden">
-      {/*
-        Always available rather than shown once something is pinned: knowing the
-        arrangement can be undone is what makes dragging safe to try, and
-        counting pinned nodes would mean reading simulation state during render.
-      */}
-      <button
-        type="button"
-        onClick={releaseAll}
-        title="Release every node back into the layout"
-        className="glass-float text-muted-foreground hover:text-foreground absolute top-2 right-2 z-10 rounded-full px-3 py-1 text-[11px] backdrop-blur pointer-coarse:px-3 pointer-coarse:py-2 pointer-coarse:text-[12px] transition-colors"
-      >
-        Reset layout
-      </button>
+  const dagMode = layout === "tree-down" ? "td" : layout === "tree-right" ? "lr" : undefined;
 
+  return (
+    <div
+      ref={containerRef}
+      className="relative min-h-0 flex-1 overflow-hidden"
+      style={{ backgroundColor: look.palette.background }}
+    >
       {size.width > 0 && (
         <ForceGraph2D
           instanceRef={graphRef}
@@ -297,62 +365,61 @@ export function MindmapCanvas({
           width={size.width}
           height={size.height}
           graphData={graphData}
-          backgroundColor={MINDMAP_COLORS.background}
-          // No dagMode: its radial rings shake the map (see createRadialForce),
-          // so the rings come from the "radial" force set in applyForces.
+          // No dagMode for the radial layout: its rings shake the map (see
+          // createRadialForce), so they come from the force set in applyForces.
+          dagMode={dagMode}
+          dagLevelDistance={60 * spacing}
+          // A merged concept can close a loop in the global map; the tree
+          // layouts then just place what they can instead of throwing.
+          onDagError={() => {}}
           cooldownTicks={200}
           d3AlphaDecay={0.022}
           d3VelocityDecay={0.35}
-          linkColor={() => MINDMAP_COLORS.link}
-          linkWidth={0.8}
-          // Thin, gently curved connectors rather than straight spokes.
-          linkCurvature={0.18}
+          nodeVisibility={(node: GraphNode) => !isHidden(look, node.id)}
+          linkVisibility={(link: PaintLink) =>
+            typeof link.source !== "object" ||
+            typeof link.target !== "object" ||
+            !(isHidden(look, link.source.id) || isHidden(look, link.target.id))
+          }
+          linkCurvature={look.link.curvature}
+          linkCanvasObjectMode={() => "replace"}
+          linkCanvasObject={(link: PaintLink, ctx: CanvasRenderingContext2D) => drawLink(ctx, link, painter)}
+          linkDirectionalParticles={look.link.particles}
+          linkDirectionalParticleSpeed={look.link.particleSpeed}
+          linkDirectionalParticleWidth={look.link.particleSize}
+          linkDirectionalParticleColor={(link: PaintLink) =>
+            typeof link.target === "object" ? lookup(link.target).accent : look.palette.link
+          }
           // Hover, click and drag come from useNodePointer, by geometry.
           enablePointerInteraction={false}
           enableNodeDrag={false}
+          onRenderFramePre={(ctx: CanvasRenderingContext2D) => {
+            const { width, height } = ctx.canvas;
+            paintBackdrop(ctx, width, height, painterRef.current.style);
+            paintGraphPattern(ctx, width, height, painterRef.current.style);
+            if (resizedRef.current) {
+              // Fonts, emoji and sizes change what a node occupies; clear any
+              // overlap that opened up before it is drawn.
+              resizedRef.current = false;
+              resolveOverlaps(visibleNodes(), extentOf);
+            }
+          }}
           // Runs after d3 has integrated the tick, so the separation it applies
           // is what the frame actually draws. The last tick before the engine
           // stops therefore leaves the map with no pills overlapping.
           onEngineTick={() => {
-            separateOnce(nodesRef.current, extentOf, 0.5);
+            separateOnce(visibleNodes(), extentOf, 0.5);
           }}
           onEngineStop={() => {
             // The engine has stopped, so nothing will integrate away a residual
             // overlap. Resolve what is left outright, then frame the result.
-            resolveOverlaps(nodesRef.current, extentOf);
+            resolveOverlaps(visibleNodes(), extentOf);
             if (!framedRef.current) {
               framedRef.current = true;
               graphRef.current?.zoomToFit(400, 40);
             }
           }}
-          nodeCanvasObject={(node: GraphNode, ctx: CanvasRenderingContext2D) => {
-            const style = PILL[node.kind] ?? PILL.concept;
-            const colors = MINDMAP_COLORS[node.kind] ?? MINDMAP_COLORS.concept;
-            const { halfWidth, halfHeight } = extentOf(node);
-            const x = node.x ?? 0;
-            const y = node.y ?? 0;
-
-            ctx.beginPath();
-            ctx.roundRect(
-              x - halfWidth,
-              y - halfHeight,
-              halfWidth * 2,
-              halfHeight * 2,
-              halfHeight,
-            );
-            ctx.fillStyle = colors.fill;
-            ctx.fill();
-            // A hand-placed node reads as deliberate, so its outline is firmer.
-            ctx.strokeStyle = colors.stroke;
-            ctx.lineWidth = isPinned(node) ? 1.1 : 0.5;
-            ctx.stroke();
-
-            ctx.font = `${style.font}px ${FONT_STACK}`;
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            ctx.fillStyle = colors.text;
-            ctx.fillText(node.label, x, y);
-          }}
+          nodeCanvasObject={(node: GraphNode, ctx: CanvasRenderingContext2D) => drawNode(ctx, node, painter)}
         />
       )}
     </div>
