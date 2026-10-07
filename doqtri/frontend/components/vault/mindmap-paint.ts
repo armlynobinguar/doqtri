@@ -1,5 +1,6 @@
 import type { Extent } from "@/lib/mindmap-layout";
-import type { MapNode, MapNodeKind } from "@/lib/mindmap-graph";
+import { focusAlpha, linkFocusAlpha, type FocusState } from "@/components/vault/use-mindmap-focus";
+import { revealAlpha, type MapNode, type MapNodeKind } from "@/lib/mindmap-graph";
 import {
   displayLabel,
   isHidden,
@@ -35,6 +36,17 @@ export type Painter = {
    * dropped, since a blurred shadow on a thousand lines is most of a frame.
    */
   large?: boolean;
+  /** Hover focus, read at draw time; absent for exports, which never dim. */
+  focus?: { current: FocusState };
+  /**
+   * Draw deeper levels only once zoomed in far enough to read them. Off for
+   * small maps and for exports, which always show everything.
+   */
+  reveal?: boolean;
+  /** Device pixels per CSS pixel, to turn canvas scale into on-screen size. */
+  dpr?: number;
+  /** Enlargements already fitted so outline labels do not collide (see fitBoosts). */
+  boosts?: { current: Map<string, number> };
 };
 
 /**
@@ -203,9 +215,92 @@ function tracePath(ctx: CanvasRenderingContext2D, style: MindmapStyle, x: number
   }
 }
 
+/**
+ * How much of `node` the current zoom reveals, 0 to 1 (see `revealAlpha`).
+ * A focused branch is revealed in full, so hovering a section shows what is
+ * inside it before zooming in — and the selected node is never hidden.
+ *
+ * `cssPerUnit` is CSS pixels per graph unit at the current zoom.
+ */
+export function nodeReveal(painter: Painter, node: PaintNode, cssPerUnit: number): number {
+  if (!painter.reveal || node.depth <= 1) return 1;
+  if (painter.selectedId === node.id) return 1;
+  let alpha = revealAlpha(sizeOf(painter, node).font * cssPerUnit, node.depth);
+  const focus = painter.focus?.current;
+  if (focus?.set?.has(node.id) && focus.t > 0) alpha = Math.max(alpha, focus.t);
+  return alpha;
+}
+
+/** Smallest on-screen label height, in CSS pixels, for the map's outline. */
+const OUTLINE_MIN_PX: Record<number, number> = { 0: 12, 1: 10 };
+
+/** Smallest on-screen label height for a highlighted branch below the outline. */
+const LIT_MIN_PX = 9;
+
+/** Most a label may be enlarged: the outline, and a highlighted branch, which may grow further. */
+const MAX_BOOST = 4;
+const MAX_LIT_BOOST = 8;
+
+/** Whether `node` is part of a showing highlight (hovered, held, or locked). */
+export function isLit(painter: Painter, node: PaintNode): boolean {
+  const focus = painter.focus?.current;
+  return Boolean(focus?.set?.has(node.id) && focus.t > 0);
+}
+
+/**
+ * How much to enlarge a node so its label stays readable when zoomed far out
+ * — the way a map keeps continent names legible however far you pull back,
+ * instead of shrinking them to dots with everything else.
+ *
+ * The outline (root and first ring) always gets this. So does a highlighted
+ * branch, at any depth: a locked highlight is what the viewer asked to keep
+ * in sight, and zooming out should not shrink it to specks.
+ * 1 when no enlarging is needed, or when zoom reveal is off.
+ */
+export function labelBoost(painter: Painter, node: PaintNode, cssPerUnit: number): number {
+  if (!painter.reveal) return 1;
+  const lit = isLit(painter, node);
+  const minimum = OUTLINE_MIN_PX[node.depth] ?? (lit ? LIT_MIN_PX : undefined);
+  if (minimum === undefined) return 1;
+  const onScreen = sizeOf(painter, node).font * cssPerUnit;
+  return onScreen >= minimum ? 1 : Math.min(lit ? MAX_LIT_BOOST : MAX_BOOST, minimum / onScreen);
+}
+
+/**
+ * The enlargement a node is actually drawn at: what `labelBoost` wants, cut
+ * down where it would collide with a neighbour. Always 1 without zoom reveal,
+ * which is also how exports opt out.
+ */
+export function fittedBoost(painter: Painter, node: PaintNode, cssPerUnit: number): number {
+  if (!painter.reveal) return 1;
+  return painter.boosts?.current.get(node.id) ?? labelBoost(painter, node, cssPerUnit);
+}
+
 export function drawNode(ctx: CanvasRenderingContext2D, node: PaintNode, painter: Painter) {
   const { style } = painter;
   if (isHidden(style, node.id)) return;
+  const cssPerUnit = pixelScale(ctx) / (painter.dpr ?? 1);
+  const reveal = nodeReveal(painter, node, cssPerUnit);
+  if (reveal <= 0) return;
+
+  const boost = fittedBoost(painter, node, cssPerUnit);
+  if (boost !== 1) {
+    // Scale about the node's centre, so it grows in place.
+    const cx = node.x ?? 0;
+    const cy = node.y ?? 0;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(boost, boost);
+    ctx.translate(-cx, -cy);
+    drawNodeBody(ctx, node, painter, reveal);
+    ctx.restore();
+    return;
+  }
+  drawNodeBody(ctx, node, painter, reveal);
+}
+
+function drawNodeBody(ctx: CanvasRenderingContext2D, node: PaintNode, painter: Painter, reveal: number) {
+  const { style } = painter;
 
   const look = painter.look(node);
   const { halfWidth: hw, halfHeight: hh } = measureNode(painter, node);
@@ -217,9 +312,12 @@ export function drawNode(ctx: CanvasRenderingContext2D, node: PaintNode, painter
   // Below a few pixels a label is unreadable anyway; drawing it is the single
   // most expensive part of a node, so a zoomed-out big map skips it.
   const legible = font * scale >= MIN_TEXT_PX;
+  const alpha = (painter.focus ? focusAlpha(painter.focus.current, node.id) : 1) * reveal;
 
   ctx.save();
-  if (style.glow > 0 && legible) {
+  ctx.globalAlpha = alpha;
+  // A dimmed node's glow would only haze over the branch that is lit.
+  if (style.glow > 0 && legible && alpha === 1) {
     ctx.shadowColor = look.accent;
     ctx.shadowBlur = style.glow * 9 * scale;
   }
@@ -318,6 +416,10 @@ export function drawLink(ctx: CanvasRenderingContext2D, link: PaintLink, painter
   if (typeof source !== "object" || typeof target !== "object") return;
   const { style } = painter;
   if (isHidden(style, source.id) || isHidden(style, target.id)) return;
+  const cssPerUnit = pixelScale(ctx) / (painter.dpr ?? 1);
+  // A link shows as much as its less-revealed end: it leads nowhere otherwise.
+  const reveal = Math.min(nodeReveal(painter, source, cssPerUnit), nodeReveal(painter, target, cssPerUnit));
+  if (reveal <= 0) return;
 
   const sx = source.x ?? 0;
   const sy = source.y ?? 0;
@@ -326,6 +428,7 @@ export function drawLink(ctx: CanvasRenderingContext2D, link: PaintLink, painter
   const cp = controlPoint(sx, sy, tx, ty, style.link.curvature);
 
   ctx.save();
+  ctx.globalAlpha = (painter.focus ? linkFocusAlpha(painter.focus.current, source.id, target.id) : 1) * reveal;
   ctx.beginPath();
   ctx.moveTo(sx, sy);
   if (cp) ctx.quadraticCurveTo(cp.x, cp.y, tx, ty);

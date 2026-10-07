@@ -6,6 +6,9 @@ import type { ForceGraphMethods, NodeObject } from "react-force-graph-2d";
 /** Screen pixels the pointer may travel before a press becomes a drag. */
 const DRAG_TOLERANCE_PX = 4;
 
+/** How long a finger must rest on a node before the press counts as a hold. */
+const LONG_PRESS_MS = 450;
+
 /**
  * Share of every other node's velocity kept per tick while one is dragged.
  * A drag reheats the simulation to full strength so the engine keeps drawing;
@@ -30,6 +33,15 @@ export type NodePointerOptions<N extends Positioned> = {
   onDragEnd?: (node: N) => void;
   /** Native tooltip text for a hovered node. */
   tooltip?: (node: N) => string | undefined;
+  /** The node under a mouse pointer, or null once it leaves every node. */
+  onHover?: (node: N | null) => void;
+  /**
+   * A finger held still on a node. Touch screens have no hover, so this stands
+   * in for it; the press then neither clicks nor drags.
+   */
+  onLongPress?: (node: N) => void;
+  /** A press that landed on no node. */
+  onPressEmpty?: () => void;
 };
 
 /**
@@ -60,7 +72,17 @@ export function useNodePointer<N extends Positioned>(options: NodePointerOptions
 
     let pressed: { node: N; startX: number; startY: number; offsetX: number; offsetY: number } | null = null;
     let dragging: N | null = null;
+    let hovered: N | null = null;
+    let holdTimer: ReturnType<typeof setTimeout> | undefined;
+    /** Set once a hold has fired, so releasing the finger does not also click. */
+    let held = false;
+    /** The kind of the latest press, to tell a touch hold's contextmenu apart. */
+    let lastPointerType = "mouse";
 
+    function cancelHold() {
+      clearTimeout(holdTimer);
+      holdTimer = undefined;
+    }
     const canvasOf = () => container.querySelector("canvas");
 
     /** The topmost node under a client point, with that point in graph units. */
@@ -95,6 +117,12 @@ export function useNodePointer<N extends Positioned>(options: NodePointerOptions
       canvas.title = (node && tooltip?.(node)) || "";
     }
 
+    function reportHover(node: N | null) {
+      if (node === hovered) return;
+      hovered = node;
+      optionsRef.current.onHover?.(node);
+    }
+
     function setDamping(on: boolean) {
       const instance = optionsRef.current.instanceRef.current;
       if (!instance) return;
@@ -116,10 +144,25 @@ export function useNodePointer<N extends Positioned>(options: NodePointerOptions
     // d3-zoom would start panning the whole view instead.
     function onDown(event: PointerEvent) {
       if (event.target !== canvasOf()) return;
+      lastPointerType = event.pointerType;
+      held = false;
       const hit = pick(event.clientX, event.clientY);
-      if (!hit?.node) return;
+      if (!hit?.node) {
+        optionsRef.current.onPressEmpty?.();
+        return;
+      }
       event.stopPropagation();
       if (event.button !== 0) return;
+      if (event.pointerType !== "mouse" && optionsRef.current.onLongPress) {
+        const node = hit.node;
+        cancelHold();
+        holdTimer = setTimeout(() => {
+          holdTimer = undefined;
+          if (!pressed || dragging) return;
+          held = true;
+          optionsRef.current.onLongPress?.(node);
+        }, LONG_PRESS_MS);
+      }
       pressed = {
         node: hit.node,
         startX: event.clientX,
@@ -143,9 +186,14 @@ export function useNodePointer<N extends Positioned>(options: NodePointerOptions
     function onMove(event: PointerEvent) {
       if (!pressed) {
         if (event.target !== canvasOf()) return;
-        setHover(pick(event.clientX, event.clientY)?.node ?? null);
+        const node = pick(event.clientX, event.clientY)?.node ?? null;
+        setHover(node);
+        // Touch "hover" is only a finger passing over; holds handle touch.
+        if (event.pointerType === "mouse") reportHover(node);
         return;
       }
+      // A held finger has become a focus; moving it afterwards is not a drag.
+      if (held) return;
 
       const instance = optionsRef.current.instanceRef.current;
       if (!instance) return;
@@ -154,6 +202,7 @@ export function useNodePointer<N extends Positioned>(options: NodePointerOptions
       if (!dragging) {
         const moved = Math.hypot(event.clientX - pressed.startX, event.clientY - pressed.startY);
         if (moved < DRAG_TOLERANCE_PX || !optionsRef.current.onDragEnd) return;
+        cancelHold();
         dragging = node;
         setDamping(true);
         setHover(node);
@@ -170,6 +219,7 @@ export function useNodePointer<N extends Positioned>(options: NodePointerOptions
     }
 
     function onUp(event: PointerEvent) {
+      cancelHold();
       if (!pressed) return;
       const { node } = pressed;
       pressed = null;
@@ -185,12 +235,23 @@ export function useNodePointer<N extends Positioned>(options: NodePointerOptions
         return;
       }
 
+      if (held) {
+        held = false;
+        return;
+      }
+
       const { isClickable, onClick } = optionsRef.current;
       if (isClickable?.(node) ?? true) onClick?.(node);
     }
 
     function onContextMenu(event: MouseEvent) {
       if (event.target !== canvasOf()) return;
+      // A long touch raises contextmenu on Android. That press is a hold, not a
+      // right-click, and must not release a pinned node.
+      if (lastPointerType !== "mouse") {
+        event.preventDefault();
+        return;
+      }
       const hit = pick(event.clientX, event.clientY);
       if (!hit?.node || !optionsRef.current.onRightClick) return;
       event.preventDefault();
@@ -198,7 +259,10 @@ export function useNodePointer<N extends Positioned>(options: NodePointerOptions
     }
 
     function onLeave() {
-      if (!pressed) setHover(null);
+      if (!pressed) {
+        setHover(null);
+        reportHover(null);
+      }
     }
 
     container.addEventListener("pointerdown", onDown, { capture: true });
@@ -210,6 +274,7 @@ export function useNodePointer<N extends Positioned>(options: NodePointerOptions
     container.addEventListener("pointerleave", onLeave);
     container.addEventListener("contextmenu", onContextMenu);
     return () => {
+      cancelHold();
       container.removeEventListener("pointerdown", onDown, { capture: true });
       container.removeEventListener("mousedown", onLegacyDown, { capture: true });
       container.removeEventListener("touchstart", onLegacyDown, { capture: true });

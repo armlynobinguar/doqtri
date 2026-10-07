@@ -100,3 +100,72 @@ export function overviewGraph(
   const links = graph.links.filter((link) => kept.has(link.source) && kept.has(link.target));
   return { graph: { nodes, links }, depth };
 }
+
+/**
+ * Above this share of the map, focusing on a node dims nothing: lighting up
+ * nearly everything (hovering the root, say) only adds a flicker.
+ */
+export const FOCUS_MAX_SHARE = 0.8;
+
+/**
+ * For any node, the nodes it is related to: itself, everything below it, and
+ * the path back up to the root.
+ *
+ * The descendants are what the node is about; the ancestors say where it sits
+ * in the map, which a highlighted branch floating alone would lose. A node with
+ * several parents — a hub in the global map — keeps every route upward.
+ *
+ * The adjacency is built once per graph; each lookup walks only the nodes it
+ * returns. Returns null when the related set covers too much of the map to be
+ * worth dimming the rest.
+ */
+export function createFocusIndex(graph: MindmapGraph): (id: string) => Set<string> | null {
+  const children = new Map<string, string[]>();
+  const parents = new Map<string, string[]>();
+  for (const { source, target } of graph.links) {
+    (children.get(source) ?? children.set(source, []).get(source)!).push(target);
+    (parents.get(target) ?? parents.set(target, []).get(target)!).push(source);
+  }
+  const total = graph.nodes.length;
+
+  function walk(start: string, edges: Map<string, string[]>, into: Set<string>) {
+    const stack = [start];
+    while (stack.length > 0) {
+      const id = stack.pop()!;
+      for (const next of edges.get(id) ?? []) {
+        if (into.has(next)) continue;
+        into.add(next);
+        stack.push(next);
+      }
+    }
+  }
+
+  return (id) => {
+    const related = new Set<string>([id]);
+    walk(id, children, related);
+    walk(id, parents, related);
+    return related.size > total * FOCUS_MAX_SHARE ? null : related;
+  };
+}
+
+/** Below this many nodes a map is drawn whole at every zoom. */
+export const ZOOM_REVEAL_MIN_NODES = 150;
+
+/**
+ * How much of a node to draw for its label's on-screen size — the map
+ * equivalent of street names appearing only once you zoom in.
+ *
+ * The root and its first ring always show: they are the map's outline. Each
+ * level below needs a larger on-screen label than the one above it before it
+ * appears, so zooming in reveals the map a level at a time instead of all at
+ * once, and each level fades in over a short range rather than popping.
+ *
+ * `fontPx` is the label's height in CSS pixels at the current zoom. Returns
+ * 0 (hidden) to 1 (fully drawn).
+ */
+export function revealAlpha(fontPx: number, depth: number): number {
+  if (depth <= 1) return 1;
+  const start = 4 + (depth - 2) * 3;
+  const full = start + 3;
+  return Math.min(1, Math.max(0, (fontPx - start) / (full - start)));
+}

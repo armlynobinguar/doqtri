@@ -81,6 +81,10 @@ export type MindmapStyle = {
     bloom: number;
   };
   caption: { show: boolean; text: string; watermark: boolean };
+  /** Dim everything but a hovered (or held, on touch) node's branch. */
+  focus: boolean;
+  /** On big maps, draw deeper levels only once zoomed in far enough to read them. */
+  zoomReveal: boolean;
   overrides: Record<string, NodeOverride>;
 };
 
@@ -412,6 +416,8 @@ export const DEFAULT_STYLE: MindmapStyle = {
   view: "2d",
   three: { layout: "free", node: "label", autoRotate: true, rotateSpeed: 1, bloom: 1 },
   caption: { show: false, text: "", watermark: true },
+  focus: true,
+  zoomReveal: true,
   overrides: {},
 };
 
@@ -435,6 +441,8 @@ export function applyPreset(style: MindmapStyle, presetId: string): MindmapStyle
     layout: style.layout,
     spacing: style.spacing,
     caption: style.caption,
+    focus: style.focus,
+    zoomReveal: style.zoomReveal,
     overrides: style.overrides,
     preset: preset.id,
   };
@@ -581,6 +589,8 @@ export function parseStyle(value: unknown, fallback: MindmapStyle = DEFAULT_STYL
           : f.caption.text,
       watermark: bool(caption.watermark, f.caption.watermark),
     },
+    focus: bool(raw.focus, f.focus),
+    zoomReveal: bool(raw.zoomReveal, f.zoomReveal),
     overrides: parseOverrides(raw.overrides),
   };
 }
