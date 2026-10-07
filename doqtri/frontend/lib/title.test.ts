@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveTitle, uniqueTitle } from "@/lib/title";
+import { deriveTitle, isTitleTaken, uniqueTitle } from "@/lib/title";
 
 describe("deriveTitle", () => {
   it("prefers the first h1", () => {
@@ -58,5 +58,15 @@ describe("uniqueTitle", () => {
 
   it("handles an empty taken list", () => {
     expect(uniqueTitle("Alpha", [])).toBe("Alpha");
+  });
+});
+
+describe("isTitleTaken", () => {
+  it("matches case- and trim-insensitively", () => {
+    expect(isTitleTaken("  plan ", ["Plan"])).toBe(true);
+  });
+
+  it("is false when nothing matches", () => {
+    expect(isTitleTaken("Plan", ["Plans", "Other"])).toBe(false);
   });
 });

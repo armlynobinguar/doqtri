@@ -8,6 +8,7 @@ import {
   UploadIcon,
   FilePlusIcon,
   Loader2Icon,
+  PencilIcon,
   RotateCcwIcon,
   Trash2Icon,
   TriangleAlertIcon,
@@ -39,6 +40,7 @@ export function FileExplorer({
   anchoredIds,
   onDeleteNote,
   deletingId,
+  onRenameNote,
 }: {
   notes: NoteSummary[];
   activeId?: string;
@@ -51,6 +53,7 @@ export function FileExplorer({
   anchoredIds?: ReadonlySet<string>;
   onDeleteNote?: (note: NoteSummary) => void;
   deletingId?: string | null;
+  onRenameNote?: (note: NoteSummary) => void;
 }) {
   return (
     <aside className="bg-sidebar flex h-full min-h-0 flex-col">
@@ -127,6 +130,9 @@ export function FileExplorer({
                       />
                       <span className="truncate">{note.title}</span>
                     </NavLink>
+                    {onRenameNote ? (
+                      <RenameRowAction note={note} onRename={onRenameNote} />
+                    ) : null}
                     <NoteRowAction
                       note={note}
                       anchored={anchored}
@@ -204,6 +210,31 @@ function FailedImports({
         ))}
       </ul>
     </div>
+  );
+}
+
+/**
+ * Rename sits before the delete/on-chain control and shows on every row:
+ * a rename leaves the note's text alone, so anchored notes can be renamed too.
+ */
+function RenameRowAction({
+  note,
+  onRename,
+}: {
+  note: NoteSummary;
+  onRename: (note: NoteSummary) => void;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        aria-label={`Rename ${note.title}`}
+        onClick={() => onRename(note)}
+        className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent focus-visible:ring-ring flex size-6 shrink-0 items-center justify-center rounded-md opacity-0 transition-opacity group-hover:opacity-100 pointer-coarse:size-10 pointer-coarse:opacity-70 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:outline-hidden"
+      >
+        <PencilIcon className="size-3.5" strokeWidth={1.75} />
+      </TooltipTrigger>
+      <TooltipContent side="right">Rename note</TooltipContent>
+    </Tooltip>
   );
 }
 

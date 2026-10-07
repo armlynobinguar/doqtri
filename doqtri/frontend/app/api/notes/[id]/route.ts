@@ -4,11 +4,100 @@ import {
   createSupabaseAdminClient,
 } from "@/lib/supabase/server";
 import { DoqtriRegistry } from "@/lib/stellar/contract-client";
+import { isTitleTaken, MAX_TITLE_LENGTH } from "@/lib/title";
 
 export const runtime = "nodejs";
 
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Renames a note. Only the `title` column changes: the markdown is left alone,
+ * so an anchored note's content hash still matches the ledger and stays
+ * renameable. Titles are the graph's join key, so a clash with another of the
+ * user's notes is refused rather than silently suffixed — the user picked this
+ * name and should see that it did not stick.
+ *
+ * Other notes' [[wikilinks]] to the old title are not rewritten. Editing their
+ * markdown would un-anchor any of them that are on the ledger.
+ */
+export async function PATCH(
+  request: Request,
+  context: RouteContext<"/api/notes/[id]">,
+) {
+  const { id } = await context.params;
+
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+  }
+
+  if (!UUID.test(id)) {
+    return NextResponse.json({ error: "Note not found" }, { status: 404 });
+  }
+
+  let title = "";
+  try {
+    const body = (await request.json()) as { title?: unknown };
+    if (typeof body.title === "string") title = body.title.trim();
+  } catch {
+    // falls through to the empty-title refusal
+  }
+
+  if (!title) {
+    return NextResponse.json({ error: "A note needs a title" }, { status: 400 });
+  }
+  if (title.length > MAX_TITLE_LENGTH) {
+    return NextResponse.json(
+      { error: `Titles are at most ${MAX_TITLE_LENGTH} characters` },
+      { status: 400 },
+    );
+  }
+
+  const admin = createSupabaseAdminClient();
+
+  // Scoped by user_id: the service role would otherwise reach anyone's note.
+  const { data: rows, error: titlesError } = await admin
+    .from("documents")
+    .select("id, title")
+    .eq("user_id", user.id);
+
+  if (titlesError) {
+    return NextResponse.json({ error: titlesError.message }, { status: 500 });
+  }
+
+  const notes = (rows ?? []) as { id: string; title: string }[];
+  const note = notes.find((row) => row.id === id);
+  if (!note) {
+    return NextResponse.json({ error: "Note not found" }, { status: 404 });
+  }
+
+  const others = notes.filter((row) => row.id !== id).map((row) => row.title);
+  if (isTitleTaken(title, others)) {
+    return NextResponse.json(
+      { error: `Another note is already called “${title}”`, code: "TITLE_TAKEN" },
+      { status: 409 },
+    );
+  }
+
+  if (title !== note.title) {
+    const { error: updateError } = await admin
+      .from("documents")
+      .update({ title })
+      .eq("id", id)
+      .eq("user_id", user.id);
+
+    if (updateError) {
+      return NextResponse.json({ error: updateError.message }, { status: 500 });
+    }
+  }
+
+  return NextResponse.json({ id, title, previousTitle: note.title });
+}
 
 /**
  * Hard-deletes a note: the row (markdown and stored mindmap with it), its

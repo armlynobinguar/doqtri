@@ -14,6 +14,7 @@ import { StatusBar } from "@/components/vault/status-bar";
 import { QuickSwitcher } from "@/components/vault/quick-switcher";
 import { UploadDialog, type RetryTarget } from "@/components/vault/upload-dialog";
 import { DeleteNoteDialog } from "@/components/vault/delete-note-dialog";
+import { RenameNoteDialog } from "@/components/vault/rename-note-dialog";
 import { SettingsDialog } from "@/components/vault/settings-dialog";
 import { AccountMenu } from "@/components/vault/account-menu";
 import { MobileTabBar, MobileTopBar } from "@/components/vault/mobile-chrome";
@@ -26,6 +27,7 @@ import {
 } from "@/components/vault/vault-status";
 import { createBlankNote } from "@/lib/create-note";
 import { deleteNote, DeleteNoteError } from "@/lib/delete-note";
+import { renameNote } from "@/lib/rename-note";
 import { anchoredDocIds } from "@/lib/stellar/anchored";
 import type { FailedImport, NoteSummary, VaultIdentity } from "@/lib/types";
 import {
@@ -87,6 +89,7 @@ function VaultShellInner({
   const [anchored, setAnchored] = useState<ReadonlySet<string>>(new Set());
   const [pendingDelete, setPendingDelete] = useState<NoteSummary | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [pendingRename, setPendingRename] = useState<NoteSummary | null>(null);
 
   // The shell lives in the layout, so the active note comes from the URL
   // rather than from props. `/vault/mindmap` and `/vault/graph` are
@@ -179,6 +182,18 @@ function VaultShellInner({
     [activeId, navigate, router],
   );
 
+  // Errors are rethrown so the dialog can show them beside the title field.
+  const handleRenameNote = useCallback(
+    async (note: NoteSummary, title: string) => {
+      const renamed = await renameNote(note.id, title);
+      toast.success(`Renamed to “${renamed.title}”`);
+      // The explorer, tabs, and mindmap root all read the title from the
+      // layout's server data.
+      router.refresh();
+    },
+    [router],
+  );
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "k" && (event.metaKey || event.ctrlKey)) {
@@ -242,6 +257,10 @@ function VaultShellInner({
       anchoredIds={anchored}
       deletingId={deletingId}
       onDeleteNote={setPendingDelete}
+      onRenameNote={(note) => {
+        setDrawerOpen(false);
+        setPendingRename(note);
+      }}
     />
   );
 
@@ -346,6 +365,17 @@ function VaultShellInner({
         }}
         onConfirm={async () => {
           if (pendingDelete) await handleDeleteNote(pendingDelete);
+        }}
+      />
+      <RenameNoteDialog
+        key={pendingRename?.id ?? "closed"}
+        open={pendingRename !== null}
+        title={pendingRename?.title ?? ""}
+        onOpenChange={(next) => {
+          if (!next) setPendingRename(null);
+        }}
+        onConfirm={async (title) => {
+          if (pendingRename) await handleRenameNote(pendingRename, title);
         }}
       />
       <SettingsDialog
