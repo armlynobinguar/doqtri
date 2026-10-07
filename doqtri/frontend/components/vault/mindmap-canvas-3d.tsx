@@ -13,7 +13,12 @@ import {
   type MindmapCanvasProps,
 } from "@/components/vault/mindmap-canvas";
 import { fontFamily, fontWeight } from "@/components/vault/mindmap-fonts";
-import { canvasToBlob, paintBackdrop, paintCaption } from "@/components/vault/mindmap-paint";
+import {
+  canvasToBlob,
+  loadWatermarkLogo,
+  paintBackdrop,
+  paintCaption,
+} from "@/components/vault/mindmap-paint";
 import { displayLabel, isHidden, isLight, mix, type MindmapStyle } from "@/lib/mindmap-style";
 import type { MapNode, MapNodeKind } from "@/lib/mindmap-graph";
 
@@ -199,6 +204,37 @@ export default function MindmapCanvas3D({
     };
   }, [ready, look]);
 
+  /*
+   * Guards OrbitControls against a fake pointer-up.
+   *
+   * When a node drag ends — and every node click is a drag that did not move —
+   * 3d-force-graph dispatches a synthetic `pointerup` on the document so the
+   * camera controls let go. It carries pointerId 0, which OrbitControls never
+   * saw go down: it removes nothing, finds the real mouse pointer still listed,
+   * and reads a touch position that was never recorded, throwing "Cannot read
+   * properties of undefined (reading 'x')". The real pointer-up follows on the
+   * same gesture and releases the controls properly, so the fake one is
+   * dropped. OrbitControls looks this handler up when a press starts, so
+   * replacing it here takes effect from the next press on.
+   */
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!ready || !fg) return;
+    const controls = fg.controls() as unknown as {
+      _pointers?: number[];
+      _onPointerUp?: (event: PointerEvent) => void;
+    };
+    const original = controls._onPointerUp;
+    if (!original || !Array.isArray(controls._pointers)) return;
+    controls._onPointerUp = (event: PointerEvent) => {
+      if (!event.isTrusted && !controls._pointers?.includes(event.pointerId)) return;
+      original(event);
+    };
+    return () => {
+      controls._onPointerUp = original;
+    };
+  }, [ready]);
+
   // Camera spin.
   useEffect(() => {
     const fg = fgRef.current;
@@ -322,7 +358,8 @@ export default function MindmapCanvas3D({
           composer.setPixelRatio(previous);
         }
 
-        paintCaption(ctx, request.width, request.height, look, family, request.title, request.watermark);
+        const logo = request.watermark ? await loadWatermarkLogo(look) : null;
+        paintCaption(ctx, request.width, request.height, look, family, request.title, request.watermark, logo);
         return canvasToBlob(output);
       },
     }),

@@ -25,6 +25,7 @@ import {
   type MindmapCanvasHandle,
   type MindmapCanvasProps,
 } from "@/components/vault/mindmap-canvas";
+import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { cssFontFamily, FONT_LABELS } from "@/components/vault/mindmap-fonts";
 import { useMindmapStyle } from "@/hooks/use-mindmap-style";
 import {
@@ -239,9 +240,21 @@ export function MindmapStudio({
           </div>
           {style.caption.watermark && (
             <span
-              className="shrink-0 text-[11px] font-semibold"
+              className="flex shrink-0 items-center gap-1.5 text-[11px] font-semibold"
               style={{ color: light ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.55)", fontFamily: "ui-sans-serif, system-ui" }}
             >
+              {/* The mark reads its ring fill from --mark-fill; match the backdrop. */}
+              <span
+                className="flex opacity-85"
+                style={
+                  {
+                    color: light ? "#111111" : "#f4f5f7",
+                    "--mark-fill": style.palette.background,
+                  } as React.CSSProperties
+                }
+              >
+                <DoqtriMark title="" glow={false} className="h-[18px] w-auto" />
+              </span>
               made with doqtri
             </span>
           )}
@@ -324,6 +337,7 @@ export function MindmapStudio({
             if (next !== "node") setSelectedId(null);
           }}
           selected={selected}
+          nodes={graph.nodes}
           clearSelection={() => setSelectedId(null)}
           title={title}
           undo={undo}
@@ -589,6 +603,7 @@ function StudioPanel({
   tab,
   setTab,
   selected,
+  nodes,
   clearSelection,
   title,
   undo,
@@ -601,6 +616,7 @@ function StudioPanel({
   tab: Tab;
   setTab: (tab: Tab) => void;
   selected: MapNode | null;
+  nodes: MapNode[];
   clearSelection: () => void;
   title: string;
   undo: () => void;
@@ -635,7 +651,30 @@ function StudioPanel({
       };
     });
 
-  const hiddenCount = Object.values(style.overrides).filter((o) => o.hidden).length;
+  // Only nodes on this map: a rebuilt mindmap can leave overrides behind for
+  // concepts that no longer exist, and those cannot be shown again anyway.
+  const hiddenNodes = nodes.filter((node) => style.overrides[node.id]?.hidden);
+  const hiddenCount = hiddenNodes.length;
+
+  const editNode = (id: string, patch: NodeOverride) =>
+    update((s) => {
+      const merged: NodeOverride = { ...s.overrides[id], ...patch };
+      for (const key of Object.keys(merged) as (keyof NodeOverride)[]) {
+        if (merged[key] === undefined) delete merged[key];
+      }
+      const overrides = { ...s.overrides };
+      if (Object.keys(merged).length === 0) delete overrides[id];
+      else overrides[id] = merged;
+      return { ...s, overrides };
+    });
+
+  const showAll = () =>
+    update((s) => ({
+      ...s,
+      overrides: Object.fromEntries(
+        Object.entries(s.overrides).map(([id, o]) => [id, { ...o, hidden: undefined }]),
+      ),
+    }));
 
   async function copyCode() {
     try {
@@ -868,16 +907,7 @@ function StudioPanel({
                 Open the <b className="text-foreground">Node</b> tab, then click any node to give it its own colour, emoji or size.
               </p>
               {hiddenCount > 0 && (
-                <PanelButton
-                  onClick={() =>
-                    update((s) => ({
-                      ...s,
-                      overrides: Object.fromEntries(
-                        Object.entries(s.overrides).map(([id, o]) => [id, { ...o, hidden: undefined }]),
-                      ),
-                    }))
-                  }
-                >
+                <PanelButton onClick={showAll}>
                   <EyeIcon className="size-3.5" /> Show {hiddenCount} hidden {hiddenCount === 1 ? "node" : "nodes"}
                 </PanelButton>
               )}
@@ -981,23 +1011,14 @@ function StudioPanel({
         )}
 
         {tab === "node" && (
-          <NodeEditor
-            node={selected}
-            style={style}
-            onChange={(id, patch) =>
-              update((s) => {
-                const merged: NodeOverride = { ...s.overrides[id], ...patch };
-                for (const key of Object.keys(merged) as (keyof NodeOverride)[]) {
-                  if (merged[key] === undefined) delete merged[key];
-                }
-                const overrides = { ...s.overrides };
-                if (Object.keys(merged).length === 0) delete overrides[id];
-                else overrides[id] = merged;
-                return { ...s, overrides };
-              })
-            }
-            onDone={clearSelection}
-          />
+          <>
+            <NodeEditor node={selected} style={style} onChange={editNode} onDone={clearSelection} />
+            <HiddenNodes
+              nodes={hiddenNodes}
+              onShow={(id) => editNode(id, { hidden: undefined })}
+              onShowAll={showAll}
+            />
+          </>
         )}
       </div>
 
@@ -1012,6 +1033,57 @@ function StudioPanel({
         </button>
       </footer>
     </aside>
+  );
+}
+
+/**
+ * The nodes hidden on this map, each with its own way back.
+ *
+ * A hidden node is not drawn, so it cannot be clicked to select it again; this
+ * list is the only handle on it short of showing every hidden node at once.
+ */
+function HiddenNodes({
+  nodes,
+  onShow,
+  onShowAll,
+}: {
+  nodes: MapNode[];
+  onShow: (id: string) => void;
+  onShowAll: () => void;
+}) {
+  if (nodes.length === 0) return null;
+  return (
+    <Section
+      title={`Hidden (${nodes.length})`}
+      aside={
+        nodes.length > 1 && (
+          <button type="button" onClick={onShowAll} className="text-muted-foreground hover:text-foreground text-[11px]">
+            Show all
+          </button>
+        )
+      }
+    >
+      <ul className="flex flex-col gap-1">
+        {nodes.map((node) => (
+          <li
+            key={node.id}
+            className="flex items-center justify-between gap-2 rounded-lg border border-[var(--glass-lo)] bg-[var(--glass)] py-1 pr-1 pl-2.5"
+          >
+            <span className="text-muted-foreground min-w-0 truncate text-[12px]" title={node.label}>
+              {node.label}
+            </span>
+            <button
+              type="button"
+              onClick={() => onShow(node.id)}
+              aria-label={`Show ${node.label}`}
+              className="text-foreground flex h-6 shrink-0 items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors hover:bg-[var(--glass-strong)]"
+            >
+              <EyeIcon className="size-3" /> Show
+            </button>
+          </li>
+        ))}
+      </ul>
+    </Section>
   );
 }
 

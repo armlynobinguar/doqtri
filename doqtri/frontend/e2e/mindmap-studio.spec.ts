@@ -95,6 +95,57 @@ test.describe("mindmap studio", () => {
     await expect(page.getByRole("button", { name: "Switch to 2D" })).toBeVisible();
   });
 
+  test("a hidden node is listed and can be shown again on its own", async ({ page }) => {
+    await page.goto(`/vault/${docId}/mindmap`);
+    // #24252c is the root pill's fill in the default look.
+    const root: [number, number, number] = [0x24, 0x25, 0x2c];
+    await expect.poll(() => canvasHasColor(page, root, 0), { timeout: 15_000 }).toBe(true);
+
+    await page.getByRole("button", { name: "Customize" }).click();
+    await page.getByRole("button", { name: "Node", exact: true }).click();
+
+    // The radial layout puts the root at the centre of the view.
+    const box = (await page.locator("canvas").first().boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await page.getByRole("button", { name: "Hide node" }).click();
+
+    await expect(page.getByRole("heading", { name: "Hidden (1)" })).toBeVisible();
+    await expect.poll(() => canvasHasColor(page, root, 0), { timeout: 5_000 }).toBe(false);
+
+    await page.getByRole("button", { name: `Show ${title}` }).click();
+    await expect(page.getByRole("heading", { name: /^Hidden/ })).toHaveCount(0);
+    await expect.poll(() => canvasHasColor(page, root, 0), { timeout: 5_000 }).toBe(true);
+  });
+
+  test("clicking a node in 3D selects it without a page error", async ({ page }) => {
+    // 3d-force-graph ends every node click with a synthetic pointer-up that
+    // OrbitControls used to choke on.
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+
+    await page.goto(`/vault/${docId}/mindmap`);
+    await page.getByRole("button", { name: "Switch to 3D" }).click();
+    await page.getByRole("button", { name: "Customize" }).click();
+    await page.getByRole("button", { name: "Node", exact: true }).click();
+
+    // The root sits at the origin, which the camera frames at the centre.
+    const canvas = page.locator("canvas").first();
+    await expect
+      .poll(
+        async () => {
+          const box = await canvas.boundingBox();
+          if (!box) return false;
+          await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+          return page.getByRole("button", { name: "Hide node" }).isVisible();
+        },
+        { timeout: 30_000 },
+      )
+      .toBe(true);
+
+    await page.getByRole("button", { name: "🚀" }).click();
+    expect(errors).toEqual([]);
+  });
+
   test("a snapshot downloads a PNG at the chosen size", async ({ page }) => {
     await page.goto(`/vault/${docId}/mindmap`);
     // Give the layout time to settle before capturing.
