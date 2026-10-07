@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { useVaultStatus } from "@/components/vault/vault-status";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { createSaveQueue } from "@/lib/save-queue";
 import type { Doc } from "@/lib/types";
 
 const SETTLE_MS = 700;
@@ -58,7 +59,19 @@ export function DocWorkspace({
   const [regenerateOpen, setRegenerateOpen] = useState(false);
   const isMobile = useIsCompactVault();
   const [mobileView, setMobileView] = useState<MobileView>("note");
-  const lastSavedRef = useRef(active.markdown);
+  // The page remounts this per note, so the queue never outlives its row.
+  const [saves] = useState(() =>
+    createSaveQueue(active.markdown, async (text) => {
+      const supabase = createSupabaseBrowserClient();
+      // Anon key + RLS: the update policy restricts this to the caller's row.
+      const { error } = await supabase
+        .from("documents")
+        .update({ markdown: text, updated_at: new Date().toISOString() })
+        .eq("id", active.id);
+      if (error) throw new Error(`Could not save: ${error.message}`);
+    }),
+  );
+  const markdownRef = useRef(markdown);
 
   // Keeps the Supabase write and the force simulation off the keystroke path.
   const settled = useDebouncedValue(markdown, SETTLE_MS);
@@ -68,8 +81,9 @@ export function DocWorkspace({
   }, [markdown, setWordCount]);
 
   useEffect(() => {
-    if (markdown !== lastSavedRef.current) setSaveState("saving");
-  }, [markdown, setSaveState]);
+    markdownRef.current = markdown;
+    if (markdown !== saves.saved) setSaveState("saving");
+  }, [markdown, saves, setSaveState]);
 
   // Clear the shared status when leaving the note.
   useEffect(() => {
@@ -80,35 +94,42 @@ export function DocWorkspace({
   }, [setWordCount, setSaveState]);
 
   useEffect(() => {
-    if (settled === lastSavedRef.current) return;
+    if (settled === saves.saved) return;
 
     let cancelled = false;
-    const pending = settled;
 
-    (async () => {
-      const supabase = createSupabaseBrowserClient();
-      // Anon key + RLS: the update policy restricts this to the caller's row.
-      const { error } = await supabase
-        .from("documents")
-        .update({ markdown: pending, updated_at: new Date().toISOString() })
-        .eq("id", active.id);
-
-      if (cancelled) return;
-
-      if (error) {
+    saves.save(settled).then(
+      () => {
+        if (!cancelled) setSaveState("saved");
+      },
+      (e: unknown) => {
+        if (cancelled) return;
         setSaveState("error");
-        toast.error(`Could not save: ${error.message}`);
-        return;
-      }
-
-      lastSavedRef.current = pending;
-      setSaveState("saved");
-    })();
+        toast.error(e instanceof Error ? e.message : "Could not save");
+      },
+    );
 
     return () => {
       cancelled = true;
     };
-  }, [settled, active.id, setSaveState]);
+  }, [settled, saves, setSaveState]);
+
+  /**
+   * Writes the editor's text now instead of waiting for the debounce, and
+   * returns exactly what was stored — the ship panel hashes that, so the
+   * on-chain hash always matches a row Supabase actually holds.
+   */
+  const saveNow = useCallback(async () => {
+    const text = markdownRef.current;
+    try {
+      await saves.save(text);
+    } catch (e) {
+      setSaveState("error");
+      throw e;
+    }
+    setSaveState(markdownRef.current === text ? "saved" : "saving");
+    return text;
+  }, [saves, setSaveState]);
 
   /**
    * The graph reads the settled text so the simulation is not restarted on
@@ -153,12 +174,12 @@ export function DocWorkspace({
 
     // The route already wrote this row, so adopt it as the saved baseline
     // rather than letting the debounced effect write it straight back.
-    lastSavedRef.current = next;
+    saves.markSaved(next);
     setMarkdown(next);
     setSaveState("saved");
     toast.success("Note regenerated");
     router.refresh();
-  }, [active.id, router, setSaveState]);
+  }, [active.id, router, saves, setSaveState]);
 
   const regenerateDialog = (
     <RegenerateDialog
@@ -228,13 +249,14 @@ export function DocWorkspace({
               markdown={markdown}
               mindmap={active.mindmap ?? null}
               mindmapStale={active.mindmapStale ?? false}
+              onSave={saveNow}
               showShip={false}
             />
           </div>
         )}
         {mobileView === "ship" && (
           <div className="bg-muted min-h-0 flex-1 overflow-y-auto [&>*:first-child]:border-t-0">
-            <ShipPanel docId={active.id} title={active.title} markdown={markdown} />
+            <ShipPanel docId={active.id} title={active.title} markdown={markdown} onSave={saveNow} />
           </div>
         )}
 
@@ -271,6 +293,7 @@ export function DocWorkspace({
             markdown={markdown}
             mindmap={active.mindmap ?? null}
             mindmapStale={active.mindmapStale ?? false}
+            onSave={saveNow}
           />
         </ResizablePanel>
       </ResizablePanelGroup>

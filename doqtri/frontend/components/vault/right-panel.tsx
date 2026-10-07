@@ -16,6 +16,7 @@ export function RightPanel({
   markdown,
   mindmap,
   mindmapStale,
+  onSave,
   showShip = true,
 }: {
   /** All notes, with the active one carrying the live editor text. */
@@ -26,6 +27,8 @@ export function RightPanel({
   /** The active note's stored concept map, null when it has none. */
   mindmap: DocMindmap | null;
   mindmapStale: boolean;
+  /** Saves the note now and resolves with the text stored; see ShipPanel. */
+  onSave: () => Promise<string>;
   /** Off on phones, where the ship panel is a view of its own. */
   showShip?: boolean;
 }) {
@@ -87,7 +90,7 @@ export function RightPanel({
         <BacklinksList docs={docs} activeId={activeId} />
         {showShip && (
           <div className="shrink-0">
-            <ShipPanel docId={activeId} title={title} markdown={markdown} />
+            <ShipPanel docId={activeId} title={title} markdown={markdown} onSave={onSave} />
           </div>
         )}
       </div>
