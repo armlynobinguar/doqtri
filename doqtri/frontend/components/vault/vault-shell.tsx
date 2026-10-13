@@ -18,7 +18,6 @@ import { RenameNoteDialog } from "@/components/vault/rename-note-dialog";
 import { SettingsDialog } from "@/components/vault/settings-dialog";
 import { AccountMenu } from "@/components/vault/account-menu";
 import { LogOutButton } from "@/components/vault/log-out-button";
-import { TemplatesDialog } from "@/components/vault/templates-dialog";
 import type { NoteTemplate } from "@/lib/templates";
 import { MobileTabBar, MobileTopBar } from "@/components/vault/mobile-chrome";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -87,7 +86,6 @@ function VaultShellInner({
   const [uploadOpen, setUploadOpen] = useState(false);
   const [retryTarget, setRetryTarget] = useState<RetryTarget | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [templatesOpen, setTemplatesOpen] = useState(false);
   const [ribbonActive, setRibbonActive] = useState<RibbonAction>("files");
   const [creating, setCreating] = useState(false);
   const [anchored, setAnchored] = useState<ReadonlySet<string>>(new Set());
@@ -96,13 +94,13 @@ function VaultShellInner({
   const [pendingRename, setPendingRename] = useState<NoteSummary | null>(null);
 
   // The shell lives in the layout, so the active note comes from the URL
-  // rather than from props. `/vault/mindmap` and `/vault/graph` are
-  // vault-wide views, not notes.
+  // rather than from props. `/vault/mindmap`, `/vault/graph` and
+  // `/vault/templates` are vault-wide views, not notes.
   const segment = pathname.startsWith("/vault/")
     ? pathname.split("/")[2] || undefined
     : undefined;
   const routeAction: RibbonAction | undefined =
-    segment === "mindmap" || segment === "graph" ? segment : undefined;
+    segment === "mindmap" || segment === "graph" || segment === "templates" ? segment : undefined;
   const activeId = routeAction ? undefined : segment;
 
   // What the mobile top bar calls the current pane. The desktop layout has no
@@ -112,7 +110,9 @@ function VaultShellInner({
       ? "Graph view"
       : routeAction === "mindmap"
         ? "Global mindmap"
-        : (notes.find((note) => note.id === activeId)?.title ?? "Vault");
+        : routeAction === "templates"
+          ? "Templates"
+          : (notes.find((note) => note.id === activeId)?.title ?? "Vault");
 
   // Blank by default; a template seeds the title and body instead.
   const handleNewNote = useCallback(async (template?: NoteTemplate) => {
@@ -121,7 +121,6 @@ function VaultShellInner({
     setDrawerOpen(false);
     try {
       const { id, title } = await createBlankNote(template?.title, template?.body);
-      setTemplatesOpen(false);
       toast.success(`Created “${title}”`);
       // Navigate first, then refresh: a refresh issued before the push is
       // superseded by it, and the push reuses the cached layout, so the
@@ -230,7 +229,7 @@ function VaultShellInner({
           setSwitcherOpen(true);
           break;
         case "templates":
-          setTemplatesOpen(true);
+          navigate("/vault/templates");
           break;
         case "graph":
         case "mindmap":
@@ -259,7 +258,7 @@ function VaultShellInner({
       }}
       onTemplatesClick={() => {
         setDrawerOpen(false);
-        setTemplatesOpen(true);
+        navigate("/vault/templates");
       }}
       failedImports={failedImports}
       onRetryImport={(target) => {
@@ -365,19 +364,6 @@ function VaultShellInner({
         </SheetContent>
       </Sheet>
 
-      <TemplatesDialog
-        open={templatesOpen}
-        onOpenChange={setTemplatesOpen}
-        creating={creating}
-        onUse={(template) => void handleNewNote(template)}
-        onCreated={({ id, title }) => {
-          // Same ordering as handleNewNote: navigate, then refresh the layout.
-          setTemplatesOpen(false);
-          toast.success(`Created “${title}”`);
-          navigate(`/vault/${id}`);
-          router.refresh();
-        }}
-      />
       <QuickSwitcher
         notes={notes}
         open={switcherOpen}

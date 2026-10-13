@@ -4,6 +4,7 @@ import {
   formatAmount,
   newTemplateId,
   parseAmount,
+  sectionSimilarity,
   TEMPLATE_ID_PATTERN,
   templateBodyFromNote,
   templateOutline,
@@ -112,5 +113,21 @@ describe("buySplit (mirrors the contract)", () => {
 
   it("makes no transfers for a free template", () => {
     expect(buySplit({ ...base, price: BigInt(0), parentCreator: "BEN" }).transfers).toEqual([]);
+  });
+});
+
+describe("sectionSimilarity", () => {
+  it("is 1 for the same structure and 0 for none in common", () => {
+    expect(sectionSimilarity("## Goals\nA\n## Risks", "## Goals\nB\n## Risks")).toBe(1);
+    expect(sectionSimilarity("## Goals", "## Budget")).toBe(0);
+    expect(sectionSimilarity("no headings", "none here")).toBe(0);
+  });
+
+  it("ignores case, heading level and emphasis", () => {
+    expect(sectionSimilarity("## **Goals**\n### Risks", "# goals\n## RISKS")).toBe(1);
+  });
+
+  it("is the share of headings in common", () => {
+    expect(sectionSimilarity("## A\n## B\n## C", "## A\n## B\n## D")).toBe(0.5);
   });
 });

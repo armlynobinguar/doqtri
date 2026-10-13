@@ -32,7 +32,7 @@ import {
   type RelaySubmission,
 } from "@/lib/stellar/relay-validation";
 import { MAX_MARKET_FEE_STROOPS } from "@/lib/stellar/market-config";
-import { expectedTransfers } from "@/lib/market-server";
+import { marketCallPlan, purchaseColumns, syncTemplate, type SaleRecord } from "@/lib/market-server";
 import { simulateWithinCap, submitAndConfirm } from "@/lib/stellar/channels";
 import { readWalletPasskeys } from "@/lib/stellar/wallet-signers";
 import { submitPaidWrite } from "@/lib/stellar/direct-submit";
@@ -294,21 +294,25 @@ async function authorizeMarketCall(userId: string, call: MarketCall): Promise<Re
   }
 }
 
-/** A buy the relay saw land, recorded so claim and the earnings page can find it. */
-async function recordPurchase(userId: string, wallet: string, call: MarketCall, hash: string) {
-  if (call.fn !== "buy") return;
-  const { data: row } = await createSupabaseAdminClient()
-    .from("market_templates")
-    .select("price::text")
-    .eq("id", call.templateId)
-    .maybeSingle();
+/**
+ * After a market write lands: a buy is recorded so claim and the earnings
+ * page can find it; a price or listing change refreshes the gallery's cache.
+ */
+async function recordPurchase(userId: string, wallet: string, call: MarketCall, sale: SaleRecord | null, hash: string) {
+  if (call.fn === "update_price" || call.fn === "set_listed") {
+    await syncTemplate(createSupabaseAdminClient(), call.templateId).catch((e: Error) =>
+      console.error(`[chain/relay] ${call.templateId} not synced after ${call.fn}: ${e.message}`),
+    );
+    return;
+  }
+  if (call.fn !== "buy" || !sale) return;
   const { error } = await createSupabaseAdminClient().from("market_purchases").insert({
     network: NETWORK,
     template_id: call.templateId,
     buyer_id: userId,
     buyer_wallet: wallet,
     tx_hash: hash,
-    amount: row?.price ?? "0",
+    ...purchaseColumns(sale),
   });
   // On-chain either way; claim re-checks has_purchased, so log and move on.
   if (error) console.error(`[chain/relay] purchase ${hash} not recorded: ${error.message}`);
@@ -329,6 +333,7 @@ async function relayPaidMarketWrite(userId: string, submission: RelaySubmission)
   const refusedCall = await authorizeMarketCall(userId, call);
   if (refusedCall) return refusedCall;
 
+  const plan = await marketCallPlan(call, wallet.address);
   const write = validateForwardedMarketWrite(submission, {
     forwarder: FEE_FORWARDER!,
     xlm: NATIVE_XLM,
@@ -336,14 +341,14 @@ async function relayPaidMarketWrite(userId: string, submission: RelaySubmission)
     wallet: wallet.address,
     relayer: DOQTRI_RELAYER!,
     maxFeeCap: MAX_MARKET_FEE_STROOPS,
-    transfers: await expectedTransfers(call, wallet.address),
+    transfers: plan.transfers,
   });
 
   const refused = await chargeQuota(userId, "market", MARKET_PER_USER, MARKET_GLOBAL);
   if (refused) return refused;
 
   const { hash, feeStroops } = await submitPaidWrite(submission.func, walletAuthEntry(submission, wallet.address), write.maxFee);
-  await recordPurchase(userId, wallet.address, call, hash);
+  await recordPurchase(userId, wallet.address, call, plan.sale, hash);
   return Response.json({ success: true, data: { hash, status: "confirmed", feeStroops: feeStroops.toString() } });
 }
 
@@ -362,18 +367,15 @@ async function relayMarketWrite(userId: string, submission: RelaySubmission) {
   const refusedCall = await authorizeMarketCall(userId, call);
   if (refusedCall) return refusedCall;
 
-  validateMarketWrite(submission, {
-    market: MARKET_CONTRACT_ID!,
-    wallet: wallet.address,
-    transfers: await expectedTransfers(call, wallet.address),
-  });
+  const plan = await marketCallPlan(call, wallet.address);
+  validateMarketWrite(submission, { market: MARKET_CONTRACT_ID!, wallet: wallet.address, transfers: plan.transfers });
 
   const refused = await chargeQuota(userId, "market", MARKET_PER_USER, MARKET_GLOBAL);
   if (refused) return refused;
 
   await simulateWithinCap(submission.func, submission.auth);
   const sent = await submitAndConfirm(submission.func, submission.auth);
-  await recordPurchase(userId, wallet.address, call, sent.hash);
+  await recordPurchase(userId, wallet.address, call, plan.sale, sent.hash);
   return Response.json({ success: true, data: sent });
 }
 

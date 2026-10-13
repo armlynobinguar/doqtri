@@ -1,9 +1,9 @@
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
 import { MARKET_CONTRACT_ID } from "@/lib/stellar/config";
 import { NETWORK } from "@/lib/stellar/smart-wallet-config";
-import { readHasPurchased } from "@/lib/stellar/market-reads";
+import { readChainTemplate, readHasPurchased } from "@/lib/stellar/market-reads";
 import { TEMPLATE_ID_PATTERN } from "@/lib/market";
-import { userWallet } from "@/lib/market-server";
+import { purchaseColumns, saleFor, userWallet } from "@/lib/market-server";
 import { uniqueTitle } from "@/lib/title";
 
 /**
@@ -13,7 +13,9 @@ import { uniqueTitle } from "@/lib/title";
  * before this check.
  *
  * Free templates need no transaction. Paid ones need `has_purchased` to be
- * true on-chain for the caller's wallet; the chain decides, never the client.
+ * true on-chain for the caller's wallet; the chain decides, never the client
+ * — including what "paid" means: the price and listing are read from the
+ * contract, not the gallery's cache, so a price change can't slip through.
  * Owners can always copy their own, and buyers can copy again for free.
  * The copy remembers its source, so re-publishing it links the parent.
  */
@@ -45,35 +47,59 @@ export async function POST(request: Request) {
   const admin = createSupabaseAdminClient();
   const { data: row } = await admin
     .from("market_templates")
-    .select("id, title, body, price::text, status, hidden, creator_id")
+    .select("id, title, body, status, hidden, creator_id")
     .eq("id", templateId)
     .eq("network", NETWORK)
     .maybeSingle();
   if (!row || row.status === "pending") return fail("That template isn't in the gallery.", 404);
 
-  const price = BigInt(row.price);
   const own = row.creator_id === user.id;
-  if (!own && price === BigInt(0) && (row.status !== "listed" || row.hidden)) {
-    return fail("That template is no longer available.", 410);
+  let chain;
+  try {
+    chain = await readChainTemplate(templateId);
+  } catch (error) {
+    console.error(`[market/claim] ${templateId}: ${(error as Error).message}`);
+    return fail("The ledger couldn't be reached. Try again in a moment.", 503);
   }
-  if (!own && price > BigInt(0)) {
+  if (!chain) return fail("That template isn't on-chain.", 404);
+
+  if (!own) {
     const wallet = await userWallet(admin, user);
     let purchased = false;
-    try {
-      purchased = wallet ? await readHasPurchased(templateId, wallet) : false;
-    } catch (error) {
-      console.error(`[market/claim] ${templateId}: ${(error as Error).message}`);
-      return fail("The ledger couldn't be reached. Try again in a moment.", 503);
+    if (wallet) {
+      try {
+        purchased = await readHasPurchased(templateId, wallet);
+      } catch (error) {
+        console.error(`[market/claim] ${templateId}: ${(error as Error).message}`);
+        return fail("The ledger couldn't be reached. Try again in a moment.", 503);
+      }
     }
-    if (!purchased) return fail("Buy this template first.", 402);
-    // Freighter buyers submit themselves; record what they sent. Passkey
-    // purchases were recorded by the relay. Either way the chain decided.
-    await admin
-      .from("market_purchases")
-      .upsert(
-        { network: NETWORK, template_id: templateId, buyer_id: user.id, buyer_wallet: wallet, tx_hash: txHash, amount: row.price },
-        { onConflict: "template_id,buyer_wallet", ignoreDuplicates: true },
-      );
+    // Bought before: copy again for free, even if since delisted or hidden.
+    if (!purchased) {
+      if (!chain.listed || row.hidden) return fail("That template is no longer available.", 410);
+      if (chain.price > BigInt(0)) return fail("Buy this template first.", 402);
+    } else if (wallet) {
+      // Freighter buyers submit themselves; record what they sent. Passkey
+      // purchases were recorded by the relay. Either way the chain decided.
+      const { data: recorded } = await admin
+        .from("market_purchases")
+        .select("template_id")
+        .eq("template_id", templateId)
+        .eq("buyer_wallet", wallet)
+        .maybeSingle();
+      if (!recorded) {
+        const { record } = await saleFor(chain, wallet);
+        const { error: purchaseError } = await admin.from("market_purchases").insert({
+          network: NETWORK,
+          template_id: templateId,
+          buyer_id: user.id,
+          buyer_wallet: wallet,
+          tx_hash: txHash,
+          ...purchaseColumns(record),
+        });
+        if (purchaseError) console.error(`[market/claim] purchase of ${templateId} not recorded: ${purchaseError.message}`);
+      }
+    }
   }
 
   const { data: existing, error: titlesError } = await admin.from("documents").select("title").eq("user_id", user.id);

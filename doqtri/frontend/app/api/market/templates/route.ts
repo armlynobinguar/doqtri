@@ -58,6 +58,14 @@ export async function GET(request: Request) {
     for (const p of data ?? []) parents.set(p.id, { id: p.id, title: p.title, creatorWallet: p.creator_wallet });
   }
 
+  // Templates this user already bought: "Use again" instead of "Buy".
+  const { data: bought } = await createSupabaseAdminClient()
+    .from("market_purchases")
+    .select("template_id")
+    .eq("buyer_id", user.id)
+    .eq("network", NETWORK);
+  const owned = new Set((bought ?? []).map((p) => p.template_id as string));
+
   const templates: CommunityTemplate[] = rows.map((r) => {
     const free = BigInt(r.price) === BigInt(0);
     return {
@@ -72,6 +80,7 @@ export async function GET(request: Request) {
       tokenCode: marketToken(r.token)?.code ?? "?",
       creatorWallet: r.creator_wallet,
       mine: r.creator_id === user.id,
+      owned: owned.has(r.id),
       uses: r.uses,
       sales: r.sales,
       parent: r.parent_id ? (parents.get(r.parent_id) ?? null) : null,

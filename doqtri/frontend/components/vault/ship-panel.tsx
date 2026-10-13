@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { MAX_USER_FEE_STROOPS, USER_PAYS_FEES } from "@/lib/stellar/smart-wallet-config";
 import { formatXlm } from "@/lib/stellar/wallet-balance";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StatusTag } from "@/components/ui/status-tag";
 import {
   DoqtriRegistry,
@@ -540,32 +541,38 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
 
       <label className="text-muted-foreground grid gap-1">
         Node
-        <select
-          className="text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-[10px] border border-[var(--glass-lo)] bg-[var(--glass)] px-2.5 shadow-[inset_0_1px_0_0_var(--glass-hi)] outline-none focus-visible:ring-3"
+        <Select
           value={nodeId}
-          onChange={(e) => setNodeId(e.target.value)}
+          onValueChange={(next) => next && setNodeId(next as string)}
+          items={Object.fromEntries(flatNodes.map((n) => [n.id, n.label]))}
         >
-          {flatNodes.map((n) => (
-            <option key={n.id} value={n.id}>
-              {n.label}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger aria-label="Node" className="h-8 text-[12px] max-lg:h-10 max-lg:text-base">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {flatNodes.map((n) => (
+              <SelectItem key={n.id} value={n.id}>
+                {n.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </label>
 
       <label className="text-muted-foreground grid gap-1">
         Status
-        <select
-          className="text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-[10px] border border-[var(--glass-lo)] bg-[var(--glass)] px-2.5 shadow-[inset_0_1px_0_0_var(--glass-hi)] outline-none focus-visible:ring-3"
-          value={status}
-          onChange={(e) => setStatus(e.target.value as NodeStatus)}
-        >
-          {NODE_STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
+        <Select value={status} onValueChange={(next) => next && setStatus(next as NodeStatus)}>
+          <SelectTrigger aria-label="Status" className="h-8 text-[12px] max-lg:h-10 max-lg:text-base">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {NODE_STATUSES.map((s) => (
+              <SelectItem key={s} value={s}>
+                {s}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </label>
 
       <label className="text-muted-foreground grid gap-1">

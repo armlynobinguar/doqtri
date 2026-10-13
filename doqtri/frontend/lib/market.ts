@@ -135,8 +135,73 @@ export type CommunityTemplate = {
   tokenCode: string;
   creatorWallet: string;
   mine: boolean;
+  /** Bought before by this user: copying again is free. */
+  owned: boolean;
   uses: number;
   sales: number;
   parent: { id: string; title: string; creatorWallet: string } | null;
   listedAt: string;
+};
+
+/** Lowercased heading text, without `#`s, markdown emphasis or extra spaces. */
+function headingSet(body: string): Set<string> {
+  return new Set(
+    templateOutline(body)
+      .split("\n")
+      .map((h) => h.replace(/^#+\s*/, "").replace(/[*_`~[\]]/g, "").replace(/\s+/g, " ").trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+/**
+ * How alike two templates' structures are: the share of headings they have
+ * in common (Jaccard, 0–1). Copy reports are judged on this, the content
+ * hashes and the on-chain listing times.
+ */
+export function sectionSimilarity(a: string, b: string): number {
+  const x = headingSet(a);
+  const y = headingSet(b);
+  if (x.size === 0 && y.size === 0) return 0;
+  let shared = 0;
+  for (const h of x) if (y.has(h)) shared++;
+  return shared / (x.size + y.size - shared);
+}
+
+/** One of the creator's templates on the earnings page (/vault/earnings). */
+export type EarningsTemplate = {
+  id: string;
+  title: string;
+  listed: boolean;
+  hidden: boolean;
+  /** Smallest-unit amounts as decimal strings. */
+  price: string;
+  token: string;
+  tokenCode: string;
+  sales: number;
+  earned: string;
+  tips: string;
+  uses: number;
+  listedAt: string | null;
+  parent: { id: string; title: string } | null;
+  recentSales: { buyerWallet: string; amount: string; creatorCut: string; txHash: string | null; createdAt: string }[];
+  derived: { id: string; title: string; creatorWallet: string; sales: number }[];
+};
+
+/** Royalties earned from other creators' derivatives of the user's templates. */
+export type EarningsRoyalty = {
+  templateId: string;
+  title: string;
+  parentId: string;
+  parentTitle: string;
+  tokenCode: string;
+  sales: number;
+  total: string;
+};
+
+export type EarningsSummary = {
+  wallet: string | null;
+  templates: EarningsTemplate[];
+  royalties: EarningsRoyalty[];
+  /** Per token: sales earnings, tips and royalties. */
+  totals: { tokenCode: string; earned: string; tips: string; royalties: string }[];
 };

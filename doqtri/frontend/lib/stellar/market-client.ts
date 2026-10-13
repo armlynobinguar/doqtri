@@ -17,9 +17,11 @@ import { hexToBytes32 } from "@/lib/stellar/hash";
 import { signSorobanTx } from "@/lib/wallet";
 import { passkeyWalletFor, payAndRelay, signAndRelay } from "@/lib/passkey-wallet";
 import { NATIVE_XLM, USER_PAYS_FEES } from "@/lib/stellar/smart-wallet-config";
-import { MAX_MARKET_FEE_STROOPS } from "@/lib/stellar/market-config";
-import { marketErrorName } from "@/lib/stellar/market-reads";
-import { assertCanPay, assertFunded } from "@/lib/stellar/horizon";
+import { MAX_MARKET_FEE_STROOPS, marketToken, type MarketToken } from "@/lib/stellar/market-config";
+import { marketErrorName, readChainTemplate, readHasPurchased, readMarketConfig, type ChainTemplate } from "@/lib/stellar/market-reads";
+import { assertCanPay, assertFunded, getAccountBalance, trustlineState } from "@/lib/stellar/horizon";
+import { tokenBalance } from "@/lib/stellar/wallet-balance";
+import { buySplit, formatAmount } from "@/lib/market";
 import { DoqtriError, mapWalletError } from "@/lib/stellar/errors";
 
 const MESSAGES: Record<string, string> = {
@@ -142,3 +144,115 @@ export const TemplateMarket = {
     return run(source, (c) => c.set_listed({ template_id: templateId, listed }));
   },
 };
+
+/** Everything the confirm-to-buy sheet shows, read before any wallet prompt. */
+export type BuyQuote = {
+  template: ChainTemplate;
+  token: MarketToken;
+  price: bigint;
+  /** Who gets what, in the token's smallest unit. */
+  creatorCut: bigint;
+  parentCut: bigint;
+  treasuryCut: bigint;
+  /** The buyer's balance in the template's token (null if unreadable). */
+  balance: bigint | null;
+  /** Network fee in stroops: simulated for Freighter, the cap for passkey wallets. */
+  feeStroops: bigint;
+  feeIsCap: boolean;
+  /** Already bought on-chain (e.g. the copy failed last time): copy again, don't buy. */
+  owned: boolean;
+  /** Reasons the purchase can't go ahead; empty when it can. */
+  problems: string[];
+};
+
+/**
+ * Prices a purchase for `source` without signing anything: the split, the
+ * buyer's balance and trustline, the network fee, and a simulation of the
+ * buy itself, which also catches a recipient who can't receive the token.
+ */
+export async function quoteBuy(source: string, templateId: string): Promise<BuyQuote> {
+  const [template, config, owned] = await Promise.all([
+    readChainTemplate(templateId),
+    readMarketConfig(),
+    readHasPurchased(templateId, source).catch(() => false),
+  ]);
+  if (!template) throw new DoqtriError("NOT_FOUND", MESSAGES.TemplateNotFound);
+  const token = marketToken(template.token);
+  if (!token) throw new DoqtriError("CONTRACT", MESSAGES.TokenNotAllowed);
+
+  const split = buySplit({
+    price: template.price,
+    buyer: source,
+    creator: template.creator,
+    parentCreator: template.parentCreator,
+    treasury: config.treasury,
+    fees: config,
+  });
+  const merged = template.parentCreator === template.creator;
+  const problems: string[] = [];
+  if (owned) {
+    return {
+      template, token, price: template.price, creatorCut: BigInt(0), parentCut: BigInt(0), treasuryCut: BigInt(0),
+      balance: null, feeStroops: BigInt(0), feeIsCap: false, owned, problems,
+    };
+  }
+  if (config.paused) problems.push(MESSAGES.Paused);
+  if (!template.listed) problems.push(MESSAGES.NotListed);
+  if (source === template.creator) problems.push(MESSAGES.SelfPurchase);
+
+  const smart = isSmartWallet(source);
+  const trust = await trustlineState(source, token.asset);
+  if (trust === "no-account") problems.push("This wallet isn't on the network yet. Fund it with XLM first.");
+  if (trust === "missing") problems.push(`Your wallet has no ${token.code} trustline. Add one in your wallet, then get some ${token.code}.`);
+  if (trust === "unauthorized") problems.push(`Your ${token.code} trustline isn't authorized by its issuer.`);
+
+  let balance: bigint | null = null;
+  if (trust === "ok") balance = await tokenBalance(source, token.contract).catch(() => null);
+
+  // Simulate the buy itself: catches AlreadyPurchased, a price change, and a
+  // creator or parent creator who can't receive this token.
+  let feeStroops = MAX_MARKET_FEE_STROOPS;
+  if (problems.length === 0) {
+    try {
+      const tx = await client(source).buy({ buyer: source, template_id: templateId, max_price: template.price });
+      assertSimulates(tx);
+      if (!smart) feeStroops = BigInt(tx.built?.fee ?? 0);
+    } catch (e) {
+      problems.push(
+        e instanceof DoqtriError && e.code !== "SIM_FAILED"
+          ? e.message
+          : `This purchase would fail on-chain. The creator may not be able to receive ${token.code} right now.`,
+      );
+    }
+  }
+
+  const xlmNeeded = feeStroops + (token.asset === null ? template.price : BigInt(0));
+  if (balance !== null && balance < template.price) {
+    problems.push(`You need ${formatAmount(template.price)} ${token.code}; this wallet has ${formatAmount(balance)}.`);
+  }
+  if (token.asset !== null || balance === null) {
+    // Fees are always XLM: check it separately when the price isn't in XLM.
+    const xlm = smart
+      ? await tokenBalance(source, NATIVE_XLM).catch(() => null)
+      : await getAccountBalance(source).then((a) => (a.funded ? BigInt(Math.floor(a.spendable * 1e7)) : BigInt(0)));
+    if (xlm !== null && xlm < xlmNeeded) {
+      problems.push(`Network fees need up to ${formatAmount(xlmNeeded)} XLM; this wallet has ${formatAmount(xlm)}.`);
+    }
+  } else if (balance < xlmNeeded) {
+    problems.push(`You need ${formatAmount(xlmNeeded)} XLM including network fees; this wallet has ${formatAmount(balance)}.`);
+  }
+
+  return {
+    template,
+    token,
+    price: template.price,
+    creatorCut: merged ? split.creatorCut + split.parentCut : split.creatorCut,
+    parentCut: merged ? BigInt(0) : split.parentCut,
+    treasuryCut: split.treasuryCut,
+    balance,
+    feeStroops,
+    feeIsCap: smart,
+    owned,
+    problems: [...new Set(problems)],
+  };
+}

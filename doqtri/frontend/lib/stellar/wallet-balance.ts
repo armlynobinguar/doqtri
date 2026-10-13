@@ -11,8 +11,17 @@ const NULL_ACCOUNT = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 
 /** Balance in stroops (1 XLM = 10,000,000). */
 export async function xlmBalanceStroops(address: string): Promise<bigint> {
+  return tokenBalance(address, NATIVE_XLM);
+}
+
+/**
+ * Balance of any Stellar Asset Contract token, in its smallest unit. A `G…`
+ * account without a trustline to the asset makes the simulation fail; that
+ * reads as an error here, so check the trustline first (horizon.ts).
+ */
+export async function tokenBalance(address: string, token: string): Promise<bigint> {
   const tx = new TransactionBuilder(new Account(NULL_ACCOUNT, "0"), { fee: "100", networkPassphrase: NETWORK_PASSPHRASE })
-    .addOperation(new Contract(NATIVE_XLM).call("balance", Address.fromString(address).toScVal()))
+    .addOperation(new Contract(token).call("balance", Address.fromString(address).toScVal()))
     .setTimeout(30)
     .build();
   const simulation = await new rpc.Server(RPC_URL).simulateTransaction(tx);

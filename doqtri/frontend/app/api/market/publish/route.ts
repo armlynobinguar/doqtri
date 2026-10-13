@@ -11,7 +11,7 @@ import {
   newTemplateId,
   templateBodyFromNote,
 } from "@/lib/market";
-import { consumeQuota, positiveEnv, userWallet } from "@/lib/market-server";
+import { canReceive, consumeQuota, positiveEnv, userWallet } from "@/lib/market-server";
 
 /**
  * Step 1 of publishing a note as a community template (progress/004): freeze
@@ -84,15 +84,30 @@ export async function POST(request: Request) {
   if (body.length > MAX_TEMPLATE_BODY) return fail("This note is too long to publish as a template.", 413);
 
   // Only a parent that exists on-chain: the contract refuses any other.
-  let parent: { id: string; title: string } | null = null;
+  let parent: { id: string; title: string; creatorWallet: string } | null = null;
   if (note.source_template_id) {
     const { data } = await admin
       .from("market_templates")
-      .select("id, title, status")
+      .select("id, title, status, creator_wallet")
       .eq("id", note.source_template_id)
       .eq("network", NETWORK)
       .maybeSingle();
-    if (data && data.status !== "pending") parent = { id: data.id, title: data.title };
+    if (data && data.status !== "pending") parent = { id: data.id, title: data.title, creatorWallet: data.creator_wallet };
+  }
+
+  // A sale pays everyone in one transaction, so it fails as a whole if anyone
+  // can't receive the token (a G account without a USDC trustline).
+  if (price > BigInt(0)) {
+    try {
+      if (!(await canReceive(wallet, token.contract))) {
+        return fail(`Your wallet can't receive ${token.code} yet. Add a ${token.code} trustline, or price it in XLM.`, 409);
+      }
+      if (parent && !(await canReceive(parent.creatorWallet, token.contract))) {
+        return fail(`The original template's creator can't receive ${token.code}, so this one has to be priced in XLM.`, 409);
+      }
+    } catch {
+      return fail("The ledger couldn't be reached. Try again in a moment.", 503);
+    }
   }
 
   const quota = await consumeQuota(admin, user.id, "publish", PUBLISH_PER_USER, PUBLISH_GLOBAL);
@@ -127,7 +142,7 @@ export async function POST(request: Request) {
     contentHash,
     token: token.contract,
     price: price.toString(),
-    parent,
+    parent: parent && { id: parent.id, title: parent.title },
     wallet,
   });
 }

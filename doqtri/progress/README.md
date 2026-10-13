@@ -21,4 +21,4 @@ contradicts a v1 non-goal, the file says so explicitly and supersedes it.
 | 001 | Document mindmap + global mindmap | Shipped | [001-document-mindmap.md](001-document-mindmap.md) |
 | 002 | Email sign-up with passkey smart wallet | Shipped | [002-email-passkey-wallet.md](002-email-passkey-wallet.md) |
 | 003 | Testnet production and user-paid fees | In progress | [003-testnet-user-pays.md](003-testnet-user-pays.md) |
-| 004 | Template marketplace with creator royalties | In progress | [004-template-marketplace.md](004-template-marketplace.md) |
+| 004 | Template marketplace with creator royalties | Testnet shipped; mainnet prepared | [004-template-marketplace.md](004-template-marketplace.md) |

@@ -63,5 +63,5 @@ export function marketTokenByCode(code: string): MarketToken | null {
  */
 export const MAX_MARKET_FEE_STROOPS = BigInt(10_000_000);
 
-/** Paid templates (phase 2) are off until the buy flow ships. */
-export const PAID_TEMPLATES_ENABLED = false;
+/** Paid templates (phase 2). One switch for the publish form, the API and the gallery. */
+export const PAID_TEMPLATES_ENABLED = true;

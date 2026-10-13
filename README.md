@@ -188,6 +188,13 @@ status: [004-template-marketplace.md](./doqtri/progress/004-template-marketplace
 | **Split** | creator 85% · parent creator 5% · treasury 10% |
 | **Tokens** | XLM, USDC (Circle testnet) |
 
+In the app: **Publish as template** in a note's Stellar proof panel, and one
+**Templates** page (`/vault/templates`) with three tabs: **Starter** (Doqtri's
+samples), **Community** (buy, use, tip, report a copy) and **Yours** (your
+published templates and what they earned). Admins review copy reports at
+`/admin/reports`. Deploying to another network: `market/deploy.sh` (see the
+plan's phase 4 runbook).
+
 ### Stellar Mainnet
 
 | Field | Value |

@@ -1,6 +1,6 @@
 # 004 — Template marketplace with creator royalties
 
-**Status:** In progress
+**Status:** Phases 1–3 built and tested on testnet; phase 4 (mainnet) prepared, not deployed
 **Opened:** 2026-10-11 · **Checked against the codebase:** 2026-10-13
 **Builds on:** template gallery (`4a7bad3f`), [002-email-passkey-wallet.md](002-email-passkey-wallet.md), [003-testnet-user-pays.md](003-testnet-user-pays.md)
 
@@ -44,7 +44,7 @@ to receive USDC**, or every `buy` of their listing fails on the transfer to them
 Passkey (`C...`) wallets don't need one. The publish form must check this
 before offering USDC.
 
-**Phase 1 (2026-10-13), built; migration applied, not yet tested end-to-end.** Free templates,
+**Phase 1 (2026-10-13), built and tested on testnet.** Free templates,
 the Community tab and tips:
 
 - `20261013000000_create_market.sql`: `market_templates`, `market_purchases`,
@@ -70,6 +70,82 @@ Changed from the plan:
   template's headings, the same way starter templates are drawn.
 - **Usage counts** live in `market_templates.uses`, bumped by `claim`.
 - **Free templates use XLM** as their listing token, so tips need no trustline.
+
+**Phases 2 and 3 (2026-10-13), built and tested on testnet.**
+
+- Migration `20261014000000_market_reports_and_cuts.sql` (applied): each
+  purchase stores its split (`creator_cut`, `parent_cut`, `treasury_cut`,
+  `parent_creator_wallet`) so royalties need no indexer; `market_reports`;
+  the advisor's RLS (`(select auth.uid())`) and foreign-key index fixes.
+- Paid templates: the publish form takes a price in XLM or USDC (minimum 1 XLM
+  / 0.50 USDC). The API refuses a USDC listing when the creator, or the
+  parent's creator, can't receive USDC (a `G…` account without a trustline),
+  since a sale pays everyone in one transaction and fails as a whole.
+- Buy: a confirm sheet (`quoteBuy`) shows the split, the network fee and the
+  balance, and simulates the buy first. `claim` reads price and listing from
+  the contract, not the cache, and records Freighter purchases with their split.
+  Already bought → "Use again" / "Add to vault".
+- Earnings: per-template sales, earnings, tips, recent sales with
+  transactions, derivatives, royalties, change price, delist / relist
+  (`/api/market/sync` refreshes the cache from the chain), with search,
+  filters and pagination.
+- **One Templates page** (`/vault/templates`) replaced the gallery modal and
+  the separate earnings page: tabs **Starter**, **Community** and **Yours**
+  (the earnings view), kept in the URL (`?tab=`). The ribbon's Templates
+  button and "New from template" open it; `/vault/earnings` redirects to the
+  Yours tab; the account menus link to it as "Your templates".
+- Reports: "Report copy" in the gallery; `/admin/reports` shows both sides,
+  hash equality, heading overlap (`sectionSimilarity`) and which was listed
+  on-chain first. Uphold hides the copy; hide / unhide per template.
+
+**Testing.**
+- `lib/market.testnet.test.ts` (opt-in, `MARKET_E2E=1`): signs in through the
+  real wallet challenge and drives every flow against the deployed contract.
+  It covers publish and confirm, the gallery, use, tip, derive, paid buy with
+  the split recorded, a derivative sale paying a 5% royalty, earnings, price
+  change, delist, reports, and the refusals (below minimum price, USDC without
+  a trustline, someone else's note or template, mismatched listing,
+  non-admin). Both tests pass.
+- `e2e/marketplace.spec.ts` (Playwright): gallery tabs, publish pricing,
+  earnings page, admin gate. All pass.
+- **Not tested:** the passkey-wallet path through the relay in a browser (it
+  needs a real passkey prompt). The relay's forwarded-market validator was
+  checked against a real simulated forwarded `buy` instead. Also untested: a
+  full USDC sale (no testnet USDC on the smoke keys), and the buy sheet driven
+  by a real Freighter.
+- Pre-existing, not from this work: `vault-shell.spec.ts` "the explorer/editor
+  divider resizes" fails on `main` too (the markdown editor overlaps the 1px
+  handle). CI skips e2e without its secrets, so it went unnoticed.
+
+**Known gaps.**
+- A Freighter buyer whose claim never succeeds isn't in `market_purchases`
+  until they use the template, so that sale is missing from recent sales and
+  royalties. The on-chain `sales` and `earned` totals are still right.
+- Raising a free template's price goes straight to the chain, so there's no
+  trustline check like the one publish does. The buy sheet's simulation still
+  catches a creator who can't receive the token.
+- "Report copy" picks the original from the currently loaded gallery list.
+
+**Phase 4, mainnet: prepared, not deployed.** It needs the decisions under
+"Before mainnet". Then:
+
+1. Create the treasury as a multisig account with a USDC trustline, and decide
+   who holds the admin key (ideally the same multisig).
+2. `DRY_RUN=1 market/deploy.sh mainnet <source> <admin> <treasury>` to review,
+   then run it without `DRY_RUN`. It builds, prints the wasm hash, deploys with
+   the 85/5/10 split, and allows XLM
+   (`CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA`) and USDC
+   (`CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75`).
+3. Upload cost: simulated at 19.03 XLM on 2026-10-13; it's usually charged
+   ~15% under the simulation. Extend the code entry's TTL afterwards.
+4. Set `NEXT_PUBLIC_MARKET_CONTRACT_ID` in production. Until then the
+   marketplace stays off on mainnet. Supabase needs nothing: production uses
+   the same project, and both migrations are applied.
+5. Passkey users on mainnet have no FeeForwarder, so Channels sponsors market
+   calls. A mainnet registry write simulates at 0.063 XLM (testnet 0.31), which
+   puts a listing at roughly 0.11 XLM, under the 0.5 XLM Channels cap.
+   Re-simulate after deploy.
+6. Smoke-test with small amounts: list, buy, tip, and a USDC sale.
 
 ## Problem
 
@@ -437,10 +513,10 @@ the API re-checks the chain).
 
 | Phase | Network | Scope |
 |---|---|---|
-| 1. Tips | Testnet | "Tip the creator" on free community templates; publish as free template; gallery Community tab |
-| 2. Paid templates | Testnet | `TemplateMarket` contract, buy flow, claim check, creator dashboard; run with the user testers |
-| 3. Derivatives | Testnet | Parent royalties, "Derived from" badges, reports queue |
-| 4. Mainnet | Mainnet | USDC prices, creator terms, fee estimates before every write (roadmap item) |
+| 1. Tips ✅ | Testnet | "Tip the creator" on free community templates; publish as free template; gallery Community tab |
+| 2. Paid templates ✅ | Testnet | `TemplateMarket` contract, buy flow, claim check, creator dashboard; run with the user testers |
+| 3. Derivatives ✅ | Testnet | Parent royalties, "Derived from" badges, reports queue |
+| 4. Mainnet (prepared) | Mainnet | USDC prices, creator terms, fee estimates before every write (roadmap item) |
 
 ## Before mainnet
 
@@ -466,15 +542,15 @@ the API re-checks the chain).
 - [x] Insufficient buyer balance → whole `buy` fails, nothing recorded
 
 **App (Vitest + Playwright)**
-- [ ] Claim refuses without an on-chain purchase
-- [ ] Preview never includes paragraph text for paid templates
-- [ ] Re-publishing a note from a template sets `parent`
-- [ ] Passkey user can buy through the relay; Freighter user can buy directly
-- [ ] Confirm sheet blocks the wallet prompt when the balance is too low
-- [ ] `relay-validation.test.ts`: forwarded `buy` accepted; rejected when a
+- [x] Claim refuses without an on-chain purchase
+- [x] Preview never includes paragraph text for paid templates
+- [x] Re-publishing a note from a template sets `parent`
+- [ ] Passkey user can buy through the relay (needs a browser passkey); [x] Freighter-style `G…` account can buy directly (testnet e2e)
+- [x] Confirm sheet blocks the wallet prompt when the balance is too low
+- [x] `relay-validation.test.ts`: forwarded `buy` accepted; rejected when a
       transfer goes to an unexpected recipient, the wallet isn't the buyer, or
       the target isn't the market contract
-- [ ] Forwarded registry writes still pass unchanged
+- [x] Forwarded registry writes still pass unchanged
 
 ## Open questions
 

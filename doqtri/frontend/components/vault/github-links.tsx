@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ArrowRightIcon, GitPullRequestIcon, Loader2Icon, RefreshCwIcon, XIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StatusTag } from "@/components/ui/status-tag";
 import { useWallet } from "@/components/vault/wallet-provider";
 import { DoqtriRegistry } from "@/lib/stellar/contract-client";
@@ -265,18 +266,22 @@ export function GitHubLinks({
 
       {unlinked.length > 0 ? (
         <div className="grid gap-1.5">
-          <select
-            aria-label="Heading to link"
-            className="text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-[10px] border border-[var(--glass-lo)] bg-[var(--glass)] px-2.5 shadow-[inset_0_1px_0_0_var(--glass-hi)] outline-none focus-visible:ring-3"
+          <Select
             value={selectedNode}
-            onChange={(e) => setLinkNode(e.target.value)}
+            onValueChange={(next) => next && setLinkNode(next as string)}
+            items={Object.fromEntries(unlinked.map((n) => [n.id, n.label]))}
           >
-            {unlinked.map((n) => (
-              <option key={n.id} value={n.id}>
-                {n.label}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger aria-label="Heading to link" className="h-8 text-[12px] max-lg:h-10 max-lg:text-base">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {unlinked.map((n) => (
+                <SelectItem key={n.id} value={n.id}>
+                  {n.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <div className="flex gap-1.5">
             <input
               aria-label="GitHub issue or pull request"
