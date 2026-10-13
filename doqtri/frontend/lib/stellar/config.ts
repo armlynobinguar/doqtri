@@ -8,6 +8,7 @@ const RAW = {
   NETWORK_PASSPHRASE: process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE,
   SOROBAN_RPC_URL: process.env.NEXT_PUBLIC_SOROBAN_RPC_URL,
   CONTRACT_ID: process.env.NEXT_PUBLIC_CONTRACT_ID,
+  MARKET_CONTRACT_ID: process.env.NEXT_PUBLIC_MARKET_CONTRACT_ID,
   HORIZON_URL: process.env.NEXT_PUBLIC_HORIZON_URL,
   EXPERT_NETWORK: process.env.NEXT_PUBLIC_EXPERT_NETWORK,
   LAB_NETWORK: process.env.NEXT_PUBLIC_LAB_NETWORK,
@@ -55,6 +56,16 @@ export const CONTRACT_ID = (() => {
   }
   return TESTNET_CONTRACT;
 })();
+
+/** Public testnet TemplateMarket (progress/004). */
+const TESTNET_MARKET_CONTRACT = "CA6YPRXQ2IFGACBFLKWEFETGLZ2C5R7DG5TTBKTTP4AVYOF3HFOSBCC2";
+
+/**
+ * The template marketplace contract, or null where it isn't deployed. Like
+ * CONTRACT_ID it never falls back to the testnet contract on mainnet; unlike
+ * it, a missing id switches the marketplace off instead of failing the app.
+ */
+export const MARKET_CONTRACT_ID: string | null = env("MARKET_CONTRACT_ID", "") || (IS_MAINNET ? null : TESTNET_MARKET_CONTRACT);
 
 export const HORIZON_URL = env(
   "HORIZON_URL",

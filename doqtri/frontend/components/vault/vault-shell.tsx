@@ -370,6 +370,13 @@ function VaultShellInner({
         onOpenChange={setTemplatesOpen}
         creating={creating}
         onUse={(template) => void handleNewNote(template)}
+        onCreated={({ id, title }) => {
+          // Same ordering as handleNewNote: navigate, then refresh the layout.
+          setTemplatesOpen(false);
+          toast.success(`Created “${title}”`);
+          navigate(`/vault/${id}`);
+          router.refresh();
+        }}
       />
       <QuickSwitcher
         notes={notes}

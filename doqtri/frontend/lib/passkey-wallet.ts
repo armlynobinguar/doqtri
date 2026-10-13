@@ -363,8 +363,16 @@ export type PaidWrite = { hash: string; feeStroops: bigint };
  * Wraps `tx`'s registry call in `forward(...)` so the wallet pays for it, has
  * the passkey sign the wallet's approval (one prompt), and sends it to the
  * relay, which prices and submits it. `tx` must be built without a source.
+ *
+ * `maxFee` is the most the user approves paying; market writes cost more than
+ * registry writes and pass their own. `alsoSpendsXlm` is XLM the call itself
+ * moves (an XLM tip or price), which the balance must cover on top of the fee.
  */
-export async function payAndRelay<T>(tx: contract.AssembledTransaction<T>, wallet: PasskeyWalletRef): Promise<PaidWrite> {
+export async function payAndRelay<T>(
+  tx: contract.AssembledTransaction<T>,
+  wallet: PasskeyWalletRef,
+  { maxFee = MAX_USER_FEE_STROOPS, alsoSpendsXlm = BigInt(0) }: { maxFee?: bigint; alsoSpendsXlm?: bigint } = {},
+): Promise<PaidWrite> {
   if (!FEE_FORWARDER || !DOQTRI_RELAYER) throw new Error("Paid writes aren't available on this network.");
   const op = tx.built?.operations[0] as { func?: xdr.HostFunction } | undefined;
   if (!op?.func || op.func.switch().name !== "hostFunctionTypeInvokeContract") {
@@ -373,7 +381,7 @@ export async function payAndRelay<T>(tx: contract.AssembledTransaction<T>, walle
   const call = op.func.invokeContract();
 
   const balance = await xlmBalanceStroops(wallet.address);
-  if (balance < MAX_USER_FEE_STROOPS) {
+  if (balance < maxFee + alsoSpendsXlm) {
     throw new Error(`Your wallet has ${formatXlm(balance)} XLM, not enough for this write. Use Top up in the account menu.`);
   }
 
@@ -383,7 +391,7 @@ export async function payAndRelay<T>(tx: contract.AssembledTransaction<T>, walle
     "forward",
     Address.fromString(NATIVE_XLM).toScVal(),
     nativeToScVal(BigInt(1), { type: "i128" }), // the relay sets the real fee
-    nativeToScVal(MAX_USER_FEE_STROOPS, { type: "i128" }),
+    nativeToScVal(maxFee, { type: "i128" }),
     nativeToScVal(sequence + FEE_APPROVAL_LEDGERS, { type: "u32" }),
     Address.fromScAddress(call.contractAddress()).toScVal(),
     xdr.ScVal.scvSymbol(call.functionName().toString()),

@@ -44,6 +44,32 @@ to receive USDC**, or every `buy` of their listing fails on the transfer to them
 Passkey (`C...`) wallets don't need one. The publish form must check this
 before offering USDC.
 
+**Phase 1 (2026-10-13), built, waiting on the migration.** Free templates,
+the Community tab and tips:
+
+- `20261013000000_create_market.sql`: `market_templates`, `market_purchases`,
+  `documents.source_template_id`, `chain_usage.kind` widened to `publish` and
+  `market`, and `market_record_use()`. **Not applied yet.**
+- `/api/market/publish` → `publish/confirm`, `/api/market/templates`,
+  `/api/market/claim`. Claim already checks `has_purchased` for paid
+  templates; publishing paid ones is off (`PAID_TEMPLATES_ENABLED`) until the
+  buy sheet ships.
+- The relay accepts market calls, sponsored or forwarded. The forwarded
+  validator was checked against a real testnet simulation of a forwarded
+  `buy`: the tree is `forward → {approve, buy → transfer ×3}`, and a
+  redirected split is refused. That `buy` simulated at 0.315 XLM.
+- Market writes get their own fee cap, `MAX_MARKET_FEE_STROOPS` = 1 XLM,
+  because listing exceeds the 0.5 XLM registry cap.
+- UI: Starter / Community tabs in the gallery, "Tip creator", and **Publish as
+  template** in the note's Stellar proof panel (it already saves the note and
+  knows the wallet), not the note menu.
+
+Changed from the plan:
+- **No cover images and no public bucket.** Cards draw the mindmap from the
+  template's headings, the same way starter templates are drawn.
+- **Usage counts** live in `market_templates.uses`, bumped by `claim`.
+- **Free templates use XLM** as their listing token, so tips need no trustline.
+
 ## Problem
 
 The template gallery has 14 starter notes, all written by Doqtri. Users write

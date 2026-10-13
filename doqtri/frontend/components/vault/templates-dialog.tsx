@@ -1,8 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { LayoutTemplateIcon, Loader2Icon } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ExternalLinkIcon, HandCoinsIcon, LayoutTemplateIcon, Loader2Icon } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogContent,
@@ -20,6 +23,11 @@ import {
   type TemplateCategory,
 } from "@/lib/templates";
 import { cn } from "@/lib/utils";
+import { expertContractUrl, expertTxUrl, MARKET_CONTRACT_ID } from "@/lib/stellar/config";
+import { PAID_TEMPLATES_ENABLED } from "@/lib/stellar/market-config";
+import { TemplateMarket } from "@/lib/stellar/market-client";
+import { formatAmount, parseAmount, shortAddress, type CommunityTemplate } from "@/lib/market";
+import { useWallet } from "@/components/vault/wallet-provider";
 
 /** Rough label width at the preview's 11px type, for laying out columns. */
 function labelWidth(label: string): number {
@@ -112,22 +120,32 @@ function TemplateMapPreview({ tree }: { tree: MindmapNode }) {
 const chip =
   "rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden";
 
+type GalleryTab = "starter" | "community";
+
 /**
  * The template gallery: pick a sample on the left, see its mindmap and
  * markdown on the right, then start a note from it. Nothing is written until
  * "Use template", so browsing is free.
+ *
+ * Starter templates are Doqtri's own; Community templates are notes other
+ * users published through the TemplateMarket contract (progress/004). The
+ * Community tab only exists where that contract is deployed.
  */
 export function TemplatesDialog({
   open,
   onOpenChange,
   onUse,
+  onCreated,
   creating,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onUse: (template: NoteTemplate) => void;
+  /** A community template was copied into the vault server-side. */
+  onCreated: (note: { id: string; title: string }) => void;
   creating: boolean;
 }) {
+  const [tab, setTab] = useState<GalleryTab>("starter");
   const [category, setCategory] = useState<TemplateCategory | "All">("All");
   const [selectedId, setSelectedId] = useState(TEMPLATES[0].id);
 
@@ -157,9 +175,24 @@ export function TemplatesDialog({
             Templates
           </DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            Start from a sample. Headings become the mindmap, and everything stays editable.
+            {tab === "starter"
+              ? "Start from a sample. Headings become the mindmap, and everything stays editable."
+              : "Templates published by Doqtri users. Authorship is recorded on Stellar."}
           </DialogDescription>
         </DialogHeader>
+
+        {MARKET_CONTRACT_ID ? (
+          <Tabs value={tab} onValueChange={(value) => setTab(value as GalleryTab)}>
+            <TabsList className="h-8">
+              <TabsTrigger value="starter" data-testid="templates-tab-starter" className="text-muted-foreground px-3 text-[12px]">
+                Starter
+              </TabsTrigger>
+              <TabsTrigger value="community" data-testid="templates-tab-community" className="text-muted-foreground px-3 text-[12px]">
+                Community
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+        ) : null}
 
         <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Template categories">
           {(["All", ...TEMPLATE_CATEGORIES] as const).map((c) => (
@@ -181,6 +214,9 @@ export function TemplatesDialog({
           ))}
         </div>
 
+        {tab === "community" && MARKET_CONTRACT_ID ? (
+          <CommunityGallery category={category} active={open} onCreated={onCreated} />
+        ) : (
         <div className="grid min-h-0 flex-1 gap-3 overflow-y-auto md:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] md:overflow-hidden">
           <ScrollArea className="min-h-0 md:h-full">
             <ul className="grid gap-2 pr-2 sm:grid-cols-2" aria-label="Templates">
@@ -241,7 +277,304 @@ export function TemplatesDialog({
             </ScrollArea>
           </section>
         </div>
+        )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+type Sort = "popular" | "newest" | "price";
+
+const SORT_LABELS: Record<Sort, string> = { popular: "Most used", newest: "Newest", price: "Price" };
+
+function priceLabel(t: CommunityTemplate): string {
+  return t.free ? "Free" : `${formatAmount(BigInt(t.price))} ${t.tokenCode}`;
+}
+
+/** The Community tab: fetched from /api/market/templates when it opens. */
+function CommunityGallery({
+  category,
+  active,
+  onCreated,
+}: {
+  category: TemplateCategory | "All";
+  active: boolean;
+  onCreated: (note: { id: string; title: string }) => void;
+}) {
+  const [sort, setSort] = useState<Sort>("popular");
+  // Results remember the query they answer; a newer query reads as loading
+  // until its own response lands, without resetting state inside the effect.
+  const query = `${sort}|${category}`;
+  const [result, setResult] = useState<
+    | { query: string; kind: "error"; message: string }
+    | { query: string; kind: "unavailable" }
+    | { query: string; kind: "ready"; templates: CommunityTemplate[] }
+    | null
+  >(null);
+  const state = result && result.query === query ? result : { kind: "loading" as const };
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [claiming, setClaiming] = useState(false);
+
+  useEffect(() => {
+    if (!active) return;
+    const controller = new AbortController();
+    const params = new URLSearchParams({ sort });
+    if (category !== "All") params.set("category", category);
+    const key = `${sort}|${category}`;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/market/templates?${params}`, { signal: controller.signal });
+        const body = (await res.json().catch(() => ({}))) as {
+          templates?: CommunityTemplate[];
+          available?: boolean;
+          error?: string;
+        };
+        if (!res.ok) throw new Error(body.error || "Community templates couldn't be loaded.");
+        if (body.available === false) {
+          setResult({ query: key, kind: "unavailable" });
+          return;
+        }
+        setResult({ query: key, kind: "ready", templates: body.templates ?? [] });
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setResult({ query: key, kind: "error", message: error instanceof Error ? error.message : "Community templates couldn't be loaded." });
+      }
+    })();
+    return () => controller.abort();
+  }, [active, category, sort]);
+
+  const templates = state.kind === "ready" ? state.templates : [];
+  const selected = templates.find((t) => t.id === selectedId) ?? templates[0] ?? null;
+
+  async function claim(template: CommunityTemplate) {
+    setClaiming(true);
+    try {
+      const res = await fetch("/api/market/claim", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ templateId: template.id }),
+      });
+      const body = (await res.json().catch(() => ({}))) as { id?: string; title?: string; error?: string };
+      if (!res.ok || !body.id) throw new Error(body.error || "The template could not be copied.");
+      onCreated({ id: body.id, title: body.title ?? template.title });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "The template could not be copied.");
+    } finally {
+      setClaiming(false);
+    }
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-2" data-testid="community-gallery">
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-muted-foreground flex items-center gap-2 text-[11px]">
+          Sort
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as Sort)}
+            className="text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-7 rounded-[10px] border border-[var(--glass-lo)] bg-[var(--glass)] px-2 text-[12px] shadow-[inset_0_1px_0_0_var(--glass-hi)] outline-none focus-visible:ring-3"
+          >
+            {(Object.keys(SORT_LABELS) as Sort[]).map((s) => (
+              <option key={s} value={s}>
+                {SORT_LABELS[s]}
+              </option>
+            ))}
+          </select>
+        </label>
+        {MARKET_CONTRACT_ID ? (
+          <a
+            href={expertContractUrl(MARKET_CONTRACT_ID)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-[11px]"
+          >
+            On-chain
+            <ExternalLinkIcon className="size-3" strokeWidth={1.5} />
+          </a>
+        ) : null}
+      </div>
+
+      {state.kind === "loading" ? (
+        <p className="text-muted-foreground flex items-center gap-2 py-8 text-[12px]">
+          <Loader2Icon className="size-3.5 animate-spin" /> Loading community templates…
+        </p>
+      ) : state.kind === "unavailable" ? (
+        <p className="text-muted-foreground py-8 text-[12px]">Community templates aren&apos;t available on this network.</p>
+      ) : state.kind === "error" ? (
+        <p role="alert" className="text-destructive py-8 text-[12px]">
+          {state.message}
+        </p>
+      ) : templates.length === 0 ? (
+        <p className="text-muted-foreground py-8 text-[12px]" data-testid="community-empty">
+          No community templates {category === "All" ? "yet" : `in ${category} yet`}. Publish one of your notes from its
+          Stellar proof panel.
+        </p>
+      ) : (
+        <div className="grid min-h-0 flex-1 gap-3 overflow-y-auto md:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] md:overflow-hidden">
+          <ScrollArea className="min-h-0 md:h-full">
+            <ul className="grid gap-2 pr-2 sm:grid-cols-2" aria-label="Community templates">
+              {templates.map((t) => (
+                <li key={t.id}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedId(t.id)}
+                    aria-pressed={t.id === selected?.id}
+                    data-testid={`community-template-${t.id}`}
+                    className={cn(
+                      "h-full w-full rounded-xl border p-3 text-left transition-colors focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden",
+                      t.id === selected?.id
+                        ? "border-[var(--glass-hi)] bg-[var(--glass-strong)]"
+                        : "border-[var(--glass-lo)] bg-[var(--glass)] hover:border-[var(--glass-hi)]",
+                    )}
+                  >
+                    <span className="flex items-center justify-between gap-2">
+                      <span className="eyebrow text-label text-[10px]">{t.category}</span>
+                      <span className="text-foreground text-[11px] font-medium">{priceLabel(t)}</span>
+                    </span>
+                    <span className="text-foreground mt-1 block text-[13px] font-semibold">{t.title}</span>
+                    {t.description ? (
+                      <span className="text-muted-foreground mt-1 block text-[12px] leading-snug">{t.description}</span>
+                    ) : null}
+                    <span className="text-label mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+                      <span className="font-mono">{shortAddress(t.creatorWallet)}</span>
+                      <span>
+                        {t.uses} {t.uses === 1 ? "use" : "uses"}
+                      </span>
+                      {t.mine ? (
+                        <span className="rounded-full border border-[var(--glass-lo)] px-1.5 py-px text-[10px]">Yours</span>
+                      ) : null}
+                    </span>
+                    {t.parent ? (
+                      <span className="text-muted-foreground mt-1 block truncate text-[11px]">
+                        Derived from <span className="text-foreground">{t.parent.title}</span>
+                      </span>
+                    ) : null}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </ScrollArea>
+          {selected ? (
+            <CommunityPreview key={selected.id} template={selected} claiming={claiming} onClaim={() => void claim(selected)} />
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CommunityPreview({
+  template,
+  claiming,
+  onClaim,
+}: {
+  template: CommunityTemplate;
+  claiming: boolean;
+  onClaim: () => void;
+}) {
+  const tree = useMemo(() => buildMindmap(template.title, template.preview), [template]);
+  const paid = !template.free;
+  return (
+    <section
+      aria-label={`${template.title} preview`}
+      className="flex min-h-0 flex-col gap-2 rounded-xl border border-[var(--glass-lo)] bg-[var(--glass)] p-3"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-foreground truncate text-[14px] font-semibold">{template.title}</p>
+          <p className="text-muted-foreground text-[12px]">
+            by <span className="font-mono">{shortAddress(template.creatorWallet)}</span> · {priceLabel(template)}
+          </p>
+          {template.parent ? (
+            <p className="text-muted-foreground text-[11px]">
+              Derived from “{template.parent.title}” by{" "}
+              <span className="font-mono">{shortAddress(template.parent.creatorWallet)}</span>
+            </p>
+          ) : null}
+        </div>
+        {paid && !template.mine ? (
+          <Button size="sm" disabled className="shrink-0 rounded-full" title="Paid templates are coming soon">
+            Buy — coming soon
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            disabled={claiming || (paid && !PAID_TEMPLATES_ENABLED && !template.mine)}
+            onClick={onClaim}
+            data-testid="use-community-template"
+            className="shrink-0 rounded-full"
+          >
+            {claiming ? <Loader2Icon className="animate-spin" /> : null}
+            {claiming ? "Creating…" : "Use template"}
+          </Button>
+        )}
+      </div>
+      <div className="bg-background relative h-56 shrink-0 overflow-hidden rounded-lg border border-[var(--glass-lo)] p-2 md:h-64">
+        <TemplateMapPreview tree={tree} />
+      </div>
+      {!template.mine ? <TipCreator template={template} /> : null}
+      <ScrollArea className="min-h-0 flex-1">
+        <pre className="text-muted-foreground max-h-60 font-mono text-[11px] leading-relaxed whitespace-pre-wrap md:max-h-none">
+          {template.preview}
+        </pre>
+        {paid ? (
+          <p className="text-label mt-2 text-[11px]">Headings only. The full text unlocks after purchase.</p>
+        ) : null}
+      </ScrollArea>
+    </section>
+  );
+}
+
+/** Sends a tip in the template's token, straight to its creator. */
+function TipCreator({ template }: { template: CommunityTemplate }) {
+  const wallet = useWallet();
+  const [amount, setAmount] = useState("");
+  const [sending, setSending] = useState(false);
+  const parsed = parseAmount(amount);
+  const valid = parsed !== null && parsed > BigInt(0);
+
+  async function send() {
+    if (!valid) return;
+    setSending(true);
+    try {
+      const address = await wallet.ensureWallet();
+      const { txHash } = await TemplateMarket.tip(address, template.id, template.token, parsed);
+      setAmount("");
+      toast.success(`Tipped ${formatAmount(parsed)} ${template.tokenCode}`, {
+        action: { label: "View tx", onClick: () => window.open(expertTxUrl(txHash), "_blank", "noopener,noreferrer") },
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "The tip could not be sent.");
+    } finally {
+      setSending(false);
+      void wallet.refreshBalance();
+    }
+  }
+
+  return (
+    <form
+      className="flex items-center gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void send();
+      }}
+    >
+      <label className="sr-only" htmlFor={`tip-${template.id}`}>
+        Tip amount in {template.tokenCode}
+      </label>
+      <Input
+        id={`tip-${template.id}`}
+        inputMode="decimal"
+        placeholder={`Tip in ${template.tokenCode}`}
+        value={amount}
+        onChange={(e) => setAmount(e.target.value)}
+        aria-invalid={amount !== "" && !valid}
+        className="h-8 flex-1 text-[12px]"
+      />
+      <Button type="submit" size="sm" variant="outline" disabled={!valid || sending} className="h-8 shrink-0 text-[12px]">
+        {sending ? <Loader2Icon className="animate-spin" /> : <HandCoinsIcon />}
+        {sending ? "Sending…" : "Tip creator"}
+      </Button>
+    </form>
   );
 }

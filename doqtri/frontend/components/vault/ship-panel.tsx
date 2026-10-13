@@ -9,6 +9,7 @@ import {
   LinkIcon,
   Loader2Icon,
   RefreshCwIcon,
+  StoreIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { MAX_USER_FEE_STROOPS, USER_PAYS_FEES } from "@/lib/stellar/smart-wallet-config";
@@ -28,7 +29,8 @@ import { NODE_STATUSES, type NodeStatus } from "@/lib/stellar/types";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useWallet } from "@/components/vault/wallet-provider";
 import { GitHubLinks } from "@/components/vault/github-links";
-import { IS_MAINNET } from "@/lib/stellar/config";
+import { IS_MAINNET, MARKET_CONTRACT_ID } from "@/lib/stellar/config";
+import { PublishTemplateDialog } from "@/components/vault/publish-template-dialog";
 import { buildMindmap } from "@/lib/mindmap";
 
 type Props = {
@@ -90,6 +92,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
   const paysOwnFees = USER_PAYS_FEES && smartWallet !== null;
   const lowBalance = paysOwnFees && wallet.walletXlm !== null && wallet.walletXlm < MAX_USER_FEE_STROOPS;
   const [toppingUp, setToppingUp] = useState(false);
+  const [publishOpen, setPublishOpen] = useState(false);
 
   async function topUp() {
     setToppingUp(true);
@@ -488,6 +491,34 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
             Anchored .md
           </Button>
         </div>
+      ) : null}
+
+      {MARKET_CONTRACT_ID ? (
+        <>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={noWallet}
+            title={noWallet ? "Create a passkey wallet first" : "Share this note as a community template"}
+            className="h-7 w-full px-2 text-[11px] max-lg:h-10 max-lg:text-[13px]"
+            data-testid="publish-template"
+            onClick={() => setPublishOpen(true)}
+          >
+            <StoreIcon />
+            Publish as template
+          </Button>
+          {publishOpen ? (
+            <PublishTemplateDialog
+              key={docId}
+              open={publishOpen}
+              onOpenChange={setPublishOpen}
+              docId={docId}
+              title={title}
+              onSave={onSave}
+            />
+          ) : null}
+        </>
       ) : null}
 
       {chainVersion != null && publishHeadings !== undefined ? (

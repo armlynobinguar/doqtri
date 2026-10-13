@@ -1,7 +1,7 @@
 import { Address } from "@stellar/stellar-sdk";
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
 import { walletAddressFromEmail } from "@/lib/wallet-address";
-import { CONTRACT_ID, NETWORK_PASSPHRASE } from "@/lib/stellar/config";
+import { CONTRACT_ID, MARKET_CONTRACT_ID, NETWORK_PASSPHRASE } from "@/lib/stellar/config";
 import {
   DOQTRI_RELAYER,
   FEE_FORWARDER,
@@ -17,14 +17,22 @@ import {
 import {
   deployedContractAddress,
   deployerAddress,
+  forwardedMarketCallOf,
+  forwardedTarget,
+  marketCallOf,
   parseRelayBody,
   RelayRejection,
+  validateForwardedMarketWrite,
   validateForwardedWrite,
+  validateMarketWrite,
   validateRegistryWrite,
   validateWalletAdmin,
   validateWalletDeploy,
+  type MarketCall,
   type RelaySubmission,
 } from "@/lib/stellar/relay-validation";
+import { MAX_MARKET_FEE_STROOPS } from "@/lib/stellar/market-config";
+import { expectedTransfers } from "@/lib/market-server";
 import { simulateWithinCap, submitAndConfirm } from "@/lib/stellar/channels";
 import { readWalletPasskeys } from "@/lib/stellar/wallet-signers";
 import { submitPaidWrite } from "@/lib/stellar/direct-submit";
@@ -38,9 +46,11 @@ import { submitPaidWrite } from "@/lib/stellar/direct-submit";
  * from a signed-in email account, pass the shape checks in relay-validation,
  * fit the per-user and global quota, and simulate under the fee cap.
  *
- * Three kinds of submission: a wallet deployment; a DoqtriRegistry write
- * signed by the caller's own wallet for one of the caller's own notes; and a
- * passkey change (add or remove) on the caller's own wallet. Each relayed
+ * Four kinds of submission: a wallet deployment; a DoqtriRegistry write
+ * signed by the caller's own wallet for one of the caller's own notes; a
+ * TemplateMarket write by the caller's wallet on a template Doqtri lists
+ * (progress/004); and a passkey change (add or remove) on the caller's own
+ * wallet. Each relayed
  * registry write is indexed in chain_writes, because Horizon cannot list a
  * contract account's writes by owner.
  */
@@ -49,6 +59,8 @@ const DEPLOYS_PER_USER = positive(process.env.CHAIN_DEPLOYS_PER_USER_DAILY, 3);
 const DEPLOYS_GLOBAL = positive(process.env.CHAIN_DEPLOYS_GLOBAL_DAILY, 200);
 const WRITES_PER_USER = positive(process.env.CHAIN_WRITES_PER_USER_DAILY, 100);
 const WRITES_GLOBAL = positive(process.env.CHAIN_WRITES_GLOBAL_DAILY, 5000);
+const MARKET_PER_USER = positive(process.env.CHAIN_MARKET_PER_USER_DAILY, 50);
+const MARKET_GLOBAL = positive(process.env.CHAIN_MARKET_GLOBAL_DAILY, 2000);
 /** Well under the contract's own cap of 15 signers per rule. */
 const MAX_PASSKEYS = 10;
 
@@ -86,12 +98,21 @@ export async function POST(request: Request) {
       submission.func.switch().name === "hostFunctionTypeInvokeContract"
         ? Address.fromScAddress(submission.func.invokeContract().contractAddress()).toString()
         : null;
+    if (MARKET_CONTRACT_ID && target === MARKET_CONTRACT_ID) {
+      if (USER_PAYS_FEES) return fail("Market calls must go through the fee forwarder.", 403);
+      return await relayMarketWrite(user.id, submission);
+    }
     if (target === CONTRACT_ID) {
       // Where users pay their own fees, an unwrapped write would skip paying.
       if (USER_PAYS_FEES) return fail("Registry writes must go through the fee forwarder.", 403);
       return await relayRegistryWrite(user.id, submission);
     }
-    if (USER_PAYS_FEES && target === FEE_FORWARDER) return await relayPaidWrite(user.id, submission);
+    if (USER_PAYS_FEES && target === FEE_FORWARDER) {
+      if (MARKET_CONTRACT_ID && forwardedTarget(submission.func) === MARKET_CONTRACT_ID) {
+        return await relayPaidMarketWrite(user.id, submission);
+      }
+      return await relayPaidWrite(user.id, submission);
+    }
     return await relayWalletAdmin(user.id, submission, new URL(request.url).hostname);
   } catch (error) {
     if (error instanceof RelayRejection) return fail(error.message, error.status);
@@ -103,7 +124,7 @@ export async function POST(request: Request) {
 /** Charges one request against the quota; null when allowed, else a refusal. */
 async function chargeQuota(
   userId: string,
-  kind: "deploy" | "write",
+  kind: "deploy" | "write" | "market",
   userLimit: number,
   globalLimit: number,
 ): Promise<Response | null> {
@@ -209,15 +230,7 @@ async function relayPaidWrite(userId: string, submission: RelaySubmission) {
   const refused = await chargeQuota(userId, "write", WRITES_PER_USER, WRITES_GLOBAL);
   if (refused) return refused;
 
-  const walletEntry = submission.auth.find(
-    (entry) => entry.credentials().switch().name !== "sorobanCredentialsSourceAccount" &&
-      Address.fromScAddress(
-        entry.credentials().switch().name === "sorobanCredentialsAddress"
-          ? entry.credentials().address().address()
-          : entry.credentials().addressV2().address(),
-      ).toString() === wallet.address,
-  )!;
-  const { hash, feeStroops } = await submitPaidWrite(submission.func, walletEntry, write.maxFee);
+  const { hash, feeStroops } = await submitPaidWrite(submission.func, walletAuthEntry(submission, wallet.address), write.maxFee);
 
   const { error } = await admin.from("chain_writes").insert({
     network: NETWORK,
@@ -229,6 +242,139 @@ async function relayPaidWrite(userId: string, submission: RelaySubmission) {
   if (error) console.error(`[chain/relay] ${write.fn} ${hash} not indexed: ${error.message}`);
 
   return Response.json({ success: true, data: { hash, status: "confirmed", feeStroops: feeStroops.toString() } });
+}
+
+/** The wallet's own (validated) approval among a submission's auth entries. */
+function walletAuthEntry(submission: RelaySubmission, wallet: string) {
+  return submission.auth.find(
+    (entry) => entry.credentials().switch().name !== "sorobanCredentialsSourceAccount" &&
+      Address.fromScAddress(
+        entry.credentials().switch().name === "sorobanCredentialsAddress"
+          ? entry.credentials().address().address()
+          : entry.credentials().addressV2().address(),
+      ).toString() === wallet,
+  )!;
+}
+
+/**
+ * The marketplace's equivalent of "the note is the caller's": the relay only
+ * pays to submit calls on templates Doqtri lists. A listing must match the
+ * draft /api/market/publish prepared for this user; price and listing
+ * changes must be on the user's own templates; tips and purchases must be on
+ * templates the gallery shows.
+ */
+async function authorizeMarketCall(userId: string, call: MarketCall): Promise<Response | null> {
+  const { data: row } = await createSupabaseAdminClient()
+    .from("market_templates")
+    .select("creator_id, status, hidden, content_hash, token, price::text, parent_id")
+    .eq("id", call.templateId)
+    .eq("network", NETWORK)
+    .maybeSingle();
+  if (!row) return fail("That template isn't in the Doqtri gallery.", 404);
+
+  switch (call.fn) {
+    case "list_template":
+      if (
+        row.creator_id !== userId ||
+        row.status !== "pending" ||
+        row.content_hash !== call.contentHash ||
+        row.token !== call.token ||
+        BigInt(row.price) !== call.price ||
+        (row.parent_id ?? null) !== call.parent
+      ) {
+        return fail("This listing doesn't match what you prepared. Publish it again.", 409);
+      }
+      return null;
+    case "update_price":
+    case "set_listed":
+      return row.creator_id === userId && row.status !== "pending" ? null : fail("That template isn't yours.", 403);
+    case "tip":
+    case "buy":
+      return row.status === "listed" && !row.hidden ? null : fail("That template isn't available.", 409);
+  }
+}
+
+/** A buy the relay saw land, recorded so claim and the earnings page can find it. */
+async function recordPurchase(userId: string, wallet: string, call: MarketCall, hash: string) {
+  if (call.fn !== "buy") return;
+  const { data: row } = await createSupabaseAdminClient()
+    .from("market_templates")
+    .select("price::text")
+    .eq("id", call.templateId)
+    .maybeSingle();
+  const { error } = await createSupabaseAdminClient().from("market_purchases").insert({
+    network: NETWORK,
+    template_id: call.templateId,
+    buyer_id: userId,
+    buyer_wallet: wallet,
+    tx_hash: hash,
+    amount: row?.price ?? "0",
+  });
+  // On-chain either way; claim re-checks has_purchased, so log and move on.
+  if (error) console.error(`[chain/relay] purchase ${hash} not recorded: ${error.message}`);
+}
+
+/** A market write paid for by the user's wallet through the FeeForwarder. */
+async function relayPaidMarketWrite(userId: string, submission: RelaySubmission) {
+  const admin = createSupabaseAdminClient();
+  const { data: wallet } = await admin
+    .from("smart_wallets")
+    .select("address")
+    .eq("user_id", userId)
+    .eq("network", NETWORK)
+    .maybeSingle();
+  if (!wallet) return fail("Create your passkey wallet first.", 409);
+
+  const call = forwardedMarketCallOf(submission.func, MARKET_CONTRACT_ID!, wallet.address);
+  const refusedCall = await authorizeMarketCall(userId, call);
+  if (refusedCall) return refusedCall;
+
+  const write = validateForwardedMarketWrite(submission, {
+    forwarder: FEE_FORWARDER!,
+    xlm: NATIVE_XLM,
+    market: MARKET_CONTRACT_ID!,
+    wallet: wallet.address,
+    relayer: DOQTRI_RELAYER!,
+    maxFeeCap: MAX_MARKET_FEE_STROOPS,
+    transfers: await expectedTransfers(call, wallet.address),
+  });
+
+  const refused = await chargeQuota(userId, "market", MARKET_PER_USER, MARKET_GLOBAL);
+  if (refused) return refused;
+
+  const { hash, feeStroops } = await submitPaidWrite(submission.func, walletAuthEntry(submission, wallet.address), write.maxFee);
+  await recordPurchase(userId, wallet.address, call, hash);
+  return Response.json({ success: true, data: { hash, status: "confirmed", feeStroops: feeStroops.toString() } });
+}
+
+/** A market write sponsored through Channels, on networks without a forwarder. */
+async function relayMarketWrite(userId: string, submission: RelaySubmission) {
+  const admin = createSupabaseAdminClient();
+  const { data: wallet } = await admin
+    .from("smart_wallets")
+    .select("address")
+    .eq("user_id", userId)
+    .eq("network", NETWORK)
+    .maybeSingle();
+  if (!wallet) return fail("Create your passkey wallet first.", 409);
+
+  const call = marketCallOf(submission.func, MARKET_CONTRACT_ID!, wallet.address);
+  const refusedCall = await authorizeMarketCall(userId, call);
+  if (refusedCall) return refusedCall;
+
+  validateMarketWrite(submission, {
+    market: MARKET_CONTRACT_ID!,
+    wallet: wallet.address,
+    transfers: await expectedTransfers(call, wallet.address),
+  });
+
+  const refused = await chargeQuota(userId, "market", MARKET_PER_USER, MARKET_GLOBAL);
+  if (refused) return refused;
+
+  await simulateWithinCap(submission.func, submission.auth);
+  const sent = await submitAndConfirm(submission.func, submission.auth);
+  await recordPurchase(userId, wallet.address, call, sent.hash);
+  return Response.json({ success: true, data: sent });
 }
 
 /**
