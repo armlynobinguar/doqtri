@@ -44,12 +44,13 @@ to receive USDC**, or every `buy` of their listing fails on the transfer to them
 Passkey (`C...`) wallets don't need one. The publish form must check this
 before offering USDC.
 
-**Phase 1 (2026-10-13), built, waiting on the migration.** Free templates,
+**Phase 1 (2026-10-13), built; migration applied, not yet tested end-to-end.** Free templates,
 the Community tab and tips:
 
 - `20261013000000_create_market.sql`: `market_templates`, `market_purchases`,
   `documents.source_template_id`, `chain_usage.kind` widened to `publish` and
-  `market`, and `market_record_use()`. **Not applied yet.**
+  `market`, and `market_record_use()`. Applied to the Supabase project on
+  2026-10-13 (recorded as version `20261013114543`).
 - `/api/market/publish` → `publish/confirm`, `/api/market/templates`,
   `/api/market/claim`. Claim already checks `has_purchased` for paid
   templates; publishing paid ones is off (`PAID_TEMPLATES_ENABLED`) until the
