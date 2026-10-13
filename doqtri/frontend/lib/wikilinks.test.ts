@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { buildBacklinks, buildGraph, parseLinks } from "@/lib/wikilinks";
+import {
+  buildBacklinks,
+  buildGraph,
+  completeLink,
+  findLinkQuery,
+  matchIndices,
+  parseLinks,
+  rankLinkSuggestions,
+} from "@/lib/wikilinks";
 import type { Doc } from "@/lib/types";
 
 const doc = (id: string, title: string, markdown = ""): Doc => ({
@@ -154,5 +162,114 @@ describe("buildBacklinks", () => {
 
   it("returns nothing for an unknown id", () => {
     expect(buildBacklinks([doc("1", "Alpha")], "nope")).toEqual([]);
+  });
+});
+
+/** Caret position marked with `¦` in the fixture; returns [text, caret]. */
+const at = (marked: string): [string, number] => {
+  const caret = marked.indexOf("¦");
+  return [marked.replace("¦", ""), caret];
+};
+
+describe("findLinkQuery", () => {
+  it("opens on [[ with an empty query", () => {
+    expect(findLinkQuery(...at("see [[¦"))).toEqual({ start: 6, query: "" });
+  });
+
+  it("captures what has been typed after [[", () => {
+    expect(findLinkQuery(...at("see [[Meet¦"))).toEqual({ start: 6, query: "Meet" });
+  });
+
+  it("works with the caret inside an already closed link", () => {
+    expect(findLinkQuery(...at("[[Al¦pha]]"))).toEqual({ start: 2, query: "Al" });
+  });
+
+  it("is null outside a link", () => {
+    expect(findLinkQuery(...at("plain ¦text"))).toBeNull();
+    expect(findLinkQuery(...at("[[Alpha]] after¦"))).toBeNull();
+    expect(findLinkQuery(...at("[single¦"))).toBeNull();
+  });
+
+  it("does not reach across a newline", () => {
+    expect(findLinkQuery(...at("[[Alpha\nnext¦"))).toBeNull();
+  });
+
+  it("stops once an alias starts", () => {
+    expect(findLinkQuery(...at("[[Alpha|the¦"))).toBeNull();
+  });
+
+  it("ignores triple brackets", () => {
+    expect(findLinkQuery(...at("[[[x¦"))).toBeNull();
+  });
+});
+
+describe("rankLinkSuggestions", () => {
+  const titles = ["Meeting notes", "Roadmap", "Team meeting", "Memo", "Atom"];
+
+  it("lists everything alphabetically for an empty query", () => {
+    expect(rankLinkSuggestions(titles, "")).toEqual([
+      "Atom",
+      "Meeting notes",
+      "Memo",
+      "Roadmap",
+      "Team meeting",
+    ]);
+  });
+
+  it("ranks prefix over word-start over substring over subsequence", () => {
+    expect(rankLinkSuggestions(["xmeet", "Team meeting", "Meeting notes", "m-e-e-t"], "meet")).toEqual([
+      "Meeting notes",
+      "Team meeting",
+      "xmeet",
+      "m-e-e-t",
+    ]);
+  });
+
+  it("puts an exact match first and is case-insensitive", () => {
+    expect(rankLinkSuggestions(["Memo pad", "memo"], "MEMO")).toEqual(["memo", "Memo pad"]);
+  });
+
+  it("drops non-matches and duplicate titles", () => {
+    expect(rankLinkSuggestions(["Alpha", "alpha", "Beta"], "al")).toEqual(["Alpha"]);
+  });
+
+  it("respects the limit", () => {
+    expect(rankLinkSuggestions(titles, "", 2)).toEqual(["Atom", "Meeting notes"]);
+  });
+});
+
+describe("completeLink", () => {
+  const apply = (marked: string, title: string) => {
+    const [text, caret] = at(marked);
+    const link = findLinkQuery(text, caret)!;
+    const edit = completeLink(text, caret, link, title);
+    const next = text.slice(0, edit.from) + edit.insert + text.slice(edit.to);
+    return next.slice(0, edit.caret) + "¦" + next.slice(edit.caret);
+  };
+
+  it("closes a fresh link and lands after ]]", () => {
+    expect(apply("see [[Me¦ later", "Meeting notes")).toBe("see [[Meeting notes]]¦ later");
+  });
+
+  it("replaces the old target inside a closed link without doubling ]]", () => {
+    expect(apply("[[Al¦pha]] x", "Atom")).toBe("[[Atom]]¦ x");
+  });
+
+  it("keeps an existing alias and lands before it", () => {
+    expect(apply("[[Al¦pha|first]]", "Atom")).toBe("[[Atom¦|first]]");
+  });
+});
+
+describe("matchIndices", () => {
+  it("marks a contiguous match", () => {
+    expect(matchIndices("Team meeting", "meet")).toEqual([5, 6, 7, 8]);
+  });
+
+  it("falls back to subsequence characters", () => {
+    expect(matchIndices("Meeting notes", "mtg")).toEqual([0, 3, 6]);
+  });
+
+  it("is empty for an empty query", () => {
+    expect(matchIndices("Alpha", "")).toEqual([]);
   });
 });

@@ -144,6 +144,12 @@ export function DocWorkspace({
     [docs, active.id, settled],
   );
 
+  // Every other note, offered by the editor's `[[` autocomplete.
+  const linkTitles = useMemo(
+    () => docs.filter((doc) => doc.id !== active.id).map((doc) => doc.title),
+    [docs, active.id],
+  );
+
   const handleRegenerate = useCallback(async () => {
     const res = await fetch("/api/regenerate", {
       method: "POST",
@@ -238,6 +244,7 @@ export function DocWorkspace({
             markdown={markdown}
             onChange={setMarkdown}
             onRegenerate={() => setRegenerateOpen(true)}
+            linkTitles={linkTitles}
           />
         </div>
         {mobileView === "map" && (
@@ -274,6 +281,7 @@ export function DocWorkspace({
             markdown={markdown}
             onChange={setMarkdown}
             onRegenerate={() => setRegenerateOpen(true)}
+            linkTitles={linkTitles}
           />
         </ResizablePanel>
 
