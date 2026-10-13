@@ -1,11 +1,13 @@
 "use client";
 
+import { useRef } from "react";
 import dynamic from "next/dynamic";
 import { FileTextIcon, SparklesIcon } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { DoqtriLoader } from "@/components/brand/doqtri-loader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { WikilinkSuggest } from "@/components/vault/wikilink-suggest";
 
 // Touches `window`, so it must never be server-rendered.
 const MDEditor = dynamic(() => import("@uiw/react-md-editor"), {
@@ -22,10 +24,13 @@ export function EditorPane({
   markdown,
   onChange,
   onRegenerate,
+  linkTitles,
   compact = false,
 }: {
   title: string;
   markdown: string;
+  /** Titles offered when a `[[link` is being typed. */
+  linkTitles: string[];
   onChange: (markdown: string) => void;
   onRegenerate: () => void;
   /**
@@ -35,6 +40,8 @@ export function EditorPane({
    */
   compact?: boolean;
 }) {
+  const editorRef = useRef<HTMLDivElement>(null);
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/*
@@ -79,7 +86,7 @@ export function EditorPane({
         </div>
       )}
 
-      <div className="min-h-0 flex-1" data-color-mode="dark">
+      <div ref={editorRef} className="min-h-0 flex-1" data-color-mode="dark">
         <MDEditor
           value={markdown}
           onChange={(next) => onChange(next ?? "")}
@@ -92,6 +99,7 @@ export function EditorPane({
           }}
           style={{ height: "100%" }}
         />
+        <WikilinkSuggest containerRef={editorRef} titles={linkTitles} />
       </div>
     </div>
   );
