@@ -28,7 +28,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run unit tests
-        run: cargo test -p doqtri-registry
+        run: cargo test -p doqtri-registry -p doqtri-market
 
   build:
     name: Build WASM
@@ -63,11 +63,22 @@ jobs:
         run: stellar contract build
         working-directory: contract
 
+      - name: Build market contract
+        run: stellar contract build
+        working-directory: market
+
       - name: Upload WASM artifact
         uses: actions/upload-artifact@v4
         with:
           name: doqtri-registry-wasm
           path: target/wasm32v1-none/release/doqtri_registry.wasm
+          if-no-files-found: error
+
+      - name: Upload market WASM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: doqtri-market-wasm
+          path: target/wasm32v1-none/release/doqtri_market.wasm
           if-no-files-found: error
 
   app:
