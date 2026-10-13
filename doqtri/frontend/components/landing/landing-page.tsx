@@ -97,6 +97,9 @@ export function LandingPage() {
               <Link className={styles.secondary} href="/signup">
                 Sign up with email
               </Link>
+              <Link className={styles.secondary} href="/demo">
+                Try the demo
+              </Link>
               <Link className={styles.secondary} href="/docs">
                 Read the docs
               </Link>

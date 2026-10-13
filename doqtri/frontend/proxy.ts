@@ -47,9 +47,11 @@ export async function proxy(request: NextRequest) {
   const isDocsRoute = pathname === "/docs" || pathname.startsWith("/docs/");
   // The promo portal is linked from the landing; it shows sign-in when needed.
   const isPromoRoute = pathname === "/promo";
+  // The read-only demo vault is for visitors, and signed-in users may open it too.
+  const isDemoRoute = pathname === "/demo" || pathname.startsWith("/demo/");
   // Emailed links land on /auth/confirm signed out and leave signed in.
   const isAuthCallback = pathname.startsWith("/auth/");
-  if (isAuditRoute || isDocsRoute || isPromoRoute || isAuthCallback) return response;
+  if (isAuditRoute || isDocsRoute || isPromoRoute || isDemoRoute || isAuthCallback) return response;
 
   // Unauthenticated users may view the landing and the sign-in screens.
   // Everything else (including /reset-password, which the emailed link reaches
