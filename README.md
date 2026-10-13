@@ -175,6 +175,26 @@ environment variables (see [Network selection](#network-selection)).
 - [Deploy transaction (Expert)](https://stellar.expert/explorer/testnet/tx/8b65276712032e15a2094b75c0818c5b87556b91782b9612ffad8836084d916a)
 - [WASM upload transaction (Expert)](https://stellar.expert/explorer/testnet/tx/5da4263b7e01b3c5be44b093bc6105aec07f20e4157b5231516c980dd4933cbd)
 
+### Template marketplace (testnet)
+
+`TemplateMarket` (`market/`) sells community templates and splits each payment
+between the creator, the parent template's creator and the treasury. Plan and
+status: [004-template-marketplace.md](./doqtri/progress/004-template-marketplace.md).
+
+| Field | Value |
+| --- | --- |
+| **Contract ID** | [`CA6YPRXQ2IFGACBFLKWEFETGLZ2C5R7DG5TTBKTTP4AVYOF3HFOSBCC2`](https://lab.stellar.org/r/testnet/contract/CA6YPRXQ2IFGACBFLKWEFETGLZ2C5R7DG5TTBKTTP4AVYOF3HFOSBCC2) |
+| **CLI alias** | `doqtri-market` |
+| **Split** | creator 85% · parent creator 5% · treasury 10% |
+| **Tokens** | XLM, USDC (Circle testnet) |
+
+In the app: **Publish as template** in a note's Stellar proof panel, and one
+**Templates** page (`/vault/templates`) with three tabs: **Starter** (Doqtri's
+samples), **Community** (buy, use, tip, report a copy) and **Yours** (your
+published templates and what they earned). Admins review copy reports at
+`/admin/reports`. Deploying to another network: `market/deploy.sh` (see the
+plan's phase 4 runbook).
+
 ### Stellar Mainnet
 
 | Field | Value |
@@ -372,6 +392,7 @@ doqtri/                          # git repo root
 │   ├── progress/                # feature plans (mindmap, passkey wallets, user-paid fees)
 │   └── image/                   # brand assets
 ├── contract/                    # Soroban DoqtriRegistry
+├── market/                      # Soroban TemplateMarket (template sales + royalties)
 ├── fee-forwarder/               # Soroban FeeForwarder for passkey-wallet fees
 ├── docs/                        # user testing, wallet integration, screenshots
 ├── .github/workflows/ci.yml
@@ -384,8 +405,8 @@ See also [`doqtri/README.md`](./doqtri/README.md) and [`doqtri/SPEC.md`](./doqtr
 
 GitHub Actions (`.github/workflows/ci.yml`) runs four jobs:
 
-1. **Contract tests:** `cargo test -p doqtri-registry`
-2. **Build WASM:** `stellar contract build`, uploaded as an artifact
+1. **Contract tests:** `cargo test -p doqtri-registry -p doqtri-market`
+2. **Build WASM:** `stellar contract build` for both contracts, uploaded as artifacts
 3. **App build + unit tests:** lint, Vitest and `next build`
 4. **E2E (Playwright):** signs in and drives the vault against Supabase; runs on pushes to `main`
 

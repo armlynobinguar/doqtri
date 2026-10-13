@@ -10,7 +10,7 @@
  * These checks bound spending; they do not prove wallet ownership. Ownership
  * is the session (the route) plus the passkey signature (the contract).
  */
-import { Address, hash, Keypair, scValToBigInt, StrKey, xdr } from "@stellar/stellar-sdk";
+import { Address, hash, Keypair, nativeToScVal, scValToBigInt, StrKey, xdr } from "@stellar/stellar-sdk";
 
 export class RelayRejection extends Error {
   constructor(
@@ -464,4 +464,256 @@ export function validateForwardedWrite(
   }
 
   return { ...write, maxFee: max, expirationLedger: expiration.u32() };
+}
+
+// ---------------------------------------------------------------------------
+// Template marketplace (progress/004). Market calls move tokens, so on top of
+// the registry rules every token transfer the wallet approves must be one the
+// contract will make, to the recipients and amounts the caller computed from
+// the ledger. The relay must never pay to submit a transfer anywhere else.
+
+export const MARKET_FUNCTIONS = ["list_template", "update_price", "set_listed", "buy", "tip"] as const;
+export type MarketFunction = (typeof MARKET_FUNCTIONS)[number];
+
+export type MarketCall =
+  | { fn: "list_template"; templateId: string; contentHash: string; token: string; price: bigint; parent: string | null }
+  | { fn: "update_price"; templateId: string; price: bigint }
+  | { fn: "set_listed"; templateId: string; listed: boolean }
+  | { fn: "buy"; templateId: string; maxPrice: bigint }
+  | { fn: "tip"; templateId: string; amount: bigint };
+
+/** A `token.transfer(wallet, to, amount)` the wallet is expected to approve. */
+export type ExpectedTransfer = { token: string; to: string; amount: bigint };
+
+const TEMPLATE_ID = /^[a-z2-7]{16}$/;
+
+function templateIdOf(value: xdr.ScVal | undefined): string | null {
+  if (!isString(value)) return null;
+  const id = value.str().toString();
+  return TEMPLATE_ID.test(id) ? id : null;
+}
+
+function i128Of(value: xdr.ScVal | undefined): bigint | null {
+  return value?.switch().name === "scvI128" ? scValToBigInt(value) : null;
+}
+
+/**
+ * One of the market's write functions with the argument shapes the contract
+ * declares, naming `wallet` wherever the call names who acts. `update_price`
+ * and `set_listed` name nobody: the caller must check the template is the
+ * user's own.
+ */
+export function validateMarketCall(fnName: string, args: xdr.ScVal[], wallet: string): MarketCall {
+  const fn = fnName as MarketFunction;
+  if (!MARKET_FUNCTIONS.includes(fn)) {
+    throw new RelayRejection("That market function is not allowed");
+  }
+  const bad = () => new RelayRejection(`${fn} has an invalid argument shape`);
+  switch (fn) {
+    case "list_template": {
+      const templateId = templateIdOf(args[1]);
+      const token = addressOf(args[3]);
+      const price = i128Of(args[4]);
+      const parentVal = args[5];
+      const parent = parentVal?.switch().name === "scvVoid" ? null : templateIdOf(parentVal);
+      if (args.length !== 6 || !templateId || !isHash(args[2]) || !token || price === null || price < BigInt(0)) {
+        throw bad();
+      }
+      if (parent === null && parentVal?.switch().name !== "scvVoid") throw bad();
+      if (addressOf(args[0]) !== wallet) throw new RelayRejection("list_template must name your wallet as the creator");
+      return { fn, templateId, contentHash: Buffer.from(args[2].bytes()).toString("hex"), token, price, parent };
+    }
+    case "update_price": {
+      const templateId = templateIdOf(args[0]);
+      const price = i128Of(args[1]);
+      if (args.length !== 2 || !templateId || price === null || price < BigInt(0)) throw bad();
+      return { fn, templateId, price };
+    }
+    case "set_listed": {
+      const templateId = templateIdOf(args[0]);
+      if (args.length !== 2 || !templateId || args[1].switch().name !== "scvBool") throw bad();
+      return { fn, templateId, listed: args[1].b() };
+    }
+    case "buy": {
+      const templateId = templateIdOf(args[1]);
+      const maxPrice = i128Of(args[2]);
+      if (args.length !== 3 || !templateId || maxPrice === null || maxPrice < BigInt(0)) throw bad();
+      if (addressOf(args[0]) !== wallet) throw new RelayRejection("buy must name your wallet as the buyer");
+      return { fn, templateId, maxPrice };
+    }
+    case "tip": {
+      const templateId = templateIdOf(args[1]);
+      const amount = i128Of(args[2]);
+      if (args.length !== 3 || !templateId || amount === null || amount <= BigInt(0)) throw bad();
+      if (addressOf(args[0]) !== wallet) throw new RelayRejection("tip must come from your wallet");
+      return { fn, templateId, amount };
+    }
+  }
+}
+
+/** The market call inside an invoke, before any auth checks (to look up what it should transfer). */
+export function marketCallOf(func: xdr.HostFunction, market: string, wallet: string): MarketCall {
+  if (func.switch().name !== "hostFunctionTypeInvokeContract") {
+    throw new RelayRejection("Only market calls are accepted here");
+  }
+  const invoke = func.invokeContract();
+  if (Address.fromScAddress(invoke.contractAddress()).toString() !== market) {
+    throw new RelayRejection("Only the Doqtri market can be called");
+  }
+  return validateMarketCall(invoke.functionName().toString(), invoke.args(), wallet);
+}
+
+/** The contract a `forward` call targets (its fifth argument), or null. */
+export function forwardedTarget(func: xdr.HostFunction): string | null {
+  if (func.switch().name !== "hostFunctionTypeInvokeContract") return null;
+  return addressOf(func.invokeContract().args()[4]);
+}
+
+/** The market call wrapped in a `forward`, before any auth checks. */
+export function forwardedMarketCallOf(func: xdr.HostFunction, market: string, wallet: string): MarketCall {
+  const args = func.switch().name === "hostFunctionTypeInvokeContract" ? func.invokeContract().args() : [];
+  const [, , , , target, targetFn, targetArgs] = args;
+  if (args.length !== 9 || addressOf(target) !== market) {
+    throw new RelayRejection("Only the Doqtri market can be called");
+  }
+  if (targetFn?.switch().name !== "scvSymbol" || targetArgs?.switch().name !== "scvVec") {
+    throw new RelayRejection("The forwarded call has an invalid shape");
+  }
+  return validateMarketCall(targetFn.sym().toString(), targetArgs.vec() ?? [], wallet);
+}
+
+/** Exactly `transfers`, in order, each `transfer(wallet, to, amount)` with nothing nested. */
+function isExactlyTransfers(
+  subs: xdr.SorobanAuthorizedInvocation[],
+  wallet: string,
+  transfers: ExpectedTransfer[],
+): boolean {
+  const walletAddr = Address.fromString(wallet).toScVal();
+  return (
+    subs.length === transfers.length &&
+    subs.every((sub, i) => {
+      const fn = sub.function();
+      if (fn.switch().name !== "sorobanAuthorizedFunctionTypeContractFn" || sub.subInvocations().length !== 0) {
+        return false;
+      }
+      const call = fn.contractFn();
+      const t = transfers[i];
+      return (
+        Address.fromScAddress(call.contractAddress()).toString() === t.token &&
+        call.functionName().toString() === "transfer" &&
+        sameScVals(call.args(), [walletAddr, Address.fromString(t.to).toScVal(), nativeToScVal(t.amount, { type: "i128" })])
+      );
+    })
+  );
+}
+
+/**
+ * A market write signed by the caller's wallet and sponsored by the relay
+ * (networks without a FeeForwarder): one invocation on exactly `market`, and
+ * one auth entry from `wallet` for exactly that call, whose only nested
+ * approvals are `transfers`.
+ */
+export function validateMarketWrite(
+  { func, auth }: RelaySubmission,
+  expected: { market: string; wallet: string; transfers: ExpectedTransfer[] },
+): MarketCall {
+  const call = marketCallOf(func, expected.market, expected.wallet);
+  const invoke = func.invokeContract();
+  if (auth.length !== 1) {
+    throw new RelayRejection("A market write must carry exactly one auth entry");
+  }
+  const root = auth[0].rootInvocation();
+  if (
+    credentialAddress(auth[0]) !== expected.wallet ||
+    root.function().switch().name !== "sorobanAuthorizedFunctionTypeContractFn" ||
+    !root.function().contractFn().toXDR().equals(invoke.toXDR()) ||
+    !isExactlyTransfers(root.subInvocations(), expected.wallet, expected.transfers)
+  ) {
+    throw new RelayRejection("The signature must come from your wallet for exactly this call");
+  }
+  return call;
+}
+
+export type ForwardedMarketWrite = { call: MarketCall; maxFee: bigint; expirationLedger: number };
+
+/**
+ * A market write wrapped in Doqtri's FeeForwarder, so the wallet pays the
+ * fee: the same `forward` shape as a forwarded registry write, except the
+ * market call's own approval may nest the token transfers `buy` and `tip`
+ * make — exactly `transfers`, and nothing else.
+ */
+export function validateForwardedMarketWrite(
+  { func, auth }: RelaySubmission,
+  expected: {
+    forwarder: string;
+    xlm: string;
+    market: string;
+    wallet: string;
+    relayer: string;
+    maxFeeCap: bigint;
+    transfers: ExpectedTransfer[];
+  },
+): ForwardedMarketWrite {
+  if (func.switch().name !== "hostFunctionTypeInvokeContract") {
+    throw new RelayRejection("Only forwarded market calls are accepted here");
+  }
+  const invoke = func.invokeContract();
+  if (
+    Address.fromScAddress(invoke.contractAddress()).toString() !== expected.forwarder ||
+    invoke.functionName().toString() !== "forward"
+  ) {
+    throw new RelayRejection("Only Doqtri's fee forwarder can be called");
+  }
+  const a = invoke.args();
+  if (a.length !== 9) throw new RelayRejection("forward has an invalid argument shape");
+  const [feeToken, feeAmount, maxFee, expiration, target, targetFn, , user, relayer] = a;
+
+  if (addressOf(feeToken) !== expected.xlm) throw new RelayRejection("Fees must be paid in XLM");
+  if (feeAmount.switch().name !== "scvI128" || maxFee.switch().name !== "scvI128") {
+    throw new RelayRejection("Fee amounts have an invalid shape");
+  }
+  const max = scValToBigInt(maxFee);
+  if (max <= BigInt(0) || max > expected.maxFeeCap) {
+    throw new RelayRejection("The maximum fee is outside the allowed range");
+  }
+  if (expiration.switch().name !== "scvU32") throw new RelayRejection("The fee approval has no valid expiry");
+  const call = forwardedMarketCallOf(func, expected.market, expected.wallet);
+  const inner = a[6].vec() ?? [];
+  if (addressOf(user) !== expected.wallet) throw new RelayRejection("Only your own wallet can pay for this");
+  if (addressOf(relayer) !== expected.relayer) throw new RelayRejection("The fee must go to Doqtri's relayer");
+
+  const walletEntries = auth.filter((entry) => credentialAddress(entry) === expected.wallet);
+  if (walletEntries.length !== 1 || auth.some((e) => ![expected.wallet, expected.relayer].includes(credentialAddress(e) ?? ""))) {
+    throw new RelayRejection("A forwarded write must carry exactly one approval from your wallet");
+  }
+  const root = walletEntries[0].rootInvocation();
+  const rootFn = root.function();
+  const subs = root.subInvocations();
+  const contractOf = (inv: xdr.SorobanAuthorizedInvocation) =>
+    inv.function().switch().name === "sorobanAuthorizedFunctionTypeContractFn"
+      ? Address.fromScAddress(inv.function().contractFn().contractAddress()).toString()
+      : null;
+  const approve = subs.find((s) => contractOf(s) === expected.xlm);
+  const marketCall = subs.find((s) => contractOf(s) === expected.market);
+  const walletAddr = Address.fromString(expected.wallet).toScVal();
+  const forwarderAddr = Address.fromString(expected.forwarder).toScVal();
+  if (
+    rootFn.switch().name !== "sorobanAuthorizedFunctionTypeContractFn" ||
+    Address.fromScAddress(rootFn.contractFn().contractAddress()).toString() !== expected.forwarder ||
+    rootFn.contractFn().functionName().toString() !== "forward" ||
+    !sameScVals(rootFn.contractFn().args(), [feeToken, maxFee, expiration, target, targetFn, a[6]]) ||
+    subs.length !== 2 ||
+    !approve ||
+    approve.subInvocations().length !== 0 ||
+    approve.function().contractFn().functionName().toString() !== "approve" ||
+    !sameScVals(approve.function().contractFn().args(), [walletAddr, forwarderAddr, maxFee, expiration]) ||
+    !marketCall ||
+    marketCall.function().contractFn().functionName().toString() !== targetFn.sym().toString() ||
+    !sameScVals(marketCall.function().contractFn().args(), inner) ||
+    !isExactlyTransfers(marketCall.subInvocations(), expected.wallet, expected.transfers)
+  ) {
+    throw new RelayRejection("Your wallet's approval must cover exactly this forwarded call");
+  }
+
+  return { call, maxFee: max, expirationLedger: expiration.u32() };
 }

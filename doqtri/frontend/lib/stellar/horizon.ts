@@ -97,3 +97,30 @@ export async function fundWithFriendbot(address: string): Promise<void> {
     throw new DoqtriError("FRIENDBOT", `Friendbot failed (${res.status}). Try again shortly.`);
   }
 }
+
+export type TrustlineState = "no-account" | "missing" | "unauthorized" | "ok";
+
+/**
+ * Can a `G…` account hold `asset`? XLM needs only the account; any other
+ * classic asset needs a trustline the issuer hasn't frozen. Contract (`C…`)
+ * wallets hold SAC balances directly and never need one.
+ */
+export async function trustlineState(
+  address: string,
+  asset: { code: string; issuer: string } | null,
+): Promise<TrustlineState> {
+  if (!address.startsWith("G")) return "ok";
+  let account;
+  try {
+    account = await new Horizon.Server(HORIZON_URL).loadAccount(address);
+  } catch (error) {
+    if (error instanceof NotFoundError) return "no-account";
+    throw new DoqtriError("HORIZON", "Could not read the account from Horizon.");
+  }
+  if (!asset) return "ok";
+  const line = account.balances.find(
+    (b) => "asset_code" in b && b.asset_code === asset.code && "asset_issuer" in b && b.asset_issuer === asset.issuer,
+  ) as { is_authorized?: boolean } | undefined;
+  if (!line) return "missing";
+  return line.is_authorized === false ? "unauthorized" : "ok";
+}

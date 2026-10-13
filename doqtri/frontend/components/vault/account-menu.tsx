@@ -11,7 +11,9 @@ import {
   LogOutIcon,
   PlugIcon,
   RefreshCwIcon,
+  StoreIcon,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   DropdownMenu,
@@ -23,7 +25,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useWallet } from "@/components/vault/wallet-provider";
-import { expertContractUrl, IS_MAINNET } from "@/lib/stellar/config";
+import { expertContractUrl, IS_MAINNET, MARKET_CONTRACT_ID } from "@/lib/stellar/config";
 import { PasskeysDialog } from "@/components/vault/passkeys-dialog";
 import { USER_PAYS_FEES } from "@/lib/stellar/smart-wallet-config";
 import { formatXlm as formatStroops } from "@/lib/stellar/wallet-balance";
@@ -149,6 +151,7 @@ export function AccountMenu({ className }: { className?: string }) {
             <RefreshCwIcon />
             Refresh balance
           </DropdownMenuItem>
+          <EarningsItem />
           {!IS_MAINNET && (unfunded || low) ? (
             <DropdownMenuItem
               disabled={busy}
@@ -308,6 +311,7 @@ function EmailAccountMenu({
                   </DropdownMenuItem>
                 </>
               ) : null}
+              <EarningsItem />
               <DropdownMenuItem data-testid="open-passkeys" onClick={() => setPasskeysOpen(true)}>
                   <KeyRoundIcon />
                   Passkeys
@@ -352,5 +356,17 @@ function EmailAccountMenu({
       </DropdownMenu>
       <PasskeysDialog open={passkeysOpen} onOpenChange={setPasskeysOpen} />
     </>
+  );
+}
+
+/** The creator's own templates and earnings: the Templates page's "Yours" tab (progress/004). */
+function EarningsItem() {
+  const router = useRouter();
+  if (!MARKET_CONTRACT_ID) return null;
+  return (
+    <DropdownMenuItem data-testid="open-earnings" onClick={() => router.push("/vault/templates?tab=yours")}>
+      <StoreIcon />
+      Your templates
+    </DropdownMenuItem>
   );
 }
