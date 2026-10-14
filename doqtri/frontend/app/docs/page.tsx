@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ConnectWalletButton } from "@/components/auth/connect-wallet-button";
-import { EmailSignInLink } from "@/components/auth/email-sign-in-link";
+import { OpenVaultLink } from "@/components/auth/open-vault-link";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { BlockGlyph, type Glyph } from "@/components/brand/glyphs";
 import { CONTRACT_ID, IS_MAINNET, labContractUrl } from "@/lib/stellar/config";
@@ -68,8 +67,7 @@ export default function DocsPage() {
           </a>
         </nav>
         <div className={styles.navActions}>
-          <EmailSignInLink size="sm" className={styles.cta} />
-          <ConnectWalletButton size="sm" label="Open your vault" className={styles.cta} />
+          <OpenVaultLink size="sm" className={styles.cta} />
         </div>
       </header>
 
@@ -346,8 +344,7 @@ export default function DocsPage() {
             <DoqtriMark className={styles.footerMark} />
             <p>Tested vs Shipped, Block by Block.</p>
             <div className={styles.navActions}>
-              <ConnectWalletButton size="lg" label="Open your vault" className={styles.cta} />
-              <EmailSignInLink size="lg" className={styles.cta} />
+              <OpenVaultLink size="lg" label="Open your vault" className={styles.cta} />
             </div>
           </div>
         </main>

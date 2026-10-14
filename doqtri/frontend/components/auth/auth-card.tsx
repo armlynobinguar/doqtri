@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 
 /** The card every auth screen sits in: wordmark, display title, one line of context. */
@@ -36,5 +37,17 @@ export function AuthPage({ children }: { children: React.ReactNode }) {
       />
       <div className="relative flex w-full justify-center">{children}</div>
     </main>
+  );
+}
+
+/** The line under an auth card that swaps between sign-in and sign-up. */
+export function AuthSwitch({ prompt, href, label }: { prompt: string; href: string; label: string }) {
+  return (
+    <p className="text-muted-foreground mt-3 text-center text-[12px]">
+      {prompt}{" "}
+      <Link href={href} className="text-foreground underline-offset-2 hover:underline">
+        {label}
+      </Link>
+    </p>
   );
 }

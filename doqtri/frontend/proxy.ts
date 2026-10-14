@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
+import { safeNextPath } from "@/lib/email-auth";
 
 /**
  * Next 16 renamed `middleware` to `proxy`; the behavior is unchanged.
@@ -62,11 +63,12 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // Signed-in users skip marketing and sign-in screens and land in the vault.
+  // Signed-in users skip marketing and sign-in screens and land in the vault,
+  // or on the page that sent them to sign in (`?next=`, e.g. /promo).
   if (user && isPublicRoute) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/vault";
-    return NextResponse.redirect(url);
+    const next = safeNextPath(request.nextUrl.searchParams.get("next"));
+    const target = PUBLIC_ROUTES.has(new URL(next, request.url).pathname) ? "/vault" : next;
+    return NextResponse.redirect(new URL(target, request.url));
   }
 
   return response;

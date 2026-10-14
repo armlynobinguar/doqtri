@@ -1,9 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { Box, FileText, Link2, Network, type LucideIcon } from "lucide-react";
-import { ConnectWalletButton } from "@/components/auth/connect-wallet-button";
-import { EmailSignInLink } from "@/components/auth/email-sign-in-link";
+import { Box, FileText, Link2, Network, PlayIcon, type LucideIcon } from "lucide-react";
+import { OpenVaultLink } from "@/components/auth/open-vault-link";
 import { BlockChain } from "@/components/brand/block-chain";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { BlockGlyph, type Glyph } from "@/components/brand/glyphs";
@@ -74,8 +73,7 @@ export function LandingPage() {
           <Link href="/docs">Docs</Link>
         </nav>
         <div className={styles.navActions}>
-          <EmailSignInLink size="sm" className={`${styles.cta} ${styles.navEmail}`} />
-          <ConnectWalletButton size="sm" className={styles.cta} />
+          <OpenVaultLink size="sm" className={styles.cta} />
         </div>
       </header>
 
@@ -92,16 +90,10 @@ export function LandingPage() {
               version and every shipped node gets a ledger-true receipt.
             </p>
             <div className={styles.actions}>
-              <ConnectWalletButton size="lg" label="Open your vault" className={styles.cta} />
-              <EmailSignInLink size="lg" className={styles.cta} />
-              <Link className={styles.secondary} href="/signup">
-                Sign up with email
-              </Link>
+              <OpenVaultLink size="lg" label="Open your vault" className={styles.cta} />
               <Link className={styles.secondary} href="/demo">
+                <PlayIcon strokeWidth={1.5} />
                 Try the demo
-              </Link>
-              <Link className={styles.secondary} href="/docs">
-                Read the docs
               </Link>
             </div>
           </div>
@@ -168,10 +160,10 @@ export function LandingPage() {
             <li>
               <BlockGlyph glyph="check" className={styles.stepIcon} />
               <div>
-                <strong>Connect a Stellar wallet</strong>
+                <strong>Open your vault</strong>
                 <p>
-                  Your Stellar testnet identity opens your private vault. Freighter and other Stellar wallets work —
-                  or <Link href="/signup">sign up with email</Link> to start writing without one.
+                  <Link href="/signup">Sign up with email</Link> and start writing — no extension needed. Already on
+                  Stellar? Freighter and other Stellar wallets open the same private vault.
                 </p>
               </div>
             </li>
@@ -213,8 +205,7 @@ export function LandingPage() {
             from the contract — not from our database.
           </p>
           <div className={`${styles.proofCta} ${styles.actions}`}>
-            <ConnectWalletButton size="lg" label="Open your vault" className={styles.cta} />
-            <EmailSignInLink size="lg" className={styles.cta} />
+            <OpenVaultLink size="lg" label="Open your vault" className={styles.cta} />
           </div>
         </section>
       </main>

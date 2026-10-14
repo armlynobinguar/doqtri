@@ -18,9 +18,9 @@ const AUTH_FILE = "e2e/.auth/user.json";
  */
 setup("wallet login surface + session seed", async ({ page }) => {
   await page.goto("/login");
-  await expect(page.getByRole("heading", { name: "Open your vault" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
   await expect(
-    page.getByRole("button", { name: /Connect wallet/i }),
+    page.getByRole("button", { name: /Use Freighter wallet/i }),
   ).toBeVisible();
 
   // An address alone must not open a session.

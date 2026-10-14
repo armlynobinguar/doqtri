@@ -22,12 +22,23 @@ export function confirmUrl(origin: string, next: string): string {
 }
 
 /**
- * Only same-site paths: an emailed link's `next` must not become an open
- * redirect to another origin (`//evil.com`, `/\evil.com`, `https://…`).
+ * Only same-site paths: an emailed link's or auth screen's `next` must not
+ * become an open redirect to another origin (`//evil.com`, `/\evil.com`,
+ * `https://…`, or `/<tab>/evil.com`, which browsers read as `//evil.com`).
+ * Resolving against a dummy origin catches every spelling the URL parser does.
  */
 export function safeNextPath(next: string | null | undefined, fallback = "/vault"): string {
-  if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\")) {
+  if (!next || !next.startsWith("/")) return fallback;
+  try {
+    const url = new URL(next, "http://same.site");
+    if (url.origin !== "http://same.site") return fallback;
+    return url.pathname + url.search + url.hash;
+  } catch {
     return fallback;
   }
-  return next;
+}
+
+/** An auth screen's path, carrying `next` along unless it is the default. */
+export function withNext(path: string, next: string): string {
+  return next === "/vault" ? path : `${path}?next=${encodeURIComponent(next)}`;
 }
