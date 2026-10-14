@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { GiftIcon } from "lucide-react";
-import { ConnectWalletButton } from "@/components/auth/connect-wallet-button";
+import { OpenVaultLink } from "@/components/auth/open-vault-link";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { PromoSubmissionForm } from "@/components/promo/promo-submission-form";
 import { MINDMAP_PROMO, PROMO_BUCKET, type PromoSubmission } from "@/lib/promo";
@@ -129,21 +129,7 @@ export default async function PromoPage() {
           ) : (
             <div className="flex flex-col items-start gap-4">
               <p className="text-[14px]">Sign in to submit your mindmaps.</p>
-              <div className="flex flex-wrap items-center gap-3">
-                <ConnectWalletButton label="Connect wallet" />
-                <Link
-                  href="/signup"
-                  className="text-muted-foreground hover:text-foreground text-[13px] underline-offset-4 hover:underline"
-                >
-                  Sign up with email
-                </Link>
-                <Link
-                  href="/login"
-                  className="text-muted-foreground hover:text-foreground text-[13px] underline-offset-4 hover:underline"
-                >
-                  Log in
-                </Link>
-              </div>
+              <OpenVaultLink next="/promo" className="rounded-full" />
             </div>
           )}
         </section>

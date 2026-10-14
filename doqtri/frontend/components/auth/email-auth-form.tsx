@@ -3,13 +3,14 @@
 import { useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Loader2Icon, MailCheckIcon } from "lucide-react";
+import { Loader2Icon, LogInIcon, MailCheckIcon, MailIcon, UserPlusIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Turnstile, TURNSTILE_SITE_KEY, type TurnstileHandle } from "@/components/auth/turnstile";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { confirmUrl, MIN_PASSWORD_LENGTH, signUpProblem } from "@/lib/email-auth";
+import { confirmUrl, MIN_PASSWORD_LENGTH, signUpProblem, withNext } from "@/lib/email-auth";
 import { isReservedEmail } from "@/lib/wallet-address";
+import { markReturningVisitor } from "@/lib/returning-visitor";
 
 type Mode = "sign-in" | "sign-up";
 
@@ -18,7 +19,7 @@ type Mode = "sign-in" | "sign-up";
  * which writes the session cookies proxy.ts and the server components read.
  * Sign-up ends at "check your inbox" when email confirmation is on.
  */
-export function EmailAuthForm({ mode }: { mode: Mode }) {
+export function EmailAuthForm({ mode, next = "/vault" }: { mode: Mode; next?: string }) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -40,7 +41,7 @@ export function EmailAuthForm({ mode }: { mode: Mode }) {
     const problem = signUp
       ? signUpProblem(email, password)
       : isReservedEmail(email)
-        ? "Wallet accounts sign in with Connect wallet."
+        ? "Wallet accounts sign in with Use Freighter wallet, below."
         : null;
     if (problem) {
       setError(problem);
@@ -57,9 +58,10 @@ export function EmailAuthForm({ mode }: { mode: Mode }) {
         const { data, error: signUpError } = await supabase.auth.signUp({
           email: email.trim(),
           password,
-          options: { emailRedirectTo: confirmUrl(window.location.origin, "/vault"), captchaToken: token },
+          options: { emailRedirectTo: confirmUrl(window.location.origin, next), captchaToken: token },
         });
         if (signUpError) throw signUpError;
+        markReturningVisitor();
         // With confirmation off, Supabase signs the user in immediately.
         if (data.session) return enterVault();
         // Supabase answers an already-registered email the same way, on
@@ -78,6 +80,7 @@ export function EmailAuthForm({ mode }: { mode: Mode }) {
         if (signInError.code === "email_not_confirmed") setUnconfirmed(true);
         throw signInError;
       }
+      markReturningVisitor();
       enterVault();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Try again.");
@@ -87,7 +90,7 @@ export function EmailAuthForm({ mode }: { mode: Mode }) {
 
   function enterVault() {
     router.refresh();
-    router.push("/vault");
+    router.push(next);
   }
 
   async function resend() {
@@ -97,7 +100,7 @@ export function EmailAuthForm({ mode }: { mode: Mode }) {
     const { error: resendError } = await createSupabaseBrowserClient().auth.resend({
       type: "signup",
       email: email.trim(),
-      options: { emailRedirectTo: confirmUrl(window.location.origin, "/vault"), captchaToken: token },
+      options: { emailRedirectTo: confirmUrl(window.location.origin, next), captchaToken: token },
     });
     setBusy(false);
     if (resendError) setError(resendError.message);
@@ -117,6 +120,15 @@ export function EmailAuthForm({ mode }: { mode: Mode }) {
           We sent a confirmation link to <span className="text-foreground">{sentTo}</span>. Open it on
           this device to finish {signUp ? "creating your vault" : "signing in"}.
         </p>
+        {signUp ? (
+          <p className="text-muted-foreground">
+            No email? If you already have an account,{" "}
+            <Link href={withNext("/login", next)} className="text-foreground underline-offset-2 hover:underline">
+              sign in
+            </Link>{" "}
+            instead.
+          </p>
+        ) : null}
       </div>
     );
   }
@@ -129,6 +141,7 @@ export function EmailAuthForm({ mode }: { mode: Mode }) {
           type="email"
           name="email"
           autoComplete="email"
+          autoFocus
           required
           value={email}
           onChange={(e) => setEmail(e.target.value)}
@@ -169,21 +182,21 @@ export function EmailAuthForm({ mode }: { mode: Mode }) {
           disabled={busy || waitingForCaptcha}
           onClick={() => void resend()}
         >
+          <MailIcon strokeWidth={1.5} />
           Resend confirmation email
         </Button>
       ) : null}
 
       <Button type="submit" size="lg" disabled={busy || waitingForCaptcha} className="mt-2 w-full rounded-full">
-        {busy ? <Loader2Icon className="animate-spin" /> : null}
+        {busy ? (
+          <Loader2Icon className="animate-spin" />
+        ) : signUp ? (
+          <UserPlusIcon strokeWidth={1.5} />
+        ) : (
+          <LogInIcon strokeWidth={1.5} />
+        )}
         {signUp ? "Create account" : "Sign in"}
       </Button>
-
-      <p className="text-muted-foreground text-center text-[12px]">
-        {signUp ? "Already have an account? " : "New to Doqtri? "}
-        <Link href={signUp ? "/login" : "/signup"} className="text-foreground underline-offset-2 hover:underline">
-          {signUp ? "Sign in" : "Create an account"}
-        </Link>
-      </p>
     </form>
   );
 }

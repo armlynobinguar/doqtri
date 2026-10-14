@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { confirmUrl, safeNextPath, signUpProblem } from "./email-auth";
+import { confirmUrl, safeNextPath, signUpProblem, withNext } from "./email-auth";
 
 describe("email sign-up checks", () => {
   it("accepts a normal email and a long enough password", () => {
@@ -23,9 +23,14 @@ describe("post-confirmation redirect", () => {
   });
 
   it("falls back for anything that could leave the site", () => {
-    for (const next of ["//evil.com", "/\\evil.com", "https://evil.com", "evil.com", "", null]) {
+    for (const next of ["//evil.com", "/\\evil.com", "/\t/evil.com", "/\n/evil.com", "https://evil.com", "evil.com", "", null]) {
       expect(safeNextPath(next)).toBe("/vault");
     }
+  });
+
+  it("carries next onto auth screens only when it is not the vault", () => {
+    expect(withNext("/login", "/vault")).toBe("/login");
+    expect(withNext("/signup", "/promo")).toBe("/signup?next=%2Fpromo");
   });
 
   it("encodes next into the confirmation link", () => {

@@ -141,17 +141,6 @@
   gap: 0.5rem;
 }
 
-/* Phones: the hero carries the email sign-in, so the header keeps one button. */
-.navEmail {
-  display: none;
-}
-
-@media (min-width: 560px) {
-  .navEmail {
-    display: inline-flex;
-  }
-}
-
 /* ----------------------------------------------------------------- hero */
 
 .hero {
@@ -238,6 +227,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 0.45rem;
   min-height: 2.5rem;
   padding: 0.55rem 1.2rem;
   border-radius: 999px;
@@ -247,6 +237,11 @@
   font-size: 0.9rem;
   font-weight: 550;
   transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.secondary svg {
+  width: 1rem;
+  height: 1rem;
 }
 
 .secondary:hover {
