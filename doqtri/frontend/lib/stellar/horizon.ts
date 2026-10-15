@@ -71,7 +71,11 @@ export async function assertFunded(address: string): Promise<void> {
  * `feeStroops` is the assembled transaction's total fee, resource fee included.
  */
 export async function assertCanPay(address: string, feeStroops: number): Promise<void> {
-  const account = await getAccountBalance(address);
+  assertBalanceCovers(await getAccountBalance(address), feeStroops);
+}
+
+/** The check behind assertCanPay, for a caller that already read the balance. */
+export function assertBalanceCovers(account: AccountBalance, feeStroops: number): void {
   if (!account.funded) {
     throw new DoqtriError(
       "NOT_FUNDED",

@@ -9,6 +9,7 @@
  * and is never above the maximum the user signed.
  */
 import {
+  Account,
   authorizeEntry,
   Horizon,
   Keypair,
@@ -67,8 +68,17 @@ async function relayerAuth(func: xdr.HostFunction, kp: Keypair, latestLedger: nu
   return authorizeEntry(entry, kp, latestLedger + RELAYER_AUTH_LEDGERS, NETWORK_PASSPHRASE);
 }
 
+/** How long a "the relayer has enough XLM" check is trusted before Horizon is asked again. */
+const FUNDED_CHECK_TTL_MS = 5 * 60_000;
+let fundedCheckedAt = 0;
+
 async function ensureRelayerFunded(publicKey: string): Promise<void> {
   if (IS_MAINNET) return;
+  // Every paid write used to wait on a Horizon round trip here. The relayer
+  // spends well under a lumen per write against a 1,000 XLM floor, so one
+  // check every few minutes is plenty.
+  if (Date.now() - fundedCheckedAt < FUNDED_CHECK_TTL_MS) return;
+  fundedCheckedAt = Date.now();
   try {
     const account = await new Horizon.Server(HORIZON_URL).loadAccount(publicKey);
     const native = account.balances.find((b) => b.asset_type === "native");
@@ -95,11 +105,20 @@ export async function submitPaidWrite(
   const server = new rpc.Server(RPC_URL);
   await ensureRelayerFunded(kp.publicKey());
 
+  // The latest ledger and the relayer's sequence number are read once and
+  // shared by the measuring and charging builds (testnet RPC takes a second or
+  // more per read); a stale sequence on submit refreshes them.
+  const chainState = async () => {
+    const [{ sequence }, account] = await Promise.all([server.getLatestLedger(), server.getAccount(kp.publicKey())]);
+    return { latestLedger: sequence, accountId: account.accountId(), accountSequence: account.sequenceNumber() };
+  };
+  let state = await chainState();
+
   const build = async (fee: bigint) => {
-    const { sequence } = await server.getLatestLedger();
     const priced = withFee(func, fee);
-    const auth = [walletEntry, await relayerAuth(priced, kp, sequence)];
-    const source = await server.getAccount(kp.publicKey());
+    const auth = [walletEntry, await relayerAuth(priced, kp, state.latestLedger)];
+    // TransactionBuilder bumps the account's sequence, so each build gets a fresh copy.
+    const source = new Account(state.accountId, state.accountSequence);
     const tx = new TransactionBuilder(source, { fee: String(INCLUSION_FEE), networkPassphrase: NETWORK_PASSPHRASE })
       .addOperation(Operation.invokeHostFunction({ func: priced, auth }))
       .setTimeout(60)
@@ -133,7 +152,10 @@ export async function submitPaidWrite(
     const sent = await server.sendTransaction(prepared);
     if (sent.status === "ERROR" || sent.status === "TRY_AGAIN_LATER") {
       const code = sent.errorResult?.result().switch().name ?? sent.status;
-      if (attempt < 3 && (code === "txBadSeq" || sent.status === "TRY_AGAIN_LATER")) continue;
+      if (attempt < 3 && (code === "txBadSeq" || sent.status === "TRY_AGAIN_LATER")) {
+        state = await chainState();
+        continue;
+      }
       console.error(`[chain/relay] paid write rejected: ${code}`);
       throw new RelayRejection("The network rejected this transaction. Try again.", 502);
     }
