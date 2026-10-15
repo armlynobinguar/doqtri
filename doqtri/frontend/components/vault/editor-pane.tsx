@@ -86,7 +86,7 @@ export function EditorPane({
         </div>
       )}
 
-      <div ref={editorRef} className="min-h-0 flex-1" data-color-mode="dark">
+      <div ref={editorRef} className="min-h-0 flex-1">
         <MDEditor
           value={markdown}
           onChange={(next) => onChange(next ?? "")}

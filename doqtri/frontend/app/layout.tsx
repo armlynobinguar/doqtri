@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
+import { PREFERENCES_BOOT_SCRIPT } from "@/lib/preferences";
 // The editor's stylesheet must load before globals.css so the brand-palette
 // overrides in there win on equal specificity.
 import "@uiw/react-md-editor/markdown-editor.css";
@@ -45,13 +46,19 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    // The app is dark-only, so `dark` is hardcoded rather than theme-switchable.
+    // Dark is the default; the inline script below swaps to the saved theme
+    // (Profile → Settings) before anything paints, so the server render and the
+    // first frame never disagree visibly. It edits <html>, hence the warning opt-out.
     <html
       lang="en"
       className={`dark ${jakarta.variable} ${jetbrainsMono.variable} h-full antialiased`}
-      // Consumed by @uiw/react-md-editor to pick its dark variant.
+      // Consumed by @uiw/react-md-editor to pick its colour variant.
       data-color-mode="dark"
+      suppressHydrationWarning
     >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: PREFERENCES_BOOT_SCRIPT }} />
+      </head>
       <body className="bg-background text-foreground min-h-full">
         <TooltipProvider delay={300}>{children}</TooltipProvider>
         <Toaster

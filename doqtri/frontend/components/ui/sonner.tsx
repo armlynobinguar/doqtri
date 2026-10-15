@@ -1,12 +1,25 @@
 "use client"
 
+import { useSyncExternalStore } from "react"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon } from "lucide-react"
 
+/** Follows the theme class on <html> (set from Profile → Settings). */
+function subscribeTheme(onChange: () => void) {
+  const observer = new MutationObserver(onChange)
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] })
+  return () => observer.disconnect()
+}
+
 const Toaster = ({ ...props }: ToasterProps) => {
+  const theme = useSyncExternalStore(
+    subscribeTheme,
+    () => (document.documentElement.classList.contains("light") ? "light" : "dark"),
+    () => "dark" as const,
+  )
   return (
     <Sonner
-      theme="dark"
+      theme={theme}
       className="toaster group"
       icons={{
         success: (

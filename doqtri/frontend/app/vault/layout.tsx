@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { VaultShell } from "@/components/vault/vault-shell";
+import { PreferencesSync } from "@/components/vault/preferences";
 import { loadFailedImports } from "@/lib/ingest/failed";
 import { walletAddressFromEmail } from "@/lib/wallet-address";
 import { NETWORK } from "@/lib/stellar/smart-wallet-config";
@@ -67,8 +68,11 @@ export default async function VaultLayout({
   }
 
   return (
-    <VaultShell notes={notes} failedImports={failedImports} identity={identity}>
-      {children}
-    </VaultShell>
+    <>
+      <PreferencesSync account={user.user_metadata?.preferences ?? null} />
+      <VaultShell notes={notes} failedImports={failedImports} identity={identity}>
+        {children}
+      </VaultShell>
+    </>
   );
 }
