@@ -23,6 +23,7 @@ import { MobileTabBar, MobileTopBar } from "@/components/vault/mobile-chrome";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useIsCompactVault } from "@/hooks/use-mobile";
 import { WalletProvider } from "@/components/vault/wallet-provider";
+import { WalletSetupDialog } from "@/components/vault/wallet-setup-dialog";
 import {
   VaultStatusProvider,
   useVaultStatus,
@@ -56,6 +57,7 @@ export function VaultShell({
           <VaultShellInner notes={notes} failedImports={failedImports} identity={identity}>
             {children}
           </VaultShellInner>
+          <WalletSetupDialog />
         </NavigationProvider>
       </VaultStatusProvider>
     </WalletProvider>

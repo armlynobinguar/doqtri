@@ -1,7 +1,8 @@
+import { after } from "next/server";
 import { Address } from "@stellar/stellar-sdk";
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
 import { walletAddressFromEmail } from "@/lib/wallet-address";
-import { CONTRACT_ID, MARKET_CONTRACT_ID, NETWORK_PASSPHRASE } from "@/lib/stellar/config";
+import { CONTRACT_ID, IS_MAINNET, MARKET_CONTRACT_ID, NETWORK_PASSPHRASE } from "@/lib/stellar/config";
 import {
   DOQTRI_RELAYER,
   FEE_FORWARDER,
@@ -36,6 +37,7 @@ import { marketCallPlan, purchaseColumns, syncTemplate, type SaleRecord } from "
 import { simulateWithinCap, submitAndConfirm } from "@/lib/stellar/channels";
 import { readWalletPasskeys } from "@/lib/stellar/wallet-signers";
 import { submitPaidWrite } from "@/lib/stellar/direct-submit";
+import { topUpWallet } from "@/lib/stellar/friendbot-topup";
 
 /**
  * Fee-sponsored submission for passkey smart wallets (progress/002).
@@ -461,9 +463,22 @@ async function deployWallet(userId: string, submission: RelaySubmission, rpId: s
   if (refused) return refused;
 
   await simulateWithinCap(submission.func, submission.auth);
+
+  // Where wallets pay their own fees, a new wallet can't anchor until it holds
+  // test XLM. The address is known before the deploy lands and the native token
+  // accepts transfers to it, so the top-up (Friendbot, then a transfer: ~10s)
+  // runs alongside the deploy instead of after it, and `after` lets it finish
+  // once the response is sent. Best effort: Top up in the app covers a failure.
+  const address = deployedContractAddress(deploy.deployer, deploy.salt, NETWORK_PASSPHRASE);
+  if (USER_PAYS_FEES && !IS_MAINNET) {
+    const topUp = topUpWallet(address).catch((error: Error) =>
+      console.error(`[chain/relay] first top-up for ${address} failed: ${error.message}`),
+    );
+    after(() => topUp);
+  }
+
   const sent = await submitAndConfirm(submission.func, submission.auth);
 
-  const address = deployedContractAddress(deploy.deployer, deploy.salt, NETWORK_PASSPHRASE);
   const { error: walletError } = await admin.from("smart_wallets").insert({
     user_id: userId,
     network: NETWORK,
