@@ -90,6 +90,16 @@ export function expertContractUrl(id: string) {
   return `${EXPERT_TX_BASE.replace(/\/tx$/, "")}/contract/${id}`;
 }
 
+/** Classic (`G…`) account pages: `.../explorer/<network>/account/<id>`. */
+export function expertAccountUrl(id: string) {
+  return `${EXPERT_TX_BASE.replace(/\/tx$/, "")}/account/${id}`;
+}
+
+/** The right stellar.expert page for any address: contract (`C…`) or account (`G…`). */
+export function expertAddressUrl(id: string) {
+  return id.startsWith("C") ? expertContractUrl(id) : expertAccountUrl(id);
+}
+
 export function labContractUrl(id = CONTRACT_ID) {
   return `https://lab.stellar.org/r/${LAB_NETWORK}/contract/${id}`;
 }

@@ -107,6 +107,18 @@ async function kit(): Promise<Kit> {
   return (await kitAndStorage()).kit;
 }
 
+/**
+ * Loads the passkey kit ahead of the first write, so Save & anchor doesn't
+ * also wait for the kit's code to download. Safe to call more than once.
+ */
+export function warmPasskeyWallet(): void {
+  if (typeof window === "undefined") return;
+  void kitAndStorage().catch(() => {
+    // The first real use reports the error.
+    kitPromise = null;
+  });
+}
+
 /** True when this browser can create and use passkeys at all. */
 export function passkeysSupported(): boolean {
   return typeof window !== "undefined" && typeof window.PublicKeyCredential === "function";
@@ -380,13 +392,12 @@ export async function payAndRelay<T>(
   }
   const call = op.func.invokeContract();
 
-  const balance = await xlmBalanceStroops(wallet.address);
+  const server = new rpc.Server(RPC_URL);
+  // Independent reads, each a network round trip: run them together.
+  const [balance, { sequence }] = await Promise.all([xlmBalanceStroops(wallet.address), server.getLatestLedger()]);
   if (balance < maxFee + alsoSpendsXlm) {
     throw new Error(`Your wallet has ${formatXlm(balance)} XLM, not enough for this write. Use Top up in the account menu.`);
   }
-
-  const server = new rpc.Server(RPC_URL);
-  const { sequence } = await server.getLatestLedger();
   const forward = new Contract(FEE_FORWARDER).call(
     "forward",
     Address.fromString(NATIVE_XLM).toScVal(),

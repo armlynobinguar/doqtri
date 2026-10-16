@@ -12,6 +12,7 @@ import {
   PlugIcon,
   RefreshCwIcon,
   StoreIcon,
+  UserRoundIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -125,6 +126,7 @@ export function AccountMenu({ className }: { className?: string }) {
             <span className="font-mono">{shortenAddress(sessionAddress)}</span>
             <span className="text-muted-foreground ml-auto text-[11px]">copy</span>
           </DropdownMenuItem>
+          <ProfileItem />
         </DropdownMenuGroup>
 
         <DropdownMenuGroup>
@@ -275,6 +277,7 @@ function EmailAccountMenu({
             <div className="truncate px-1.5 pb-1 text-[12px]" title={email}>
               {email}
             </div>
+            <ProfileItem />
           </DropdownMenuGroup>
 
           <DropdownMenuGroup>
@@ -367,6 +370,17 @@ function EarningsItem() {
     <DropdownMenuItem data-testid="open-earnings" onClick={() => router.push("/vault/templates?tab=yours")}>
       <StoreIcon />
       Your templates
+    </DropdownMenuItem>
+  );
+}
+
+/** Account details, the wallet, recent on-chain activity and display settings. */
+function ProfileItem() {
+  const router = useRouter();
+  return (
+    <DropdownMenuItem data-testid="open-profile" onClick={() => router.push("/vault/profile")}>
+      <UserRoundIcon />
+      Profile, wallet &amp; settings
     </DropdownMenuItem>
   );
 }

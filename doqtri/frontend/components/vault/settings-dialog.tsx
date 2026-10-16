@@ -7,6 +7,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import Link from "next/link";
 import { Separator } from "@/components/ui/separator";
 import { shortenAddress } from "@/lib/wallet";
 import type { VaultIdentity } from "@/lib/types";
@@ -51,8 +52,12 @@ export function SettingsDialog({
           </div>
           <Separator />
           <div className="flex justify-between gap-4">
-            <dt className="text-muted-foreground">Theme</dt>
-            <dd>Doqtri Dark</dd>
+            <dt className="text-muted-foreground">Theme, text size &amp; motion</dt>
+            <dd>
+              <Link href="/vault/profile" className="underline-offset-2 hover:underline" onClick={() => onOpenChange(false)}>
+                Profile → Settings
+              </Link>
+            </dd>
           </div>
         </dl>
 

@@ -22,7 +22,7 @@ import { signSorobanTx } from "@/lib/wallet";
 import { passkeyWalletFor, payAndRelay, signAndRelay } from "@/lib/passkey-wallet";
 import { USER_PAYS_FEES } from "@/lib/stellar/smart-wallet-config";
 import { rpc, scValToNative, StrKey, type contract } from "@stellar/stellar-sdk";
-import { assertCanPay, assertFunded } from "@/lib/stellar/horizon";
+import { assertBalanceCovers, getAccountBalance, type AccountBalance } from "@/lib/stellar/horizon";
 import { DoqtriError, mapWalletError } from "@/lib/stellar/errors";
 
 export type ChainDocument = {
@@ -145,35 +145,69 @@ function unwrapResult<T>(
 }
 
 /**
- * register/update return the new version; read it from the confirmed result
- * rather than re-querying, which can race a lagging RPC node.
+ * Builds (simulates) a write while reading the signer's balance from Horizon,
+ * instead of one after the other. A `G…` account that doesn't exist fails with
+ * the funding message rather than a confusing simulation error. Smart wallets
+ * pay through the relay, so there is nothing to read.
  */
-function receipt(
-  sent: { sendTransactionResponse?: { hash?: string }; result: unknown },
-  hasVersion: boolean,
-): WriteReceipt {
-  const txHash = sent.sendTransactionResponse?.hash;
-  if (!txHash) throw new DoqtriError("SEND_FAILED", "No transaction hash");
-  if (!hasVersion) return { txHash };
-  try {
-    return { txHash, version: Number(unwrapResult<number>(sent.result, "write failed")) };
-  } catch {
-    return { txHash };
-  }
+async function buildChecked<T>(
+  source: string,
+  build: () => Promise<contract.AssembledTransaction<T>>,
+): Promise<{ tx: contract.AssembledTransaction<T>; balance: AccountBalance | null }> {
+  if (isSmartWallet(source)) return { tx: await build(), balance: null };
+  const [balance, tx] = await Promise.allSettled([getAccountBalance(source), build()]);
+  if (balance.status === "fulfilled") assertBalanceCovers(balance.value, 0);
+  if (tx.status === "rejected") throw tx.reason;
+  // Horizon unreachable: carry on; the network still refuses an unfunded write.
+  return { tx: tx.value, balance: balance.status === "fulfilled" ? balance.value : null };
 }
 
 /**
- * The pre-flight funding check: runs after simulation, when the real fee is
- * known, and before the wallet is asked to sign anything. Smart wallets pay
- * nothing, so there is nothing to check.
+ * The pre-flight funding check: after simulation, when the real fee is known,
+ * and before the wallet is asked to sign anything, against the balance read
+ * while building.
  */
-async function preflight(source: string, tx: { built?: { fee: string } }): Promise<void> {
-  if (isSmartWallet(source)) return;
-  await assertCanPay(source, Number(tx.built?.fee ?? 0));
+function preflight(balance: AccountBalance | null, tx: { built?: { fee: string } }): void {
+  if (balance) assertBalanceCovers(balance, Number(tx.built?.fee ?? 0));
 }
 
-async function assertSourceFunded(source: string): Promise<void> {
-  if (!isSmartWallet(source)) await assertFunded(source);
+/** The document version a confirmed register/update returned, if it can be read. */
+function versionOf(result: rpc.Api.GetSuccessfulTransactionResponse): number | undefined {
+  if (!result.returnValue) return undefined;
+  const value = scValToNative(result.returnValue) as unknown;
+  const version = Number((value as { ok?: unknown })?.ok ?? value);
+  return Number.isFinite(version) ? version : undefined;
+}
+
+/** How many one-second checks to wait for a ledger (~5s each) to include a write. */
+const CONFIRM_ATTEMPTS = 30;
+
+/**
+ * A `G…` signer: the wallet signs, then the write is sent and checked once a
+ * second until a ledger includes it. The SDK's own signAndSend backs off
+ * (1s, 1.5s, 2.25s, 3.4s, 5s…), so a write that landed in a ~5s ledger often
+ * sat unnoticed for several more seconds.
+ */
+async function signSendAndConfirm<T>(tx: contract.AssembledTransaction<T>, hasVersion: boolean): Promise<WriteReceipt> {
+  await tx.sign();
+  if (!tx.signed) throw new DoqtriError("SEND_FAILED", "The transaction was not signed");
+  const server = new rpc.Server(RPC_URL);
+  const sent = await server.sendTransaction(tx.signed);
+  if (sent.status !== "PENDING" && sent.status !== "DUPLICATE") {
+    // Same wording the SDK used, so mapWalletError still recognises funding errors.
+    throw new Error(`Sending the transaction to the network failed! ${JSON.stringify(sent)}`);
+  }
+  const result = await server.pollTransaction(sent.hash, { attempts: CONFIRM_ATTEMPTS });
+  if (result.status !== rpc.Api.GetTransactionStatus.SUCCESS) {
+    throw new DoqtriError(
+      "SEND_FAILED",
+      result.status === rpc.Api.GetTransactionStatus.NOT_FOUND
+        ? "The network hasn't confirmed this write yet. Check again in a minute before retrying."
+        : "The transaction failed on-chain.",
+    );
+  }
+  if (!hasVersion) return { txHash: sent.hash };
+  return { txHash: sent.hash, version: versionOf(result) };
 }
 
 /** Signs and submits with whichever signer `source` is; returns the receipt. */
@@ -182,7 +216,7 @@ async function send<T>(
   tx: contract.AssembledTransaction<T>,
   hasVersion: boolean,
 ): Promise<WriteReceipt> {
-  if (!isSmartWallet(source)) return receipt(await tx.signAndSend(), hasVersion);
+  if (!isSmartWallet(source)) return signSendAndConfirm(tx, hasVersion);
 
   const wallet = passkeyWalletFor(source);
   const txHash = USER_PAYS_FEES ? (await payAndRelay(tx, wallet)).hash : await signAndRelay(tx, wallet);
@@ -191,11 +225,7 @@ async function send<T>(
   // it returned instead of re-querying the document.
   try {
     const result = await new rpc.Server(RPC_URL).getTransaction(txHash);
-    if (result.status === rpc.Api.GetTransactionStatus.SUCCESS && result.returnValue) {
-      const value = scValToNative(result.returnValue) as unknown;
-      const version = Number((value as { ok?: unknown })?.ok ?? value);
-      if (Number.isFinite(version)) return { txHash, version };
-    }
+    if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) return { txHash, version: versionOf(result) };
   } catch {
     // The write landed; only the version label is missing.
   }
@@ -273,13 +303,14 @@ export const DoqtriRegistry = {
     docId: string,
     contentHashHex: string,
   ): Promise<WriteReceipt> {
-    await assertSourceFunded(source);
     try {
-      const tx = await writeClient(source).register_document({
-        owner: source,
-        doc_id: docId,
-        content_hash: hexToBuffer(contentHashHex),
-      });
+      const { tx, balance } = await buildChecked(source, () =>
+        writeClient(source).register_document({
+          owner: source,
+          doc_id: docId,
+          content_hash: hexToBuffer(contentHashHex),
+        }),
+      );
       // Detect already-exists from simulation before prompting the signer
       try {
         unwrapResult(tx.result, "register failed", simulationError(tx));
@@ -289,7 +320,7 @@ export const DoqtriRegistry = {
         }
         throw e;
       }
-      await preflight(source, tx);
+      preflight(balance, tx);
       return await send(source, tx, true);
     } catch (e) {
       if (e instanceof DoqtriError && e.code === "ALREADY_EXISTS") {
@@ -308,13 +339,14 @@ export const DoqtriRegistry = {
     docId: string,
     contentHashHex: string,
   ): Promise<WriteReceipt> {
-    await assertSourceFunded(source);
     try {
-      const tx = await writeClient(source).update_document({
-        doc_id: docId,
-        new_hash: hexToBuffer(contentHashHex),
-      });
-      await preflight(source, tx);
+      const { tx, balance } = await buildChecked(source, () =>
+        writeClient(source).update_document({
+          doc_id: docId,
+          new_hash: hexToBuffer(contentHashHex),
+        }),
+      );
+      preflight(balance, tx);
       return await send(source, tx, true);
     } catch (e) {
       mapInvokeError(e);
@@ -329,16 +361,17 @@ export const DoqtriRegistry = {
     tool: string,
     artifactRef: string,
   ): Promise<WriteReceipt> {
-    await assertSourceFunded(source);
     try {
-      const tx = await writeClient(source).set_node_status({
-        doc_id: docId,
-        node_id: nodeId,
-        status: toStatusTag(status),
-        tool,
-        artifact_ref: artifactRef,
-      });
-      await preflight(source, tx);
+      const { tx, balance } = await buildChecked(source, () =>
+        writeClient(source).set_node_status({
+          doc_id: docId,
+          node_id: nodeId,
+          status: toStatusTag(status),
+          tool,
+          artifact_ref: artifactRef,
+        }),
+      );
+      preflight(balance, tx);
       return await send(source, tx, false);
     } catch (e) {
       mapInvokeError(e);

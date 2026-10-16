@@ -60,9 +60,9 @@
 }
 
 /*
- * Doqtri "Monochrome Glass" palette. The app is dark-only, so :root and .dark
- * carry identical values — this prevents a light flash before the `dark` class
- * on <html> is honored.
+ * Doqtri "Monochrome Glass" palette, the default (dark) theme. :root and .dark
+ * carry identical values, so nothing flashes light before the theme script in
+ * app/layout.tsx sets the class on <html>. Light mode overrides these below.
  *
  * Hierarchy comes from light, weight and depth rather than hue: graphite
  * surfaces, three text steps, and a single pale lavender-white primary. The
@@ -142,6 +142,71 @@
   --sidebar-accent-foreground: var(--brand-text);
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
+
+  /* The soft top light behind the page. */
+  --vignette: color-mix(in oklch, white 5%, transparent);
+}
+
+/*
+ * Light mode, from the "What we shipped" light slides: warm paper, white
+ * cards on hairlines, near-black ink for text and the one filled pill, and a
+ * deep green for on-chain marks. Chosen in Profile → Settings; html carries
+ * `light` instead of `dark` (see the theme script in app/layout.tsx).
+ */
+html.light {
+  --brand-bg: #f3f2ee;
+  --brand-surface: #ffffff;
+  --brand-elevated: #ffffff;
+  --brand-border: #d6d4cd;
+  --brand-hover: #c9c7c0;
+  --brand-connector: #a3a8b2;
+  --brand-text: #16171a;
+  --brand-body: #5f636a;
+  --brand-label: #6b6f76;
+  --brand-pearl: #16171a;
+  --brand-purple: #5b54a6;
+  --brand-green: #1f8a4c;
+  --brand-blue: #3b5f91;
+
+  --primary-foreground: #ffffff;
+  --secondary: #eceae4;
+  --accent-foreground: #ffffff;
+  --destructive: #c23b3b;
+  --border: #e2e0da;
+  --ring: #3b3e44;
+  --warning: #9a6a12;
+
+  --glass: color-mix(in oklch, white 72%, transparent);
+  --glass-strong: #ffffff;
+  --glass-hi: #ffffff;
+  --glass-lo: #e2e0da;
+  --shadow-float:
+    0 24px 60px -24px rgb(22 23 26 / 0.22), 0 8px 20px -10px rgb(22 23 26 / 0.12);
+
+  --sidebar-primary-foreground: #ffffff;
+  --vignette: color-mix(in oklch, white 60%, transparent);
+
+  color-scheme: light;
+}
+
+/* Profile → Settings → Text size: the editor scales its font and line height together. */
+html[data-text-size="small"] {
+  --editor-font-size: 12px;
+  --editor-line-height: 20px;
+}
+html[data-text-size="large"] {
+  --editor-font-size: 15px;
+  --editor-line-height: 25px;
+}
+
+/* Profile → Settings → Reduce motion. Spinners keep turning so progress stays visible. */
+html[data-reduce-motion] *:not(.animate-spin),
+html[data-reduce-motion] *::before,
+html[data-reduce-motion] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
 }
 
 @layer base {
@@ -154,7 +219,7 @@
     background-image:
       radial-gradient(
         120% 70% at 50% -10%,
-        color-mix(in oklch, white 5%, transparent),
+        var(--vignette),
         transparent 60%
       );
     background-attachment: fixed;
@@ -343,8 +408,8 @@ html[data-color-mode] .w-md-editor .w-md-editor-text-pre,
 html[data-color-mode] .w-md-editor .w-md-editor-text-pre > code,
 html[data-color-mode] .w-md-editor .w-md-editor-text-input {
   font-family: var(--md-editor-font-family) !important;
-  font-size: 13px !important;
-  line-height: 22px !important;
+  font-size: var(--editor-font-size, 13px) !important;
+  line-height: var(--editor-line-height, 22px) !important;
   font-weight: 400 !important;
   font-style: normal !important;
   letter-spacing: normal !important;

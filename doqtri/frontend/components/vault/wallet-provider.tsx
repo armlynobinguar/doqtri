@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { DoqtriError } from "@/lib/stellar/errors";
 import {
@@ -30,12 +31,20 @@ import {
   createPasskeyWallet,
   removePasskey as removeWalletPasskey,
   setPasskeyWallet,
+  warmPasskeyWallet,
 } from "@/lib/passkey-wallet";
 import type { VaultIdentity } from "@/lib/types";
-import { USER_PAYS_FEES } from "@/lib/stellar/smart-wallet-config";
+import { IS_MAINNET } from "@/lib/stellar/config";
+import { MAX_USER_FEE_STROOPS, USER_PAYS_FEES } from "@/lib/stellar/smart-wallet-config";
 import { xlmBalanceStroops } from "@/lib/stellar/wallet-balance";
 
 const BALANCE_POLL_MS = 30_000;
+/** While a new wallet waits for its first test XLM, how often to look. */
+const SETUP_POLL_MS = 2_000;
+/** The server tops up a new wallet itself; ask again from here if it hasn't landed by then. */
+const SETUP_FALLBACK_TOP_UP_MS = 40_000;
+/** Stop waiting; the low-balance notice and Top up take over. */
+const SETUP_GIVE_UP_MS = 90_000;
 
 /**
  * Two addresses that used to be conflated:
@@ -77,6 +86,13 @@ type WalletContextValue = {
   /** Testnet: fill the passkey wallet with free test XLM. */
   topUp: () => Promise<void>;
   fund: () => Promise<void>;
+  /**
+   * A new wallet is being made ready to anchor: a passkey wallet waiting for
+   * its first test XLM, or a Freighter account being funded by Friendbot.
+   */
+  preparingWallet: boolean;
+  /** The vault can sign and pay for a write right now. */
+  walletReady: boolean;
 };
 
 const WalletContext = createContext<WalletContextValue | null>(null);
@@ -118,9 +134,51 @@ export function WalletProvider({
     await refreshWalletXlm();
   }, [refreshWalletXlm]);
 
+  // A wallet that was just created: the server is adding its first test XLM.
+  // Look every couple of seconds until it can pay for a write, instead of
+  // waiting for the 30s poll.
+  const [setupStartedAt, setSetupStartedAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (setupStartedAt === null || !smartAddress) return;
+    let stopped = false;
+    let askedAgain = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = async () => {
+      let xlm: bigint | null = null;
+      try {
+        xlm = await xlmBalanceStroops(smartAddress);
+      } catch {
+        // Try again on the next tick.
+      }
+      if (stopped) return;
+      if (xlm !== null) setWalletXlm(xlm);
+      const waited = Date.now() - setupStartedAt;
+      if ((xlm !== null && xlm >= MAX_USER_FEE_STROOPS) || waited > SETUP_GIVE_UP_MS) {
+        setSetupStartedAt(null);
+        return;
+      }
+      if (waited > SETUP_FALLBACK_TOP_UP_MS && !askedAgain) {
+        askedAgain = true;
+        await fetch("/api/chain/topup", { method: "POST" }).catch(() => undefined);
+        if (stopped) return;
+      }
+      timer = setTimeout(() => void tick(), SETUP_POLL_MS);
+    };
+    timer = setTimeout(() => void tick(), 0);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [setupStartedAt, smartAddress]);
+
   // The registry client signs as a C… address by looking its passkey up here.
   useEffect(() => {
     setPasskeyWallet(smartWallet);
+    if (smartWallet) {
+      // Fetch the passkey kit while the user reads, not when they anchor.
+      const idle = window.requestIdleCallback ?? ((fn: () => void) => window.setTimeout(fn, 1_500));
+      idle(() => warmPasskeyWallet());
+    }
     return () => setPasskeyWallet(null);
   }, [smartWallet]);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
@@ -175,6 +233,28 @@ export function WalletProvider({
     };
   }, [refreshBalance]);
 
+  // Testnet Freighter accounts start empty: fund a new one with Friendbot right
+  // away, once, instead of waiting for the user to find the button.
+  const [autoFunding, setAutoFunding] = useState(false);
+  const autoFunded = useRef<string | null>(null);
+  useEffect(() => {
+    if (IS_MAINNET || !sessionAddress || balance?.funded !== false || autoFunded.current === sessionAddress) return;
+    autoFunded.current = sessionAddress;
+    const start = setTimeout(() => {
+      setAutoFunding(true);
+      void fundWithFriendbot(sessionAddress)
+        .then(async () => {
+          await refreshBalance();
+          toast.success("Your account is now on Stellar testnet and ready to anchor");
+        })
+        .catch(() => {
+          // The funding notice and its Fund with Friendbot button remain.
+        })
+        .finally(() => setAutoFunding(false));
+    }, 0);
+    return () => clearTimeout(start);
+  }, [sessionAddress, balance, refreshBalance]);
+
   const ensureWallet = useCallback(async () => {
     if (!sessionAddress) {
       // Email accounts sign with their passkey wallet; the relay pays.
@@ -222,9 +302,9 @@ export function WalletProvider({
   const createSmartWallet = useCallback(async () => {
     if (identity.kind !== "email") throw new Error("Wallet accounts already have a wallet.");
     const { address } = await createPasskeyWallet(identity.email);
-    // A new wallet pays for its own writes: fill it with test XLM right away.
-    // Best effort; the Top up button covers a failure.
-    if (USER_PAYS_FEES) await fetch("/api/chain/topup", { method: "POST" }).catch(() => undefined);
+    // A new wallet pays for its own writes. The relay starts its first top-up
+    // with the deploy; watch for it to land rather than waiting on it here.
+    if (USER_PAYS_FEES) setSetupStartedAt(Date.now());
     router.refresh();
     return address;
   }, [identity, router]);
@@ -259,6 +339,11 @@ export function WalletProvider({
     await refreshBalance();
   }, [sessionAddress, refreshBalance]);
 
+  const preparingWallet = autoFunding || (setupStartedAt !== null && (walletXlm === null || walletXlm < MAX_USER_FEE_STROOPS));
+  const walletReady = sessionAddress
+    ? balance?.funded === true
+    : smartWallet !== null && (!USER_PAYS_FEES || (walletXlm !== null && walletXlm >= MAX_USER_FEE_STROOPS));
+
   const value = useMemo(
     () => ({
       identity,
@@ -279,6 +364,8 @@ export function WalletProvider({
       walletXlm,
       topUp,
       fund,
+      preparingWallet,
+      walletReady,
     }),
     [
       identity,
@@ -298,6 +385,8 @@ export function WalletProvider({
       walletXlm,
       topUp,
       fund,
+      preparingWallet,
+      walletReady,
     ],
   );
 

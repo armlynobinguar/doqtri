@@ -91,7 +91,9 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
   // Where users pay their own fees, a wallet below the most one write can cost
   // can't anchor until it's topped up.
   const paysOwnFees = USER_PAYS_FEES && smartWallet !== null;
-  const lowBalance = paysOwnFees && wallet.walletXlm !== null && wallet.walletXlm < MAX_USER_FEE_STROOPS;
+  const preparing = wallet.preparingWallet;
+  const lowBalance =
+    paysOwnFees && !preparing && wallet.walletXlm !== null && wallet.walletXlm < MAX_USER_FEE_STROOPS;
   const [toppingUp, setToppingUp] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
 
@@ -365,6 +367,21 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
         </div>
       ) : null}
 
+      {preparing ? (
+        <div
+          role="status"
+          data-testid="wallet-preparing-notice"
+          className="glass text-muted-foreground flex items-center gap-2 rounded-xl px-2.5 py-2 text-[11px]"
+        >
+          <Loader2Icon className="size-3.5 shrink-0 animate-spin" />
+          <span>
+            {smartWallet
+              ? "Getting your wallet ready: adding free test XLM for network fees. Usually about 10 seconds."
+              : "Funding your testnet account with Friendbot so it can pay network fees…"}
+          </span>
+        </div>
+      ) : null}
+
       {lowBalance ? (
         <div
           role="alert"
@@ -412,7 +429,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
         </div>
       ) : null}
 
-      {!noWallet && (fundingError || unfunded) ? (
+      {!noWallet && !preparing && (fundingError || unfunded) ? (
         <div
           role="alert"
           data-testid="funding-warning"
@@ -441,17 +458,25 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
       <Button
         type="button"
         size="sm"
-        disabled={busy || unfunded || noWallet || lowBalance || upToDate}
-        title={upToDate ? "This version of the note is already anchored" : undefined}
+        disabled={busy || unfunded || noWallet || lowBalance || preparing || upToDate}
+        title={
+          upToDate
+            ? "This version of the note is already anchored"
+            : preparing
+              ? "Your wallet is almost ready"
+              : undefined
+        }
         className="w-full max-lg:h-10"
         onClick={() => void saveAndAnchor()}
       >
-        {anchorStep ? <Loader2Icon className="animate-spin" /> : <AnchorIcon />}
+        {anchorStep || preparing ? <Loader2Icon className="animate-spin" /> : <AnchorIcon />}
         {anchorStep === "saving"
           ? "Saving…"
           : anchorStep === "signing"
-            ? "Signing…"
-            : "Save & anchor"}
+            ? "Signing & confirming…"
+            : preparing
+              ? "Wallet getting ready…"
+              : "Save & anchor"}
       </Button>
       {paysOwnFees && !lowBalance ? (
         <p className="text-muted-foreground text-[11px]" data-testid="fee-note">
