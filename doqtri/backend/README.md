@@ -31,6 +31,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261006000000_create_node_links.sql      # NOT yet applied: apply before deploying
 20261009000000_create_promo_submissions.sql
 20261009000100_add_promo_submission_status.sql
+20261018000000_create_referrals.sql       # NOT yet applied: apply before deploying
 ```
 
 The remote records its own version stamps (e.g. `20260929114657` for
@@ -67,6 +68,14 @@ Two supporting tables:
   caption and contact). Written only by `/api/promo/submissions` with the
   service role; owners can read their own row. `status` (pending, shortlisted,
   winner, rejected) is set from `/admin/promo` and resets on resubmission.
+- `public.referral_codes` / `public.referrals` — each user's referral code
+  (their link is `/r/<code>`, created on first visit to the profile page by
+  `referral_code_for()`) and who referred whom (one referrer per account).
+  `/r/<code>` stores the code in a signed cookie; after sign-up the vault calls
+  `/api/referrals/claim`, which records it through `claim_referral()` only for
+  an account created after the link was opened, never for the user's own code.
+  Both functions are service role only. Owners can read their own code;
+  referrals are exposed only as a count on the profile page.
 
 The notes table itself is still the only content store. There are deliberately **no** graph tables: nodes and
 edges are parsed from `markdown` at render time by `lib/wikilinks.ts`, so the

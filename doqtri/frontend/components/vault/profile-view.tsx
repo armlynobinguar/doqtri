@@ -6,6 +6,7 @@ import {
   CopyIcon,
   DropletIcon,
   ExternalLinkIcon,
+  GiftIcon,
   KeyRoundIcon,
   Loader2Icon,
   LogOutIcon,
@@ -122,7 +123,10 @@ async function loadOnChainSince(address: string, createdTx: string | null): Prom
   return first ? { hash: first.transaction_hash, at: first.created_at } : null;
 }
 
-export function ProfileView({ joinedAt }: { joinedAt: string }) {
+/** The user's referral link and how many accounts signed up through it. */
+export type ReferralSummary = { url: string; referred: number };
+
+export function ProfileView({ joinedAt, referral }: { joinedAt: string; referral: ReferralSummary | null }) {
   const wallet = useWallet();
   const { identity } = wallet;
   const smartWallet = identity.kind === "email" ? identity.smartWallet : null;
@@ -283,6 +287,35 @@ export function ProfileView({ joinedAt }: { joinedAt: string }) {
           <Row label="Notes">{noteCount === null ? "…" : noteCount}</Row>
           <Row label="Network">{IS_MAINNET ? "Stellar Mainnet" : "Stellar Testnet"}</Row>
         </Section>
+
+        {referral ? (
+          <Section title="Invite friends" icon={GiftIcon}>
+            <p className="text-muted-foreground text-[13px]">
+              Share your link. Anyone who opens it and then creates an account is counted as your referral.
+            </p>
+            <Row label="Your link">
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate font-mono text-[12px]" data-testid="referral-link" title={referral.url}>
+                  {referral.url}
+                </span>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="Copy referral link"
+                  onClick={() => void copy(referral.url, "Referral link")}
+                >
+                  <CopyIcon />
+                </Button>
+              </span>
+            </Row>
+            <Row label="Signed up">
+              <span data-testid="referral-count">
+                {referral.referred === 1 ? "1 person" : `${referral.referred} people`}
+              </span>
+            </Row>
+          </Section>
+        ) : null}
 
         <Section
           title="Wallet"
