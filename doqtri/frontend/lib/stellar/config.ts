@@ -57,7 +57,10 @@ export const RPC_URL = env(
 
 export const CONTRACT_ID = (() => {
   const id = env("CONTRACT_ID", "");
-  if (id) return id;
+  // A dashboard value still naming a registry this app migrated away from is
+  // stale, not a choice: its documents were copied to TESTNET_CONTRACT, and
+  // writes the current code makes (anchor) don't exist on it.
+  if (id && !TESTNET_LEGACY_CONTRACTS.includes(id)) return id;
   if (IS_MAINNET) {
     throw new Error(
       "NEXT_PUBLIC_CONTRACT_ID is required when NEXT_PUBLIC_NETWORK_PASSPHRASE is mainnet — " +
