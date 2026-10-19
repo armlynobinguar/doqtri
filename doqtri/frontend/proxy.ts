@@ -52,7 +52,11 @@ export async function proxy(request: NextRequest) {
   const isDemoRoute = pathname === "/demo" || pathname.startsWith("/demo/");
   // Emailed links land on /auth/confirm signed out and leave signed in.
   const isAuthCallback = pathname.startsWith("/auth/");
-  if (isAuditRoute || isDocsRoute || isPromoRoute || isDemoRoute || isAuthCallback) return response;
+  // Shared referral links remember the code, then send the visitor to sign up.
+  const isReferralLink = pathname.startsWith("/r/");
+  if (isAuditRoute || isDocsRoute || isPromoRoute || isDemoRoute || isAuthCallback || isReferralLink) {
+    return response;
+  }
 
   // Unauthenticated users may view the landing and the sign-in screens.
   // Everything else (including /reset-password, which the emailed link reaches
