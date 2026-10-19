@@ -4,7 +4,8 @@ use super::*;
 use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Symbol};
 
 fn setup(env: &Env) -> (DoqtriRegistryClient<'_>, Address) {
-    let contract_id = env.register(DoqtriRegistry, ());
+    let admin = Address::generate(env);
+    let contract_id = env.register(DoqtriRegistry, (admin,));
     let client = DoqtriRegistryClient::new(env, &contract_id);
     let owner = Address::generate(env);
     (client, owner)
