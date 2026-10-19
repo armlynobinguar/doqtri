@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   AnchorIcon,
   CircleCheckIcon,
+  FlagIcon,
   CopyIcon,
   DownloadIcon,
   LinkIcon,
@@ -20,6 +21,7 @@ import { StatusTag } from "@/components/ui/status-tag";
 import {
   DoqtriRegistry,
   type ChainDocument,
+  type ChainNode,
   type WriteReceipt,
 } from "@/lib/stellar/contract-client";
 import { expertTxUrl } from "@/lib/stellar/config";
@@ -43,10 +45,19 @@ type Props = {
 };
 
 type Receipt = WriteReceipt & {
-  kind: "register" | "update" | "node";
+  kind: "register" | "update" | "node" | "done";
   contentHash?: string;
   nodeId?: string;
 };
+
+/**
+ * "Mark mindmap done" sets the mindmap's root node to Verified with this tool,
+ * and the anchored version it confirms as the artifact (e.g. "v3"), in the
+ * same registry `anchor` call that anchors the text: one transaction.
+ */
+const DONE_NODE = "root";
+const DONE_TOOL = "doqtri-done";
+const doneRef = (version: number) => `v${version}`;
 
 function shortHash(hash: string): string {
   return `${hash.slice(0, 6)}…${hash.slice(-6)}`;
@@ -68,6 +79,10 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
   const [busy, setBusy] = useState(false);
   // Which half of Save & anchor is running, for the button label.
   const [anchorStep, setAnchorStep] = useState<"saving" | "signing" | null>(null);
+  // Which step of Mark mindmap done is running, for the button label.
+  const [doneStep, setDoneStep] = useState<"saving" | "anchoring" | null>(null);
+  // The root node's on-chain record: says which version was marked done.
+  const [rootNode, setRootNode] = useState<ChainNode | null>(null);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [nodeId, setNodeId] = useState("root");
   const [status, setStatus] = useState<NodeStatus>("Planned");
@@ -141,14 +156,23 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
   // The contract bumps the version even for an unchanged hash, so re-anchoring
   // identical text would spend a fee on nothing.
   const upToDate = chainDoc != null && !unanchored;
+  // This exact version was confirmed done.
+  const markedDone =
+    upToDate &&
+    chainVersion != null &&
+    rootNode?.status === "Verified" &&
+    rootNode.tool === DONE_TOOL &&
+    rootNode.artifactRef === doneRef(chainVersion);
 
   const refreshChain = useCallback(async () => {
     const doc = await DoqtriRegistry.getDocument(docId);
     setChainDoc(doc);
     if (!doc) {
       setHistory(null);
+      setRootNode(null);
       return;
     }
+    setRootNode(await DoqtriRegistry.getNode(docId, DONE_NODE).catch(() => null));
     try {
       setHistory(await getDocumentHistory(docId));
     } catch {
@@ -164,6 +188,9 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
       if (cancelled) return;
       setChainDoc(doc);
       if (!doc) return;
+      const root = await DoqtriRegistry.getNode(docId, DONE_NODE).catch(() => null);
+      if (cancelled) return;
+      setRootNode(root);
       try {
         const loaded = await getDocumentHistory(docId);
         if (!cancelled) setHistory(loaded);
@@ -293,6 +320,44 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
     } catch (e) {
       reportError(e, "Ship failed");
     } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * One click for "this mindmap is finished": save, then one registry
+   * `anchor` call that anchors the text (a new version only if it changed)
+   * and marks the root node Verified for that version. One transaction, so
+   * one signature.
+   */
+  async function markDone() {
+    setBusy(true);
+    setReceipt(null);
+    setFundingError(null);
+    try {
+      setDoneStep("saving");
+      const saved = await onSave();
+      const contentHash = await sha256Hex(saved);
+      const address = await wallet.ensureWallet();
+
+      // The version this call will leave: the same one if the text is already
+      // anchored, otherwise the next (v1 for a new document).
+      const current = chainDoc?.version ?? null;
+      const version =
+        current != null && contentHash === chainDoc?.contentHash ? current : (current ?? 0) + 1;
+
+      setDoneStep("anchoring");
+      const anchored = await DoqtriRegistry.anchor(address, docId, contentHash, [
+        { nodeId: DONE_NODE, status: "Verified", tool: DONE_TOOL, artifactRef: doneRef(version) },
+      ]);
+      setReceipt({ ...anchored, kind: "done", version: anchored.version ?? version, contentHash });
+      toast.success(`Mindmap marked done and anchored as v${version}`);
+      await refreshChain();
+      void wallet.refreshBalance();
+    } catch (e) {
+      reportError(e, "Mark done failed");
+    } finally {
+      setDoneStep(null);
       setBusy(false);
     }
   }
@@ -455,9 +520,46 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
         </div>
       ) : null}
 
+      {markedDone ? (
+        <div
+          data-testid="marked-done"
+          className="glass flex items-center gap-2 rounded-xl px-2.5 py-2 text-[12px] max-lg:text-[13px]"
+        >
+          <CircleCheckIcon className="text-success size-4 shrink-0" strokeWidth={2} aria-hidden />
+          <span className="flex-1">
+            Done · v{chainVersion}
+            {rootNode?.updatedAt ? (
+              <span className="text-muted-foreground"> · {new Date(rootNode.updatedAt * 1000).toLocaleDateString()}</span>
+            ) : null}
+          </span>
+        </div>
+      ) : (
+        <Button
+          type="button"
+          size="sm"
+          data-testid="mark-done"
+          disabled={busy || unfunded || noWallet || lowBalance || preparing}
+          title="Save, anchor this version and record on Stellar that the mindmap is done"
+          className="w-full max-lg:h-10"
+          onClick={() => void markDone()}
+        >
+          {doneStep || preparing ? <Loader2Icon className="animate-spin" /> : <FlagIcon />}
+          {doneStep === "saving"
+            ? "Saving…"
+            : doneStep === "anchoring"
+              ? "Anchoring…"
+              : preparing
+                  ? "Wallet getting ready…"
+                  : rootNode?.tool === DONE_TOOL
+                    ? "Mark this version done"
+                    : "Mark mindmap done"}
+        </Button>
+      )}
+
       <Button
         type="button"
         size="sm"
+        variant="outline"
         disabled={busy || unfunded || noWallet || lowBalance || preparing || upToDate}
         title={
           upToDate
@@ -678,7 +780,9 @@ function ReceiptCard({ receipt }: { receipt: Receipt }) {
       ? "Registered"
       : receipt.kind === "update"
         ? "Updated"
-        : `Node “${receipt.nodeId}” synced`;
+        : receipt.kind === "done"
+          ? "Marked done"
+          : `Node “${receipt.nodeId}” synced`;
 
   return (
     <div className="glass grid gap-1 rounded-xl px-2.5 py-2 text-[11px]">

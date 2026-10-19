@@ -18,7 +18,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { Address, rpc, scValToNative, StrKey, xdr } from "@stellar/stellar-sdk";
 import { Buffer } from "buffer";
-import { CONTRACT_ID, HORIZON_URL, RPC_URL } from "@/lib/stellar/config";
+import { CONTRACT_ID, HORIZON_URL, LEGACY_CONTRACT_IDS, RPC_URL } from "@/lib/stellar/config";
 import { docLedgerKey } from "@/lib/stellar/anchored";
 import { DoqtriRegistry } from "@/lib/stellar/contract-client";
 import { FEE_FORWARDER, NETWORK } from "@/lib/stellar/smart-wallet-config";
@@ -77,6 +77,12 @@ type Invocation =
       status: string;
       tool: string;
       artifactRef: string;
+    }
+  | {
+      fn: "anchor";
+      docId: string;
+      hash: string;
+      nodes: { nodeId: string; status: string; tool: string; artifactRef: string }[];
     };
 
 function decode(value: string): xdr.ScVal {
@@ -101,9 +107,10 @@ function enumTag(value: unknown): string {
  */
 export function decodeInvocation(
   op: HorizonOperation,
-  contractId: string,
+  contractId: string | readonly string[],
   forwarder: string | null = FEE_FORWARDER,
 ): Invocation | null {
+  const registries: readonly string[] = typeof contractId === "string" ? [contractId] : contractId;
   if (op.type !== "invoke_host_function") return null;
   if (op.transaction_successful === false) return null;
   const params = op.parameters;
@@ -113,13 +120,13 @@ export function decodeInvocation(
     const contract = Address.fromScVal(decode(params[0].value)).toString();
     let fn = String(scValToNative(decode(params[1].value)));
     let args: unknown[];
-    if (contract === contractId) {
+    if (registries.includes(contract)) {
       args = params.slice(2).map((p) => scValToNative(decode(p.value)));
     } else if (forwarder && contract === forwarder && fn === "forward" && params.length >= 9) {
       // A user-paid write (progress/003): forward(fee_token, fee_amount,
       // max_fee_amount, expiration_ledger, target, target_fn, target_args, …).
       // The registry call is the wrapped one.
-      if (Address.fromScVal(decode(params[6].value)).toString() !== contractId) return null;
+      if (!registries.includes(Address.fromScVal(decode(params[6].value)).toString())) return null;
       fn = String(scValToNative(decode(params[7].value)));
       args = (decode(params[8].value).vec() ?? []).map((v) => scValToNative(v));
     } else {
@@ -143,6 +150,19 @@ export function decodeInvocation(
           tool: String(args[3] ?? ""),
           artifactRef: String(args[4] ?? ""),
         };
+      // anchor(owner, doc_id, content_hash, nodes)
+      case "anchor":
+        return {
+          fn,
+          docId: String(args[1]),
+          hash: toHex(args[2]),
+          nodes: ((args[3] as Record<string, unknown>[] | undefined) ?? []).map((n) => ({
+            nodeId: String(n.node_id),
+            status: enumTag(n.status),
+            tool: String(n.tool ?? ""),
+            artifactRef: String(n.artifact_ref ?? ""),
+          })),
+        };
       default:
         return null;
     }
@@ -159,7 +179,7 @@ export function decodeInvocation(
 export function buildHistory(
   ops: HorizonOperation[],
   docId: string,
-  contractId: string,
+  contractId: string | readonly string[],
   owner: string,
 ): DocumentHistory {
   const versions: ChainVersion[] = [];
@@ -169,7 +189,27 @@ export function buildHistory(
     const call = decodeInvocation(op, contractId);
     if (!call || call.docId !== docId) continue;
 
-    if (call.fn === "register_document" || call.fn === "update_document") {
+    if (call.fn === "anchor") {
+      // Like the contract: a new document is v1, changed text a new version,
+      // the same text keeps its version; then every node update.
+      const last = versions[versions.length - 1];
+      if (!last || last.contentHash !== call.hash) {
+        versions.push({
+          version: versions.length + 1,
+          contentHash: call.hash,
+          txHash: op.transaction_hash,
+          closedAt: op.created_at,
+        });
+      }
+      for (const node of call.nodes) {
+        nodeEvents.push({
+          ...node,
+          txHash: op.transaction_hash,
+          closedAt: op.created_at,
+          docVersion: versions.length,
+        });
+      }
+    } else if (call.fn === "register_document" || call.fn === "update_document") {
       // A second register cannot succeed on-chain; ignore one if it appears.
       if (call.fn === "register_document" && versions.length > 0) continue;
       versions.push({
@@ -202,6 +242,9 @@ export function buildHistory(
 
   return { owner, versions, nodeEvents, nodes };
 }
+
+/** This registry and the ones its documents were migrated from. */
+const REGISTRIES: readonly string[] = [CONTRACT_ID, ...LEGACY_CONTRACT_IDS];
 
 /** Horizon caps a page at 200; this bounds a runaway feed. */
 const MAX_PAGES = 25;
@@ -297,10 +340,10 @@ export async function getDocumentHistory(
   if (!doc?.owner) return null;
   if (StrKey.isValidContract(doc.owner)) {
     const ops = await fetchIndexedOperations(docId);
-    return withCompleteness(buildHistory(ops, docId, CONTRACT_ID, doc.owner), doc.version);
+    return withCompleteness(buildHistory(ops, docId, REGISTRIES, doc.owner), doc.version);
   }
   const ops = await fetchOwnerOperations(doc.owner);
-  return buildHistory(ops, docId, CONTRACT_ID, doc.owner);
+  return buildHistory(ops, docId, REGISTRIES, doc.owner);
 }
 
 export type DocumentTtl = {

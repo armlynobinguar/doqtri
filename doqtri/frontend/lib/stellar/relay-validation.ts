@@ -192,7 +192,25 @@ export function deployedContractAddress(deployer: string, salt: Buffer, networkP
   return StrKey.encodeContract(hash(preimage.toXDR()));
 }
 
-export const REGISTRY_FUNCTIONS = ["register_document", "update_document", "set_node_status"] as const;
+export const REGISTRY_FUNCTIONS = ["register_document", "update_document", "set_node_status", "anchor"] as const;
+
+/** The same cap as the registry's MAX_NODES_PER_CALL. */
+export const MAX_ANCHOR_NODES = 32;
+
+/** NodeUpdate's fields, as a struct arrives: an ScMap sorted by field name. */
+const NODE_UPDATE_FIELDS = ["artifact_ref", "node_id", "status", "tool"];
+
+function isNodeUpdate(value: xdr.ScVal): boolean {
+  if (value.switch().name !== "scvMap") return false;
+  const entries = value.map() ?? [];
+  if (entries.length !== NODE_UPDATE_FIELDS.length) return false;
+  return entries.every((entry, i) => {
+    const key = entry.key();
+    if (key.switch().name !== "scvSymbol" || key.sym().toString() !== NODE_UPDATE_FIELDS[i]) return false;
+    const field = entry.val();
+    return NODE_UPDATE_FIELDS[i] === "status" ? field.switch().name === "scvVec" : isString(field);
+  });
+}
 export type RegistryFunction = (typeof REGISTRY_FUNCTIONS)[number];
 
 export type RegistryWrite = { fn: RegistryFunction; docId: string };
@@ -256,9 +274,10 @@ export function validateRegistryWrite(
 }
 
 /**
- * One of the three registry functions with the argument shapes the contract
- * declares; `register_document` must name `wallet` as the owner. Shared by
- * direct and forwarded writes.
+ * One of the registry's write functions with the argument shapes the contract
+ * declares; `register_document` and `anchor` must name `wallet` as the owner,
+ * and `anchor` takes at most MAX_ANCHOR_NODES well-formed node updates.
+ * Shared by direct and forwarded writes.
  */
 export function validateRegistryCall(fnName: string, args: xdr.ScVal[], wallet: string): RegistryWrite {
   const fn = fnName as RegistryFunction;
@@ -275,6 +294,21 @@ export function validateRegistryCall(fnName: string, args: xdr.ScVal[], wallet: 
       !isHash(args[2])
     ) {
       throw new RelayRejection("register_document must name your wallet as the owner");
+    }
+    docArg = args[1];
+  } else if (fn === "anchor") {
+    const nodes = args[3]?.switch().name === "scvVec" ? (args[3].vec() ?? []) : null;
+    if (
+      args.length !== 4 ||
+      args[0].switch().name !== "scvAddress" ||
+      Address.fromScAddress(args[0].address()).toString() !== wallet ||
+      !isString(args[1]) ||
+      !isHash(args[2]) ||
+      nodes === null ||
+      nodes.length > MAX_ANCHOR_NODES ||
+      !nodes.every(isNodeUpdate)
+    ) {
+      throw new RelayRejection("anchor must name your wallet as the owner, with at most 32 node updates");
     }
     docArg = args[1];
   } else if (fn === "update_document") {

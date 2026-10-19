@@ -286,6 +286,14 @@ export default function DocsPage() {
                 </thead>
                 <tbody>
                   <tr>
+                    <td><code>anchor(owner, doc_id, content_hash, nodes)</code></td>
+                    <td>owner</td>
+                    <td>
+                      Register or update the document (a new version only if the text changed) and set up to 32
+                      node statuses, in one transaction. Used by Mark mindmap done.
+                    </td>
+                  </tr>
+                  <tr>
                     <td><code>register_document(owner, doc_id, content_hash)</code></td>
                     <td>owner</td>
                     <td>Anchor a new document at version 1</td>

@@ -50,6 +50,65 @@ const update = (doc = DOC, byte = 2, opts = {}) =>
   op("update_document", [str(doc), bytes(hashOf(byte))], opts);
 const node = (id: string, tag: string, opts = {}) =>
   op("set_node_status", [str(DOC), str(id), status(tag), str("n8n"), str("wf_1")], opts);
+/** anchor(owner, doc_id, content_hash, nodes), nodes as the SDK encodes NodeUpdate structs. */
+const anchorOp = (byte: number, nodes: [string, string][] = [], opts = {}) =>
+  op(
+    "anchor",
+    [
+      new Address(OWNER).toScVal(),
+      str(DOC),
+      bytes(hashOf(byte)),
+      xdr.ScVal.scvVec(
+        nodes.map(([id, tag]) =>
+          xdr.ScVal.scvMap([
+            new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("artifact_ref"), val: str("v1") }),
+            new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("node_id"), val: str(id) }),
+            new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("status"), val: status(tag) }),
+            new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("tool"), val: str("doqtri-done") }),
+          ]),
+        ),
+      ),
+    ],
+    opts,
+  );
+
+describe("anchor (registry v2)", () => {
+  it("decodes an anchor call with its node updates", () => {
+    expect(decodeInvocation(anchorOp(1, [["root", "Verified"]]), CONTRACT)).toEqual({
+      fn: "anchor",
+      docId: DOC,
+      hash: hashOf(1).toString("hex"),
+      nodes: [{ nodeId: "root", status: "Verified", tool: "doqtri-done", artifactRef: "v1" }],
+    });
+  });
+
+  it("numbers versions like the contract: new text is a version, the same text is not", () => {
+    const history = buildHistory(
+      [anchorOp(1, [["root", "Built"]]), anchorOp(1, [["root", "Verified"]]), anchorOp(2)],
+      DOC,
+      CONTRACT,
+      OWNER,
+    );
+    expect(history.versions.map((v) => [v.version, v.contentHash])).toEqual([
+      [1, hashOf(1).toString("hex")],
+      [2, hashOf(2).toString("hex")],
+    ]);
+    expect(history.nodes).toEqual([expect.objectContaining({ nodeId: "root", status: "Verified", docVersion: 1 })]);
+  });
+
+  it("continues a migrated document's history from the registry it came from", () => {
+    const ops = [
+      register(DOC, 1, { contract: OTHER_CONTRACT }),
+      update(DOC, 2, { contract: OTHER_CONTRACT }),
+      anchorOp(3, [["root", "Verified"]]),
+    ];
+    const history = buildHistory(ops, DOC, [CONTRACT, OTHER_CONTRACT], OWNER);
+    expect(history.versions.map((v) => v.version)).toEqual([1, 2, 3]);
+    expect(history.nodes[0]).toEqual(expect.objectContaining({ nodeId: "root", docVersion: 3 }));
+    // Without the old registry, only the new write counts.
+    expect(buildHistory(ops, DOC, CONTRACT, OWNER).versions).toHaveLength(1);
+  });
+});
 
 describe("decodeInvocation", () => {
   it("decodes each registry call", () => {
