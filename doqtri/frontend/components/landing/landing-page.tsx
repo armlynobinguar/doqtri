@@ -16,7 +16,7 @@ const BLOCKS: { glyph: Glyph; title: string; body: string }[] = [
   {
     glyph: "check",
     title: "Tested",
-    body: "Every mindmap node carries a lifecycle — Planned, Building, Built, Verified — so “done” means checked, not claimed.",
+    body: "Every mindmap node carries a lifecycle (Planned, Building, Built, Verified), so “done” means checked, not claimed.",
   },
   {
     glyph: "hash",
@@ -86,7 +86,7 @@ export function LandingPage() {
             </h1>
             <p className={styles.headline}>Planned vs shipped, proven on-chain.</p>
             <p className={styles.support}>
-              Living documents. Executable mindmaps. Built on Stellar — every
+              Living documents. Executable mindmaps. Built on Stellar, so every
               version and every shipped node gets a ledger-true receipt.
             </p>
             <div className={styles.actions}>
@@ -145,7 +145,7 @@ export function LandingPage() {
             </h2>
             <p className={styles.sectionSupport}>
               Markdown is the source of truth. <code>##</code> headings compile into the mindmap and wikilinks
-              into the global graph — nothing second-hand to go stale.
+              into the global graph, so nothing second-hand can go stale.
             </p>
           </div>
           <LandingMindmap />
@@ -162,7 +162,7 @@ export function LandingPage() {
               <div>
                 <strong>Open your vault</strong>
                 <p>
-                  <Link href="/signup">Sign up with email</Link> and start writing — no extension needed. Already on
+                  <Link href="/signup">Sign up with email</Link> and start writing. No extension needed. Already on
                   Stellar? Freighter and other Stellar wallets open the same private vault.
                 </p>
               </div>
@@ -171,7 +171,7 @@ export function LandingPage() {
               <BlockGlyph glyph="hash" className={styles.stepIcon} />
               <div>
                 <strong>Write or ingest</strong>
-                <p>Notes work like Obsidian. Upload PDFs and docs and they convert the same way — headings become the map.</p>
+                <p>Notes work like Obsidian. Upload PDFs and docs and they convert the same way: headings become the map.</p>
               </div>
             </li>
             <li>
@@ -202,7 +202,7 @@ export function LandingPage() {
           </ol>
           <p className={styles.sectionSupport}>
             Anyone can open a document&rsquo;s public audit page and read its version history and node status straight
-            from the contract — not from our database.
+            from the contract, not from our database.
           </p>
           <div className={`${styles.proofCta} ${styles.actions}`}>
             <OpenVaultLink size="lg" label="Open your vault" className={styles.cta} />

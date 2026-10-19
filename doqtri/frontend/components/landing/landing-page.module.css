@@ -145,11 +145,11 @@
 
 .hero {
   display: grid;
-  gap: clamp(2rem, 5vw, 3.5rem);
+  gap: clamp(2rem, 5vw, 3rem);
   align-items: center;
-  max-width: 72rem;
+  max-width: 64rem;
   margin: 0 auto;
-  padding: clamp(2.5rem, 8vw, 5.5rem) clamp(1rem, 4vw, 2.5rem) clamp(3rem, 8vw, 5rem);
+  padding: clamp(2rem, 5vw, 3.5rem) clamp(1rem, 4vw, 2.5rem) clamp(2.5rem, 5vw, 3.5rem);
 }
 
 @media (min-width: 960px) {
@@ -167,8 +167,8 @@
 .heroTag {
   display: inline-flex;
   align-items: center;
-  margin-bottom: 1.6rem;
-  padding: 0.55rem 1.1rem;
+  margin-bottom: 1.25rem;
+  padding: 0.45rem 0.95rem;
   border: 1px solid var(--glass-hi);
   border-radius: 999px;
   font-size: 0.64rem;
@@ -179,7 +179,7 @@
 }
 
 .brand {
-  font-size: clamp(4rem, 13vw, 8rem);
+  font-size: clamp(2.75rem, 7vw, 4.75rem);
   font-weight: 800;
   letter-spacing: -0.055em;
   line-height: 0.9;
@@ -189,7 +189,7 @@
 /* The second, lighter line under the display word. */
 .headline {
   max-width: 16ch;
-  font-size: clamp(1.9rem, 4.6vw, 3.1rem);
+  font-size: clamp(1.4rem, 3vw, 2.1rem);
   font-weight: 700;
   letter-spacing: -0.04em;
   line-height: 1.02;
@@ -199,9 +199,9 @@
 
 .support {
   max-width: 44ch;
-  margin-bottom: 2rem;
+  margin-bottom: 1.6rem;
   color: var(--muted-foreground);
-  font-size: 1.08rem;
+  font-size: 1rem;
   line-height: 1.55;
 }
 
@@ -260,7 +260,7 @@
 /* A smoked-glass disc lit from above. */
 .disc {
   position: relative;
-  width: min(100%, 26rem);
+  width: min(100%, 19rem);
   aspect-ratio: 1;
   border-radius: 50%;
   background:
@@ -280,14 +280,14 @@
 }
 
 .emblemMark {
-  width: 74%;
+  width: 64%;
   height: auto;
   color: var(--foreground);
   filter: drop-shadow(0 0 14px rgba(244, 245, 247, 0.16));
 }
 
 .discChain {
-  --block-size: clamp(0.85rem, 2.2vw, 1.1rem);
+  --block-size: clamp(0.7rem, 1.6vw, 0.85rem);
   justify-content: center;
   opacity: 0.55;
 }
@@ -308,7 +308,7 @@
   list-style: none;
   display: grid;
   gap: 1.5rem;
-  max-width: 72rem;
+  max-width: 64rem;
   width: 100%;
   margin: 0 auto;
   padding: 2rem clamp(1rem, 4vw, 2.5rem) 0;
@@ -340,13 +340,13 @@
 }
 
 .loopTile {
-  width: 3.25rem;
-  height: 3.25rem;
+  width: 2.5rem;
+  height: 2.5rem;
 }
 
 .loopTile svg {
-  width: 1.4rem;
-  height: 1.4rem;
+  width: 1.1rem;
+  height: 1.1rem;
 }
 
 .loop strong {
@@ -376,7 +376,7 @@
 }
 
 .sectionTitle {
-  font-size: clamp(1.8rem, 4vw, 2.75rem);
+  font-size: clamp(1.5rem, 3vw, 2.1rem);
   font-weight: 800;
   letter-spacing: -0.045em;
   line-height: 1.04;
@@ -409,10 +409,10 @@
 .blocks,
 .how,
 .proof {
-  max-width: 72rem;
+  max-width: 64rem;
   margin: 0 auto;
   width: 100%;
-  padding: clamp(3.5rem, 8vw, 5.5rem) clamp(1rem, 4vw, 2.5rem);
+  padding: clamp(2.5rem, 6vw, 4rem) clamp(1rem, 4vw, 2.5rem);
 }
 
 .blockGrid {
@@ -430,7 +430,7 @@
 }
 
 .blockCard {
-  padding: 1.75rem;
+  padding: 1.4rem;
   border-radius: 20px;
   background: var(--glass);
   border: 1px solid var(--glass-lo);
@@ -445,14 +445,14 @@
 }
 
 .blockIcon {
-  width: 2.25rem;
-  height: 2.25rem;
-  margin-bottom: 1.25rem;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-bottom: 1rem;
   filter: drop-shadow(0 0 8px rgba(244, 245, 247, 0.2));
 }
 
 .blockCard h3 {
-  font-size: 1.2rem;
+  font-size: 1.05rem;
   font-weight: 700;
   letter-spacing: -0.03em;
   margin-bottom: 0.45rem;
@@ -471,12 +471,13 @@
     var(--brand-surface);
   border-top: 1px solid var(--brand-line);
   border-bottom: 1px solid var(--brand-line);
-  padding: clamp(3.5rem, 8vw, 5rem) clamp(1rem, 4vw, 2.5rem) 0;
+  padding: clamp(2.5rem, 6vw, 4rem) clamp(1rem, 4vw, 2.5rem) 0;
   overflow: hidden;
 }
 
 .mapCopy {
-  max-width: 72rem;
+  /* Same text column as the other sections, whose 64rem includes their side padding. */
+  max-width: calc(64rem - 5rem);
   margin: 0 auto;
 }
 
@@ -502,14 +503,14 @@
 }
 
 .stepIcon {
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 1.4rem;
+  height: 1.4rem;
   margin-top: 0.1rem;
 }
 
 .steps strong {
   display: block;
-  font-size: 1.05rem;
+  font-size: 1rem;
   font-weight: 700;
   letter-spacing: -0.02em;
   margin-bottom: 0.25rem;
@@ -557,8 +558,8 @@
 }
 
 .lifecycleIcon {
-  width: 1.15rem;
-  height: 1.15rem;
+  width: 1rem;
+  height: 1rem;
 }
 
 .proofCta {
