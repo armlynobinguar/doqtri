@@ -4,7 +4,7 @@ import { ImageResponse } from "next/og";
 
 // Link preview in the Monochrome Glass style: label row, heavy wordmark, a
 // lighter second line, and the mark sitting on a smoked-glass disc.
-export const alt = "Doqtri — planned vs shipped, proven on-chain.";
+export const alt = "Doqtri: planned vs shipped, proven on-chain.";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
