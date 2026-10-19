@@ -54,8 +54,8 @@ export function SettingsDialog({
           <div className="flex justify-between gap-4">
             <dt className="text-muted-foreground">Theme, text size &amp; motion</dt>
             <dd>
-              <Link href="/vault/profile" className="underline-offset-2 hover:underline" onClick={() => onOpenChange(false)}>
-                Profile → Settings
+              <Link href="/vault/profile?tab=preferences" className="underline-offset-2 hover:underline" onClick={() => onOpenChange(false)}>
+                Profile → Preferences
               </Link>
             </dd>
           </div>

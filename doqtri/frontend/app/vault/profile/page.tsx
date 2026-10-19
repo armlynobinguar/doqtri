@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
@@ -23,7 +24,12 @@ export default async function ProfilePage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  return <ProfileView joinedAt={user.created_at} referral={await loadReferral(user.id)} />;
+  const referral = await loadReferral(user.id);
+  return (
+    <Suspense>
+      <ProfileView joinedAt={user.created_at} referral={referral} />
+    </Suspense>
+  );
 }
 
 /**
