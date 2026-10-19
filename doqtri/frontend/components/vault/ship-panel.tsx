@@ -52,10 +52,8 @@ type Receipt = WriteReceipt & {
 
 /**
  * "Mark mindmap done" sets the mindmap's root node to Verified with this tool,
- * and the anchored version it confirms as the artifact (e.g. "v3"). The
- * contract has one call per transaction and no batch call, so this is the
- * smallest on-chain record of "this version is done": an anchor (only if the
- * text changed) plus one node write.
+ * and the anchored version it confirms as the artifact (e.g. "v3"), in the
+ * same registry `anchor` call that anchors the text: one transaction.
  */
 const DONE_NODE = "root";
 const DONE_TOOL = "doqtri-done";
@@ -82,7 +80,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
   // Which half of Save & anchor is running, for the button label.
   const [anchorStep, setAnchorStep] = useState<"saving" | "signing" | null>(null);
   // Which step of Mark mindmap done is running, for the button label.
-  const [doneStep, setDoneStep] = useState<"saving" | "anchoring" | "marking" | null>(null);
+  const [doneStep, setDoneStep] = useState<"saving" | "anchoring" | null>(null);
   // The root node's on-chain record: says which version was marked done.
   const [rootNode, setRootNode] = useState<ChainNode | null>(null);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
@@ -327,11 +325,10 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
   }
 
   /**
-   * One click for "this mindmap is finished": save, anchor the text if it
-   * changed, then mark the root node Verified for that version. Each write is
-   * its own transaction (the contract has no batch call), so a passkey wallet
-   * is asked once per write: two at most, one when the text is already
-   * anchored.
+   * One click for "this mindmap is finished": save, then one registry
+   * `anchor` call that anchors the text (a new version only if it changed)
+   * and marks the root node Verified for that version. One transaction, so
+   * one signature.
    */
   async function markDone() {
     setBusy(true);
@@ -343,34 +340,22 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
       const contentHash = await sha256Hex(saved);
       const address = await wallet.ensureWallet();
 
-      let version = chainDoc?.version ?? null;
-      if (version == null || contentHash !== chainDoc?.contentHash) {
-        setDoneStep("anchoring");
-        const anchored =
-          version == null
-            ? await DoqtriRegistry.registerDocument(address, docId, contentHash)
-            : await DoqtriRegistry.updateDocument(address, docId, contentHash);
-        version = anchored.version ?? (version ?? 0) + 1;
-      }
+      // The version this call will leave: the same one if the text is already
+      // anchored, otherwise the next (v1 for a new document).
+      const current = chainDoc?.version ?? null;
+      const version =
+        current != null && contentHash === chainDoc?.contentHash ? current : (current ?? 0) + 1;
 
-      setDoneStep("marking");
-      const marked = await DoqtriRegistry.setNodeStatus(
-        address,
-        docId,
-        DONE_NODE,
-        "Verified",
-        DONE_TOOL,
-        doneRef(version),
-      );
-      setReceipt({ ...marked, kind: "done", version, contentHash });
+      setDoneStep("anchoring");
+      const anchored = await DoqtriRegistry.anchor(address, docId, contentHash, [
+        { nodeId: DONE_NODE, status: "Verified", tool: DONE_TOOL, artifactRef: doneRef(version) },
+      ]);
+      setReceipt({ ...anchored, kind: "done", version: anchored.version ?? version, contentHash });
       toast.success(`Mindmap marked done and anchored as v${version}`);
       await refreshChain();
       void wallet.refreshBalance();
     } catch (e) {
-      // An anchor that went through before a failed mark stays anchored; the
-      // refresh shows it, and clicking again only does the missing step.
       reportError(e, "Mark done failed");
-      void refreshChain();
     } finally {
       setDoneStep(null);
       setBusy(false);
@@ -563,9 +548,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
             ? "Saving…"
             : doneStep === "anchoring"
               ? "Anchoring…"
-              : doneStep === "marking"
-                ? "Marking done…"
-                : preparing
+              : preparing
                   ? "Wallet getting ready…"
                   : rootNode?.tool === DONE_TOOL
                     ? "Mark this version done"

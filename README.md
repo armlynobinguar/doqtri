@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <a href="https://stellar.expert/explorer/testnet/contract/CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB"><img src="https://img.shields.io/badge/Stellar-Testnet_Contract_(live_app)-7D00FF?style=for-the-badge&logo=stellar&logoColor=white" alt="Stellar testnet contract" /></a>
+  <a href="https://stellar.expert/explorer/testnet/contract/CCCIDUCFQMTMAGESMPTB3MFW4TURS62ORSZNICFOE6MNQZO3MI7F6QRJ"><img src="https://img.shields.io/badge/Stellar-Testnet_Contract_(live_app)-7D00FF?style=for-the-badge&logo=stellar&logoColor=white" alt="Stellar testnet contract" /></a>
   <a href="https://stellar.expert/explorer/public/contract/CCP5KFIWLUNPV2G7ATBKFMIZF54JYRC343P5JCTARC4PRTGM23IU6ET4"><img src="https://img.shields.io/badge/Stellar-Mainnet_Contract-00B050?style=for-the-badge&logo=stellar&logoColor=white" alt="Stellar mainnet contract" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-1FA971?style=for-the-badge" alt="MIT" /></a>
 </p>
@@ -165,15 +165,16 @@ environment variables (see [Network selection](#network-selection)).
 | Field | Value |
 | --- | --- |
 | **Network** | Stellar Testnet |
-| **Contract ID** | [`CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB`](https://lab.stellar.org/r/testnet/contract/CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB) |
-| **CLI alias** | `doqtri` |
-| **WASM hash** | `ef0124a4a22b60ba1f4e0e41823d31b175d90d38b1ba034970e58e0cf4e0e252` |
+| **Contract ID** | [`CCCIDUCFQMTMAGESMPTB3MFW4TURS62ORSZNICFOE6MNQZO3MI7F6QRJ`](https://lab.stellar.org/r/testnet/contract/CCCIDUCFQMTMAGESMPTB3MFW4TURS62ORSZNICFOE6MNQZO3MI7F6QRJ) |
+| **Version** | Registry v2: one-call `anchor`, admin `upgrade` |
+| **Admin** | `GCLICUN2GVFH477QNCG372S3J4CONBYNKWVYLX2OMEDUMDHMGOGD7GS4` (may upgrade the contract) |
+| **WASM hash** | `9c89210042e558e39c29525cfd071a771fe2c3ea624da19b013a8e80bb741330` |
+| **Previous registry** | [`CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB`](https://lab.stellar.org/r/testnet/contract/CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB), its documents copied with `scripts/migrate-registry.mjs` |
 
 **Explorer links**
 
-- [Open in Stellar Lab](https://lab.stellar.org/r/testnet/contract/CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB)
-- [Deploy transaction (Expert)](https://stellar.expert/explorer/testnet/tx/8b65276712032e15a2094b75c0818c5b87556b91782b9612ffad8836084d916a)
-- [WASM upload transaction (Expert)](https://stellar.expert/explorer/testnet/tx/5da4263b7e01b3c5be44b093bc6105aec07f20e4157b5231516c980dd4933cbd)
+- [Open in Stellar Lab](https://lab.stellar.org/r/testnet/contract/CCCIDUCFQMTMAGESMPTB3MFW4TURS62ORSZNICFOE6MNQZO3MI7F6QRJ)
+- [Deploy transaction (Expert)](https://stellar.expert/explorer/testnet/tx/5aaaf8202d21baebe6ea508a91d78cdd7e33cee87e636dd1ffc0132fdb610f2b)
 
 ### Template marketplace (testnet)
 
@@ -342,7 +343,7 @@ stellar contract deploy \
 ### Invoke (live contract)
 
 ```bash
-CONTRACT=CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB
+CONTRACT=CCCIDUCFQMTMAGESMPTB3MFW4TURS62ORSZNICFOE6MNQZO3MI7F6QRJ
 
 stellar contract invoke \
   --id $CONTRACT --source alice --network testnet -- \

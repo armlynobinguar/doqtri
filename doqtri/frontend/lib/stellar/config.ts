@@ -21,9 +21,19 @@ function env(name: keyof typeof RAW, fallback: string): string {
   return raw || fallback;
 }
 
-/** Public testnet DoqtriRegistry — override via NEXT_PUBLIC_* in .env.local / Vercel */
+/**
+ * Public testnet DoqtriRegistry (v2: one-call `anchor`, upgradeable) —
+ * override via NEXT_PUBLIC_* in .env.local / Vercel.
+ */
 const TESTNET_CONTRACT =
-  "CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB";
+  "CCCIDUCFQMTMAGESMPTB3MFW4TURS62ORSZNICFOE6MNQZO3MI7F6QRJ";
+
+/**
+ * Registries this one took its documents from (scripts/migrate-registry.mjs).
+ * Their writes are still part of a migrated document's history, which is
+ * read from the ledger, so history looks at these contracts too.
+ */
+const TESTNET_LEGACY_CONTRACTS = ["CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB"];
 
 export const MAINNET_PASSPHRASE =
   "Public Global Stellar Network ; September 2015";
@@ -56,6 +66,10 @@ export const CONTRACT_ID = (() => {
   }
   return TESTNET_CONTRACT;
 })();
+
+/** Earlier registries whose writes still count toward a document's history. */
+export const LEGACY_CONTRACT_IDS: readonly string[] =
+  CONTRACT_ID === TESTNET_CONTRACT ? TESTNET_LEGACY_CONTRACTS : [];
 
 /** Public testnet TemplateMarket (progress/004). */
 const TESTNET_MARKET_CONTRACT = "CA6YPRXQ2IFGACBFLKWEFETGLZ2C5R7DG5TTBKTTP4AVYOF3HFOSBCC2";

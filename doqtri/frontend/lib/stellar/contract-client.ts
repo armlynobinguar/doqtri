@@ -13,6 +13,7 @@ import type { NodeStatus } from "@/lib/stellar/types";
 import {
   Client,
   Errors,
+  MAX_NODES_PER_CALL,
   type ContractNodeStatus,
   Buffer,
 } from "@/lib/bindings/doqtri-registry";
@@ -136,6 +137,12 @@ function unwrapResult<T>(
       }
       if (msg.includes("NodeNotFound") || msg === Errors[3].message) {
         throw new DoqtriError("NODE_NOT_FOUND", "Node not found on-chain");
+      }
+      if (msg.includes("NotOwner") || msg === Errors[5].message) {
+        throw new DoqtriError("NOT_OWNER", "This note is anchored by a different wallet.");
+      }
+      if (msg.includes("TooManyNodes") || msg === Errors[4].message) {
+        throw new DoqtriError("TOO_MANY_NODES", "Too many nodes to anchor at once.");
       }
       throw new DoqtriError("CONTRACT", msg);
     }
@@ -346,6 +353,42 @@ export const DoqtriRegistry = {
           new_hash: hexToBuffer(contentHashHex),
         }),
       );
+      preflight(balance, tx);
+      return await send(source, tx, true);
+    } catch (e) {
+      mapInvokeError(e);
+    }
+  },
+
+  /**
+   * One transaction, one signature: registers the document if it is new,
+   * anchors `contentHashHex` as a new version if it changed (the same text
+   * keeps its version), and writes every node status in `nodes`.
+   */
+  async anchor(
+    source: string,
+    docId: string,
+    contentHashHex: string,
+    nodes: { nodeId: string; status: NodeStatus; tool: string; artifactRef: string }[],
+  ): Promise<WriteReceipt> {
+    if (nodes.length > MAX_NODES_PER_CALL) {
+      throw new DoqtriError("TOO_MANY_NODES", `At most ${MAX_NODES_PER_CALL} nodes can be anchored at once.`);
+    }
+    try {
+      const { tx, balance } = await buildChecked(source, () =>
+        writeClient(source).anchor({
+          owner: source,
+          doc_id: docId,
+          content_hash: hexToBuffer(contentHashHex),
+          nodes: nodes.map((n) => ({
+            node_id: n.nodeId,
+            status: toStatusTag(n.status),
+            tool: n.tool,
+            artifact_ref: n.artifactRef,
+          })),
+        }),
+      );
+      unwrapResult(tx.result, "anchor failed", simulationError(tx));
       preflight(balance, tx);
       return await send(source, tx, true);
     } catch (e) {

@@ -36,6 +36,7 @@ type Activity = { hash: string; label: string; detail: string | null; at: string
 const WRITE_LABELS: Record<string, string> = {
   register_document: "Registered a note",
   update_document: "Anchored a new version",
+  anchor: "Anchored a note",
   set_node_status: "Synced a mindmap node",
 };
 

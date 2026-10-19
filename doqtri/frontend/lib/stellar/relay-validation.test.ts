@@ -212,6 +212,45 @@ describe("registry write validation", () => {
     });
   });
 
+  // NodeUpdate as the SDK encodes a struct: an ScMap with its fields in name order.
+  const nodeUpdate = (fields: [string, xdr.ScVal][] = [
+    ["artifact_ref", str("v1")],
+    ["node_id", str("root")],
+    ["status", status],
+    ["tool", str("doqtri-done")],
+  ]) => xdr.ScVal.scvMap(fields.map(([k, v]) => new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol(k), val: v })));
+  const anchor = (nodes: xdr.ScVal[] = [nodeUpdate()], owner = wallet) =>
+    call("anchor", [Address.fromString(owner).toScVal(), str(docId), hash32, xdr.ScVal.scvVec(nodes)]);
+
+  it("accepts anchor from your own wallet with up to 32 node updates", () => {
+    expect(check(anchor())).toEqual({ fn: "anchor", docId });
+    expect(check(anchor([]))).toEqual({ fn: "anchor", docId });
+    expect(check(anchor(Array.from({ length: 32 }, () => nodeUpdate())))).toEqual({ fn: "anchor", docId });
+  });
+
+  it("refuses anchor for someone else's wallet, too many nodes, or malformed nodes", () => {
+    expect(() => check(anchor([nodeUpdate()], contract("victim")))).toThrow(/name your wallet/);
+    expect(() => check(anchor(Array.from({ length: 33 }, () => nodeUpdate())))).toThrow(/at most 32/);
+    // A missing field, an extra field, a wrong type, fields out of order, not a struct.
+    expect(() => check(anchor([nodeUpdate([["node_id", str("root")]])]))).toThrow(/at most 32/);
+    expect(() =>
+      check(anchor([nodeUpdate([
+        ["artifact_ref", str("v1")], ["extra", str("x")], ["node_id", str("root")], ["status", status], ["tool", str("t")],
+      ])])),
+    ).toThrow(/at most 32/);
+    expect(() =>
+      check(anchor([nodeUpdate([["artifact_ref", str("v1")], ["node_id", str("root")], ["status", str("Built")], ["tool", str("t")]])])),
+    ).toThrow(/at most 32/);
+    expect(() =>
+      check(anchor([nodeUpdate([["node_id", str("root")], ["artifact_ref", str("v1")], ["status", status], ["tool", str("t")]])])),
+    ).toThrow(/at most 32/);
+    expect(() => check(anchor([str("root")]))).toThrow(/at most 32/);
+    // The nodes argument must be a list.
+    expect(() =>
+      check(call("anchor", [Address.fromString(wallet).toScVal(), str(docId), hash32, str("nodes")])),
+    ).toThrow(/at most 32/);
+  });
+
   it("refuses other contracts and functions", () => {
     expect(() => check(register(wallet, { target: contract("token") }))).toThrow(/Only the Doqtri registry/);
     expect(() => check(call("transfer", [str(docId), hash32]))).toThrow(/not allowed/);
