@@ -3,8 +3,9 @@
 import { useMemo, useState } from "react";
 import { NavLink } from "@/components/vault/navigation";
 import { useRouter } from "next/navigation";
-import { ExternalLinkIcon, Loader2Icon, RefreshCwIcon } from "lucide-react";
+import { Loader2Icon, Maximize2Icon, RefreshCwIcon } from "lucide-react";
 import { toast } from "sonner";
+import { buttonVariants } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -17,7 +18,8 @@ import {
  * The compact mindmap: the document's concept tree, in the right-hand panel.
  *
  * The panel is a few hundred pixels wide, which is too narrow for the canvas,
- * so this stays a tree and links out to the full view. Where the tree comes
+ * so this stays a tree, with a full-width button under it for the full view —
+ * an icon in the header was too easy to miss. Where the tree comes
  * from is the whole point of the feature: the stored concept map when there is
  * one, and the heading hierarchy only as a fallback — headings alone say
  * almost nothing about a document that has none.
@@ -103,21 +105,6 @@ export function MindmapPanel({
                 : "Rebuild this mindmap from the current note"}
             </TooltipContent>
           </Tooltip>
-
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <NavLink
-                  href={`/vault/${docId}/mindmap`}
-                  aria-label="Open full mindmap"
-                  className="text-muted-foreground hover:text-foreground flex size-6 items-center justify-center rounded-md transition-colors hover:bg-[var(--glass-strong)] pointer-coarse:size-9"
-                >
-                  <ExternalLinkIcon className="size-3" strokeWidth={2} />
-                </NavLink>
-              }
-            />
-            <TooltipContent side="bottom">Open full mindmap</TooltipContent>
-          </Tooltip>
         </div>
       </div>
 
@@ -138,6 +125,16 @@ export function MindmapPanel({
           )}
         </div>
       </ScrollArea>
+
+      <div className="border-border/60 shrink-0 border-t p-2">
+        <NavLink
+          href={`/vault/${docId}/mindmap`}
+          className={buttonVariants({ variant: "outline", size: "sm", className: "w-full max-lg:h-10" })}
+        >
+          <Maximize2Icon strokeWidth={1.5} />
+          Open full mindmap
+        </NavLink>
+      </div>
     </div>
   );
 }
