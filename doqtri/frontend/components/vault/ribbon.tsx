@@ -7,9 +7,21 @@ import {
   BrainIcon,
   LayoutTemplateIcon,
   SettingsIcon,
+  ShieldIcon,
+  ImageIcon,
+  FlagIcon,
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
@@ -24,12 +36,17 @@ const ITEMS: { id: RibbonAction; label: string; Icon: typeof FilesIcon }[] = [
   { id: "settings", label: "Settings", Icon: SettingsIcon },
 ];
 
+const BUTTON =
+  "text-sidebar-foreground/70 hover:text-foreground relative flex size-9 items-center justify-center rounded-[10px] border border-transparent transition-colors hover:bg-[var(--glass)] focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden";
+
 export function Ribbon({
   active,
   onAction,
+  isAdmin = false,
 }: {
   active?: RibbonAction;
   onAction: (action: RibbonAction) => void;
+  isAdmin?: boolean;
 }) {
   return (
     <nav
@@ -49,8 +66,7 @@ export function Ribbon({
             aria-label={label}
             onClick={() => onAction(id)}
             className={cn(
-              "text-sidebar-foreground/70 hover:text-foreground relative flex size-9 items-center justify-center rounded-[10px] border border-transparent transition-colors hover:bg-[var(--glass)]",
-              "focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden",
+              BUTTON,
               active === id &&
                 "text-foreground bg-sidebar-accent border-[var(--glass-lo)] shadow-[inset_0_1px_0_0_var(--glass-hi)] before:bg-foreground before:absolute before:top-2 before:bottom-2 before:-left-[7px] before:w-0.5 before:rounded-full before:shadow-[0_0_8px_var(--foreground)]",
             )}
@@ -60,6 +76,43 @@ export function Ribbon({
           <TooltipContent side="right">{label}</TooltipContent>
         </Tooltip>
       ))}
+      {isAdmin && <AdminMenu />}
     </nav>
+  );
+}
+
+/**
+ * Staff only, pinned to the ribbon's foot. The admin pages live outside the
+ * vault and 404 for everyone else, so this is a shortcut, not the gate.
+ */
+function AdminMenu() {
+  const router = useRouter();
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger
+          render={<DropdownMenuTrigger />}
+          aria-label="Admin"
+          data-testid="ribbon-admin"
+          className={cn(BUTTON, "mt-auto")}
+        >
+          <ShieldIcon className="size-[17px]" strokeWidth={1.5} />
+        </TooltipTrigger>
+        <TooltipContent side="right">Admin</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent side="right" align="end" className="w-48">
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Admin</DropdownMenuLabel>
+          <DropdownMenuItem onClick={() => router.push("/admin/reports")}>
+            <FlagIcon strokeWidth={1.5} />
+            Template reports
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => router.push("/admin/promo")}>
+            <ImageIcon strokeWidth={1.5} />
+            Promo entries
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

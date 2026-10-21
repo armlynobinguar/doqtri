@@ -43,18 +43,26 @@ export function VaultShell({
   notes,
   failedImports,
   identity,
+  isAdmin,
   children,
 }: {
   notes: NoteSummary[];
   failedImports: FailedImport[];
   identity: VaultIdentity;
+  /** Staff (DOQTRI_ADMINS) get a ribbon shortcut to the review screens. */
+  isAdmin: boolean;
   children: React.ReactNode;
 }) {
   return (
     <WalletProvider identity={identity}>
       <VaultStatusProvider>
         <NavigationProvider>
-          <VaultShellInner notes={notes} failedImports={failedImports} identity={identity}>
+          <VaultShellInner
+            notes={notes}
+            failedImports={failedImports}
+            identity={identity}
+            isAdmin={isAdmin}
+          >
             {children}
           </VaultShellInner>
           <WalletSetupDialog />
@@ -68,11 +76,14 @@ function VaultShellInner({
   notes,
   failedImports,
   identity,
+  isAdmin,
   children,
 }: {
   notes: NoteSummary[];
   failedImports: FailedImport[];
   identity: VaultIdentity;
+  /** Staff (DOQTRI_ADMINS) get a ribbon shortcut to the review screens. */
+  isAdmin: boolean;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -294,6 +305,7 @@ function VaultShellInner({
           // ribbon click is, since those actions only toggle panels.
           active={routeAction ?? ribbonActive}
           onAction={handleRibbonAction}
+          isAdmin={isAdmin}
         />
 
         <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
