@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { isAdmin } from "@/lib/admin";
 import { VaultShell } from "@/components/vault/vault-shell";
 import { PreferencesSync } from "@/components/vault/preferences";
 import { ReferralClaim } from "@/components/vault/referral-claim";
@@ -77,7 +78,12 @@ export default async function VaultLayout({
     <>
       <PreferencesSync account={user.user_metadata?.preferences ?? null} />
       {hasReferral && <ReferralClaim />}
-      <VaultShell notes={notes} failedImports={failedImports} identity={identity}>
+      <VaultShell
+        notes={notes}
+        failedImports={failedImports}
+        identity={identity}
+        isAdmin={isAdmin(user)}
+      >
         {children}
       </VaultShell>
     </>
