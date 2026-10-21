@@ -33,6 +33,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261009000100_add_promo_submission_status.sql
 20261018000000_create_referrals.sql       # NOT yet applied: apply before deploying
 20261019000000_chain_writes_anchor.sql    # NOT yet applied: apply before deploying
+20261021000000_create_mindmap_styles.sql
 ```
 
 The remote records its own version stamps (e.g. `20260929114657` for
@@ -77,6 +78,12 @@ Two supporting tables:
   an account created after the link was opened, never for the user's own code.
   Both functions are service role only. Owners can read their own code;
   referrals are exposed only as a count on the profile page.
+- `public.mindmap_styles` — each user's mindmap studio style, one row per map
+  (`global`, or `doc:<id>` with a cascading `document_id`), so a look follows
+  the user across devices. The browser upserts its own rows under RLS a moment
+  after the last change; edits the server has not confirmed yet are parked in
+  localStorage and resent on the next visit. `updated_at` is set by a trigger
+  and acts as the row's version. The demo vault's styles stay in the browser.
 
 The notes table itself is still the only content store. There are deliberately **no** graph tables: nodes and
 edges are parsed from `markdown` at render time by `lib/wikilinks.ts`, so the

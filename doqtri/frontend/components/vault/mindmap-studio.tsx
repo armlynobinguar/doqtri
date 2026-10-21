@@ -31,6 +31,7 @@ import { DoqtriLoader } from "@/components/brand/doqtri-loader";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { cssFontFamily, FONT_LABELS } from "@/components/vault/mindmap-fonts";
 import { useMindmapStyle } from "@/hooks/use-mindmap-style";
+import type { SavedStyle } from "@/lib/mindmap-style-sync";
 import {
   applyPreset,
   BACKDROPS,
@@ -109,6 +110,7 @@ function subscribeFullscreen(callback: () => void) {
  */
 export function MindmapStudio({
   scope,
+  savedStyle,
   title,
   graph,
   defaultLayout,
@@ -116,12 +118,14 @@ export function MindmapStudio({
 }: Omit<MindmapCanvasProps, "look" | "editing" | "selectedId" | "onSelect" | "handleRef"> & {
   /** Which map this is, for remembering its style. */
   scope: string;
+  /** The signed-in user's stored style for this map; without it the style stays in this browser. */
+  savedStyle?: SavedStyle;
   title: string;
   graph: MindmapGraph;
   defaultLayout: Layout2D;
 }) {
   const fallback = useMemo(() => defaultStyleFor(defaultLayout), [defaultLayout]);
-  const [style, setStoredStyle] = useMindmapStyle(scope, fallback);
+  const [style, setStoredStyle] = useMindmapStyle(scope, fallback, savedStyle);
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("theme");
   const [selectedId, setSelectedId] = useState<string | null>(null);

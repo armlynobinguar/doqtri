@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { loadVaultDocs } from "@/lib/load-docs";
+import { loadMindmapStyle } from "@/lib/load-mindmap-style";
 import { DocumentMindmap } from "@/components/vault/document-mindmap";
 
 /**
@@ -18,7 +19,10 @@ export default async function DocMindmapPage(
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const docs = await loadVaultDocs(supabase);
+  const [docs, savedStyle] = await Promise.all([
+    loadVaultDocs(supabase),
+    loadMindmapStyle(supabase, user.id, `doc:${docId}`),
+  ]);
   const active = docs.find((doc) => doc.id === docId);
   if (!active) notFound();
 
@@ -30,6 +34,7 @@ export default async function DocMindmapPage(
       markdown={active.markdown}
       mindmap={active.mindmap ?? null}
       stale={active.mindmapStale ?? false}
+      savedStyle={savedStyle}
     />
   );
 }
