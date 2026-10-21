@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { loadVaultDocs } from "@/lib/load-docs";
+import { loadMindmapStyle } from "@/lib/load-mindmap-style";
 import { GlobalMindmap } from "@/components/vault/global-mindmap";
 
 /**
@@ -16,7 +17,10 @@ export default async function GlobalMindmapPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const docs = await loadVaultDocs(supabase);
+  const [docs, savedStyle] = await Promise.all([
+    loadVaultDocs(supabase),
+    loadMindmapStyle(supabase, user.id, "global"),
+  ]);
 
-  return <GlobalMindmap docs={docs} />;
+  return <GlobalMindmap docs={docs} savedStyle={savedStyle} />;
 }

@@ -10,6 +10,7 @@ import { MindmapStudio } from "@/components/vault/mindmap-studio";
 import { MindmapPromoBanner } from "@/components/promo/mindmap-promo-banner";
 import { graphFromMindmap } from "@/lib/mindmap-graph";
 import { mindmapFromHeadings, type DocMindmap } from "@/lib/mindmap-types";
+import type { SavedStyle } from "@/lib/mindmap-style-sync";
 
 /**
  * The full-screen mindmap of a single document.
@@ -24,12 +25,14 @@ export function DocumentMindmap({
   markdown,
   mindmap,
   stale,
+  savedStyle,
 }: {
   docId: string;
   title: string;
   markdown: string;
   mindmap: DocMindmap | null;
   stale: boolean;
+  savedStyle: SavedStyle;
 }) {
   const router = useRouter();
   const navigate = useNavigate();
@@ -127,6 +130,7 @@ export function DocumentMindmap({
 
       <MindmapStudio
         scope={`doc:${docId}`}
+        savedStyle={savedStyle}
         title={title}
         defaultLayout="radial"
         graph={graph}

@@ -5,6 +5,7 @@ import { MindmapStudio } from "@/components/vault/mindmap-studio";
 import { buildGlobalMindmap } from "@/lib/global-mindmap";
 import { MINDMAP_COLORS } from "@/lib/theme";
 import type { Doc } from "@/lib/types";
+import type { SavedStyle } from "@/lib/mindmap-style-sync";
 import { useNavigate } from "@/components/vault/navigation";
 import { MindmapPromoBanner } from "@/components/promo/mindmap-promo-banner";
 
@@ -12,7 +13,7 @@ import { MindmapPromoBanner } from "@/components/promo/mindmap-promo-banner";
  * The vault-wide mindmap. Concepts from every document in one map, with the
  * ones several documents reach drawn as hubs.
  */
-export function GlobalMindmap({ docs }: { docs: Doc[] }) {
+export function GlobalMindmap({ docs, savedStyle }: { docs: Doc[]; savedStyle: SavedStyle }) {
   const navigate = useNavigate();
   const graph = useMemo(() => buildGlobalMindmap(docs), [docs]);
 
@@ -50,6 +51,7 @@ export function GlobalMindmap({ docs }: { docs: Doc[] }) {
 
       <MindmapStudio
         scope="global"
+        savedStyle={savedStyle}
         title="Global mindmap"
         graph={graph}
         // A forest, not one tree: several notes are roots, so rings would stack

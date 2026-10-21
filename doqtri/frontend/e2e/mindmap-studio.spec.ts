@@ -38,13 +38,16 @@ test.describe("mindmap studio", () => {
         { label: "Storage" },
       ]),
     );
-    // Styles persist per browser; start every test from the default look.
-    // Once per tab, so a reload inside a test still sees what it saved.
+    // Styles are saved to the user, and each test's note is new, so its map
+    // starts with no stored style. Clear what a browser can still hold — old
+    // per-browser styles and edits parked for the server — so every test
+    // starts from the default look. Once per tab, so a reload inside a test
+    // still sees what it saved.
     await page.addInitScript(() => {
       if (sessionStorage.getItem("studio-reset")) return;
       sessionStorage.setItem("studio-reset", "1");
       for (const key of Object.keys(localStorage)) {
-        if (key.startsWith("mindmap-style:")) localStorage.removeItem(key);
+        if (key.startsWith("mindmap-style")) localStorage.removeItem(key);
       }
     });
   });
@@ -64,6 +67,36 @@ test.describe("mindmap studio", () => {
 
     await page.reload();
     await expect.poll(() => canvasHasColor(page, [0xf5, 0xf0, 0xe6]), { timeout: 15_000 }).toBe(true);
+  });
+
+  test("a style follows the user to another browser", async ({ page, browser }) => {
+    await page.goto(`/vault/${docId}/mindmap`);
+    await page.getByRole("button", { name: "Customize" }).click();
+    await expect(page.getByRole("heading", { name: "Mindmap studio" })).toBeVisible();
+
+    const saved = page.waitForResponse(
+      (res) =>
+        res.url().includes("/rest/v1/mindmap_styles") &&
+        res.request().method() === "POST" &&
+        res.ok(),
+    );
+    await page.getByRole("button", { name: "Paper" }).click();
+    await saved;
+
+    // Same account, empty browser storage: the look can only come from the server.
+    const other = await browser.newContext({
+      storageState: "e2e/.auth/user.json",
+      viewport: { width: 1440, height: 900 },
+    });
+    try {
+      const fresh = await other.newPage();
+      await fresh.goto(`/vault/${docId}/mindmap`);
+      await expect
+        .poll(() => canvasHasColor(fresh, [0xf5, 0xf0, 0xe6]), { timeout: 15_000 })
+        .toBe(true);
+    } finally {
+      await other.close();
+    }
   });
 
   test("undo puts the previous look back", async ({ page }) => {
@@ -345,7 +378,7 @@ test.describe("focus on hover", () => {
       if (sessionStorage.getItem("studio-reset")) return;
       sessionStorage.setItem("studio-reset", "1");
       for (const key of Object.keys(localStorage)) {
-        if (key.startsWith("mindmap-style:")) localStorage.removeItem(key);
+        if (key.startsWith("mindmap-style")) localStorage.removeItem(key);
       }
     });
   });
