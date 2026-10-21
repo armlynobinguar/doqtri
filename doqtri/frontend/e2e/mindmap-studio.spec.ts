@@ -255,7 +255,7 @@ test.describe("large mindmaps", () => {
     await expect(page.getByRole("button", { name: /^Showing \d+ of 1214 nodes/ })).toBeVisible();
   });
 
-  test("zoomed out, deeper levels wait until zoomed in", async ({ page }) => {
+  test("hiding child nodes on zoom out draws less of the fitted map", async ({ page }) => {
     /** Canvas pixels that are not the plain backdrop: roughly, how much is drawn. */
     const drawn = () =>
       page.locator("canvas").first().evaluate((el: HTMLCanvasElement) => {
@@ -271,14 +271,12 @@ test.describe("large mindmaps", () => {
     await page.getByRole("button", { name: /^Render all/ }).click();
     await expect(page.getByText("Building mindmap…")).toBeHidden({ timeout: 60_000 });
     await page.waitForTimeout(1000);
-    const revealing = await drawn();
-
-    await page.getByRole("button", { name: "Customize" }).click();
-    await page.getByRole("button", { name: "Scene", exact: true }).click();
-    await page.getByRole("switch", { name: "Reveal detail as you zoom" }).click();
-    await page.getByRole("button", { name: "Close" }).click();
-    await page.waitForTimeout(500);
+    // Every node shows by default.
     const everything = await drawn();
+
+    await page.getByRole("button", { name: "Hide child nodes on zoom out" }).click();
+    await page.waitForTimeout(500);
+    const revealing = await drawn();
 
     // At the fitted zoom the 1,080 leaves are unreadable, so they are not drawn.
     expect(revealing).toBeLessThan(everything * 0.7);

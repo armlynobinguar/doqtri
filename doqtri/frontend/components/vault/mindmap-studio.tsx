@@ -16,6 +16,8 @@ import {
   Minimize2Icon,
   PaletteIcon,
   RotateCcwIcon,
+  SquareCheckIcon,
+  SquareIcon,
   Undo2Icon,
   LayersIcon,
   LockIcon,
@@ -368,6 +370,17 @@ export function MindmapStudio({
                   ? `Overview · ${shown.nodes.length.toLocaleString()} of ${total.toLocaleString()}`
                   : `All ${total.toLocaleString()}`}
               </span>
+            </ToolButton>
+          )}
+          {/* Only big maps hide anything, so smaller ones do not offer it. */}
+          {shown.nodes.length >= ZOOM_REVEAL_MIN_NODES && (
+            <ToolButton
+              label="Hide child nodes on zoom out"
+              active={style.hideOnZoomOut}
+              onClick={() => update((s) => ({ ...s, hideOnZoomOut: !s.hideOnZoomOut }))}
+            >
+              {style.hideOnZoomOut ? <SquareCheckIcon className="size-3.5" /> : <SquareIcon className="size-3.5" />}
+              <span className="text-[11px] font-semibold max-sm:hidden">Hide on zoom out</span>
             </ToolButton>
           )}
           <ToolButton
@@ -1282,17 +1295,6 @@ function StudioPanel({
               <p className="text-label text-[11px] leading-relaxed">
                 Pointing at a node lights its branch and its path to the centre. On touch screens, press and hold a
                 node; tap empty space to let go.
-              </p>
-            </Section>
-            <Section title="Detail">
-              <Toggle
-                label="Reveal detail as you zoom"
-                checked={style.zoomReveal}
-                onChange={(v) => set("zoomReveal", v)}
-              />
-              <p className="text-label text-[11px] leading-relaxed">
-                On maps of {ZOOM_REVEAL_MIN_NODES}+ nodes, deeper levels appear as you zoom in — like street names on
-                a map. Hovering a branch shows what is inside it. Snapshots always include everything.
               </p>
             </Section>
             <Section title="Backdrop">

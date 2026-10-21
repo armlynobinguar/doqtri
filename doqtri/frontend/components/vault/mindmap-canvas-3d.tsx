@@ -209,7 +209,7 @@ export default function MindmapCanvas3D({
   const focus = useMindmapFocus(graph, focusOn, (state) => applyFocus3D(graphData, state), lockedId);
   const lockButtonRef = useRef<HTMLButtonElement>(null);
   const boxedLabels = look.three.node === "label" && look.shape !== "underline";
-  const revealOn = look.zoomReveal && graph.nodes.length >= ZOOM_REVEAL_MIN_NODES;
+  const revealOn = look.hideOnZoomOut && graph.nodes.length >= ZOOM_REVEAL_MIN_NODES;
   const lookRef = useRef(look);
   useEffect(() => {
     lookRef.current = look;

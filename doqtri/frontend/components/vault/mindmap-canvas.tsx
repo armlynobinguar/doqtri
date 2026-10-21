@@ -230,7 +230,7 @@ export function MindmapCanvas({
       selectedId,
       large,
       focus: focus.stateRef,
-      reveal: look.zoomReveal && graph.nodes.length >= ZOOM_REVEAL_MIN_NODES,
+      reveal: look.hideOnZoomOut && graph.nodes.length >= ZOOM_REVEAL_MIN_NODES,
       boosts: boostsRef,
       dpr: typeof window === "undefined" ? 1 : window.devicePixelRatio,
     }),
