@@ -124,9 +124,10 @@ jobs:
 
   e2e:
     name: E2E (Playwright)
-    # The suite signs in and seeds/cleans notes in the Supabase project, so it
-    # runs on pushes to main (and on demand), not on every pull request.
-    if: github.event_name != 'pull_request'
+    # The suite signs in and seeds/cleans notes in the Supabase project. It runs
+    # on pushes to main, on demand, and on pull requests from this repository;
+    # fork PRs get no secrets, so they would only reach the skip below.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     needs: app
     runs-on: ubuntu-latest
     # Every run shares one test user; never let two runs mutate it at once.
