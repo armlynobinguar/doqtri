@@ -441,12 +441,16 @@ Every gap the 50 testnet testers reported is now closed:
 - [x] One Save & anchor button, plus rename and delete for notes — [`af40bec9`](https://github.com/armlynobinguar/doqtri/commit/af40bec9), [`00995ebe`](https://github.com/armlynobinguar/doqtri/commit/00995ebe), [`749f7291`](https://github.com/armlynobinguar/doqtri/commit/749f7291)
 - [x] Mindmap Studio: themes, 3D view, PNG export, focus mode — [`fc600141`](https://github.com/armlynobinguar/doqtri/commit/fc600141)
 - [x] Template gallery with 14 starter notes — [`4a7bad3f`](https://github.com/armlynobinguar/doqtri/commit/4a7bad3f)
+- [x] A read-only demo vault anyone can open before signing up — [`34e91208`](https://github.com/armlynobinguar/doqtri/commit/34e91208)
+- [x] Community template marketplace: publish, tips and paid templates on the TemplateMarket contract — [`7b875f75`](https://github.com/armlynobinguar/doqtri/commit/7b875f75)
+- [x] Registry v2: Mark mindmap done anchors a document and all its node statuses in one signed transaction — [`e237b92c`](https://github.com/armlynobinguar/doqtri/commit/e237b92c)
+- [x] Referral links unique to each user — [`f2a88514`](https://github.com/armlynobinguar/doqtri/commit/f2a88514)
+- [x] A simpler profile page with one "needs attention" banner — [`540f5a47`](https://github.com/armlynobinguar/doqtri/commit/540f5a47)
+- [x] Mindmap styles saved per user and synced across devices; every node shown by default — [`b30683e2`](https://github.com/armlynobinguar/doqtri/commit/b30683e2), [`476b18b4`](https://github.com/armlynobinguar/doqtri/commit/476b18b4)
 
 ### Next
 
 - [ ] Vault export to a markdown zip, and undo for AI regenerate
-- [ ] A demo vault anyone can read before signing up
-- [ ] Batch node-status updates in one signed transaction
 - [ ] Run the live app on mainnet, with fee estimates shown before every write
 
 ## License
