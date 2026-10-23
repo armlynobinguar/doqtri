@@ -17,6 +17,9 @@ doctest = false
 soroban-sdk = "=25.3.2"
 stellar-fee-abstraction = "=0.7.1"
 
+[dev-dependencies]
+soroban-sdk = { version = "=25.3.2", features = ["testutils"] }
+
 [profile.release]
 opt-level = "z"
 overflow-checks = true

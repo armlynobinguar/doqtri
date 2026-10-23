@@ -50,3 +50,6 @@ impl FeeForwarder {
         )
     }
 }
+
+#[cfg(test)]
+mod test;

@@ -81,6 +81,51 @@ jobs:
           path: target/wasm32v1-none/release/doqtri_market.wasm
           if-no-files-found: error
 
+  fee-forwarder:
+    name: FeeForwarder tests + WASM
+    runs-on: ubuntu-latest
+    # Its own Cargo workspace (soroban-sdk 25 for the OpenZeppelin fee-abstraction crate).
+    defaults:
+      run:
+        working-directory: fee-forwarder
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fee-forwarder
+
+      - name: Run unit tests
+        run: cargo test
+
+      - name: Install Stellar CLI
+        env:
+          STELLAR_CLI_VERSION: "25.2.0"
+        run: |
+          set -euo pipefail
+          asset="stellar-cli-${STELLAR_CLI_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          url="https://github.com/stellar/stellar-cli/releases/download/v${STELLAR_CLI_VERSION}/${asset}"
+          curl -fsSL "$url" -o /tmp/stellar-cli.tar.gz
+          tar -xzf /tmp/stellar-cli.tar.gz -C /tmp
+          sudo install -m 755 /tmp/stellar /usr/local/bin/stellar
+
+      - name: Build contract
+        run: stellar contract build
+
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: doqtri-fee-forwarder-wasm
+          path: fee-forwarder/target/wasm32v1-none/release/doqtri_fee_forwarder.wasm
+          if-no-files-found: error
+
   app:
     name: App build + unit tests
     runs-on: ubuntu-latest
