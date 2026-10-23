@@ -6,6 +6,15 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: path.resolve(__dirname),
   },
+  async redirects() {
+    return [
+      // A real HTTP redirect: a redirect() inside app/demo/page.tsx streams
+      // (the root loading.tsx) and becomes a slower client-side hop.
+      { source: "/demo", destination: "/demo/welcome", permanent: false },
+      // Browsers still ask for /favicon.ico; the icon is app/icon.svg.
+      { source: "/favicon.ico", destination: "/icon.svg", permanent: true },
+    ];
+  },
 };
 
 export default nextConfig;
