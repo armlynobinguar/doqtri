@@ -1,7 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { extractDocumentText, formatWithModel, type UploadKind } from "@/lib/openai";
 import { generateAndStoreMindmap } from "@/lib/mindmap-store";
-import { deriveTitle, uniqueTitle } from "@/lib/title";
+import { deriveTitle } from "@/lib/title";
+import { insertWorkspaceDocument, personalWorkspaceId } from "@/lib/workspace-docs";
 import { IngestFailure, INGEST_ERRORS } from "@/lib/ingest/errors";
 import type { IngestEvent, IngestStage } from "@/lib/ingest/events";
 
@@ -11,7 +12,8 @@ import type { IngestEvent, IngestStage } from "@/lib/ingest/events";
  * runs and failing with a typed code instead of hanging.
  *
  * Server-only, and runs with the service role: `userId` must come from the
- * verified session, never from the request body.
+ * verified session, never from the request body. The note goes into the
+ * user's personal workspace (WP-1.2); the ingest row stays the uploader's.
  */
 
 function ms(name: string, fallback: number): number {
@@ -124,25 +126,17 @@ export async function runIngest(params: {
 
     // 5. Vault.
     begin("vault");
-    const { data: existing, error: titlesError } = await admin
-      .from("documents")
-      .select("title")
-      .eq("user_id", userId);
-    if (titlesError) throw new IngestFailure("SAVE_FAILED", titlesError.message);
-
-    const title = uniqueTitle(
-      deriveTitle(markdown, source.filename),
-      (existing ?? []).map((row: { title: string }) => row.title),
-    );
-
-    const { data: inserted, error: insertError } = await admin
-      .from("documents")
-      .insert({ user_id: userId, title, markdown })
-      .select("id")
-      .single();
-    if (insertError || !inserted) {
-      throw new IngestFailure("SAVE_FAILED", insertError?.message);
-    }
+    const workspaceId = await personalWorkspaceId(admin, userId).catch((error: Error) => {
+      throw new IngestFailure("SAVE_FAILED", error.message);
+    });
+    const inserted = await insertWorkspaceDocument(admin, {
+      userId,
+      workspaceId,
+      title: deriveTitle(markdown, source.filename),
+      markdown: () => markdown,
+    });
+    if ("error" in inserted) throw new IngestFailure("SAVE_FAILED", inserted.error);
+    const { title } = inserted;
 
     if (ingestId) {
       await admin
@@ -166,7 +160,7 @@ export async function runIngest(params: {
       if (remaining < 5_000) throw new Error("no time left in the request budget");
       await withTimeout(
         (signal) =>
-          generateAndStoreMindmap(admin, { id: inserted.id, userId, title, markdown, signal }),
+          generateAndStoreMindmap(admin, { id: inserted.id, workspaceId, title, markdown, signal }),
         Math.min(remaining, MINDMAP_MAX_MS),
         "MODEL_TIMEOUT",
       );
