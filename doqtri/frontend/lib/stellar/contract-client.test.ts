@@ -39,7 +39,10 @@ vi.mock("@/lib/bindings/doqtri-registry", async (importOriginal) => {
       value: async (args: Record<string, unknown> = {}) => {
         state.calls.push({ fn, args });
         const queue = state.results[fn] ?? [];
-        return { result: queue.length > 1 ? queue.shift() : queue[0], simulation: {}, built: { fee: "100" } };
+        const result = queue.length > 1 ? queue.shift() : queue[0];
+        // An Error queued for a read is the RPC failing.
+        if (result instanceof Error) throw result;
+        return { result, simulation: {}, built: { fee: "100" } };
       },
     });
   }
@@ -227,6 +230,30 @@ describe("with NEXT_PUBLIC_REGISTRY_EDITORS on", () => {
     expect(receipt.workspace).toMatchObject({
       status: "unassigned",
       reason: expect.stringMatching(/only that workspace's owner can move it/),
+    });
+  });
+
+  it("says the ledger couldn't be reached, not that someone else owns the note, when an owner read fails", async () => {
+    const { DoqtriRegistry } = await load(true);
+    const old = "7a000000-0000-4000-8000-0000000000c3";
+    state.results.update_document_as = [2];
+    state.results.get_doc_workspace = [old];
+    state.results.get_workspace = [new Error("rpc down")];
+    const moved = await DoqtriRegistry.updateDocument(wallet, docId, contentHash, team);
+    expect(called()).not.toContain("assign_document");
+    expect(moved.workspace).toEqual({
+      status: "unassigned",
+      reason: "The ledger couldn't be reached to check this note's workspace.",
+    });
+
+    // The same for a note in no workspace whose stored owner can't be read.
+    state.calls = [];
+    state.results = { update_document_as: [3], get_doc_workspace: [undefined], get_document: [new Error("rpc down")] };
+    const unplaced = await DoqtriRegistry.updateDocument(wallet, docId, contentHash, team);
+    expect(called()).not.toContain("assign_document");
+    expect(unplaced.workspace).toEqual({
+      status: "unassigned",
+      reason: "The ledger couldn't be reached to check this note's workspace.",
     });
   });
 
