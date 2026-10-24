@@ -40,6 +40,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261024150000_doc_locks.sql              # NOT yet applied: dry-run on a branch first
 20261024160000_workspace_member_removals.sql  # NOT yet applied (WP-1.8)
 20261025100000_integration_connections.sql    # NOT yet applied (WP-2.3)
+20261025110000_qdit_linking.sql               # NOT yet applied (WP-2.5)
 ```
 
 The remote records its own version stamps (e.g. `20260929114657` for
@@ -135,6 +136,17 @@ Two supporting tables:
   `my_integration_connections()`. `generation` goes up on every token write,
   so concurrent refreshes on different server instances cannot overwrite each
   other's rotated refresh token.
+
+- `public.doc_project_links` — the qdit project a note is linked to (WP-2.5,
+  D-09: one per note), with qdit's name, slug and link id cached. Viewers of
+  the note's workspace read it; only the integration routes write it, with
+  the service role, after checking the caller is an admin (D-10) and with
+  what qdit answered. `node_links` gained a `provider` (`github`, the default
+  for every existing row, or `qdit`) and the qdit milestone's ids; editors
+  still write GitHub rows from the browser, and qdit rows are written by the
+  routes only. Each save remaps moved headings through
+  `apply_node_link_remap()` (R-03), and `qdit_state` says whether qdit has
+  been told yet.
 
 The notes table itself is still the only content store. There are deliberately **no** graph tables: nodes and
 edges are parsed from `markdown` at render time by `lib/wikilinks.ts`, so the
