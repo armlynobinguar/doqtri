@@ -452,6 +452,8 @@ export type NoteWorkspace = {
 export type RegistryAccess = {
   /** The workspace a note belongs to, or null when there is no such note. */
   documentWorkspace(docId: string): Promise<NoteWorkspace | null>;
+  /** Whether a workspace is personal (D-30), or null when there is no such workspace. */
+  workspace(workspaceId: string): Promise<{ personal: boolean } | null>;
   /** The user's current role in a workspace, or null when they are not (or no longer) a member. */
   memberRole(workspaceId: string, userId: string): Promise<WorkspaceRole | null>;
   /** The role of the account holding `address` (a passkey or Freighter wallet), or null. */
@@ -508,7 +510,9 @@ function isOwnerFunction(fn: RegistryFunction): fn is OwnerFunction {
  *   and only the note's creator or the workspace's owner may make them, as
  *   before workspaces had editors.
  * - Creating the on-chain workspace needs an owner; adding or removing an
- *   editor an admin or above; adding or removing an admin an owner. Only an
+ *   editor an admin or above; adding or removing an admin an owner. In a
+ *   personal workspace every one of them needs its owner, since only the
+ *   owner signs there (D-44). Only an
  *   editor (or above) may be given chain write access, and only an admin
  *   (or above) made an on-chain admin, so the chain never holds a role the
  *   database does not.
@@ -565,6 +569,11 @@ export async function authorizeRegistryWrite(
   if (!role) throw new RelayRejection("You aren't a member of that workspace.");
   if (!roleAtLeast(role, min)) {
     throw new RelayRejection(min === "owner" ? "Only a workspace owner can do that." : "Only a workspace admin can do that.");
+  }
+  const workspace = await access.workspace(write.workspaceId);
+  if (!workspace) throw new RelayRejection("You aren't a member of that workspace.");
+  if (workspace.personal && role !== "owner") {
+    throw new RelayRejection("Only the owner of a personal workspace can sign changes to it.");
   }
   if (write.fn === "add_editor" || write.fn === "add_admin") {
     const needed: WorkspaceRole = write.fn === "add_admin" ? "admin" : "editor";

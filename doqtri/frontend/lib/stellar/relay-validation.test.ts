@@ -413,8 +413,10 @@ describe("registry write authorization (workspace roles)", () => {
     [orphanNote]: { workspaceId: team, personal: false, creatorId: null },
   };
   const walletUsers: Record<string, string> = { [editorWallet]: users.editor, [viewerWallet]: users.viewer };
+  const personalWorkspaces = new Set([home]);
   const access: RegistryAccess = {
     documentWorkspace: async (docId) => notes[docId] ?? null,
+    workspace: async (workspaceId) => (roles[workspaceId] ? { personal: personalWorkspaces.has(workspaceId) } : null),
     memberRole: async (workspaceId, userId) => roles[workspaceId]?.[userId] ?? null,
     addressRole: async (workspaceId, address) => {
       const userId = walletUsers[address];
@@ -564,6 +566,22 @@ describe("registry write authorization (workspace roles)", () => {
     await expect(
       authorize({ fn: "remove_editor", workspaceId: team, subject: strangerWallet }, users.admin),
     ).resolves.toBeUndefined();
+  });
+
+  it("lets only the owner of a personal workspace sign its membership calls (D-44)", async () => {
+    const homeCall = (fn: "add_editor" | "remove_editor" | "add_admin" | "remove_admin"): RegistryWrite => ({
+      fn,
+      workspaceId: home,
+      subject: editorWallet,
+    });
+    // The same admin may add an editor to the team, but not to someone's personal workspace.
+    await expect(authorize({ fn: "add_editor", workspaceId: team, subject: editorWallet }, users.admin)).resolves.toBeUndefined();
+    for (const fn of ["add_editor", "remove_editor"] as const) {
+      await expect(authorize(homeCall(fn), users.admin)).rejects.toThrow(/Only the owner of a personal workspace/);
+      await expect(authorize(homeCall(fn), users.owner)).resolves.toBeUndefined();
+    }
+    await expect(authorize(homeCall("remove_admin"), users.owner)).resolves.toBeUndefined();
+    await expect(authorize({ fn: "create_workspace", workspaceId: home, subject: null }, users.owner)).resolves.toBeUndefined();
   });
 
   it("lets only the owner manage admins and create the workspace on-chain", async () => {

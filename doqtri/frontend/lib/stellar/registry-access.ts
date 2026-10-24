@@ -56,6 +56,12 @@ export function registryAccess(admin: SupabaseClient): RegistryAccess {
         creatorId: (data.user_id as string | null | undefined) ?? null,
       };
     },
+    async workspace(workspaceId) {
+      if (!UUID.test(workspaceId)) return null;
+      const { data, error } = await admin.from("workspaces").select("is_personal").eq("id", workspaceId).maybeSingle();
+      if (error) throw new Error(`workspaces lookup failed: ${error.message}`);
+      return data ? { personal: Boolean(data.is_personal) } : null;
+    },
     memberRole,
     async addressRole(workspaceId, address) {
       const userId = await userIdForAddress(address);

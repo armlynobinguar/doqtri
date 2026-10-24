@@ -37,6 +37,7 @@ function appWrites(personal: boolean, editors: boolean): RegistryWrite[] {
 function accessFor(signer: NoteSigner): RegistryAccess {
   return {
     documentWorkspace: async () => ({ workspaceId, personal: signer.personal, creatorId: signer.isAuthor ? me : "u-other" }),
+    workspace: async () => ({ personal: signer.personal }),
     memberRole: async () => signer.role,
     addressRole: async () => null,
   };

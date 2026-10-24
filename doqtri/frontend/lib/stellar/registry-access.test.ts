@@ -96,6 +96,28 @@ describe("registryAccess", () => {
     await expect(registryAccess(stubClient(rows, [])).documentWorkspace(missing)).resolves.toBeNull();
   });
 
+  it("reads whether a workspace is personal", async () => {
+    const queries: Query[] = [];
+    const home = "7a000000-0000-4000-8000-0000000000d2";
+    const withWorkspaces: Rows = {
+      ...rows,
+      workspaces: [
+        { id: team, is_personal: false },
+        { id: home, is_personal: true },
+      ],
+    };
+    const access = registryAccess(stubClient(withWorkspaces, queries));
+    await expect(access.workspace(team)).resolves.toEqual({ personal: false });
+    await expect(access.workspace(home)).resolves.toEqual({ personal: true });
+    await expect(access.workspace("7a000000-0000-4000-8000-0000000000ff")).resolves.toBeNull();
+    await expect(access.workspace("acme")).resolves.toBeNull();
+    expect(queries[0]).toEqual({ table: "workspaces", columns: "is_personal", filters: { id: team } });
+    expect(queries).toHaveLength(3);
+    await expect(registryAccess(stubClient(withWorkspaces, [], "workspaces")).workspace(team)).rejects.toThrow(
+      /workspaces lookup failed/,
+    );
+  });
+
   it("reads the caller's current role from workspace_members", async () => {
     const queries: Query[] = [];
     const access = registryAccess(stubClient(rows, queries));
