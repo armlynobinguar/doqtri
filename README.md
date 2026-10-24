@@ -238,9 +238,25 @@ That rent expires: keep the code entry alive with
 | `get_document(doc_id)` | none | Read anchored document state |
 | `get_node(doc_id, node_id)` | none | Read a node’s build record |
 
+**Workspaces** (on this branch, not yet deployed). Several wallets write the same documents, each
+signing for itself. The owner manages admins; admins and the owner manage editors and the revoker,
+a server key that may only remove editors, so a member removed in the app loses chain access at once.
+
+| Function | Auth | Description |
+| --- | --- | --- |
+| `create_workspace(workspace_id, owner)` | owner | Create a workspace |
+| `add_admin` / `remove_admin(workspace_id, owner, admin)` | workspace owner | Promote a member to admin; remove an admin from the workspace |
+| `add_editor(workspace_id, admin, editor)` | admin or owner | Add an editor |
+| `remove_editor(workspace_id, caller, editor)` | admin, owner or revoker | Remove an editor (never an admin); `false` if there was none |
+| `set_revoker(workspace_id, admin, revoker)` | admin or owner | Set or replace the revoke-only key |
+| `assign_document(doc_id, workspace_id)` | document owner, a member | Let the workspace's members write the document |
+| `update_document_as` / `set_node_status_as` / `anchor_as(signer, …)` | signer: doc owner or a member | The three write calls for any writer; events add the signer as a third topic |
+| `get_workspace`, `get_role`, `get_revoker`, `get_doc_workspace`, `is_editor` | none | Reads |
+
 **Node statuses:** `Planned` · `Building` · `Built` · `Verified`
 
-**Storage keys:** `DataKey::Doc(doc_id)` · `DataKey::Node(doc_id, node_id)`  
+**Storage keys:** `DataKey::Doc(doc_id)` · `DataKey::Node(doc_id, node_id)` · `DataKey::Workspace(workspace_id)` ·
+`DataKey::Member(workspace_id, address)` · `DataKey::Revoker(workspace_id)` · `DataKey::DocWorkspace(doc_id)`  
 **TTL:** threshold 30 days → extend to 90 days on every write (`1 day = 17280` ledgers)
 
 ## Quick start — app (`doqtri/frontend`)
