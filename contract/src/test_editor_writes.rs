@@ -5,7 +5,8 @@
 extern crate std;
 
 use super::*;
-use soroban_sdk::testutils::{Address as _, Events, MockAuth, MockAuthInvoke};
+use soroban_sdk::testutils::storage::Persistent as _;
+use soroban_sdk::testutils::{Address as _, Events, Ledger as _, MockAuth, MockAuthInvoke};
 use soroban_sdk::{symbol_short, vec, Address, BytesN, Env, IntoVal, String, Symbol, TryFromVal, Val, Vec};
 
 struct Setup<'a> {
@@ -17,7 +18,8 @@ struct Setup<'a> {
     editor: Address,
     revoker: Address,
     stranger: Address,
-    /// An editor who anchored `plan` and put it in the workspace.
+    /// An editor who anchored `plan` and put it in the workspace, which
+    /// handed it to the workspace's owner.
     author: Address,
 }
 
@@ -57,7 +59,7 @@ fn setup(env: &Env) -> Setup<'_> {
     t.client.add_admin(&ws, &t.owner, &t.admin);
     t.client.add_editor(&ws, &t.admin, &t.editor);
     t.client.add_editor(&ws, &t.admin, &t.author);
-    t.client.set_revoker(&ws, &t.owner, &t.revoker);
+    t.client.set_revoker(&t.revoker);
     t.client.anchor(&t.author, &t.plan(), &hash(env, 1), &vec![env, update(env, "root", NodeStatus::Planned)]);
     t.client.assign_document(&t.plan(), &ws);
     t
@@ -115,23 +117,40 @@ fn assign_document_records_the_workspace() {
     let t = setup(&env);
     assert_eq!(t.client.get_doc_workspace(&t.plan()), Some(t.ws()));
     assert_eq!(t.client.get_doc_workspace(&s(&env, "other")), None);
-    // The document keeps its owner.
-    assert_eq!(t.client.get_document(&t.plan()).owner, t.author);
+}
+
+/// D-16: a document in a workspace belongs to the workspace's owner, so its
+/// author writes it as a member and loses it when removed.
+#[test]
+fn assign_document_hands_the_document_to_the_workspace_owner() {
+    let env = Env::default();
+    let t = setup(&env);
+    let doc = t.client.get_document(&t.plan());
+    assert_eq!(doc.owner, t.owner);
+    // Nothing else about it changed.
+    assert_eq!((doc.content_hash, doc.version, doc.node_count), (hash(&env, 1), 1, 1));
+    assert_eq!(t.client.get_node(&t.plan(), &s(&env, "root")).status, NodeStatus::Planned);
 }
 
 #[test]
 fn assign_document_needs_the_document_owners_signature() {
     let env = Env::default();
     let t = setup(&env);
-    let plan = t.plan();
     let ws = t.ws();
-
-    t.client.assign_document(&plan, &ws);
-    assert_eq!(t.signer_of_last_call(), t.author);
+    let draft = s(&env, "draft");
+    t.client.register_document(&t.editor, &draft, &hash(&env, 1));
 
     // The workspace owner can't pull someone else's document in.
-    t.only(&t.owner, "assign_document", (plan.clone(), ws.clone()));
-    assert!(t.client.try_assign_document(&plan, &ws).is_err());
+    t.only(&t.owner, "assign_document", (draft.clone(), ws.clone()));
+    assert!(t.client.try_assign_document(&draft, &ws).is_err());
+    assert_eq!(t.client.get_doc_workspace(&draft), None);
+
+    env.mock_all_auths();
+    t.client.assign_document(&draft, &ws);
+    assert_eq!(t.signer_of_last_call(), t.editor);
+    // Assigned, it is the workspace owner's, and assigning it again asks them.
+    t.client.assign_document(&draft, &ws);
+    assert_eq!(t.signer_of_last_call(), t.owner);
 }
 
 #[test]
@@ -144,6 +163,9 @@ fn any_member_may_assign_their_own_document() {
         t.client.register_document(who, &doc_id, &hash(&env, 1));
         t.client.assign_document(&doc_id, &ws);
         assert_eq!(t.client.get_doc_workspace(&doc_id), Some(ws.clone()));
+        assert_eq!(t.client.get_document(&doc_id).owner, t.owner);
+        // The author keeps writing it, now as a member.
+        assert_eq!(t.client.update_document_as(who, &doc_id, &hash(&env, 2)), 2);
     }
 }
 
@@ -160,8 +182,32 @@ fn assign_document_refuses_non_members_and_missing_documents() {
     t.client.register_document(&t.revoker, &revokers, &hash(&env, 1));
     assert_eq!(t.client.try_assign_document(&revokers, &ws), Err(Ok(Error::NotEditor)));
     assert_eq!(t.client.get_doc_workspace(&mine), None);
+    assert_eq!(t.client.get_document(&mine).owner, t.stranger);
 
     assert_eq!(t.client.try_assign_document(&s(&env, "ghost"), &ws), Err(Ok(Error::DocumentNotFound)));
+}
+
+/// Only the workspace's owner, who owns its documents, can move one out;
+/// its author can't take it to a workspace of their own.
+#[test]
+fn a_member_cannot_move_a_document_out_of_the_workspace() {
+    let env = Env::default();
+    let t = setup(&env);
+    let plan = t.plan();
+    let theirs = s(&env, "ws-2");
+    t.client.create_workspace(&theirs, &t.author);
+
+    for who in [&t.author, &t.admin, &t.editor] {
+        t.only(who, "assign_document", (plan.clone(), theirs.clone()));
+        assert!(t.client.try_assign_document(&plan, &theirs).is_err());
+        t.only(who, "unassign_document", (plan.clone(),));
+        assert!(t.client.try_unassign_document(&plan).is_err());
+    }
+    env.mock_all_auths();
+    assert_eq!(t.client.get_doc_workspace(&plan), Some(t.ws()));
+    assert_eq!(t.client.get_document(&plan).owner, t.owner);
+    // And the team still writes it.
+    assert_eq!(t.client.update_document_as(&t.editor, &plan, &hash(&env, 2)), 2);
 }
 
 #[test]
@@ -170,20 +216,55 @@ fn assign_document_moves_a_document_between_workspaces() {
     let t = setup(&env);
     let other = s(&env, "ws-2");
     t.client.create_workspace(&other, &t.author);
+    // The document's owner, ws-1's owner, must be a member of ws-2 to move it there.
+    assert_eq!(t.client.try_assign_document(&t.plan(), &other), Err(Ok(Error::NotEditor)));
+    t.client.add_editor(&other, &t.author, &t.owner);
+
     t.client.assign_document(&t.plan(), &other);
+    assert_eq!(t.signer_of_last_call(), t.owner);
     assert_eq!(t.client.get_doc_workspace(&t.plan()), Some(other));
+    assert_eq!(t.client.get_document(&t.plan()).owner, t.author);
     // ws-1's editors lost the document with the move.
     assert_eq!(t.client.try_update_document_as(&t.editor, &t.plan(), &hash(&env, 2)), Err(Ok(Error::NotEditor)));
 }
 
 #[test]
-fn assign_document_emits_the_document_and_workspace() {
+fn assign_document_emits_the_document_workspace_and_owner() {
     let env = Env::default();
     let t = setup(&env);
     t.client.assign_document(&t.plan(), &t.ws());
     let ev = env.events().all().last().unwrap();
+    assert_eq!(Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap(), symbol_short!("doqtri_ws"));
     assert_eq!(Symbol::try_from_val(&env, &ev.1.get(1).unwrap()).unwrap(), symbol_short!("assign"));
-    assert_eq!(<(String, String)>::try_from_val(&env, &ev.2).unwrap(), (t.plan(), t.ws()));
+    assert_eq!(
+        <(String, String, Address)>::try_from_val(&env, &ev.2).unwrap(),
+        (t.plan(), t.ws(), t.owner.clone())
+    );
+}
+
+// ---- unassign_document -----------------------------------------------------
+
+#[test]
+fn the_owner_unassigns_a_document() {
+    let env = Env::default();
+    let t = setup(&env);
+    let plan = t.plan();
+    assert!(t.client.unassign_document(&plan));
+    assert_eq!(t.signer_of_last_call(), t.owner);
+    let ev = env.events().all().last().unwrap();
+    assert_eq!(Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap(), symbol_short!("doqtri_ws"));
+    assert_eq!(Symbol::try_from_val(&env, &ev.1.get(1).unwrap()).unwrap(), symbol_short!("unassign"));
+    assert_eq!(<(String, String)>::try_from_val(&env, &ev.2).unwrap(), (plan.clone(), t.ws()));
+
+    assert_eq!(t.client.get_doc_workspace(&plan), None);
+    assert_eq!(t.client.get_document(&plan).owner, t.owner);
+    for who in [&t.admin, &t.editor, &t.author] {
+        assert_eq!(t.client.try_update_document_as(who, &plan, &hash(&env, 2)), Err(Ok(Error::NotEditor)));
+    }
+    assert_eq!(t.client.update_document_as(&t.owner, &plan, &hash(&env, 2)), 2);
+    // Again: nothing to do, still succeeds.
+    assert!(!t.client.unassign_document(&plan));
+    assert_eq!(t.client.try_unassign_document(&s(&env, "ghost")), Err(Ok(Error::DocumentNotFound)));
 }
 
 // ---- Writers ---------------------------------------------------------------
@@ -201,7 +282,7 @@ fn members_update_the_document_with_their_own_signature() {
     }
     let doc = t.client.get_document(&plan);
     assert_eq!((doc.version, doc.content_hash), (5, hash(&env, 5)));
-    assert_eq!(doc.owner, t.author);
+    assert_eq!(doc.owner, t.owner);
 }
 
 #[test]
@@ -234,7 +315,7 @@ fn members_anchor_with_their_own_signature() {
     assert_eq!(t.client.anchor_as(&t.admin, &plan, &hash(&env, 2), &Vec::new(&env)), 2);
 
     let doc = t.client.get_document(&plan);
-    assert_eq!((doc.version, doc.node_count, doc.owner), (2, 2, t.author.clone()));
+    assert_eq!((doc.version, doc.node_count, doc.owner), (2, 2, t.owner.clone()));
     assert_eq!(t.client.get_node(&plan, &s(&env, "root")).status, NodeStatus::Built);
 }
 
@@ -309,6 +390,31 @@ fn a_removed_editor_is_refused_at_once() {
     assert_eq!(t.client.get_document(&plan).version, 2);
 }
 
+/// The review's D-16 gap: the member who wrote a document and put it in
+/// the workspace loses it too when removed, through every write call.
+#[test]
+fn a_removed_author_loses_the_document_they_wrote() {
+    let env = Env::default();
+    let t = setup(&env);
+    let plan = t.plan();
+    assert!(t.client.remove_editor(&t.ws(), &t.revoker, &t.author));
+
+    assert_eq!(t.client.try_update_document_as(&t.author, &plan, &hash(&env, 3)), Err(Ok(Error::NotEditor)));
+    assert_eq!(t.set_status(&t.author, "root", NodeStatus::Built), Err(Error::NotEditor));
+    assert_eq!(t.client.try_anchor_as(&t.author, &plan, &hash(&env, 3), &Vec::new(&env)), Err(Ok(Error::NotEditor)));
+    // The owner-only calls are no way back in: the author is not the owner.
+    assert_eq!(t.client.try_anchor(&t.author, &plan, &hash(&env, 3), &Vec::new(&env)), Err(Ok(Error::NotOwner)));
+    t.only(&t.author, "update_document", (plan.clone(), hash(&env, 3)));
+    assert!(t.client.try_update_document(&plan, &hash(&env, 3)).is_err());
+    t.only(&t.author, "assign_document", (plan.clone(), t.ws()));
+    assert!(t.client.try_assign_document(&plan, &t.ws()).is_err());
+
+    env.mock_all_auths();
+    let doc = t.client.get_document(&plan);
+    assert_eq!((doc.version, doc.owner), (1, t.owner.clone()));
+    assert_eq!(t.client.get_node(&plan, &s(&env, "root")).status, NodeStatus::Planned);
+}
+
 #[test]
 fn a_removed_admin_is_refused_at_once() {
     let env = Env::default();
@@ -316,6 +422,16 @@ fn a_removed_admin_is_refused_at_once() {
     assert!(t.client.remove_admin(&t.ws(), &t.owner, &t.admin));
     assert_eq!(t.client.try_update_document_as(&t.admin, &t.plan(), &hash(&env, 3)), Err(Ok(Error::NotEditor)));
     assert_eq!(t.client.try_add_editor(&t.ws(), &t.admin, &t.stranger), Err(Ok(Error::NotWorkspaceAdmin)));
+}
+
+#[test]
+fn an_admin_removed_by_the_revoker_is_refused_at_once() {
+    let env = Env::default();
+    let t = setup(&env);
+    assert!(t.client.remove_admin(&t.ws(), &t.revoker, &t.admin));
+    assert_eq!(t.client.try_update_document_as(&t.admin, &t.plan(), &hash(&env, 3)), Err(Ok(Error::NotEditor)));
+    assert_eq!(t.client.try_add_editor(&t.ws(), &t.admin, &t.stranger), Err(Ok(Error::NotWorkspaceAdmin)));
+    assert_eq!(t.client.try_remove_editor(&t.ws(), &t.admin, &t.editor), Err(Ok(Error::NotWorkspaceAdmin)));
 }
 
 #[test]
@@ -363,31 +479,74 @@ fn as_calls_need_the_signers_own_signature() {
     t.only(&t.stranger, "update_document_as", (t.editor.clone(), plan.clone(), hash(&env, 2)));
     assert!(t.client.try_update_document_as(&t.editor, &plan, &hash(&env, 2)).is_err());
     // The document's owner signs, but the call names the editor.
-    t.only(&t.author, "anchor_as", (t.editor.clone(), plan.clone(), hash(&env, 2), Vec::<NodeUpdate>::new(&env)));
+    t.only(&t.owner, "anchor_as", (t.editor.clone(), plan.clone(), hash(&env, 2), Vec::<NodeUpdate>::new(&env)));
     assert!(t.client.try_anchor_as(&t.editor, &plan, &hash(&env, 2), &Vec::new(&env)).is_err());
 
     assert_eq!(t.client.get_document(&plan).version, 1);
 }
 
-/// The `*_as` calls do not widen the original calls: those stay owner-only.
+/// The `*_as` calls do not widen the original calls: those stay owner-only,
+/// and the owner of a workspace document is the workspace's owner.
 #[test]
 fn the_owner_only_calls_still_refuse_editors() {
     let env = Env::default();
     let t = setup(&env);
     let plan = t.plan();
 
-    assert_eq!(t.client.try_anchor(&t.editor, &plan, &hash(&env, 2), &Vec::new(&env)), Err(Ok(Error::NotOwner)));
-    assert_eq!(t.client.try_anchor(&t.owner, &plan, &hash(&env, 2), &Vec::new(&env)), Err(Ok(Error::NotOwner)));
+    for who in [&t.editor, &t.admin, &t.author] {
+        assert_eq!(t.client.try_anchor(who, &plan, &hash(&env, 2), &Vec::new(&env)), Err(Ok(Error::NotOwner)));
+    }
+    assert_eq!(t.client.anchor(&t.owner, &plan, &hash(&env, 2), &Vec::new(&env)), 2);
 
     // update_document / set_node_status ask the document's owner to sign;
-    // the editor's signature is not enough.
-    t.only(&t.editor, "update_document", (plan.clone(), hash(&env, 2)));
-    assert!(t.client.try_update_document(&plan, &hash(&env, 2)).is_err());
+    // an editor's signature is not enough.
+    t.only(&t.editor, "update_document", (plan.clone(), hash(&env, 3)));
+    assert!(t.client.try_update_document(&plan, &hash(&env, 3)).is_err());
     env.mock_all_auths();
-    t.client.update_document(&plan, &hash(&env, 2));
-    assert_eq!(t.signer_of_last_call(), t.author);
+    t.client.update_document(&plan, &hash(&env, 3));
+    assert_eq!(t.signer_of_last_call(), t.owner);
     t.client.set_node_status(&plan, &s(&env, "root"), &NodeStatus::Built, &s(&env, "x"), &s(&env, "y"));
-    assert_eq!(t.signer_of_last_call(), t.author);
+    assert_eq!(t.signer_of_last_call(), t.owner);
+}
+
+/// A document written only by its owner, through the owner-only calls that
+/// never read the workspace, still keeps its workspace entries alive, so a
+/// member's write or the revoker's removal never finds them archived.
+#[test]
+fn writing_a_document_keeps_its_workspace_alive() {
+    let env = Env::default();
+    let t = setup(&env);
+    let plan = t.plan();
+    let ttls = || {
+        env.as_contract(&t.client.address, || {
+            let store = env.storage().persistent();
+            (
+                store.get_ttl(&DataKey::DocWorkspace(plan.clone())),
+                store.get_ttl(&DataKey::Workspace(t.ws())),
+            )
+        })
+    };
+    let full = 90 * 17280;
+    assert_eq!(ttls(), (full, full));
+    // Keep the contract itself alive across the jumps below; on the network
+    // its code and instance are extended separately.
+    env.as_contract(&t.client.address, || env.storage().instance().extend_ttl(200 * 17280, 200 * 17280));
+
+    // Sixty days on, past the 30-day threshold.
+    let later = 60 * 17280;
+    env.ledger().with_mut(|l| l.sequence_number += later);
+    assert_eq!(ttls(), (full - later, full - later));
+    t.client.anchor(&t.owner, &plan, &hash(&env, 2), &Vec::new(&env));
+    assert_eq!(ttls(), (full, full));
+
+    env.ledger().with_mut(|l| l.sequence_number += later);
+    t.client.update_document(&plan, &hash(&env, 3));
+    assert_eq!(ttls(), (full, full));
+
+    env.ledger().with_mut(|l| l.sequence_number += later);
+    // A node the ledger has not archived ("root" was last written 180 days ago).
+    t.client.set_node_status(&plan, &s(&env, "late"), &NodeStatus::Built, &s(&env, "x"), &s(&env, "y"));
+    assert_eq!(ttls(), (full, full));
 }
 
 /// The `*_as` calls emit the same register / update / node events as the

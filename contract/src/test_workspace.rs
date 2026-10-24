@@ -1,16 +1,18 @@
 #![cfg(test)]
-//! Tests for workspaces: roles, the revoker, document assignment, and the
-//! `*_as` write calls that let workspace members sign their own writes.
+//! Tests for workspaces: roles, the member list, and the revoker.
 
 extern crate std;
 
 use super::*;
+use soroban_sdk::testutils::storage::Instance as _;
 use soroban_sdk::testutils::{Address as _, Events, MockAuth, MockAuthInvoke};
-use soroban_sdk::{symbol_short, vec, Address, BytesN, Env, IntoVal, String, Symbol, TryFromVal, Val, Vec};
+use soroban_sdk::{map, symbol_short, vec, Address, BytesN, Env, IntoVal, String, Symbol, TryFromVal, Val, Vec};
 
 struct Setup<'a> {
     env: &'a Env,
     client: DoqtriRegistryClient<'a>,
+    /// May upgrade the contract and set the revoker.
+    contract_admin: Address,
     /// Owns the workspace and the document `plan`.
     owner: Address,
     admin: Address,
@@ -36,15 +38,17 @@ fn update(env: &Env, node_id: &str, status: NodeStatus) -> NodeUpdate {
     }
 }
 
-/// A workspace `ws` with one admin, one editor and a revoker, and a document
-/// `plan` its owner anchored and assigned to it. Every auth is mocked.
+/// A workspace `ws` with one admin and one editor, the contract-wide
+/// revoker, and a document `plan` its owner anchored and assigned to it.
+/// Every auth is mocked.
 fn setup(env: &Env) -> Setup<'_> {
     env.mock_all_auths();
     let contract_admin = Address::generate(env);
-    let contract_id = env.register(DoqtriRegistry, (contract_admin,));
+    let contract_id = env.register(DoqtriRegistry, (contract_admin.clone(),));
     let t = Setup {
         env,
         client: DoqtriRegistryClient::new(env, &contract_id),
+        contract_admin,
         owner: Address::generate(env),
         admin: Address::generate(env),
         editor: Address::generate(env),
@@ -55,7 +59,7 @@ fn setup(env: &Env) -> Setup<'_> {
     t.client.create_workspace(&ws, &t.owner);
     t.client.add_admin(&ws, &t.owner, &t.admin);
     t.client.add_editor(&ws, &t.admin, &t.editor);
-    t.client.set_revoker(&ws, &t.owner, &t.revoker);
+    t.client.set_revoker(&t.revoker);
     t.client.anchor(&t.owner, &t.plan(), &hash(env, 1), &Vec::new(env));
     t.client.assign_document(&t.plan(), &ws);
     t
@@ -104,6 +108,7 @@ fn create_workspace_records_the_owner() {
 
     let ws = t.client.get_workspace(&other);
     assert_eq!(ws.owner, t.stranger);
+    assert!(ws.members.is_empty());
     assert!(t.client.is_editor(&other, &t.stranger));
     // The owner holds no member role; its rights come from the workspace.
     assert_eq!(t.client.get_role(&other, &t.stranger), None);
@@ -128,10 +133,10 @@ fn unknown_workspaces_are_reported() {
     assert_eq!(t.client.try_remove_admin(&ghost, &t.owner, &t.admin), Err(Ok(Error::WorkspaceNotFound)));
     assert_eq!(t.client.try_add_editor(&ghost, &t.owner, &t.editor), Err(Ok(Error::WorkspaceNotFound)));
     assert_eq!(t.client.try_remove_editor(&ghost, &t.owner, &t.editor), Err(Ok(Error::WorkspaceNotFound)));
-    assert_eq!(t.client.try_set_revoker(&ghost, &t.owner, &t.revoker), Err(Ok(Error::WorkspaceNotFound)));
     assert_eq!(t.client.try_assign_document(&t.plan(), &ghost), Err(Ok(Error::WorkspaceNotFound)));
+    assert_eq!(t.client.try_get_members(&ghost), Err(Ok(Error::WorkspaceNotFound)));
     assert!(!t.client.is_editor(&ghost, &t.owner));
-    assert_eq!(t.client.get_revoker(&ghost), None);
+    assert_eq!(t.client.get_role(&ghost, &t.admin), None);
 }
 
 #[test]
@@ -142,7 +147,7 @@ fn roles_are_readable() {
     assert_eq!(t.client.get_role(&ws, &t.admin), Some(Role::Admin));
     assert_eq!(t.client.get_role(&ws, &t.editor), Some(Role::Editor));
     assert_eq!(t.client.get_role(&ws, &t.stranger), None);
-    assert_eq!(t.client.get_revoker(&ws), Some(t.revoker.clone()));
+    assert_eq!(t.client.get_revoker(), Some(t.revoker.clone()));
     for who in [&t.owner, &t.admin, &t.editor] {
         assert!(t.client.is_editor(&ws, who));
     }
@@ -186,6 +191,10 @@ fn only_the_owner_changes_admins() {
     let ws = t.ws();
     for caller in [&t.admin, &t.editor, &t.revoker, &t.stranger] {
         assert_eq!(t.client.try_add_admin(&ws, caller, &t.stranger), Err(Ok(Error::NotWorkspaceOwner)));
+    }
+    // The revoker may remove admins (see the_revoker_removes_admins); no one
+    // else but the owner may.
+    for caller in [&t.admin, &t.editor, &t.stranger] {
         assert_eq!(t.client.try_remove_admin(&ws, caller, &t.admin), Err(Ok(Error::NotWorkspaceOwner)));
     }
     assert_eq!(t.client.get_role(&ws, &t.admin), Some(Role::Admin));
@@ -278,43 +287,90 @@ fn remove_editor_never_removes_an_admin() {
     assert_eq!(t.client.get_role(&ws, &t.admin), Some(Role::Admin));
 }
 
+/// D-16's revoker is one server key for the whole contract, set by the
+/// contract admin. No workspace's owner or admin can replace it, so a
+/// removed admin can't swap in their own key and add editors it can't
+/// remove.
 #[test]
-fn admins_and_the_owner_set_the_revoker() {
+fn only_the_contract_admin_sets_the_revoker() {
     let env = Env::default();
     let t = setup(&env);
-    let ws = t.ws();
     let next = Address::generate(&env);
 
-    t.client.set_revoker(&ws, &t.admin, &next);
-    assert_eq!(t.signer_of_last_call(), t.admin);
-    assert_eq!(t.client.get_revoker(&ws), Some(next.clone()));
+    for who in [&t.owner, &t.admin, &t.editor, &t.revoker, &t.stranger] {
+        t.only(who, "set_revoker", (who.clone(),));
+        assert!(t.client.try_set_revoker(who).is_err());
+    }
+    assert_eq!(t.client.get_revoker(), Some(t.revoker.clone()));
+
+    t.only(&t.contract_admin, "set_revoker", (next.clone(),));
+    t.client.set_revoker(&next);
+    assert_eq!(t.signer_of_last_call(), t.contract_admin);
+    assert_eq!(t.client.get_revoker(), Some(next.clone()));
 
     // The replaced revoker loses its power at once.
+    env.mock_all_auths();
+    let ws = t.ws();
     assert_eq!(t.client.try_remove_editor(&ws, &t.revoker, &t.editor), Err(Ok(Error::NotWorkspaceAdmin)));
+    assert_eq!(t.client.try_remove_admin(&ws, &t.revoker, &t.admin), Err(Ok(Error::NotWorkspaceOwner)));
     assert!(t.client.remove_editor(&ws, &next, &t.editor));
-
-    for caller in [&t.editor, &t.stranger] {
-        assert_eq!(t.client.try_set_revoker(&ws, caller, caller), Err(Ok(Error::NotWorkspaceAdmin)));
-    }
-    assert_eq!(t.client.get_revoker(&ws), Some(next));
 }
 
 #[test]
-fn a_workspace_without_a_revoker_only_lets_admins_remove() {
+fn the_revoker_works_in_every_workspace() {
     let env = Env::default();
     let t = setup(&env);
     let other = s(&env, "ws-2");
-    t.client.create_workspace(&other, &t.owner);
-    t.client.add_editor(&other, &t.owner, &t.editor);
-    assert_eq!(t.client.get_revoker(&other), None);
-    // The revoker of ws-1 has no say in ws-2.
-    assert_eq!(t.client.try_remove_editor(&other, &t.revoker, &t.editor), Err(Ok(Error::NotWorkspaceAdmin)));
-    assert!(t.client.is_editor(&other, &t.editor));
+    t.client.create_workspace(&other, &t.stranger);
+    t.client.add_editor(&other, &t.stranger, &t.editor);
+    t.client.add_admin(&other, &t.stranger, &t.admin);
+    assert!(t.client.remove_editor(&other, &t.revoker, &t.editor));
+    assert!(t.client.remove_admin(&other, &t.revoker, &t.admin));
+    assert!(t.client.get_members(&other).is_empty());
 }
 
-/// The revoker is a server key: it may remove editors and do nothing else.
 #[test]
-fn the_revoker_can_only_remove_editors() {
+fn with_no_revoker_set_only_admins_and_the_owner_remove() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(DoqtriRegistry, (Address::generate(&env),));
+    let client = DoqtriRegistryClient::new(&env, &contract_id);
+    let (owner, admin, editor, someone) =
+        (Address::generate(&env), Address::generate(&env), Address::generate(&env), Address::generate(&env));
+    let ws = s(&env, "ws-1");
+    client.create_workspace(&ws, &owner);
+    client.add_admin(&ws, &owner, &admin);
+    client.add_editor(&ws, &owner, &editor);
+
+    assert_eq!(client.get_revoker(), None);
+    assert_eq!(client.try_remove_editor(&ws, &someone, &editor), Err(Ok(Error::NotWorkspaceAdmin)));
+    assert_eq!(client.try_remove_admin(&ws, &someone, &admin), Err(Ok(Error::NotWorkspaceOwner)));
+    assert!(client.remove_editor(&ws, &admin, &editor));
+    assert!(client.remove_admin(&ws, &owner, &admin));
+}
+
+/// The revoker closes the gap where only the owner could remove an admin:
+/// an admin removed in the app loses chain access with one server call.
+#[test]
+fn the_revoker_removes_admins() {
+    let env = Env::default();
+    let t = setup(&env);
+    let ws = t.ws();
+    assert!(t.client.remove_admin(&ws, &t.revoker, &t.admin));
+    assert_eq!(t.signer_of_last_call(), t.revoker);
+    assert_eq!(t.client.get_role(&ws, &t.admin), None);
+    assert!(!t.client.is_editor(&ws, &t.admin));
+    // Retried: nothing left, still succeeds.
+    assert!(!t.client.remove_admin(&ws, &t.revoker, &t.admin));
+    // It is not remove_editor's job, and the revoker can't remove the owner.
+    assert!(!t.client.remove_admin(&ws, &t.revoker, &t.editor));
+    assert_eq!(t.client.get_role(&ws, &t.editor), Some(Role::Editor));
+    assert_eq!(t.client.try_remove_admin(&ws, &t.revoker, &t.owner), Err(Ok(Error::TargetIsOwner)));
+}
+
+/// The revoker is a server key: it may remove members and do nothing else.
+#[test]
+fn the_revoker_can_only_remove_members() {
     let env = Env::default();
     let t = setup(&env);
     let ws = t.ws();
@@ -324,9 +380,11 @@ fn the_revoker_can_only_remove_editors() {
     assert_eq!(t.client.try_add_editor(&ws, r, &newcomer), Err(Ok(Error::NotWorkspaceAdmin)));
     assert_eq!(t.client.try_add_admin(&ws, r, &newcomer), Err(Ok(Error::NotWorkspaceOwner)));
     assert_eq!(t.client.try_add_admin(&ws, r, r), Err(Ok(Error::NotWorkspaceOwner)));
-    assert_eq!(t.client.try_remove_admin(&ws, r, &t.admin), Err(Ok(Error::NotWorkspaceOwner)));
-    assert_eq!(t.client.try_set_revoker(&ws, r, &newcomer), Err(Ok(Error::NotWorkspaceAdmin)));
     assert_eq!(t.client.try_remove_editor(&ws, r, &t.admin), Err(Ok(Error::TargetIsAdmin)));
+    // set_revoker asks the contract admin, not the revoker.
+    t.only(r, "set_revoker", (newcomer.clone(),));
+    assert!(t.client.try_set_revoker(&newcomer).is_err());
+    env.mock_all_auths();
 
     let plan = t.plan();
     assert_eq!(t.client.try_update_document_as(r, &plan, &hash(&env, 9)), Err(Ok(Error::NotEditor)));
@@ -339,17 +397,91 @@ fn the_revoker_can_only_remove_editors() {
         Err(Ok(Error::NotEditor))
     );
     assert_eq!(t.client.try_anchor(r, &plan, &hash(&env, 9), &Vec::new(&env)), Err(Ok(Error::NotOwner)));
+    // Moving or unassigning the document asks its owner, not the revoker.
+    let other = s(&env, "ws-2");
+    t.client.create_workspace(&other, r);
+    t.only(r, "assign_document", (plan.clone(), other.clone()));
+    assert!(t.client.try_assign_document(&plan, &other).is_err());
+    t.only(r, "unassign_document", (plan.clone(),));
+    assert!(t.client.try_unassign_document(&plan).is_err());
+    env.mock_all_auths();
 
     // Nothing moved.
     assert_eq!(t.client.get_role(&ws, &newcomer), None);
     assert_eq!(t.client.get_role(&ws, r), None);
     assert_eq!(t.client.get_role(&ws, &t.admin), Some(Role::Admin));
-    assert_eq!(t.client.get_revoker(&ws), Some(r.clone()));
+    assert_eq!(t.client.get_revoker(), Some(r.clone()));
+    assert_eq!(t.client.get_doc_workspace(&plan), Some(ws.clone()));
     let doc = t.client.get_document(&plan);
     assert_eq!((doc.version, doc.content_hash, doc.node_count), (1, hash(&env, 1), 0));
 
     // What it may do, it can.
     assert!(t.client.remove_editor(&ws, r, &t.editor));
+    assert!(t.client.remove_admin(&ws, r, &t.admin));
+}
+
+// ---- The member list -------------------------------------------------------
+
+/// D-15: the member list is on-chain and readable whole, so the app can
+/// reconcile it against its own, including members an admin added
+/// directly on-chain.
+#[test]
+fn get_members_lists_every_member_and_role() {
+    let env = Env::default();
+    let t = setup(&env);
+    let ws = t.ws();
+    assert_eq!(
+        t.client.get_members(&ws),
+        map![&env, (t.admin.clone(), Role::Admin), (t.editor.clone(), Role::Editor)]
+    );
+    assert_eq!(t.client.get_workspace(&ws).members, t.client.get_members(&ws));
+
+    t.client.add_editor(&ws, &t.admin, &t.stranger);
+    t.client.add_admin(&ws, &t.owner, &t.editor);
+    assert!(t.client.remove_admin(&ws, &t.revoker, &t.admin));
+    assert_eq!(
+        t.client.get_members(&ws),
+        map![&env, (t.editor.clone(), Role::Admin), (t.stranger.clone(), Role::Editor)]
+    );
+    assert!(t.client.remove_editor(&ws, &t.revoker, &t.stranger));
+    assert_eq!(t.client.get_members(&ws), map![&env, (t.editor.clone(), Role::Admin)]);
+}
+
+#[test]
+fn a_workspace_holds_at_most_max_members() {
+    let env = Env::default();
+    let t = setup(&env);
+    let ws = t.ws();
+    // setup added two.
+    for _ in 2..MAX_MEMBERS {
+        t.client.add_editor(&ws, &t.admin, &Address::generate(&env));
+    }
+    assert_eq!(t.client.get_members(&ws).len(), MAX_MEMBERS);
+
+    let one_more = Address::generate(&env);
+    assert_eq!(t.client.try_add_editor(&ws, &t.admin, &one_more), Err(Ok(Error::TooManyMembers)));
+    assert_eq!(t.client.try_add_admin(&ws, &t.owner, &one_more), Err(Ok(Error::TooManyMembers)));
+    // Changing an existing member's role, or re-adding one, is still fine.
+    t.client.add_admin(&ws, &t.owner, &t.editor);
+    t.client.add_editor(&ws, &t.admin, &t.editor);
+    assert_eq!(t.client.get_members(&ws).len(), MAX_MEMBERS);
+
+    // A removal frees a place.
+    assert!(t.client.remove_admin(&ws, &t.revoker, &t.editor));
+    t.client.add_editor(&ws, &t.admin, &one_more);
+    assert_eq!(t.client.get_role(&ws, &one_more), Some(Role::Editor));
+}
+
+/// A removal by the revoker keeps the contract instance, where the revoker
+/// lives, from expiring, so the server's next removal needs no restore.
+#[test]
+fn a_revoker_removal_extends_the_instance() {
+    let env = Env::default();
+    let t = setup(&env);
+    let ttl = || env.as_contract(&t.client.address, || env.storage().instance().get_ttl());
+    assert!(ttl() < 30 * 17280);
+    t.client.remove_editor(&t.ws(), &t.revoker, &t.editor);
+    assert_eq!(ttl(), 90 * 17280);
 }
 
 /// With no mocked signatures, every role change is refused by the host.
@@ -366,14 +498,17 @@ fn workspace_calls_need_a_signature() {
     assert!(t.client.try_remove_admin(&ws, &t.owner, &t.admin).is_err());
     assert!(t.client.try_add_editor(&ws, &t.admin, &newcomer).is_err());
     assert!(t.client.try_remove_editor(&ws, &t.revoker, &t.editor).is_err());
-    assert!(t.client.try_set_revoker(&ws, &t.admin, &newcomer).is_err());
+    assert!(t.client.try_remove_admin(&ws, &t.revoker, &t.admin).is_err());
+    assert!(t.client.try_set_revoker(&newcomer).is_err());
     assert!(t.client.try_assign_document(&t.plan(), &ws).is_err());
+    assert!(t.client.try_unassign_document(&t.plan()).is_err());
 
     assert!(t.client.try_get_workspace(&s(&env, "ws-2")).is_err());
     assert_eq!(t.client.get_role(&ws, &newcomer), None);
     assert_eq!(t.client.get_role(&ws, &t.admin), Some(Role::Admin));
     assert_eq!(t.client.get_role(&ws, &t.editor), Some(Role::Editor));
-    assert_eq!(t.client.get_revoker(&ws), Some(t.revoker.clone()));
+    assert_eq!(t.client.get_revoker(), Some(t.revoker.clone()));
+    assert_eq!(t.client.get_doc_workspace(&t.plan()), Some(ws));
 }
 
 /// Naming someone else as the caller doesn't help: the host asks that
@@ -398,6 +533,8 @@ fn a_signature_from_another_address_does_not_count() {
     assert_eq!(t.client.get_role(&ws, &newcomer), None);
 }
 
+/// Workspace events have their own first topic, `doqtri_ws`, so the
+/// `doqtri` events keep a doc_id as their value.
 #[test]
 fn workspace_events_carry_the_workspace_subject_and_caller() {
     let env = Env::default();
@@ -405,13 +542,18 @@ fn workspace_events_carry_the_workspace_subject_and_caller() {
     let ws = t.ws();
     let newcomer = Address::generate(&env);
 
+    let topics = |ev: &(Address, Vec<Val>, Val)| -> (Symbol, Symbol) {
+        assert_eq!(ev.1.len(), 2);
+        (
+            Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap(),
+            Symbol::try_from_val(&env, &ev.1.get(1).unwrap()).unwrap(),
+        )
+    };
     let last = |action: Symbol, subject: &Address, caller: &Address| {
         let events = env.events().all();
         assert_eq!(events.len(), 1);
         let ev = events.last().unwrap();
-        assert_eq!(ev.1.len(), 2);
-        assert_eq!(Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap(), symbol_short!("doqtri"));
-        assert_eq!(Symbol::try_from_val(&env, &ev.1.get(1).unwrap()).unwrap(), action);
+        assert_eq!(topics(&ev), (symbol_short!("doqtri_ws"), action));
         let value = <(String, Address, Address)>::try_from_val(&env, &ev.2).unwrap();
         assert_eq!(value, (ws.clone(), subject.clone(), caller.clone()));
     };
@@ -424,15 +566,21 @@ fn workspace_events_carry_the_workspace_subject_and_caller() {
     last(symbol_short!("admin_add"), &newcomer, &t.owner);
     t.client.remove_admin(&ws, &t.owner, &newcomer);
     last(symbol_short!("admin_rm"), &newcomer, &t.owner);
-    t.client.set_revoker(&ws, &t.admin, &newcomer);
-    last(symbol_short!("revoker"), &newcomer, &t.admin);
+    t.client.add_admin(&ws, &t.owner, &newcomer);
+    t.client.remove_admin(&ws, &t.revoker, &newcomer);
+    last(symbol_short!("admin_rm"), &newcomer, &t.revoker);
 
     let other = s(&env, "ws-2");
     t.client.create_workspace(&other, &newcomer);
     let ev = env.events().all().last().unwrap();
-    assert_eq!(Symbol::try_from_val(&env, &ev.1.get(1).unwrap()).unwrap(), symbol_short!("ws_create"));
+    assert_eq!(topics(&ev), (symbol_short!("doqtri_ws"), symbol_short!("ws_create")));
     assert_eq!(
         <(String, Address, Address)>::try_from_val(&env, &ev.2).unwrap(),
-        (other, newcomer.clone(), newcomer)
+        (other, newcomer.clone(), newcomer.clone())
     );
+
+    t.client.set_revoker(&newcomer);
+    let ev = env.events().all().last().unwrap();
+    assert_eq!(topics(&ev), (symbol_short!("doqtri_ws"), symbol_short!("revoker")));
+    assert_eq!(Address::try_from_val(&env, &ev.2).unwrap(), newcomer);
 }

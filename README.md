@@ -239,24 +239,34 @@ That rent expires: keep the code entry alive with
 | `get_node(doc_id, node_id)` | none | Read a node’s build record |
 
 **Workspaces** (on this branch, not yet deployed). Several wallets write the same documents, each
-signing for itself. The owner manages admins; admins and the owner manage editors and the revoker,
-a server key that may only remove editors, so a member removed in the app loses chain access at once.
+signing for itself. The owner manages admins; admins and the owner manage editors. The revoker is one
+contract-wide server key, set by the contract admin, that may only remove members (editors and admins),
+so a member removed in the app loses chain access at once. A document put in a workspace becomes the
+workspace owner's: its author then writes it as a member, and loses it when removed.
 
 | Function | Auth | Description |
 | --- | --- | --- |
-| `create_workspace(workspace_id, owner)` | owner | Create a workspace |
-| `add_admin` / `remove_admin(workspace_id, owner, admin)` | workspace owner | Promote a member to admin; remove an admin from the workspace |
-| `add_editor(workspace_id, admin, editor)` | admin or owner | Add an editor |
+| `create_workspace(workspace_id, owner)` | owner | Create a workspace; ids are first come, first served, so check `get_workspace` after |
+| `add_admin(workspace_id, owner, admin)` | workspace owner | Make a member (or anyone) an admin |
+| `remove_admin(workspace_id, caller, admin)` | workspace owner or revoker | Remove an admin from the workspace; `false` if there was none |
+| `add_editor(workspace_id, admin, editor)` | admin or owner | Add an editor; at most `MAX_MEMBERS` (100) members |
 | `remove_editor(workspace_id, caller, editor)` | admin, owner or revoker | Remove an editor (never an admin); `false` if there was none |
-| `set_revoker(workspace_id, admin, revoker)` | admin or owner | Set or replace the revoke-only key |
-| `assign_document(doc_id, workspace_id)` | document owner, a member | Let the workspace's members write the document |
-| `update_document_as` / `set_node_status_as` / `anchor_as(signer, …)` | signer: doc owner or a member | The three write calls for any writer; events add the signer as a third topic |
-| `get_workspace`, `get_role`, `get_revoker`, `get_doc_workspace`, `is_editor` | none | Reads |
+| `set_revoker(revoker)` | contract admin | Set or replace the revoke-only server key |
+| `assign_document(doc_id, workspace_id)` | document owner, a member | Let the workspace's members write the document; hands it to the workspace owner |
+| `unassign_document(doc_id)` | document owner | Take the document out of its workspace; `false` if it was in none |
+| `update_document_as` / `set_node_status_as` / `anchor_as(signer, …)` | signer: doc owner or a member | The three write calls for any writer |
+| `get_workspace`, `get_members`, `get_role`, `get_revoker`, `get_doc_workspace`, `is_editor` | none | Reads; `get_members` is the whole on-chain member list |
+
+**Events.** `(doqtri, register | update | node)` events always carry the `doc_id` as their value; the
+`*_as` calls add the signer as a third topic. Workspace events use their own first topic, `doqtri_ws`:
+`ws_create`, `admin_add`, `admin_rm`, `edit_add`, `edit_rm` carry `(workspace_id, subject, caller)`;
+`assign` carries `(doc_id, workspace_id, new_owner)`, `unassign` `(doc_id, workspace_id)`, and
+`revoker` the new revoker's address.
 
 **Node statuses:** `Planned` · `Building` · `Built` · `Verified`
 
-**Storage keys:** `DataKey::Doc(doc_id)` · `DataKey::Node(doc_id, node_id)` · `DataKey::Workspace(workspace_id)` ·
-`DataKey::Member(workspace_id, address)` · `DataKey::Revoker(workspace_id)` · `DataKey::DocWorkspace(doc_id)`  
+**Storage keys:** `DataKey::Doc(doc_id)` · `DataKey::Node(doc_id, node_id)` · `DataKey::Workspace(workspace_id)`
+(owner and members) · `DataKey::DocWorkspace(doc_id)` · instance: `DataKey::Admin`, `DataKey::Revoker`  
 **TTL:** threshold 30 days → extend to 90 days on every write (`1 day = 17280` ledgers)
 
 ## Quick start — app (`doqtri/frontend`)

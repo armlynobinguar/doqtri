@@ -1,7 +1,7 @@
 #![no_std]
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
-    String, Symbol, Vec,
+    Map, String, Symbol, Vec,
 };
 
 #[contracterror]
@@ -18,10 +18,11 @@ pub enum Error {
     /// `create_workspace` was given an id that is already taken.
     WorkspaceAlreadyExists = 6,
     WorkspaceNotFound = 7,
-    /// The call needs the workspace's owner (admin changes).
+    /// The call needs the workspace's owner (`add_admin`), or for
+    /// `remove_admin` the owner or the revoker.
     NotWorkspaceOwner = 8,
-    /// The call needs a workspace admin or its owner (editor changes,
-    /// `set_revoker`), or for `remove_editor` also the workspace's revoker.
+    /// The call needs a workspace admin or its owner (`add_editor`), or for
+    /// `remove_editor` also the revoker.
     NotWorkspaceAdmin = 9,
     /// An `*_as` signer is neither the document's owner nor a member of the
     /// workspace the document is assigned to; `assign_document` was asked to
@@ -30,9 +31,11 @@ pub enum Error {
     /// The workspace owner's rights come from the workspace itself and can't
     /// be added or removed as a member role.
     TargetIsOwner = 11,
-    /// `remove_editor` never removes an admin; the owner does that with
-    /// `remove_admin`.
+    /// `remove_editor` never removes an admin; the owner or the revoker
+    /// does that with `remove_admin`.
     TargetIsAdmin = 12,
+    /// The workspace already has `MAX_MEMBERS` members.
+    TooManyMembers = 13,
 }
 
 /// Lifecycle of a mindmap node, from plan to verified deployment.
@@ -76,17 +79,21 @@ pub struct NodeUpdate {
     pub artifact_ref: String,
 }
 
-/// A shared space whose members may write each other's documents. Its owner
-/// is fixed at creation and holds every right in it.
+/// A shared space whose members may write its documents. Its owner is fixed
+/// at creation, holds every right in it, and owns every document in it.
+/// `members` is the on-chain member list (D-15): every address with a role,
+/// the owner aside, at most `MAX_MEMBERS` of them, so it can be read whole
+/// to audit who holds write access.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Workspace {
     pub owner: Address,
     pub created_at: u64,
+    pub members: Map<Address, Role>,
 }
 
 /// A workspace member's role. Both may write the workspace's documents;
-/// an admin may also add and remove editors and set the revoker.
+/// an admin may also add and remove editors.
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Role {
@@ -103,13 +110,11 @@ pub enum DataKey {
     Node(String, String),
     /// Who may `upgrade` the contract and `import_*` documents (instance storage).
     Admin,
-    /// workspace_id -> `Workspace`.
+    /// workspace_id -> `Workspace`, members included.
     Workspace(String),
-    /// (workspace_id, address) -> `Role`. The owner never has one.
-    Member(String, Address),
-    /// workspace_id -> the address that may only `remove_editor` there
-    /// (the app's revoke-only server key).
-    Revoker(String),
+    /// The app's revoke-only server key (instance storage, contract-wide):
+    /// it may only remove members, in any workspace. Set by the contract admin.
+    Revoker,
     /// doc_id -> workspace_id whose members may write the document.
     DocWorkspace(String),
 }
@@ -117,6 +122,10 @@ pub enum DataKey {
 /// Most node updates one `anchor` call takes, so a single transaction stays
 /// well inside Soroban's resource limits.
 pub const MAX_NODES_PER_CALL: u32 = 32;
+
+/// Most members (admins and editors; the owner aside) one workspace holds,
+/// so its entry, read by every member write, stays a few kilobytes.
+pub const MAX_MEMBERS: u32 = 100;
 
 const DAY_IN_LEDGERS: u32 = 17280;
 const TTL_THRESHOLD: u32 = DAY_IN_LEDGERS * 30;
@@ -138,6 +147,23 @@ fn store_doc(env: &Env, doc_id: &String, doc: &Document) {
     env.storage()
         .persistent()
         .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND);
+    touch_doc_workspace(env, doc_id);
+}
+
+/// Keeps a document's workspace entries alive as long as the document is
+/// written, even when only its owner writes it (whose writes never read
+/// them), so a member's write or the revoker's removal never finds them
+/// archived.
+fn touch_doc_workspace(env: &Env, doc_id: &String) {
+    let ws_key = DataKey::DocWorkspace(doc_id.clone());
+    let workspace_id: Option<String> = env.storage().persistent().get(&ws_key);
+    if let Some(workspace_id) = workspace_id {
+        touch(env, &ws_key);
+        let key = DataKey::Workspace(workspace_id);
+        if env.storage().persistent().has(&key) {
+            touch(env, &key);
+        }
+    }
 }
 
 /// Writes one node record; returns true when the node is new to the document.
@@ -186,23 +212,25 @@ fn load_workspace(env: &Env, workspace_id: &String) -> Result<Workspace, Error> 
     Ok(ws)
 }
 
-fn member_role(env: &Env, workspace_id: &String, who: &Address) -> Option<Role> {
-    let key = DataKey::Member(workspace_id.clone(), who.clone());
-    let role = env.storage().persistent().get(&key);
-    if role.is_some() {
-        touch(env, &key);
+fn store_workspace(env: &Env, workspace_id: &String, ws: &Workspace) {
+    persist(env, &DataKey::Workspace(workspace_id.clone()), ws);
+}
+
+/// True when `who` is the contract-wide revoker. A removal it authorizes
+/// also keeps the contract instance, where it is stored, from expiring.
+fn is_revoker(env: &Env, who: &Address) -> bool {
+    let revoker: Option<Address> = env.storage().instance().get(&DataKey::Revoker);
+    if revoker.as_ref() == Some(who) {
+        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND);
+        true
+    } else {
+        false
     }
-    role
 }
 
 /// Fails unless `who` is the workspace's owner or one of its admins.
-fn check_workspace_admin(
-    env: &Env,
-    workspace_id: &String,
-    ws: &Workspace,
-    who: &Address,
-) -> Result<(), Error> {
-    if *who == ws.owner || member_role(env, workspace_id, who) == Some(Role::Admin) {
+fn check_workspace_admin(ws: &Workspace, who: &Address) -> Result<(), Error> {
+    if *who == ws.owner || ws.members.get(who.clone()) == Some(Role::Admin) {
         Ok(())
     } else {
         Err(Error::NotWorkspaceAdmin)
@@ -210,12 +238,14 @@ fn check_workspace_admin(
 }
 
 /// True when `who` may write the workspace's documents: its owner or any member.
-fn is_workspace_writer(env: &Env, workspace_id: &String, ws: &Workspace, who: &Address) -> bool {
-    *who == ws.owner || member_role(env, workspace_id, who).is_some()
+fn is_workspace_writer(ws: &Workspace, who: &Address) -> bool {
+    *who == ws.owner || ws.members.contains_key(who.clone())
 }
 
 /// Fails unless `signer` may write `doc`: its owner, or the owner or a member
-/// of the workspace it is assigned to.
+/// of the workspace it is assigned to. A document in a workspace is owned by
+/// the workspace's owner (`assign_document`), so the owner check never lets
+/// a removed member back in.
 fn check_writer(env: &Env, doc_id: &String, doc: &Document, signer: &Address) -> Result<(), Error> {
     if *signer == doc.owner {
         return Ok(());
@@ -228,7 +258,7 @@ fn check_writer(env: &Env, doc_id: &String, doc: &Document, signer: &Address) ->
         .ok_or(Error::NotEditor)?;
     touch(env, &ws_key);
     let ws = load_workspace(env, &workspace_id)?;
-    if is_workspace_writer(env, &workspace_id, &ws, signer) {
+    if is_workspace_writer(&ws, signer) {
         Ok(())
     } else {
         Err(Error::NotEditor)
@@ -237,7 +267,8 @@ fn check_writer(env: &Env, doc_id: &String, doc: &Document, signer: &Address) ->
 
 /// Publishes a document event. The owner-only calls keep their original
 /// two-topic shape; the `*_as` calls add the signer as a third topic so an
-/// indexer can tell who wrote, and filter by it.
+/// indexer can tell who wrote, and filter by it. The value is always the
+/// doc_id.
 fn publish_doc_event(env: &Env, action: Symbol, signer: Option<&Address>, doc_id: &String) {
     match signer {
         None => env
@@ -250,7 +281,12 @@ fn publish_doc_event(env: &Env, action: Symbol, signer: Option<&Address>, doc_id
     }
 }
 
-/// Publishes a workspace event: value is (workspace_id, subject, caller).
+/// First topic of every workspace event. Kept apart from `doqtri`, whose
+/// event value is always a doc_id, so a consumer of document events never
+/// meets a workspace tuple.
+const WS_TOPIC: Symbol = symbol_short!("doqtri_ws");
+
+/// Publishes a membership event: value is (workspace_id, subject, caller).
 fn publish_ws_event(
     env: &Env,
     action: Symbol,
@@ -259,7 +295,7 @@ fn publish_ws_event(
     caller: &Address,
 ) {
     env.events().publish(
-        (symbol_short!("doqtri"), action),
+        (WS_TOPIC, action),
         (workspace_id.clone(), subject.clone(), caller.clone()),
     );
 }
@@ -450,6 +486,7 @@ impl DoqtriRegistry {
         env.storage()
             .persistent()
             .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND);
+        touch_doc_workspace(&env, &doc_id);
 
         // Emit doc_id (not version) — matches register/node and web chain-sync.
         env.events()
@@ -498,6 +535,7 @@ impl DoqtriRegistry {
                 .persistent()
                 .extend_ttl(&doc_key, TTL_THRESHOLD, TTL_EXTEND);
         }
+        touch_doc_workspace(&env, &doc_id);
 
         // Emit doc_id so vault sync can refresh the parent plan (node details via get_node).
         env.events()
@@ -525,15 +563,19 @@ impl DoqtriRegistry {
     //
     // A workspace lets several wallets write the same documents, each with
     // its own signature. Roles: the owner (fixed at creation) manages admins;
-    // admins and the owner manage editors and the revoker; every member may
-    // write the documents assigned to the workspace. The revoker is a
-    // server key that may only `remove_editor`, so a member removed in the
-    // app loses chain access at once without waiting for an admin to sign.
+    // admins and the owner manage editors; every member may write the
+    // documents assigned to the workspace, which the workspace's owner owns.
+    // The revoker is one contract-wide server key, set by the contract
+    // admin, that may only remove members (editors and admins), so a member
+    // removed in the app loses chain access at once without waiting for an
+    // admin or the owner to sign (D-16).
     //
     // The owner-only calls above are unchanged: workspace writes go through
     // the `*_as` calls, which name their signer.
 
-    /// Creates a workspace owned by `owner`. Fails if the id is taken.
+    /// Creates a workspace owned by `owner`, with no members. Fails if the
+    /// id is taken. Ids are first come, first served: the app reads
+    /// `get_workspace` after creating one to check it got it.
     pub fn create_workspace(env: Env, workspace_id: String, owner: Address) -> Result<(), Error> {
         owner.require_auth();
         let key = DataKey::Workspace(workspace_id.clone());
@@ -543,8 +585,9 @@ impl DoqtriRegistry {
         let ws = Workspace {
             owner: owner.clone(),
             created_at: env.ledger().timestamp(),
+            members: Map::new(&env),
         };
-        persist(&env, &key, &ws);
+        store_workspace(&env, &workspace_id, &ws);
         publish_ws_event(
             &env,
             symbol_short!("ws_create"),
@@ -563,18 +606,18 @@ impl DoqtriRegistry {
         admin: Address,
     ) -> Result<(), Error> {
         owner.require_auth();
-        let ws = load_workspace(&env, &workspace_id)?;
+        let mut ws = load_workspace(&env, &workspace_id)?;
         if owner != ws.owner {
             return Err(Error::NotWorkspaceOwner);
         }
         if admin == ws.owner {
             return Err(Error::TargetIsOwner);
         }
-        persist(
-            &env,
-            &DataKey::Member(workspace_id.clone(), admin.clone()),
-            &Role::Admin,
-        );
+        if !ws.members.contains_key(admin.clone()) && ws.members.len() >= MAX_MEMBERS {
+            return Err(Error::TooManyMembers);
+        }
+        ws.members.set(admin.clone(), Role::Admin);
+        store_workspace(&env, &workspace_id, &ws);
         publish_ws_event(
             &env,
             symbol_short!("admin_add"),
@@ -586,33 +629,34 @@ impl DoqtriRegistry {
     }
 
     /// Removes `admin` from the workspace altogether (to keep them as an
-    /// editor, `add_editor` them after). Owner only. Returns false, changing
-    /// nothing, when `admin` is not an admin.
+    /// editor, `add_editor` them after). `caller` must be the owner or the
+    /// revoker. Returns false, changing nothing, when `admin` is not an
+    /// admin, so a retried removal still succeeds.
     pub fn remove_admin(
         env: Env,
         workspace_id: String,
-        owner: Address,
+        caller: Address,
         admin: Address,
     ) -> Result<bool, Error> {
-        owner.require_auth();
-        let ws = load_workspace(&env, &workspace_id)?;
-        if owner != ws.owner {
+        caller.require_auth();
+        let mut ws = load_workspace(&env, &workspace_id)?;
+        if caller != ws.owner && !is_revoker(&env, &caller) {
             return Err(Error::NotWorkspaceOwner);
         }
         if admin == ws.owner {
             return Err(Error::TargetIsOwner);
         }
-        let key = DataKey::Member(workspace_id.clone(), admin.clone());
-        if env.storage().persistent().get::<_, Role>(&key) != Some(Role::Admin) {
+        if ws.members.get(admin.clone()) != Some(Role::Admin) {
             return Ok(false);
         }
-        env.storage().persistent().remove(&key);
+        ws.members.remove(admin.clone());
+        store_workspace(&env, &workspace_id, &ws);
         publish_ws_event(
             &env,
             symbol_short!("admin_rm"),
             &workspace_id,
             &admin,
-            &owner,
+            &caller,
         );
         Ok(true)
     }
@@ -626,17 +670,19 @@ impl DoqtriRegistry {
         editor: Address,
     ) -> Result<(), Error> {
         admin.require_auth();
-        let ws = load_workspace(&env, &workspace_id)?;
-        check_workspace_admin(&env, &workspace_id, &ws, &admin)?;
+        let mut ws = load_workspace(&env, &workspace_id)?;
+        check_workspace_admin(&ws, &admin)?;
         if editor == ws.owner {
             return Err(Error::TargetIsOwner);
         }
-        let key = DataKey::Member(workspace_id.clone(), editor.clone());
-        if env.storage().persistent().has(&key) {
-            touch(&env, &key);
+        if ws.members.contains_key(editor.clone()) {
             return Ok(());
         }
-        persist(&env, &key, &Role::Editor);
+        if ws.members.len() >= MAX_MEMBERS {
+            return Err(Error::TooManyMembers);
+        }
+        ws.members.set(editor.clone(), Role::Editor);
+        store_workspace(&env, &workspace_id, &ws);
         publish_ws_event(
             &env,
             symbol_short!("edit_add"),
@@ -648,8 +694,8 @@ impl DoqtriRegistry {
     }
 
     /// Removes `editor` from the workspace. `caller` must be a workspace
-    /// admin, the owner, or the workspace's revoker. Never removes an admin
-    /// or the owner. Returns false, changing nothing, when `editor` is not a
+    /// admin, the owner, or the revoker. Never removes an admin or the
+    /// owner. Returns false, changing nothing, when `editor` is not a
     /// member, so a retried removal still succeeds.
     pub fn remove_editor(
         env: Env,
@@ -658,23 +704,19 @@ impl DoqtriRegistry {
         editor: Address,
     ) -> Result<bool, Error> {
         caller.require_auth();
-        let ws = load_workspace(&env, &workspace_id)?;
-        let revoker: Option<Address> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Revoker(workspace_id.clone()));
-        if revoker.as_ref() != Some(&caller) {
-            check_workspace_admin(&env, &workspace_id, &ws, &caller)?;
+        let mut ws = load_workspace(&env, &workspace_id)?;
+        if !is_revoker(&env, &caller) {
+            check_workspace_admin(&ws, &caller)?;
         }
         if editor == ws.owner {
             return Err(Error::TargetIsOwner);
         }
-        let key = DataKey::Member(workspace_id.clone(), editor.clone());
-        match env.storage().persistent().get::<_, Role>(&key) {
+        match ws.members.get(editor.clone()) {
             None => Ok(false),
             Some(Role::Admin) => Err(Error::TargetIsAdmin),
             Some(Role::Editor) => {
-                env.storage().persistent().remove(&key);
+                ws.members.remove(editor.clone());
+                store_workspace(&env, &workspace_id, &ws);
                 publish_ws_event(
                     &env,
                     symbol_short!("edit_rm"),
@@ -687,46 +729,59 @@ impl DoqtriRegistry {
         }
     }
 
-    /// Sets (or replaces) the workspace's revoker, the one address besides
-    /// admins and the owner that may `remove_editor`, and nothing else.
-    /// `admin` must be a workspace admin or the owner.
-    pub fn set_revoker(
-        env: Env,
-        workspace_id: String,
-        admin: Address,
-        revoker: Address,
-    ) -> Result<(), Error> {
-        admin.require_auth();
-        let ws = load_workspace(&env, &workspace_id)?;
-        check_workspace_admin(&env, &workspace_id, &ws, &admin)?;
-        persist(&env, &DataKey::Revoker(workspace_id.clone()), &revoker);
-        publish_ws_event(
-            &env,
-            symbol_short!("revoker"),
-            &workspace_id,
-            &revoker,
-            &admin,
-        );
-        Ok(())
+    /// Sets (or replaces) the contract-wide revoker: the app's server key,
+    /// which may remove editors and admins from any workspace, and nothing
+    /// else. Contract admin only, so no workspace admin can swap it out.
+    pub fn set_revoker(env: Env, revoker: Address) {
+        require_admin(&env);
+        env.storage().instance().set(&DataKey::Revoker, &revoker);
+        env.events()
+            .publish((WS_TOPIC, symbol_short!("revoker")), revoker);
     }
 
     /// Puts a document in a workspace, so the workspace's members may write
     /// it through the `*_as` calls; a document already in one moves. The
     /// document's owner signs and must be a member (or the owner) of the
-    /// workspace. The document keeps its owner.
+    /// workspace. The workspace's owner becomes the document's owner: its
+    /// author then writes it as a member, so removing them from the
+    /// workspace removes their write access to it too, and it can leave the
+    /// workspace only with its owner's signature.
     pub fn assign_document(env: Env, doc_id: String, workspace_id: String) -> Result<(), Error> {
-        let doc = load_doc(&env, &doc_id)?;
+        let mut doc = load_doc(&env, &doc_id)?;
         doc.owner.require_auth();
         let ws = load_workspace(&env, &workspace_id)?;
-        if !is_workspace_writer(&env, &workspace_id, &ws, &doc.owner) {
+        if !is_workspace_writer(&ws, &doc.owner) {
             return Err(Error::NotEditor);
         }
         persist(&env, &DataKey::DocWorkspace(doc_id.clone()), &workspace_id);
+        if doc.owner != ws.owner {
+            doc.owner = ws.owner.clone();
+            store_doc(&env, &doc_id, &doc);
+        }
         env.events().publish(
-            (symbol_short!("doqtri"), symbol_short!("assign")),
-            (doc_id, workspace_id),
+            (WS_TOPIC, symbol_short!("assign")),
+            (doc_id, workspace_id, ws.owner),
         );
         Ok(())
+    }
+
+    /// Takes a document out of its workspace; its members can no longer
+    /// write it. It stays with its owner, the workspace's owner. Owner only.
+    /// Returns false, changing nothing, when it is in no workspace.
+    pub fn unassign_document(env: Env, doc_id: String) -> Result<bool, Error> {
+        let doc = load_doc(&env, &doc_id)?;
+        doc.owner.require_auth();
+        let key = DataKey::DocWorkspace(doc_id.clone());
+        let workspace_id: Option<String> = env.storage().persistent().get(&key);
+        let Some(workspace_id) = workspace_id else {
+            return Ok(false);
+        };
+        env.storage().persistent().remove(&key);
+        env.events().publish(
+            (WS_TOPIC, symbol_short!("unassign")),
+            (doc_id, workspace_id),
+        );
+        Ok(true)
     }
 
     /// `update_document` for any writer of the document: its owner, or the
@@ -781,7 +836,8 @@ impl DoqtriRegistry {
 
     /// `anchor` for any writer of the document. A new document is registered
     /// with `signer` as its owner, as `anchor` does; `assign_document` then
-    /// puts it in a workspace. `signer` must sign.
+    /// puts it in a workspace and hands it to the workspace's owner.
+    /// `signer` must sign.
     pub fn anchor_as(
         env: Env,
         signer: Address,
@@ -796,7 +852,7 @@ impl DoqtriRegistry {
         anchor_doc(&env, signer, doc_id, content_hash, nodes, true)
     }
 
-    /// A workspace's owner and creation time.
+    /// A workspace's owner, creation time and members.
     pub fn get_workspace(env: Env, workspace_id: String) -> Result<Workspace, Error> {
         env.storage()
             .persistent()
@@ -804,19 +860,23 @@ impl DoqtriRegistry {
             .ok_or(Error::WorkspaceNotFound)
     }
 
-    /// `who`'s member role in the workspace; none for the owner and for
-    /// non-members.
-    pub fn get_role(env: Env, workspace_id: String, who: Address) -> Option<Role> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Member(workspace_id, who))
+    /// Every member of the workspace and their role, the owner aside: the
+    /// list to reconcile the app's members against.
+    pub fn get_members(env: Env, workspace_id: String) -> Result<Map<Address, Role>, Error> {
+        Ok(Self::get_workspace(env, workspace_id)?.members)
     }
 
-    /// The workspace's revoker, if one is set.
-    pub fn get_revoker(env: Env, workspace_id: String) -> Option<Address> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Revoker(workspace_id))
+    /// `who`'s member role in the workspace; none for the owner, for
+    /// non-members and for an unknown workspace.
+    pub fn get_role(env: Env, workspace_id: String, who: Address) -> Option<Role> {
+        Self::get_workspace(env, workspace_id)
+            .ok()
+            .and_then(|ws| ws.members.get(who))
+    }
+
+    /// The contract-wide revoker, if one is set.
+    pub fn get_revoker(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::Revoker)
     }
 
     /// The workspace a document is assigned to, if any.
@@ -829,20 +889,9 @@ impl DoqtriRegistry {
     /// True when `who` may write the workspace's documents: its owner, an
     /// admin or an editor. False for an unknown workspace.
     pub fn is_editor(env: Env, workspace_id: String, who: Address) -> bool {
-        let ws: Option<Workspace> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Workspace(workspace_id.clone()));
-        match ws {
-            Some(ws) => {
-                who == ws.owner
-                    || env
-                        .storage()
-                        .persistent()
-                        .has(&DataKey::Member(workspace_id, who))
-            }
-            None => false,
-        }
+        Self::get_workspace(env, workspace_id)
+            .map(|ws| is_workspace_writer(&ws, &who))
+            .unwrap_or(false)
     }
 }
 
