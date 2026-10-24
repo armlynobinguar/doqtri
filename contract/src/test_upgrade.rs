@@ -133,6 +133,16 @@ fn assert_old_records_work_after_upgrade(env: &Env, t: &Legacy) {
     assert_eq!(client.get_document(&legacy).version, 4);
     // Registering an old id is still refused.
     assert_eq!(client.try_register_document(&t.owner, &legacy, &hash(env, 1)), Err(Ok(Error::DocumentAlreadyExists)));
+
+    // A transfer moves the old records with the workspace, without
+    // rewriting them: the old owner-only calls now ask the new owner.
+    let heir = Address::generate(env);
+    client.transfer_workspace(&ws, &t.owner, &heir);
+    assert_eq!(client.get_document(&legacy).owner, heir);
+    assert_eq!(client.update_document(&legacy, &hash(env, 5)), 5);
+    assert_eq!(env.auths()[0].0, heir);
+    assert_eq!(client.try_anchor(&t.owner, &anchored, &hash(env, 10), &Vec::new(env)), Err(Ok(Error::NotOwner)));
+    assert_eq!(client.anchor(&heir, &anchored, &hash(env, 10), &Vec::new(env)), 4);
 }
 
 /// Swaps in this crate's code at the v2 contract's address. The test host

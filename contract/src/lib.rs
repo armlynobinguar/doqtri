@@ -794,7 +794,10 @@ impl DoqtriRegistry {
         new_owner: Address,
     ) -> Result<(), Error> {
         owner.require_auth();
-        new_owner.require_auth();
+        // One address can't authorize the same call twice.
+        if new_owner != owner {
+            new_owner.require_auth();
+        }
         let ws = load_workspace(&env, &workspace_id)?;
         if owner != ws.owner {
             return Err(Error::NotWorkspaceOwner);
@@ -1004,3 +1007,4 @@ mod test_anchor;
 mod test_workspace;
 mod test_editor_writes;
 mod test_upgrade;
+mod test_transfer;
