@@ -17,11 +17,15 @@
 --                           email later, then holds a passkey wallet
 --   h  held@example.com     an account that never confirms its email
 --   g  guest@example.com    an editor of x's personal workspace
+--   k  anchored@example.com holds a passkey wallet and anchored a personal note
+--
+-- Email invites start off, as they ship (D-49); the tests switch them on
+-- once they have checked that.
 
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(150);
+select plan(165);
 
 -- Confirmed emails, except where a test says otherwise (D-49).
 insert into auth.users (id, email, email_confirmed_at) values
@@ -58,8 +62,8 @@ grant select on ids to authenticated, service_role;
 
 select ok((select bool_and(relrowsecurity) from pg_class
             where oid in ('public.workspace_invites'::regclass, 'public.workspace_transfers'::regclass,
-                          'public.workspace_chain_jobs'::regclass)),
-  'RLS is enabled on invites, transfers and chain jobs');
+                          'public.workspace_chain_jobs'::regclass, 'public.invite_settings'::regclass)),
+  'RLS is enabled on invites, transfers, chain jobs and the invite settings');
 select ok(
   (select bool_and(p.prosecdef and p.proconfig @> array['search_path=""'])
      from pg_proc p
@@ -70,7 +74,7 @@ select ok(
                         'accept_workspace_invite', 'cancel_workspace_invite', 'set_workspace_member_role',
                         'remove_workspace_member', 'propose_workspace_transfer', 'cancel_workspace_transfer',
                         'accept_workspace_transfer', 'claim_workspace_chain_jobs',
-                        'invite_identifier', 'my_invite_identifiers',
+                        'invite_identifier', 'my_invite_identifiers', 'email_invites_enabled',
                         'handle_deleted_user_workspaces')),
   'every new security definer function pins search_path to empty');
 select is(
@@ -82,8 +86,8 @@ select is(
                         'accept_workspace_invite', 'cancel_workspace_invite', 'set_workspace_member_role',
                         'remove_workspace_member', 'propose_workspace_transfer', 'cancel_workspace_transfer',
                         'accept_workspace_transfer', 'claim_workspace_chain_jobs',
-                        'invite_identifier', 'my_invite_identifiers')),
-  19, 'and they all exist');
+                        'invite_identifier', 'my_invite_identifiers', 'email_invites_enabled')),
+  20, 'and they all exist');
 
 select ok(not has_function_privilege('anon',
   'public.invite_workspace_member(uuid, text, public.workspace_role)', 'execute'),
@@ -108,6 +112,11 @@ select ok(not has_function_privilege('authenticated', 'public.enqueue_chain_revo
   'authenticated cannot queue chain jobs directly');
 select ok(not has_function_privilege('authenticated', 'public.account_chain_address(uuid, text)', 'execute'),
   'authenticated cannot read wallets directly');
+select ok(has_function_privilege('authenticated', 'public.email_invites_enabled()', 'execute'),
+  'authenticated can ask whether email invites are on');
+select ok(not has_table_privilege('authenticated', 'public.invite_settings', 'select')
+          and not has_table_privilege('authenticated', 'public.invite_settings', 'update'),
+  'but neither reads nor switches the setting');
 
 
 -- ---------------------------------------------------------------------------
@@ -168,8 +177,23 @@ select throws_ok(
   $$ select public.invite_workspace_member('11000000-0000-4000-8000-000000000001', 'late@example.com', 'viewer') $$,
   '42501', null, 'an editor cannot invite');
 
--- admin
+-- admin, with email invites off as they ship (D-49)
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a2","role":"authenticated"}';
+select is(public.email_invites_enabled(), false, 'email invites ship switched off');
+select throws_ok(
+  $$ select public.invite_workspace_member('11000000-0000-4000-8000-000000000001', 'late@example.com', 'viewer') $$,
+  '22023', 'Invites by email are off for now. Invite them by their wallet address.',
+  'so an admin cannot invite by email: with confirmations off, whoever registered it would take the invite');
+select throws_ok(
+  $$ select public.invite_workspace_member('11000000-0000-4000-8000-000000000001', 'editor@example.com', 'viewer') $$,
+  '22023', null, 'not even an email that already has an account, which would say so');
+select is((select count(*)::int from public.workspace_invites), 0, 'nothing was invited');
+
+-- An operator switches them on once "Confirm email" is on.
+reset role;
+update public.invite_settings set email_invites = true;
+set local role authenticated;
+select is(public.email_invites_enabled(), true, 'the operator switches email invites on');
 select throws_ok(
   $$ select public.invite_workspace_member('11000000-0000-4000-8000-000000000001', 'late@example.com', 'owner') $$,
   '22023', null, 'nobody is invited as owner');
@@ -623,8 +647,11 @@ reset role;
 create temp table newcomer_invite as
   select id from public.workspace_invites where invitee = 'newcomer@example.com';
 grant select on newcomer_invite to authenticated;
--- Signing up is not owning the inbox: with confirmations off the account is
--- signed in before it has confirmed anything (D-49).
+-- An account whose email is not confirmed has not shown it owns the inbox
+-- (D-49). With "Confirm email" on, which email invites require, that is an
+-- account still waiting on its mail, or one an admin made unconfirmed. (With
+-- it off Supabase confirms at signup, so this check alone would not help:
+-- that is what the invite_settings switch is for.)
 insert into auth.users (id, email) values ('00000000-0000-4000-8000-0000000000a8', 'newcomer@example.com');
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a8","role":"authenticated"}';
@@ -642,6 +669,26 @@ select results_eq(
   $$ select workspace_name, role::text from public.my_workspace_invites() $$,
   $$ values ('Probe'::text, 'editor'::text) $$,
   'once the email is confirmed, its account finds the invite');
+
+-- Switched off again, email invites are neither sent nor delivered.
+reset role;
+update public.invite_settings set email_invites = false;
+set local role authenticated;
+select is((select count(*)::int from public.my_workspace_invites()), 0,
+  'with email invites switched off again, an open one is not delivered');
+select throws_ok(
+  $$ select public.accept_workspace_invite((select id from newcomer_invite)) $$,
+  'P0002', null, 'nor accepted');
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a5","role":"authenticated"}';
+select is((select count(*)::int from public.workspace_pending_invites((select id from probe))
+            where label = 'newcomer@example.com'),
+  1, 'it stays listed for the admin to withdraw');
+reset role;
+update public.invite_settings set email_invites = true;
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a8","role":"authenticated"}';
+select is((select count(*)::int from public.my_workspace_invites()), 1,
+  'and is delivered again once they are back on');
 
 -- Nobody floods strangers with invites.
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a5","role":"authenticated"}';
@@ -813,6 +860,37 @@ select lives_ok(
   'an unconfirmed account deletes itself');
 select is((select count(*)::int from public.workspace_invites where invitee = 'held@example.com'),
   1, 'and the invite to the email it never confirmed stays open');
+
+
+-- ---------------------------------------------------------------------------
+-- Deleting an account whose personal workspace holds an anchored note
+-- ---------------------------------------------------------------------------
+
+-- k holds a passkey wallet and anchored a personal note through the relay.
+insert into auth.users (id, email, email_confirmed_at)
+  values ('00000000-0000-4000-8000-0000000000ab', 'anchored@example.com', now());
+insert into public.smart_wallets (user_id, network, address, created_tx) values
+  ('00000000-0000-4000-8000-0000000000ab', 'testnet', 'C' || repeat('K', 55), repeat('e', 64));
+insert into public.documents (id, user_id, workspace_id, title, markdown)
+  select '31000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-0000000000ab', w.id, 'Kept', '# Kept'
+    from public.workspaces w
+   where w.is_personal and w.created_by = '00000000-0000-4000-8000-0000000000ab';
+insert into public.chain_writes (network, tx_hash, document_id, fn, owner) values
+  ('testnet', repeat('f', 64), '31000000-0000-4000-8000-000000000001', 'anchor', 'C' || repeat('K', 55));
+
+select throws_ok(
+  $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000ab' $$,
+  '23001', 'this account''s personal workspace holds 1 note(s) anchored on Stellar',
+  'an account whose personal note is anchored is refused, and told why');
+select is((select count(*)::int from public.smart_wallets where user_id = '00000000-0000-4000-8000-0000000000ab'),
+  1, 'its passkey wallet is kept');
+select is((select count(*)::int from public.documents where id = '31000000-0000-4000-8000-000000000001'),
+  1, 'and so is the note, with its record');
+
+delete from public.chain_writes where document_id = '31000000-0000-4000-8000-000000000001';
+select lives_ok(
+  $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000ab' $$,
+  'with nothing anchored, the same account deletes itself (D-51)');
 
 select * from finish();
 rollback;

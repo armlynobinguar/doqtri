@@ -5,10 +5,10 @@
 -- in them (WP-1.2) and members holding on-chain rights (WP-1.3, WP-1.4) it
 -- is not:
 --
--- 1. Nobody joins without consent. An admin invites (by email or wallet
---    address) and the invitee accepts; there is no longer any client insert
---    into workspace_members. Admins may invite as viewer, editor or admin,
---    as before, never as owner.
+-- 1. Nobody joins without consent. An admin invites (by wallet address, or
+--    by email once email invites are switched on, below) and the invitee
+--    accepts; there is no longer any client insert into workspace_members.
+--    Admins may invite as viewer, editor or admin, as before, never as owner.
 --
 -- 2. A team workspace has exactly one owner, as it does on-chain (the
 --    registry's Workspace has one `owner`). Ownership moves only by a
@@ -106,19 +106,51 @@ create index workspace_invites_invited_by_idx on public.workspace_invites (invit
 
 alter table public.workspace_invites enable row level security;
 
+-- Email invites are off until Supabase's "Confirm email" is on (D-49).
+--
+-- An invite can wait for an email nobody has signed up with, so whoever
+-- registers that address and signs in with it takes the invite, at its
+-- role (admin, even). Only a confirmation mail proves they own the inbox,
+-- and the database cannot see the auth setting: with "Confirm email" off
+-- (mailer_autoconfirm), Supabase sets email_confirmed_at at signup, so the
+-- column alone proves nothing. Until an operator, having turned
+-- confirmations on, runs
+--
+--   update public.invite_settings set email_invites = true;
+--
+-- invites go only to wallet addresses, which the service role records only
+-- after the wallet has signed (backend/README.md, Auth configuration).
+-- Turning it off again stops email invites from being sent or delivered;
+-- the open ones stay listed for their admins to withdraw.
+create table public.invite_settings (
+  id            boolean primary key default true check (id),
+  email_invites boolean not null default false
+);
+
+insert into public.invite_settings (id) values (true);
+
+-- No policies: only the service role and the SQL editor read or write it.
+alter table public.invite_settings enable row level security;
+
+create function public.email_invites_enabled()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select coalesce((select s.email_invites from public.invite_settings s), false);
+$$;
+
 -- Every identifier an account can be invited by: its email (not a wallet
 -- account's synthetic one) once confirmed, its Stellar account and its
--- passkey wallets.
+-- passkey wallets. This is the account's own list whatever the switch
+-- above says: account deletion uses it to drop invites to all of them
+-- (D-50). With confirmations on, an email is the account's only once
+-- confirmed (D-49); with them off every email counts as confirmed, which
+-- is why delivery also needs the switch.
 --
--- The email counts only once confirmed (D-49). An invite can wait for an
--- email nobody has signed up with, and with confirmations off Supabase
--- signs a new account in at once; without the check, whoever registered
--- the address first would take the invite, at its role, without owning
--- the inbox. Wallet addresses need no such check: the service role writes
--- them only after the wallet has signed.
---
--- Internal: account deletion uses it for any account; clients reach only
--- my_invite_identifiers() below.
+-- Internal: clients reach only my_invite_identifiers() below.
 create function public.invite_identifiers_of(p_user_id uuid)
 returns text[]
 language sql
@@ -141,7 +173,9 @@ as $$
     ) x;
 $$;
 
--- The caller's own invite identifiers. Only ever the caller's.
+-- The identifiers the caller's invites are delivered to: their wallets,
+-- and their confirmed email while email invites are on. Only ever the
+-- caller's.
 create function public.my_invite_identifiers()
 returns text[]
 language sql
@@ -149,7 +183,9 @@ stable
 security definer
 set search_path = ''
 as $$
-  select public.invite_identifiers_of((select auth.uid()));
+  select coalesce(array_agg(x.identifier), '{}'::text[])
+    from unnest(public.invite_identifiers_of((select auth.uid()))) x (identifier)
+   where x.identifier ~ '^[GC]' or public.email_invites_enabled();
 $$;
 
 -- The invitee sees the invites addressed to them; admins and owners see
@@ -490,10 +526,12 @@ $$;
 -- invite waits for whoever signs in with it. The one exception is someone
 -- already in the workspace (23505), whom the admin sees on the roster
 -- anyway. An inviter has at most 100 invites sent in the last day open at
--- once (54000), so nobody floods strangers with them.
+-- once (54000), so nobody floods strangers with them. An email is refused
+-- while email invites are off (invite_settings).
 --
--- Errors: 42501 not allowed, 22023 owner or a malformed identifier, 23505
--- already a member, 54000 too many open invites.
+-- Errors: 42501 not allowed, 22023 owner, a malformed identifier or an
+-- email while email invites are off, 23505 already a member, 54000 too many
+-- open invites.
 create function public.invite_workspace_member(
   p_workspace_id uuid,
   p_identifier   text,
@@ -520,6 +558,10 @@ begin
   end if;
 
   v_invitee := public.invite_identifier(p_identifier);
+  if v_invitee !~ '^[GC]' and not public.email_invites_enabled() then
+    raise exception 'Invites by email are off for now. Invite them by their wallet address.'
+      using errcode = '22023';
+  end if;
   v_user := public.find_account(v_invitee);
   if v_user is not null and exists (
     select 1 from public.workspace_members m
@@ -843,6 +885,15 @@ $$;
 --
 -- WP-1.2's version, with these additions:
 --
+-- * An account whose personal workspace holds a note anchored through the
+--   relay is refused up front (restrict_violation, with a hint), as
+--   WP-1.2's check refuses one holding other people's notes. The registry
+--   has no delete, so an anchored note is kept with its record, as the
+--   note delete route keeps it (app/api/notes/[id]); chain_writes'
+--   `on delete restrict` would refuse the deletion anyway, further down
+--   and with nothing to say why. Notes anchored straight from a Freighter
+--   wallet leave no chain_writes row, so the database cannot see them;
+--   the delete-account route has to ask the ledger, as the note route does.
 -- * Before anything cascades, the account's editor and admin roles in every
 --   workspace, someone else's personal one included, are queued for
 --   revocation, while its wallets are still on record (wallet_accounts
@@ -859,7 +910,9 @@ $$;
 --   smart_wallets keeps `on delete restrict` against auth.users, so no path
 --   but this one drops a wallet record. The ledger keeps the wallet's
 --   history, and chain_writes, which does not reference the record, keeps
---   the index of its writes.
+--   the index of its writes. Most passkey holders have anchored a personal
+--   note, though, and are refused by the first point: the wallet is
+--   retired only for those who have not.
 -- * Each team workspace handed to its longest-standing admin also queues
 --   the on-chain `admin_reassign_owner` (D-36) to that admin's wallet. A
 --   handover still open from an earlier one (the heir is now deleting their
@@ -873,9 +926,10 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_ws     record;
-  v_admin  uuid;
-  v_others integer;
+  v_ws       record;
+  v_admin    uuid;
+  v_others   integer;
+  v_anchored integer;
 begin
   select count(*) into v_others
     from public.documents d
@@ -887,6 +941,18 @@ begin
       v_others
       using errcode = 'restrict_violation',
             hint = 'Delete those notes, or have their authors copy them out, then delete the account.';
+  end if;
+
+  select count(distinct d.id) into v_anchored
+    from public.documents d
+    join public.workspaces w on w.id = d.workspace_id
+    join public.chain_writes c on c.document_id = d.id
+   where w.is_personal and w.created_by = old.id;
+  if v_anchored > 0 then
+    raise exception 'this account''s personal workspace holds % note(s) anchored on Stellar',
+      v_anchored
+      using errcode = 'restrict_violation',
+            hint = 'An anchored note is kept with its on-chain record, which cannot be deleted, so the account stays too.';
   end if;
 
   perform public.enqueue_chain_revocation(m.workspace_id, old.id)
@@ -970,6 +1036,10 @@ revoke execute on function public.invite_identifier(text) from public, anon, aut
 -- caller's own identifiers.
 revoke execute on function public.my_invite_identifiers() from public, anon;
 grant execute on function public.my_invite_identifiers() to authenticated, service_role;
+-- The members screen asks it to word the invite box; it says nothing about
+-- anyone.
+revoke execute on function public.email_invites_enabled() from public, anon;
+grant execute on function public.email_invites_enabled() to authenticated, service_role;
 revoke execute on function public.account_label(uuid) from public, anon, authenticated;
 revoke execute on function public.account_chain_address(uuid, text) from public, anon, authenticated;
 grant execute on function public.account_chain_address(uuid, text) to service_role;
@@ -1002,6 +1072,7 @@ grant execute on function public.cancel_workspace_transfer(uuid) to authenticate
 
 -- Clients read these tables only through their select policies; every write
 -- goes through the functions above or the service role.
+revoke all on public.invite_settings from anon, authenticated;
 revoke insert, update, delete, truncate on public.workspace_invites from anon, authenticated;
 revoke insert, update, delete, truncate on public.workspace_transfers from anon, authenticated;
 revoke insert, update, delete, truncate on public.workspace_chain_jobs from anon, authenticated;

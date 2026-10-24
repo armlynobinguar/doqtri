@@ -88,6 +88,21 @@ describe("parseInviteIdentifier", () => {
   });
 });
 
+describe("parseInviteIdentifier with email invites off (D-49)", () => {
+  it("still takes wallets", () => {
+    expect(parseInviteIdentifier(G, { email: false })).toEqual({ ok: true, value: G });
+    expect(parseInviteIdentifier(C("Q"), { email: false })).toEqual({ ok: true, value: C("Q") });
+  });
+
+  it("refuses emails, saying why", () => {
+    expect(parseInviteIdentifier("ada@example.com", { email: false })).toEqual({
+      ok: false,
+      error: "Invites by email are off for now. Invite them by their wallet address.",
+    });
+    expect(parseInviteIdentifier("ada", { email: false })).toEqual({ ok: false, error: "That isn't a Stellar wallet address." });
+  });
+});
+
 describe("memberChainState", () => {
   const team = { editors: true, personal: false };
   const chain = { owner: owner.address!, members: { [admin.address!]: "admin" as const, [editor.address!]: "editor" as const } };

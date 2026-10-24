@@ -86,17 +86,24 @@ const WALLET = /^[GC][A-Z2-7]{55}$/;
 
 /**
  * What the invite box accepts: an email address, a Stellar account (G...) or
- * a passkey wallet (C...). doqtri has no usernames.
+ * a passkey wallet (C...). doqtri has no usernames. Emails only while the
+ * database has email invites switched on (`email_invites_enabled()`, D-49),
+ * which needs Supabase's "Confirm email" on; the database refuses them
+ * otherwise too.
  */
-export function parseInviteIdentifier(input: string): ParsedInvite {
+export function parseInviteIdentifier(input: string, { email = true }: { email?: boolean } = {}): ParsedInvite {
   const value = input.trim();
-  if (!value) return { ok: false, error: "Enter an email address or a wallet address." };
+  if (!value) return { ok: false, error: email ? "Enter an email address or a wallet address." : "Enter a wallet address." };
   if (WALLET.test(value.toUpperCase()) && !value.includes("@")) return { ok: true, value: value.toUpperCase() };
   if (EMAIL.test(value)) {
     if (isReservedEmail(value)) return { ok: false, error: "Invite a wallet account by its wallet address." };
+    if (!email) return { ok: false, error: "Invites by email are off for now. Invite them by their wallet address." };
     return { ok: true, value };
   }
-  return { ok: false, error: "That isn't an email address or a Stellar wallet address." };
+  return {
+    ok: false,
+    error: email ? "That isn't an email address or a Stellar wallet address." : "That isn't a Stellar wallet address.",
+  };
 }
 
 /** Who signs an on-chain grant: `add_editor` an admin or the owner, `add_admin` the owner. */

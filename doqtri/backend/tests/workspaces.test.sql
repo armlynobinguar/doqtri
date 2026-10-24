@@ -758,7 +758,9 @@ select set_eq(
 -- joined_at decides the succession, so no client can choose it. w, beta's
 -- latest admin, tries to add o as an admin backdated to 1960 and to backdate
 -- themselves; neither moves anyone ahead of n. Since WP-1.5 no client
--- inserts a membership at all; o joins by accepting an invite, today.
+-- inserts a membership at all; o joins by accepting an invite, today. The
+-- invite is by email, which WP-1.5 ships switched off (D-49).
+update public.invite_settings set email_invites = true;
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000006","role":"authenticated"}';
 select throws_ok(

@@ -71,9 +71,11 @@ type Loaded = {
   myInvites: MyInvite[];
   transfer: Transfer | null;
   jobs: ChainJobRow[];
+  /** Whether invites by email are switched on (D-49); off until "Confirm email" is. */
+  emailInvites: boolean;
 };
 
-const EMPTY: Loaded = { roster: [], invites: [], myInvites: [], transfer: null, jobs: [] };
+const EMPTY: Loaded = { roster: [], invites: [], myInvites: [], transfer: null, jobs: [], emailInvites: false };
 
 /** Who someone is, for a list row: their email, or a shortened wallet. */
 function nameOf(label: string | null, address?: string | null): string {
@@ -83,7 +85,7 @@ function nameOf(label: string | null, address?: string | null): string {
 
 async function loadAll(workspaceId: string): Promise<Loaded> {
   const supabase = createSupabaseBrowserClient();
-  const [roster, invites, mine, transfer, jobs] = await Promise.all([
+  const [roster, invites, mine, transfer, jobs, emailInvites] = await Promise.all([
     supabase.rpc("workspace_roster", { p_workspace_id: workspaceId, p_network: NETWORK }),
     supabase.rpc("workspace_pending_invites", { p_workspace_id: workspaceId }),
     supabase.rpc("my_workspace_invites"),
@@ -98,8 +100,9 @@ async function loadAll(workspaceId: string): Promise<Loaded> {
       .eq("workspace_id", workspaceId)
       .in("status", ["pending", "needs_product_owner", "failed"])
       .order("created_at", { ascending: false }),
+    supabase.rpc("email_invites_enabled"),
   ]);
-  const failed = [roster, invites, mine, transfer, jobs].find((r) => r.error);
+  const failed = [roster, invites, mine, transfer, jobs, emailInvites].find((r) => r.error);
   if (failed?.error) throw new Error(failed.error.message);
 
   type Row = Record<string, unknown>;
@@ -143,6 +146,7 @@ async function loadAll(workspaceId: string): Promise<Loaded> {
       attempts: Number(r.attempts ?? 0),
       createdAt: r.created_at as string,
     })),
+    emailInvites: emailInvites.data === true,
   };
 }
 
@@ -238,13 +242,15 @@ export function MembersView({
     act(
       "invite",
       async () => {
-        const parsed = parseInviteIdentifier(inviteInput);
+        const parsed = parseInviteIdentifier(inviteInput, { email: data.emailInvites });
         if (!parsed.ok) throw new Error(parsed.error);
         await rpc("invite_workspace_member", { p_workspace_id: workspaceId, p_identifier: parsed.value, p_role: inviteRole });
         setInviteInput("");
         await reload();
       },
-      "Invite sent. Whoever signs in with that email or wallet sees it and joins once they accept it.",
+      data.emailInvites
+        ? "Invite sent. Whoever signs in with that email or wallet sees it and joins once they accept it."
+        : "Invite sent. Whoever signs in with that wallet sees it and joins once they accept it.",
     );
 
   const changeRole = (member: RosterMember, role: WorkspaceRole) =>
@@ -602,8 +608,8 @@ export function MembersView({
               <Input
                 value={inviteInput}
                 onChange={(e) => setInviteInput(e.target.value)}
-                placeholder="Email or wallet address (G… or C…)"
-                aria-label="Email or wallet address"
+                placeholder={data.emailInvites ? "Email or wallet address (G… or C…)" : "Wallet address (G… or C…)"}
+                aria-label={data.emailInvites ? "Email or wallet address" : "Wallet address"}
                 className="min-w-[14rem] flex-1"
                 data-testid="invite-input"
               />
