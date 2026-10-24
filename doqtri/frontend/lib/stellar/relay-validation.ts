@@ -436,13 +436,22 @@ export function validateRegistryCall(fnName: string, args: xdr.ScVal[], wallet: 
   }
 }
 
+/** Where a note sits in doqtri's database, for the relay's checks. */
+export type NoteWorkspace = {
+  workspaceId: string;
+  /** A personal workspace: only its creator owns it (D-30), and its notes stay off the `*_as` calls. */
+  personal: boolean;
+  /** The note's creator (documents.user_id); null once their account is deleted. */
+  creatorId: string | null;
+};
+
 /**
  * What authorizeRegistryWrite reads from doqtri's database. The relay route
- * backs it with the service role; tests with fixtures.
+ * backs it with the service role (registry-access.ts); tests with fixtures.
  */
 export type RegistryAccess = {
   /** The workspace a note belongs to, or null when there is no such note. */
-  documentWorkspace(docId: string): Promise<string | null>;
+  documentWorkspace(docId: string): Promise<NoteWorkspace | null>;
   /** The user's current role in a workspace, or null when they are not (or no longer) a member. */
   memberRole(workspaceId: string, userId: string): Promise<WorkspaceRole | null>;
   /** The role of the account holding `address` (a passkey or Freighter wallet), or null. */
@@ -470,6 +479,10 @@ const MIN_ROLE: Record<RegistryFunction, WorkspaceRole> = {
 
 const NOT_IN_VAULT = "That note isn't in your vault.";
 
+function isOwnerFunction(fn: RegistryFunction): fn is OwnerFunction {
+  return (OWNER_FUNCTIONS as readonly string[]).includes(fn);
+}
+
 /**
  * The relay pays only for writes the user may make right now, as doqtri's
  * database has it: the contract checks signatures and its own member list,
@@ -477,9 +490,23 @@ const NOT_IN_VAULT = "That note isn't in your vault.";
  * request, so a member removed in the app is refused from the next request
  * on (D-16), whatever the chain still says.
  *
+ * `editors` is REGISTRY_EDITORS: whether the deployed registry has the v3
+ * calls. Without it they are refused outright, rather than paying to
+ * simulate a call the contract does not have.
+ *
  * - A note write needs an editor or above of the note's workspace (viewers
  *   read, D-14); taking a note out of its workspace needs an owner, and a
  *   note can only be assigned to the workspace it belongs to.
+ * - A personal workspace's note is written by that workspace's owner only,
+ *   whatever role its other members hold (D-30): its writes stay on the
+ *   owner-only calls and it is never assigned, so whichever wallet anchored
+ *   it first would own it on-chain for good.
+ * - A team note's owner-only writes (`register_document`, `anchor`, …) would
+ *   leave the note owned on-chain by whoever signed first. With `editors`
+ *   on they are refused: team notes go through `anchor_as` and then
+ *   `assign_document` (D-28). With it off they are the only calls there are,
+ *   and only the note's creator or the workspace's owner may make them, as
+ *   before workspaces had editors.
  * - Creating the on-chain workspace needs an owner; adding or removing an
  *   editor an admin or above; adding or removing an admin an owner. Only an
  *   editor (or above) may be given chain write access, and only an admin
@@ -492,13 +519,17 @@ export async function authorizeRegistryWrite(
   write: RegistryWrite,
   userId: string,
   access: RegistryAccess,
+  editors: boolean,
 ): Promise<void> {
+  if (!editors && V3_FUNCTIONS.includes(write.fn)) {
+    throw new RelayRejection("Workspace calls aren't enabled on this registry yet.");
+  }
   const min = MIN_ROLE[write.fn];
   if (isDocumentWrite(write)) {
-    const workspaceId = await access.documentWorkspace(write.docId);
+    const note = await access.documentWorkspace(write.docId);
     // An outsider and a removed member get the same answer as a missing note.
-    const role = workspaceId ? await access.memberRole(workspaceId, userId) : null;
-    if (!workspaceId || !role) throw new RelayRejection(NOT_IN_VAULT);
+    const role = note ? await access.memberRole(note.workspaceId, userId) : null;
+    if (!note || !role) throw new RelayRejection(NOT_IN_VAULT);
     if (!roleAtLeast(role, min)) {
       throw new RelayRejection(
         min === "owner"
@@ -506,7 +537,22 @@ export async function authorizeRegistryWrite(
           : "Viewers can read this note but not sign changes to it.",
       );
     }
-    if (write.fn === "assign_document" && write.workspaceId !== workspaceId) {
+    if (note.personal) {
+      if (role !== "owner") {
+        throw new RelayRejection("Only the owner of a personal workspace can sign changes to its notes.");
+      }
+      if (write.fn === "assign_document") {
+        throw new RelayRejection("A personal workspace's notes aren't put in a workspace on-chain.");
+      }
+    } else if (isOwnerFunction(write.fn)) {
+      if (editors) {
+        throw new RelayRejection("Team notes are written through the workspace calls. Reload and try again.");
+      }
+      if (note.creatorId !== userId && role !== "owner") {
+        throw new RelayRejection("Only this note's author or its workspace owner can anchor it for now.");
+      }
+    }
+    if (write.fn === "assign_document" && write.workspaceId !== note.workspaceId) {
       throw new RelayRejection("A note can only be assigned to the workspace it belongs to.");
     }
     return;

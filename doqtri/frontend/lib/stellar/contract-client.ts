@@ -358,6 +358,17 @@ export const DoqtriRegistry = {
     }
   },
 
+  /** A workspace's current owner on-chain, or null when there is no such workspace. Throws on transport errors. */
+  async readWorkspaceOwner(workspaceId: string): Promise<string | null> {
+    const tx = await readClient().get_workspace({ workspace_id: workspaceId });
+    try {
+      return String(unwrapResult<{ owner: string }>(tx.result, "get_workspace failed", simulationError(tx)).owner);
+    } catch (e) {
+      if (e instanceof DoqtriError && e.code === "WORKSPACE_NOT_FOUND") return null;
+      throw e;
+    }
+  },
+
   /** The workspace a document is assigned to on-chain, or null. Throws on transport errors. */
   async readDocWorkspace(docId: string): Promise<string | null> {
     const tx = await readClient().get_doc_workspace({ doc_id: docId });
@@ -548,11 +559,19 @@ export const DoqtriRegistry = {
     if (current === undefined) {
       return { status: "unassigned", reason: "The ledger couldn't be reached to check this note's workspace." };
     }
-    const doc = await DoqtriRegistry.getDocument(docId);
-    if (doc?.owner !== source) {
+    // Who assign_document makes sign: for a note in no workspace, its stored
+    // owner; for one already in another workspace (moved in the app), that
+    // workspace's CURRENT owner, which the stored owner can lag behind after
+    // transfer_workspace or admin_reassign_owner.
+    const signer = current
+      ? await DoqtriRegistry.readWorkspaceOwner(current).catch(() => undefined)
+      : (await DoqtriRegistry.getDocument(docId))?.owner;
+    if (signer !== source) {
       return {
         status: "unassigned",
-        reason: "Only the wallet that owns this note on-chain can put it in the workspace.",
+        reason: current
+          ? "This note is still in its old workspace on-chain; only that workspace's owner can move it."
+          : "Only the wallet that owns this note on-chain can put it in the workspace.",
       };
     }
     let assigned: WriteReceipt;

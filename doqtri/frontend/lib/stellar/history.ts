@@ -14,11 +14,18 @@
  * relay's index (`chain_writes`) lists which transactions to read, and each one
  * is still read from Horizon and decoded here — the index only says where to
  * look, so a bogus row cannot add a version that is not on the ledger.
+ *
+ * A note in a workspace (registry v3, WP-1.4) is written by its members, not
+ * only its owner, so its history is the owner's feed and the index together:
+ * a `G…` owner's feed has none of the editors' passkey writes, and the index
+ * none of the owner's own. Editors' Freighter writes are in neither until
+ * history reads the registry's events (WP-1.8); the version count then marks
+ * such a history incomplete rather than numbering it wrong.
  */
 import { createClient } from "@supabase/supabase-js";
 import { Address, rpc, scValToNative, StrKey, xdr } from "@stellar/stellar-sdk";
 import { Buffer } from "buffer";
-import { CONTRACT_ID, HORIZON_URL, LEGACY_CONTRACT_IDS, RPC_URL } from "@/lib/stellar/config";
+import { CONTRACT_ID, HORIZON_URL, LEGACY_CONTRACT_IDS, REGISTRY_EDITORS, RPC_URL } from "@/lib/stellar/config";
 import { docLedgerKey } from "@/lib/stellar/anchored";
 import { DoqtriRegistry } from "@/lib/stellar/contract-client";
 import { FEE_FORWARDER, NETWORK } from "@/lib/stellar/smart-wallet-config";
@@ -49,8 +56,9 @@ export type DocumentHistory = {
   nodes: ChainNodeEvent[];
   /**
    * Set when the contract reports more versions than were found — possible
-   * only for passkey-wallet owners, whose history comes from Doqtri's index
-   * (a write made outside Doqtri, or one the index missed). Version numbers
+   * for passkey-wallet owners, whose history comes from Doqtri's index (a
+   * write made outside Doqtri, or one the index missed), and for workspace
+   * notes an editor wrote from Freighter (not indexed). Version numbers
    * are then not trustworthy and should not be shown as such.
    */
   incomplete?: true;
@@ -297,6 +305,16 @@ export function inLedgerOrder(ops: HorizonOperation[]): HorizonOperation[] {
   return [...ops].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
 }
 
+/** Two operation lists as one, oldest first, each operation once (by its id, the paging token). */
+export function mergeOperations(...lists: HorizonOperation[][]): HorizonOperation[] {
+  const seen = new Map<string, HorizonOperation>();
+  for (const op of lists.flat()) {
+    const key = op.paging_token ?? `${op.transaction_hash}:${seen.size}`;
+    if (!seen.has(key)) seen.set(key, op);
+  }
+  return inLedgerOrder([...seen.values()]);
+}
+
 /** Marks a history that found fewer versions than the contract has. */
 export function withCompleteness(history: DocumentHistory, contractVersion: number): DocumentHistory {
   return history.versions.length === contractVersion ? history : { ...history, incomplete: true };
@@ -358,8 +376,14 @@ export async function getDocumentHistory(
     const ops = await fetchIndexedOperations(docId);
     return withCompleteness(buildHistory(ops, docId, REGISTRIES, doc.owner), doc.version);
   }
-  const ops = await fetchOwnerOperations(doc.owner);
-  return buildHistory(ops, docId, REGISTRIES, doc.owner);
+  // Only the v3 registry has workspaces; the live one has no get_doc_workspace.
+  const workspace = REGISTRY_EDITORS ? await DoqtriRegistry.readDocWorkspace(docId).catch(() => null) : null;
+  if (!workspace) {
+    const ops = await fetchOwnerOperations(doc.owner);
+    return buildHistory(ops, docId, REGISTRIES, doc.owner);
+  }
+  const [ownerOps, indexed] = await Promise.all([fetchOwnerOperations(doc.owner), fetchIndexedOperations(docId)]);
+  return withCompleteness(buildHistory(mergeOperations(ownerOps, indexed), docId, REGISTRIES, doc.owner), doc.version);
 }
 
 export type DocumentTtl = {

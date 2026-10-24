@@ -24,6 +24,7 @@ const METHODS = [
   "assign_document",
   "get_document",
   "get_doc_workspace",
+  "get_workspace",
   "get_node",
 ];
 
@@ -193,6 +194,39 @@ describe("with NEXT_PUBLIC_REGISTRY_EDITORS on", () => {
     const receipt = await DoqtriRegistry.updateDocument(wallet, docId, contentHash, team);
     expect(called()).not.toContain("assign_document");
     expect(receipt.workspace).toMatchObject({ status: "unassigned", reason: expect.stringMatching(/owns this note/) });
+  });
+
+  it("moves a note still in its old workspace on-chain when the signer owns that workspace now", async () => {
+    const { DoqtriRegistry } = await load(true);
+    const old = "7a000000-0000-4000-8000-0000000000c3";
+    state.results.update_document_as = [2];
+    state.results.get_doc_workspace = [old, team.workspaceId];
+    // The stored owner lags behind a transfer_workspace; the workspace's owner is what counts.
+    state.results.get_document = [chainDoc(someoneElse)];
+    state.results.get_workspace = [{ owner: wallet, created_at: BigInt(1), members: new Map() }];
+    const receipt = await DoqtriRegistry.updateDocument(wallet, docId, contentHash, team);
+
+    expect(called()).toEqual(["update_document_as", "get_doc_workspace", "get_workspace", "assign_document", "get_doc_workspace"]);
+    expect(state.calls[2].args).toEqual({ workspace_id: old });
+    expect(receipt.workspace).toEqual({ status: "assigned", txHash: "tx-2" });
+  });
+
+  it("leaves a moved note alone when its old workspace has another owner, whatever its stored owner says", async () => {
+    const { DoqtriRegistry } = await load(true);
+    const old = "7a000000-0000-4000-8000-0000000000c3";
+    state.results.update_document_as = [2];
+    state.results.get_doc_workspace = [old];
+    // Stored as the signer's, but the old workspace was transferred away from them.
+    state.results.get_document = [chainDoc(wallet)];
+    state.results.get_workspace = [{ owner: someoneElse, created_at: BigInt(1), members: new Map() }];
+    const receipt = await DoqtriRegistry.updateDocument(wallet, docId, contentHash, team);
+
+    expect(called()).not.toContain("assign_document");
+    expect(called()).not.toContain("get_document");
+    expect(receipt.workspace).toMatchObject({
+      status: "unassigned",
+      reason: expect.stringMatching(/only that workspace's owner can move it/),
+    });
   });
 
   it("reports, without throwing, an assignment the contract refuses", async () => {

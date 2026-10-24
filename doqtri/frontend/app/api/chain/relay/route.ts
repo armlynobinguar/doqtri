@@ -31,7 +31,6 @@ import {
   validateRegistryWrite,
   validateWalletAdmin,
   validateWalletDeploy,
-  V3_FUNCTIONS,
   type MarketCall,
   type RegistryWrite,
   type RelaySubmission,
@@ -187,13 +186,10 @@ async function relayRegistryWrite(userId: string, submission: RelaySubmission) {
  * this moment, that the caller may make this write at all, so nobody spends
  * fees on arbitrary documents or workspaces and a member removed in the app
  * is cut off at once (D-16). The v3 calls are refused until the deployed
- * registry has them.
+ * registry has them (REGISTRY_EDITORS).
  */
 async function authorizeWrite(userId: string, write: RegistryWrite): Promise<void> {
-  if (!REGISTRY_EDITORS && V3_FUNCTIONS.includes(write.fn)) {
-    throw new RelayRejection("Workspace calls aren't enabled on this registry yet.");
-  }
-  await authorizeRegistryWrite(write, userId, registryAccess(createSupabaseAdminClient()));
+  await authorizeRegistryWrite(write, userId, registryAccess(createSupabaseAdminClient()), REGISTRY_EDITORS);
 }
 
 /**

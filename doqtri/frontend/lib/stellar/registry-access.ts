@@ -39,9 +39,22 @@ export function registryAccess(admin: SupabaseClient): RegistryAccess {
   return {
     async documentWorkspace(docId) {
       if (!UUID.test(docId)) return null;
-      const { data, error } = await admin.from("documents").select("workspace_id").eq("id", docId).maybeSingle();
+      const { data, error } = await admin
+        .from("documents")
+        .select("user_id, workspace_id, workspaces(is_personal)")
+        .eq("id", docId)
+        .maybeSingle();
       if (error) throw new Error(`documents lookup failed: ${error.message}`);
-      return (data?.workspace_id as string | undefined) ?? null;
+      if (!data?.workspace_id) return null;
+      const embedded = data.workspaces as { is_personal: boolean } | { is_personal: boolean }[] | null | undefined;
+      const workspace = Array.isArray(embedded) ? embedded[0] : embedded;
+      // workspace_id is a not-null foreign key, so a missing workspace is a broken read, not a note to refuse quietly.
+      if (!workspace) throw new Error(`documents lookup failed: no workspace for ${docId}`);
+      return {
+        workspaceId: data.workspace_id as string,
+        personal: Boolean(workspace.is_personal),
+        creatorId: (data.user_id as string | null | undefined) ?? null,
+      };
     },
     memberRole,
     async addressRole(workspaceId, address) {

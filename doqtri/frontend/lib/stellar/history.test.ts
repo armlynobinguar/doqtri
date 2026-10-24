@@ -5,6 +5,7 @@ import {
   buildHistory,
   decodeInvocation,
   inLedgerOrder,
+  mergeOperations,
   withCompleteness,
   type HorizonOperation,
 } from "@/lib/stellar/history";
@@ -317,5 +318,31 @@ describe("user-paid writes (wrapped in the fee forwarder)", () => {
       [1, "direct"],
       [2, "paid"],
     ]);
+  });
+});
+
+describe("workspace-note history (owner feed and write index together)", () => {
+  const token = (op: HorizonOperation, t: string): HorizonOperation => ({ ...op, paging_token: t });
+
+  it("keeps an editor's indexed passkey write that the owner's feed lacks, and counts a shared write once", () => {
+    const registered = token(register(DOC, 1, { tx: "owner-register" }), "100");
+    const ownerFeed = [registered, token(update(DOC, 3, { tx: "owner-update" }), "300")];
+    // The editor's update_document_as was relayed and indexed; the index can also list the owner's own write.
+    const editorWrite = token(op("update_document_as", [new Address(OWNER).toScVal(), str(DOC), bytes(hashOf(2))], { tx: "editor-update" }), "200");
+    const indexed = [editorWrite, registered];
+
+    const history = withCompleteness(buildHistory(mergeOperations(ownerFeed, indexed), DOC, CONTRACT, OWNER), 3);
+    expect(history.versions.map((v) => [v.version, v.txHash])).toEqual([
+      [1, "owner-register"],
+      [2, "editor-update"],
+      [3, "owner-update"],
+    ]);
+    expect(history.incomplete).toBeUndefined();
+  });
+
+  it("marks the history incomplete when a write is in neither source", () => {
+    const ownerFeed = [token(register(DOC, 1, { tx: "owner-register" }), "100")];
+    const history = withCompleteness(buildHistory(mergeOperations(ownerFeed, []), DOC, CONTRACT, OWNER), 2);
+    expect(history.incomplete).toBe(true);
   });
 });

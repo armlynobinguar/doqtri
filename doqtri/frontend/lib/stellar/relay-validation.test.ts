@@ -10,6 +10,7 @@ import {
   validateRegistryWrite,
   validateWalletAdmin,
   validateWalletDeploy,
+  type NoteWorkspace,
   type RegistryAccess,
   type RegistryWrite,
   type RelaySubmission,
@@ -370,11 +371,15 @@ describe("registry write validation", () => {
 describe("registry write authorization (workspace roles)", () => {
   const team = "7a000000-0000-4000-8000-0000000000b1";
   const other = "7a000000-0000-4000-8000-0000000000b2";
+  const home = "7a000000-0000-4000-8000-0000000000b3";
   const note = "3f1c2a9e-0000-4000-8000-0000000000b1";
+  const homeNote = "3f1c2a9e-0000-4000-8000-0000000000b2";
+  const orphanNote = "3f1c2a9e-0000-4000-8000-0000000000b3";
   const users = {
     owner: "u-owner",
     admin: "u-admin",
     editor: "u-editor",
+    author: "u-author",
     viewer: "u-viewer",
     removed: "u-removed",
     outsider: "u-outsider",
@@ -386,41 +391,66 @@ describe("registry write authorization (workspace roles)", () => {
   /**
    * The team as doqtri's database has it. `removed` was an editor and has
    * just been removed in the app: no membership row, even though the chain
-   * may still list their wallet (D-16).
+   * may still list their wallet (D-16). `home` is the owner's personal
+   * workspace, which took the editor as a member (D-30).
    */
   const roles: Record<string, Record<string, WorkspaceRole>> = {
-    [team]: { [users.owner]: "owner", [users.admin]: "admin", [users.editor]: "editor", [users.viewer]: "viewer" },
+    [team]: {
+      [users.owner]: "owner",
+      [users.admin]: "admin",
+      [users.editor]: "editor",
+      [users.author]: "editor",
+      [users.viewer]: "viewer",
+    },
     [other]: { [users.outsider]: "owner" },
+    [home]: { [users.owner]: "owner", [users.admin]: "admin", [users.editor]: "editor", [users.viewer]: "viewer" },
+  };
+  const notes: Record<string, NoteWorkspace> = {
+    // Written by `author`, an editor of the team.
+    [note]: { workspaceId: team, personal: false, creatorId: users.author },
+    [homeNote]: { workspaceId: home, personal: true, creatorId: users.owner },
+    // Its author deleted their account.
+    [orphanNote]: { workspaceId: team, personal: false, creatorId: null },
   };
   const walletUsers: Record<string, string> = { [editorWallet]: users.editor, [viewerWallet]: users.viewer };
   const access: RegistryAccess = {
-    documentWorkspace: async (docId) => (docId === note ? team : null),
+    documentWorkspace: async (docId) => notes[docId] ?? null,
     memberRole: async (workspaceId, userId) => roles[workspaceId]?.[userId] ?? null,
     addressRole: async (workspaceId, address) => {
       const userId = walletUsers[address];
       return userId ? (roles[workspaceId]?.[userId] ?? null) : null;
     },
   };
-  const authorize = (write: RegistryWrite, userId: string) => authorizeRegistryWrite(write, userId, access);
-  const noteWrites: RegistryWrite[] = [
-    { fn: "anchor_as", docId: note },
-    { fn: "update_document_as", docId: note },
-    { fn: "set_node_status_as", docId: note },
-    { fn: "anchor", docId: note },
-    { fn: "update_document", docId: note },
-    { fn: "set_node_status", docId: note },
-    { fn: "register_document", docId: note },
-    { fn: "assign_document", docId: note, workspaceId: team },
+  /** Defaults to REGISTRY_EDITORS on: the v3 registry. */
+  const authorize = (write: RegistryWrite, userId: string, editors = true) =>
+    authorizeRegistryWrite(write, userId, access, editors);
+  const ownerOnly = (docId: string): RegistryWrite[] => [
+    { fn: "anchor", docId },
+    { fn: "update_document", docId },
+    { fn: "set_node_status", docId },
+    { fn: "register_document", docId },
   ];
+  const editorWrites = (docId: string): RegistryWrite[] => [
+    { fn: "anchor_as", docId },
+    { fn: "update_document_as", docId },
+    { fn: "set_node_status_as", docId },
+    { fn: "assign_document", docId, workspaceId: team },
+  ];
+  const noteWrites = [...editorWrites(note), ...ownerOnly(note)];
 
-  it("lets an editor, admin or owner sign every note write", async () => {
+  it("lets an editor, admin or owner sign every *_as write on a team note", async () => {
     for (const userId of [users.editor, users.admin, users.owner]) {
-      for (const write of noteWrites) await expect(authorize(write, userId)).resolves.toBeUndefined();
+      for (const write of editorWrites(note)) await expect(authorize(write, userId)).resolves.toBeUndefined();
     }
   });
 
   it("refuses a viewer: viewers read, they never sign (D-14)", async () => {
-    for (const write of noteWrites) {
+    for (const editors of [true, false]) {
+      for (const write of [...ownerOnly(note), ...ownerOnly(homeNote)]) {
+        await expect(authorize(write, users.viewer, editors)).rejects.toThrow(/Viewers can read this note but not sign/);
+      }
+    }
+    for (const write of editorWrites(note)) {
       await expect(authorize(write, users.viewer)).rejects.toThrow(/Viewers can read this note but not sign/);
     }
   });
@@ -430,15 +460,81 @@ describe("registry write authorization (workspace roles)", () => {
       await expect(authorize(write, users.removed)).rejects.toThrow(RelayRejection);
       await expect(authorize(write, users.removed)).rejects.toThrow(/isn't in your vault/);
     }
+    for (const write of ownerOnly(note)) {
+      await expect(authorize(write, users.removed, false)).rejects.toThrow(/isn't in your vault/);
+    }
   });
 
   it("refuses an outsider, even one who owns another workspace", async () => {
     for (const write of noteWrites) await expect(authorize(write, users.outsider)).rejects.toThrow(/isn't in your vault/);
+    for (const write of ownerOnly(homeNote)) {
+      await expect(authorize(write, users.outsider, false)).rejects.toThrow(/isn't in your vault/);
+    }
   });
 
   it("refuses a note that does not exist", async () => {
     await expect(authorize({ fn: "anchor_as", docId: "3f1c2a9e-0000-4000-8000-0000000000ff" }, users.owner)).rejects.toThrow(
       /isn't in your vault/,
+    );
+  });
+
+  it("refuses a team note's owner-only writes once the *_as calls exist, so no editor takes the note over", async () => {
+    for (const userId of [users.author, users.editor, users.admin, users.owner]) {
+      for (const write of ownerOnly(note)) {
+        await expect(authorize(write, userId)).rejects.toThrow(/written through the workspace calls/);
+      }
+    }
+  });
+
+  it("on the live registry, lets only a team note's author or the workspace owner sign it", async () => {
+    for (const userId of [users.author, users.owner]) {
+      for (const write of ownerOnly(note)) await expect(authorize(write, userId, false)).resolves.toBeUndefined();
+    }
+    // Anchoring first would make them its on-chain owner (registry v2).
+    for (const userId of [users.editor, users.admin]) {
+      for (const write of ownerOnly(note)) {
+        await expect(authorize(write, userId, false)).rejects.toThrow(/Only this note's author or its workspace owner/);
+      }
+    }
+    // With its author gone, only the owner.
+    await expect(authorize({ fn: "anchor", docId: orphanNote }, users.owner, false)).resolves.toBeUndefined();
+    await expect(authorize({ fn: "anchor", docId: orphanNote }, users.editor, false)).rejects.toThrow(
+      /Only this note's author or its workspace owner/,
+    );
+  });
+
+  it("refuses every v3 call while the registry has none of them", async () => {
+    const v3: RegistryWrite[] = [
+      ...editorWrites(note),
+      { fn: "unassign_document", docId: note },
+      { fn: "create_workspace", workspaceId: team, subject: null },
+      { fn: "add_editor", workspaceId: team, subject: editorWallet },
+      { fn: "remove_editor", workspaceId: team, subject: editorWallet },
+      { fn: "add_admin", workspaceId: team, subject: editorWallet },
+      { fn: "remove_admin", workspaceId: team, subject: editorWallet },
+    ];
+    for (const write of v3) {
+      await expect(authorize(write, users.owner, false)).rejects.toThrow(/aren't enabled on this registry yet/);
+    }
+  });
+
+  it("lets only the owner of a personal workspace write its notes, even with editor members (D-30)", async () => {
+    for (const editors of [true, false]) {
+      for (const write of ownerOnly(homeNote)) await expect(authorize(write, users.owner, editors)).resolves.toBeUndefined();
+      for (const userId of [users.editor, users.admin]) {
+        for (const write of ownerOnly(homeNote)) {
+          await expect(authorize(write, userId, editors)).rejects.toThrow(/Only the owner of a personal workspace/);
+        }
+      }
+    }
+    for (const write of editorWrites(homeNote).slice(0, 3)) {
+      await expect(authorize(write, users.editor)).rejects.toThrow(/Only the owner of a personal workspace/);
+    }
+  });
+
+  it("never assigns a personal workspace's note on-chain", async () => {
+    await expect(authorize({ fn: "assign_document", docId: homeNote, workspaceId: home }, users.owner)).rejects.toThrow(
+      /aren't put in a workspace on-chain/,
     );
   });
 
