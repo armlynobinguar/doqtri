@@ -10,6 +10,8 @@ import { hash, StrKey } from "@stellar/stellar-sdk";
 const state = vi.hoisted(() => ({
   calls: [] as { fn: string; args: Record<string, unknown> }[],
   results: {} as Record<string, unknown[]>,
+  /** Methods whose simulation fails before any result (the RPC down, a 429). */
+  throws: new Set<string>(),
   relayed: 0,
 }));
 
@@ -38,6 +40,7 @@ vi.mock("@/lib/bindings/doqtri-registry", async (importOriginal) => {
     Object.defineProperty(Client.prototype, fn, {
       value: async (args: Record<string, unknown> = {}) => {
         state.calls.push({ fn, args });
+        if (state.throws.has(fn)) throw new Error("fetch failed");
         const queue = state.results[fn] ?? [];
         return { result: queue.length > 1 ? queue.shift() : queue[0], simulation: {}, built: { fee: "100" } };
       },
@@ -97,6 +100,7 @@ const called = () => state.calls.map((c) => c.fn);
 beforeEach(() => {
   state.calls = [];
   state.results = {};
+  state.throws = new Set();
   state.relayed = 0;
 });
 afterEach(() => vi.unstubAllEnvs());
@@ -278,5 +282,27 @@ describe("addAdmin (the follow-up to a transfer, D-35)", () => {
     const { DoqtriRegistry } = await load(false);
     await expect(DoqtriRegistry.addAdmin(wallet, team.workspaceId, formerOwner)).rejects.toThrow(/aren't enabled/);
     expect(called()).toEqual([]);
+  });
+});
+
+describe("readNode (strict) and getNode (best effort)", () => {
+  const record = { status: { tag: "Verified", values: undefined }, tool: "doqtri-done", artifact_ref: "v1", updated_at: BigInt(5) };
+
+  it("answers the record, and null only when the contract has none", async () => {
+    const { DoqtriRegistry } = await load(false);
+    state.results.get_node = [record];
+    await expect(DoqtriRegistry.readNode(docId, "root")).resolves.toMatchObject({ status: "Verified", tool: "doqtri-done" });
+    state.results.get_node = [contractError("NodeNotFound")];
+    await expect(DoqtriRegistry.readNode(docId, "h1")).resolves.toBeNull();
+  });
+
+  it("throws when the read itself fails, where getNode answers null", async () => {
+    const { DoqtriRegistry } = await load(false);
+    state.throws.add("get_node");
+    await expect(DoqtriRegistry.readNode(docId, "root")).rejects.toThrow("fetch failed");
+    await expect(DoqtriRegistry.getNode(docId, "root")).resolves.toBeNull();
+    state.throws.clear();
+    state.results.get_node = [contractError("Unauthorized")];
+    await expect(DoqtriRegistry.readNode(docId, "root")).rejects.toThrow();
   });
 });

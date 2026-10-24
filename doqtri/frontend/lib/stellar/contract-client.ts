@@ -336,27 +336,43 @@ export const DoqtriRegistry = {
     };
   },
 
+  /** Best-effort read: null for "no record" and for any network failure. */
   async getNode(docId: string, nodeId: string): Promise<ChainNode | null> {
     try {
-      const tx = await readClient().get_node({
-        doc_id: docId,
-        node_id: nodeId,
-      });
-      const node = unwrapResult<{
-        status: ContractNodeStatus;
-        tool: string;
-        artifact_ref: string;
-        updated_at: bigint | number;
-      }>(tx.result, "get_node failed", simulationError(tx));
-      return {
-        status: fromStatusTag(node.status),
-        tool: String(node.tool ?? ""),
-        artifactRef: String(node.artifact_ref ?? ""),
-        updatedAt: Number(node.updated_at),
-      };
+      return await DoqtriRegistry.readNode(docId, nodeId);
     } catch {
       return null;
     }
+  },
+
+  /**
+   * Strict read: null only when the contract says the node has no record.
+   * Transport and RPC failures throw, so a signature is never planned from a
+   * read that failed (D-04).
+   */
+  async readNode(docId: string, nodeId: string): Promise<ChainNode | null> {
+    const tx = await readClient().get_node({
+      doc_id: docId,
+      node_id: nodeId,
+    });
+    let node: {
+      status: ContractNodeStatus;
+      tool: string;
+      artifact_ref: string;
+      updated_at: bigint | number;
+    };
+    try {
+      node = unwrapResult(tx.result, "get_node failed", simulationError(tx));
+    } catch (e) {
+      if (e instanceof DoqtriError && (e.code === "NODE_NOT_FOUND" || e.code === "NOT_FOUND")) return null;
+      throw e;
+    }
+    return {
+      status: fromStatusTag(node.status),
+      tool: String(node.tool ?? ""),
+      artifactRef: String(node.artifact_ref ?? ""),
+      updatedAt: Number(node.updated_at),
+    };
   },
 
   /** A workspace's current owner on-chain, or null when there is no such workspace. Throws on transport errors. */

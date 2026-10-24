@@ -82,10 +82,11 @@ create table public.qdit_milestone_states (
   -- there was nothing to read (the heading stays Planned, section 10).
   -- `none`: the contract has no record of the milestone (MilestoneNotFound).
   -- Otherwise milestone_proof's MilestoneStatus and the record's version.
+  -- The version is a u32, so bigint (integer stops at 2^31 - 1).
   chain_status     text check (chain_status in ('unregistered', 'none', 'Proposed', 'Submitted', 'Approved', 'Rejected')),
   chain_network    text check (chain_network in ('testnet', 'mainnet')),
   chain_contract_id text check (chain_contract_id ~ '^C[A-Z2-7]{55}$'),
-  chain_version    integer check (chain_version between 1 and 4294967295),
+  chain_version    bigint check (chain_version between 1 and 4294967295),
   -- The ledger the read saw (the RPC's latest ledger): orders reads.
   chain_ledger     bigint check (chain_ledger >= 0),
   chain_checked_at timestamptz,
@@ -235,7 +236,7 @@ create function public.record_qdit_milestone_state(
   p_chain_status      text default null,
   p_chain_network     text default null,
   p_chain_contract_id text default null,
-  p_chain_version     integer default null,
+  p_chain_version     bigint default null,
   p_chain_ledger      bigint default null,
   p_qdit_checked      boolean default false,
   p_event_id          uuid default null
@@ -308,10 +309,10 @@ begin
 end;
 $$;
 
-comment on function public.record_qdit_milestone_state(uuid, uuid, text, timestamptz, text, text, text, integer, bigint, boolean, uuid) is
+comment on function public.record_qdit_milestone_state(uuid, uuid, text, timestamptz, text, text, text, bigint, bigint, boolean, uuid) is
   'Records a linked qdit milestone''s state, newest wins, and marks its webhook event done (WP-2.8, D-25).';
 
 revoke all on function public.claim_qdit_webhook_event(uuid, text, uuid, uuid, text, timestamptz) from public, anon, authenticated;
 grant execute on function public.claim_qdit_webhook_event(uuid, text, uuid, uuid, text, timestamptz) to service_role;
-revoke all on function public.record_qdit_milestone_state(uuid, uuid, text, timestamptz, text, text, text, integer, bigint, boolean, uuid) from public, anon, authenticated;
-grant execute on function public.record_qdit_milestone_state(uuid, uuid, text, timestamptz, text, text, text, integer, bigint, boolean, uuid) to service_role;
+revoke all on function public.record_qdit_milestone_state(uuid, uuid, text, timestamptz, text, text, text, bigint, bigint, boolean, uuid) from public, anon, authenticated;
+grant execute on function public.record_qdit_milestone_state(uuid, uuid, text, timestamptz, text, text, text, bigint, bigint, boolean, uuid) to service_role;

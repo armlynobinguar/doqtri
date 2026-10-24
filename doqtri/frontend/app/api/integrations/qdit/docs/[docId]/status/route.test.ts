@@ -28,7 +28,7 @@ vi.mock("@/lib/integrations/qdit-client", async (importOriginal) => ({
   qditServerSetup: () => ({ config: {}, tokenKey: Buffer.alloc(32), store: {} }),
   createQditClient: () => qditClient,
 }));
-const recheck = vi.fn(async () => ({ states: { m: { chain_status: "Approved" } }, errors: [] }));
+const recheck = vi.fn(async () => ({ states: { m: { chain_status: "Approved" } }, errors: [], unread: [] }));
 vi.mock("@/lib/integrations/qdit-status-sync", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/integrations/qdit-status-sync")>()),
   recheckDocStatuses: (...args: unknown[]) => recheck(...(args as [])),
@@ -56,7 +56,7 @@ describe("POST /api/integrations/qdit/docs/[docId]/status", () => {
   it("lets a viewer see the states, with the user's client and the chain reader", async () => {
     const res = await call();
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ states: { m: { chain_status: "Approved" } }, errors: [] });
+    expect(await res.json()).toEqual({ states: { m: { chain_status: "Approved" } }, errors: [], unread: [] });
     expect(recheck).toHaveBeenCalledWith(expect.objectContaining({ docId: DOC, client: qditClient, force: false }));
   });
 

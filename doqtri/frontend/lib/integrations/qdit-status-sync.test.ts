@@ -1,6 +1,6 @@
 import { createHmac } from "crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { QditChainError, type MilestoneChainRead, type ProjectChain } from "@/lib/integrations/qdit-chain";
+import { QditChainError, readMilestoneRecord, type MilestoneChainRead, type ProjectChain } from "@/lib/integrations/qdit-chain";
 import { QditError, QditNotConnectedError, type QditClient, type QditMilestone } from "@/lib/integrations/qdit-client";
 import type { QditMilestoneStateRow } from "@/lib/integrations/qdit-status";
 import {
@@ -293,6 +293,17 @@ describe("handleQditWebhook", () => {
     errors.mockRestore();
   });
 
+  it("does not retry a contract id with nothing behind it either", async () => {
+    readChain.mockImplementationOnce((chain, project, milestone) =>
+      readMilestoneRecord(chain, project, milestone, {
+        simulate: async () => ({ ledger: 9, error: "HostError: Error(Storage, MissingValue)" }),
+      }),
+    );
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await deliver()).toEqual({ status: 200, body: { ok: true, chain: "unreadable" } });
+    errors.mockRestore();
+  });
+
   it("acknowledges and drops unknown events and unlinked milestones", async () => {
     const unknown = eventBody({ event: "milestone.deleted" });
     expect(await deliver({ body: unknown })).toEqual({ status: 200, body: { ok: true, ignored: "unknown_event" } });
@@ -437,11 +448,21 @@ describe("recheckDocStatuses (R-09)", () => {
       "qdit is busy; showing what Stellar says.",
       "Stellar couldn't be reached; the statuses shown may be out of date.",
     ]);
+    expect(result.unread).toContain(MILESTONE);
+  });
+
+  it("names the milestones a forced read could not reach, so a signature waits for them", async () => {
+    readChain.mockImplementation(async (_chain, _project, milestoneId) => {
+      if (milestoneId === MILESTONE) throw new QditChainError("unreachable", "down");
+      return { ledger: 900, record: null };
+    });
+    const result = await recheckDocStatuses({ store, client: null, docId: DOC, readChain, now: () => NOW_MS, force: true });
+    expect(result.unread).toEqual([MILESTONE]);
   });
 
   it("returns nothing for a note with no project", async () => {
     store.loadDoc = async () => ({ project: null, links: [], states: {} });
-    expect(await recheckDocStatuses({ store, client: fakeClient(), docId: DOC, readChain })).toEqual({ states: {}, errors: [] });
+    expect(await recheckDocStatuses({ store, client: fakeClient(), docId: DOC, readChain })).toEqual({ states: {}, errors: [], unread: [] });
   });
 });
 

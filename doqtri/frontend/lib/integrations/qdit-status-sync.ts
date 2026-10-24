@@ -409,6 +409,11 @@ export type RecheckResult = {
   states: Record<string, QditMilestoneStateRow>;
   /** Short, safe to show; one per kind of failure. */
   errors: string[];
+  /**
+   * Milestones whose chain read failed on this call, so their state is the
+   * last one stored. A signature waits for them (force reads every one).
+   */
+  unread: string[];
 };
 
 const age = (at: string | null | undefined, now: number) => (at ? now - Date.parse(at) : Infinity);
@@ -431,6 +436,7 @@ export async function recheckDocStatuses(params: {
   const { store, docId, readChain, force = false } = params;
   const now = params.now ?? Date.now;
   const errors = new Set<string>();
+  const unread = new Set<string>();
   let client = params.client;
 
   /** Stops asking qdit when the user has no usable connection or qdit is busy. */
@@ -448,7 +454,7 @@ export async function recheckDocStatuses(params: {
   };
 
   const doc = await store.loadDoc(docId);
-  if (!doc.project || doc.links.length === 0) return { states: doc.states, errors: [] };
+  if (!doc.project || doc.links.length === 0) return { states: doc.states, errors: [], unread: [] };
   let chain = doc.project.chain;
 
   // The project's chain: needed once it is registered, and checked again
@@ -489,6 +495,7 @@ export async function recheckDocStatuses(params: {
       try {
         await store.record({ ...link, chain: await chainStateFor(chain, link.projectId, link.milestoneId, readChain) });
       } catch (error) {
+        unread.add(link.milestoneId);
         errors.add(
           error instanceof QditChainError && error.kind === "unreachable"
             ? "Stellar couldn't be reached; the statuses shown may be out of date."
@@ -502,5 +509,5 @@ export async function recheckDocStatuses(params: {
     await Promise.all(doc.links.slice(i, i + CONCURRENCY).map(recheck));
   }
 
-  return { states: (await store.loadDoc(docId)).states, errors: [...errors] };
+  return { states: (await store.loadDoc(docId)).states, errors: [...errors], unread: [...unread] };
 }

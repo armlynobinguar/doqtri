@@ -21,7 +21,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(59);
+select plan(61);
 
 insert into auth.users (id, email) values
   ('00000000-0000-4000-8000-000000000001', 'owner@example.com'),
@@ -92,14 +92,14 @@ select ok(not has_function_privilege('anon',
   'public.claim_qdit_webhook_event(uuid, text, uuid, uuid, text, timestamptz)', 'execute'),
   'nor can anon');
 select ok(not has_function_privilege('authenticated',
-  'public.record_qdit_milestone_state(uuid, uuid, text, timestamptz, text, text, text, integer, bigint, boolean, uuid)', 'execute'),
+  'public.record_qdit_milestone_state(uuid, uuid, text, timestamptz, text, text, text, bigint, bigint, boolean, uuid)', 'execute'),
   'signed-in users cannot record milestone states');
 select ok(has_function_privilege('service_role',
-  'public.record_qdit_milestone_state(uuid, uuid, text, timestamptz, text, text, text, integer, bigint, boolean, uuid)', 'execute'),
+  'public.record_qdit_milestone_state(uuid, uuid, text, timestamptz, text, text, text, bigint, bigint, boolean, uuid)', 'execute'),
   'the service role records them');
 
 select is(
-  (select prosecdef from pg_proc where oid = 'public.record_qdit_milestone_state(uuid, uuid, text, timestamptz, text, text, text, integer, bigint, boolean, uuid)'::regprocedure),
+  (select prosecdef from pg_proc where oid = 'public.record_qdit_milestone_state(uuid, uuid, text, timestamptz, text, text, text, bigint, bigint, boolean, uuid)'::regprocedure),
   true, 'record_qdit_milestone_state is security definer');
 select is(
   (select proconfig from pg_proc where oid = 'public.claim_qdit_webhook_event(uuid, text, uuid, uuid, text, timestamptz)'::regprocedure),
@@ -211,6 +211,18 @@ select is(public.record_qdit_milestone_state(
   p_chain_status => 'none', p_chain_network => 'testnet',
   p_chain_contract_id => 'CBP3NKXCRUSOJLLUXDF5AIRNPAC6IL7TFJ2KCNL5A2GTKC2MB7M4OHVG', p_chain_ledger => 130),
   'recorded', 'a milestone with no record on chain records as none');
+select is(public.record_qdit_milestone_state(
+  '3f6c2a1e-8b4d-4c7e-9a10-2d5b7e9f1c34', 'b81e4f07-6a2c-4d93-8e5f-0c7a9b3d2e62',
+  p_chain_status => 'Submitted', p_chain_network => 'testnet',
+  p_chain_contract_id => 'CBP3NKXCRUSOJLLUXDF5AIRNPAC6IL7TFJ2KCNL5A2GTKC2MB7M4OHVG',
+  p_chain_version => 4294967295, p_chain_ledger => 135),
+  'recorded', 'a version up to u32::MAX fits');
+select throws_ok($$ select public.record_qdit_milestone_state(
+  '3f6c2a1e-8b4d-4c7e-9a10-2d5b7e9f1c34', 'b81e4f07-6a2c-4d93-8e5f-0c7a9b3d2e62',
+  p_chain_status => 'Submitted', p_chain_network => 'testnet',
+  p_chain_contract_id => 'CBP3NKXCRUSOJLLUXDF5AIRNPAC6IL7TFJ2KCNL5A2GTKC2MB7M4OHVG',
+  p_chain_version => 4294967296, p_chain_ledger => 136) $$,
+  '23514', null, 'and one past it is refused');
 
 select throws_ok($$ select public.record_qdit_milestone_state(
   '3f6c2a1e-8b4d-4c7e-9a10-2d5b7e9f1c34', 'b81e4f07-6a2c-4d93-8e5f-0c7a9b3d2e62',

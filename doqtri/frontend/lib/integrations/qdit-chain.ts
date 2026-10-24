@@ -61,7 +61,11 @@ export type MilestoneChainRead = { ledger: number; record: MilestoneChainRecord 
 
 export class QditChainError extends Error {
   constructor(
-    /** `unreachable`: RPC down or slow, try again. `invalid`: bad input. `bad_response`: an answer doqtri can't read. */
+    /**
+     * `unreachable`: RPC down or slow, try again. `invalid`: bad input.
+     * `bad_response`: an answer doqtri can't read. `contract`: the host
+     * refused the call (a contract error, or no such contract).
+     */
     readonly kind: "unreachable" | "invalid" | "bad_response" | "contract",
     message: string,
   ) {
@@ -273,8 +277,10 @@ export async function readMilestoneRecord(
     const code = CONTRACT_ERROR.exec(outcome.error)?.[1];
     if (code !== undefined && Number(code) === MILESTONE_NOT_FOUND) return { ledger: outcome.ledger, record: null };
     if (code !== undefined) throw new QditChainError("contract", `milestone_proof refused the read (error #${code}).`);
-    // Not the contract's own error: a missing contract, a bad network, an RPC hiccup.
-    throw new QditChainError("unreachable", "milestone_proof could not be read on chain.");
+    // The RPC answered, but the host failed the call: no contract at that id,
+    // missing storage, a wasm that is not milestone_proof. Retrying won't fix
+    // that (only transport failures and timeouts are `unreachable`).
+    throw new QditChainError("contract", "The project's contract could not be read as milestone_proof.");
   }
   let native: unknown;
   try {

@@ -6,10 +6,14 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { StatusTag } from "@/components/ui/status-tag";
 import { useWallet } from "@/components/vault/wallet-provider";
-import { suggestQditStatus, type QditMilestoneStateRow, type QditSuggestion } from "@/lib/integrations/qdit-status";
+import {
+  planQditSignature,
+  suggestQditStatus,
+  type QditMilestoneStateRow,
+  type QditSuggestion,
+} from "@/lib/integrations/qdit-status";
 import { buildMindmap, type MindmapNode } from "@/lib/mindmap";
 import type { QditLinkRow } from "@/lib/node-links";
-import { anchorBatches, planRollups, type NodeUpdate } from "@/lib/node-rollup";
 import { DoqtriRegistry, type ChainNode, type WriteReceipt } from "@/lib/stellar/contract-client";
 import { DoqtriError } from "@/lib/stellar/errors";
 import { sha256Hex } from "@/lib/stellar/hash";
@@ -37,7 +41,7 @@ const TONE: Record<string, "planned" | "info" | "onchain" | "verified"> = {
   Verified: "verified",
 };
 
-type StatusResponse = { states: Record<string, QditMilestoneStateRow>; errors: string[] };
+type StatusResponse = { states: Record<string, QditMilestoneStateRow>; errors: string[]; unread: string[] };
 
 async function recheck(docId: string, force: boolean): Promise<StatusResponse> {
   const res = await fetch(`/api/integrations/qdit/docs/${docId}/status`, {
@@ -47,7 +51,7 @@ async function recheck(docId: string, force: boolean): Promise<StatusResponse> {
   });
   const payload = (await res.json().catch(() => ({}))) as Partial<StatusResponse> & { error?: string };
   if (!res.ok || !payload.states) throw new Error(payload.error ?? "Could not check qdit milestones");
-  return { states: payload.states, errors: payload.errors ?? [] };
+  return { states: payload.states, errors: payload.errors ?? [], unread: payload.unread ?? [] };
 }
 
 function flatten(tree: MindmapNode): string[] {
@@ -60,9 +64,31 @@ function flatten(tree: MindmapNode): string[] {
   return ids;
 }
 
-async function readRecords(docId: string, nodeIds: string[]): Promise<Record<string, ChainNode | null>> {
-  const entries = await Promise.all(nodeIds.map(async (id) => [id, await DoqtriRegistry.getNode(docId, id)] as const));
-  return Object.fromEntries(entries);
+/** Node reads in flight at once: the RPC rate-limits a burst of simulations. */
+const READ_CONCURRENCY = 4;
+
+type NodeReads = { records: Record<string, ChainNode | null>; failed: string[] };
+
+/**
+ * Each heading's on-chain record, null where the contract has none. A
+ * heading whose read failed is in `failed` and not in `records`: it is never
+ * taken for one with no record.
+ */
+async function readRecords(docId: string, nodeIds: string[]): Promise<NodeReads> {
+  const records: Record<string, ChainNode | null> = {};
+  const failed: string[] = [];
+  for (let i = 0; i < nodeIds.length; i += READ_CONCURRENCY) {
+    await Promise.all(
+      nodeIds.slice(i, i + READ_CONCURRENCY).map(async (id) => {
+        try {
+          records[id] = await DoqtriRegistry.readNode(docId, id);
+        } catch {
+          failed.push(id);
+        }
+      }),
+    );
+  }
+  return { records, failed };
 }
 
 export type QditStatusSync = {
@@ -105,6 +131,7 @@ export function useQditStatusSync({
   const wallet = useWallet();
   const [states, setStates] = useState<Record<string, QditMilestoneStateRow>>({});
   const [records, setRecords] = useState<Record<string, ChainNode | null>>({});
+  const [unreadNodes, setUnreadNodes] = useState<string[]>([]);
   const [checking, setChecking] = useState(false);
   const [signingIds, setSigningIds] = useState<string[]>([]);
   const signing = signingIds.length > 0;
@@ -116,7 +143,7 @@ export function useQditStatusSync({
     if (links.length === 0) return;
     setChecking(true);
     try {
-      const [result, nodeRecords] = await Promise.all([
+      const [result, reads] = await Promise.all([
         recheck(docId, false),
         readRecords(
           docId,
@@ -124,8 +151,10 @@ export function useQditStatusSync({
         ),
       ]);
       setStates(result.states);
-      setRecords(nodeRecords);
+      setRecords(reads.records);
+      setUnreadNodes(reads.failed);
       if (result.errors.length > 0) toast.warning(result.errors[0]);
+      else if (reads.failed.length > 0) toast.warning("Some headings' records on Stellar couldn't be read.");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not check qdit milestones");
     } finally {
@@ -146,10 +175,15 @@ export function useQditStatusSync({
       Object.fromEntries(
         links.map((l) => [
           l.id,
-          suggestQditStatus({ link: l, state: states[l.qdit_milestone_id], record: records[l.node_id] ?? null }),
+          suggestQditStatus({
+            link: l,
+            state: states[l.qdit_milestone_id],
+            record: records[l.node_id] ?? null,
+            recordUnread: unreadNodes.includes(l.node_id),
+          }),
         ]),
       ),
-    [links, states, records],
+    [links, states, records, unreadNodes],
   );
   const ready = links.filter((l) => suggestions[l.id]?.kind === "sign").map((l) => l.id);
 
@@ -167,26 +201,29 @@ export function useQditStatusSync({
       const [fresh, rows] = await Promise.all([recheck(docId, true), reloadLinks()]);
       setStates(fresh.states);
       const tree = buildMindmap(title, saved);
-      const allRecords = await readRecords(docId, flatten(tree));
-      setRecords(allRecords);
+      const reads = await readRecords(docId, flatten(tree));
+      setRecords(reads.records);
+      setUnreadNodes(reads.failed);
 
-      // The ids picked, re-found on the rows as the save left them.
-      const updates: NodeUpdate[] = [];
-      for (const row of rows.filter((r) => linkIds.includes(r.id))) {
-        const s = suggestQditStatus({ link: row, state: fresh.states[row.qdit_milestone_id], record: allRecords[row.node_id] ?? null });
-        if (s.kind === "sign") updates.push(s.update);
-      }
-      if (updates.length === 0) {
-        toast.info("Nothing to sign: Stellar already says this.");
+      // The ids picked, re-found on the rows as the save left them. Every
+      // read this rests on must have answered: a failed one is not "no
+      // record", and planning from it would sign a wrong record (D-04).
+      const plan = planQditSignature({
+        tree,
+        rows,
+        linkIds,
+        states: fresh.states,
+        records: reads.records,
+        unreadNodes: reads.failed,
+        unreadMilestones: fresh.unread,
+        otherLinked,
+      });
+      if (!plan.ok) {
+        if (plan.reason === "nothing") toast.info(plan.message);
+        else toast.error(plan.message);
         return;
       }
-      const rollups = planRollups({
-        tree,
-        records: allRecords,
-        linked: [...rows.map((r) => r.node_id), ...otherLinked],
-        pending: updates,
-      }).updates;
-      const batches = anchorBatches([...updates, ...rollups]);
+      const { updates, rollups, batches } = plan;
 
       const address = await wallet.ensureWallet();
       const target = await loadWriteTarget(docId);

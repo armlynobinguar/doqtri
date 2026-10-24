@@ -6,8 +6,9 @@ import {
   type QditChainNetwork,
 } from "@/lib/integrations/qdit-chain";
 import type { QditMilestoneStatus } from "@/lib/integrations/qdit-client";
+import type { MindmapNode } from "@/lib/mindmap";
 import type { QditLinkRow } from "@/lib/node-links";
-import type { NodeUpdate, RecordLike } from "@/lib/node-rollup";
+import { anchorBatches, planRollups, type NodeUpdate, type RecordLike } from "@/lib/node-rollup";
 import type { NodeStatus } from "@/lib/stellar/types";
 
 /**
@@ -72,6 +73,8 @@ export function suggestQditStatus(params: {
   state: QditMilestoneStateRow | null | undefined;
   /** The heading's own on-chain record now, or null for none. */
   record: RecordLike | null;
+  /** The heading's record could not be read: `record` says nothing then. */
+  recordUnread?: boolean;
 }): QditSuggestion {
   const { link, state, record } = params;
   if (link.qdit_state === "ambiguous" || link.qdit_state === "broken" || link.qdit_state === "conflict") {
@@ -92,6 +95,11 @@ export function suggestQditStatus(params: {
   if (state.chain_status === "none") {
     // Section 10: a milestone with no record is not signed with tool = "qdit".
     return { kind: "none", status: "Planned", reason: "No proof is on Stellar for this milestone yet.", preview };
+  }
+
+  if (params.recordUnread) {
+    // Not "no record": a failed read must not suggest what the heading may already say.
+    return { kind: "none", status: null, reason: "This heading's record on Stellar couldn't be read.", preview };
   }
 
   const status = nodeStatusForMilestone(state.chain_status);
@@ -119,4 +127,52 @@ export function suggestQditStatus(params: {
     reason: `${said}.`,
     preview,
   };
+}
+
+export type QditSignPlan =
+  | { ok: true; updates: NodeUpdate[]; rollups: NodeUpdate[]; batches: NodeUpdate[][] }
+  | { ok: false; reason: "unread" | "nothing"; message: string };
+
+/**
+ * What one "Mark <status>" signs, from reads made just before (D-04): the
+ * picked links' suggestions, every parent heading that rolls up from them
+ * (section 11) and the anchor calls they fit in (R-04). Refuses when any
+ * read it rests on failed, whether a heading's record (`unreadNodes`: a
+ * failed read is not "no record", and would let a roll-up overwrite a
+ * signed heading or downgrade a parent) or a picked milestone's chain read
+ * (`unreadMilestones`: the stored state could be out of date).
+ */
+export function planQditSignature(params: {
+  tree: MindmapNode;
+  /** The note's qdit links as the save left them. */
+  rows: QditLinkRow[];
+  linkIds: string[];
+  states: Record<string, QditMilestoneStateRow>;
+  records: Record<string, RecordLike | null>;
+  unreadNodes: string[];
+  unreadMilestones: string[];
+  /** Headings linked by another provider. */
+  otherLinked: string[];
+}): QditSignPlan {
+  const picked = params.rows.filter((r) => params.linkIds.includes(r.id));
+  if (params.unreadNodes.length > 0 || picked.some((r) => params.unreadMilestones.includes(r.qdit_milestone_id))) {
+    return {
+      ok: false,
+      reason: "unread",
+      message: "Stellar couldn't be read just now, so nothing was signed. Try again in a moment.",
+    };
+  }
+  const updates: NodeUpdate[] = [];
+  for (const row of picked) {
+    const s = suggestQditStatus({ link: row, state: params.states[row.qdit_milestone_id], record: params.records[row.node_id] ?? null });
+    if (s.kind === "sign") updates.push(s.update);
+  }
+  if (updates.length === 0) return { ok: false, reason: "nothing", message: "Nothing to sign: Stellar already says this." };
+  const rollups = planRollups({
+    tree: params.tree,
+    records: params.records,
+    linked: [...params.rows.map((r) => r.node_id), ...params.otherLinked],
+    pending: updates,
+  }).updates;
+  return { ok: true, updates, rollups, batches: anchorBatches([...updates, ...rollups]) };
 }

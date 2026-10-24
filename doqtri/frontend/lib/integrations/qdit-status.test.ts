@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { suggestQditStatus, type QditMilestoneStateRow } from "@/lib/integrations/qdit-status";
+import { planQditSignature, suggestQditStatus, type QditMilestoneStateRow } from "@/lib/integrations/qdit-status";
+import { buildMindmap } from "@/lib/mindmap";
+import type { QditLinkRow } from "@/lib/node-links";
 
 /*
  * What the ship panel suggests for a heading linked to a qdit milestone
@@ -113,5 +115,74 @@ describe("suggestQditStatus", () => {
   it("refuses to name a record a verifier could not parse", () => {
     const s = suggestQditStatus({ link: { ...link, qdit_project_id: PROJECT.toUpperCase() }, state: state(), record: null });
     expect(s.kind).toBe("none");
+  });
+});
+
+describe("suggestQditStatus with a failed record read", () => {
+  it("suggests nothing rather than treating the failure as no record", () => {
+    const s = suggestQditStatus({ link, state: state(), record: null, recordUnread: true });
+    expect(s).toMatchObject({ kind: "none", status: null });
+  });
+});
+
+describe("planQditSignature", () => {
+  // root ("Mark mindmap done": Verified, signed by hand)
+  //   h0 Plan
+  //     h1 Escrow (qdit, M approved)
+  //     h2 Payroll (Verified by hand)
+  const tree = buildMindmap("Doc", "# Plan\n## Escrow\n## Payroll");
+  const row: QditLinkRow = {
+    id: "row-1",
+    node_id: "h1",
+    node_label: "Escrow",
+    qdit_project_id: PROJECT,
+    qdit_milestone_id: MILESTONE,
+    qdit_link_id: "l1",
+    qdit_url: null,
+    qdit_doc_version: null,
+    qdit_state: "linked",
+  };
+  const records = {
+    root: { status: "Verified", tool: "doqtri-done", artifactRef: "v1" },
+    h0: null,
+    h1: null,
+    h2: { status: "Verified", tool: "manual", artifactRef: "" },
+  };
+  const base = {
+    tree,
+    rows: [row],
+    linkIds: ["row-1"],
+    states: { [MILESTONE]: state() },
+    records,
+    unreadNodes: [] as string[],
+    unreadMilestones: [] as string[],
+    otherLinked: [] as string[],
+  };
+
+  it("signs the heading and the parent it rolls up, leaving the hand-signed root alone", () => {
+    const plan = planQditSignature(base);
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(plan.updates).toEqual([{ nodeId: "h1", status: "Verified", tool: "qdit", artifactRef: REF }]);
+    expect(plan.rollups.map((u) => [u.nodeId, u.status])).toEqual([["h0", "Verified"]]);
+    expect(plan.batches).toHaveLength(1);
+  });
+
+  it("refuses when a heading's record could not be read (the root's attestation would be overwritten)", () => {
+    const { root: _root, ...rest } = records;
+    void _root;
+    const plan = planQditSignature({ ...base, records: rest, unreadNodes: ["root"] });
+    expect(plan).toMatchObject({ ok: false, reason: "unread" });
+  });
+
+  it("refuses when the forced chain read of a picked milestone failed", () => {
+    expect(planQditSignature({ ...base, unreadMilestones: [MILESTONE] })).toMatchObject({ ok: false, reason: "unread" });
+    // Another milestone's failure does not hold this one up.
+    expect(planQditSignature({ ...base, unreadMilestones: ["c81e4f07-6a2c-4d93-8e5f-0c7a9b3d2e61"] }).ok).toBe(true);
+  });
+
+  it("says so when there is nothing to sign", () => {
+    const signed = { ...records, h1: { status: "Verified", tool: "qdit", artifactRef: REF } };
+    expect(planQditSignature({ ...base, records: signed })).toMatchObject({ ok: false, reason: "nothing" });
   });
 });

@@ -75,7 +75,7 @@ describe("readMilestoneRecord", () => {
       readMilestoneRecord(CHAIN, PROJECT, MILESTONE, {
         simulate: answering({ ledger: 9, error: "HostError: Error(Storage, MissingValue)" }),
       }),
-    ).rejects.toMatchObject({ kind: "unreachable" });
+    ).rejects.toMatchObject({ kind: "contract" }); // no contract at that id: a retry can't fix it
   });
 
   it("passes on an unreachable RPC", async () => {
