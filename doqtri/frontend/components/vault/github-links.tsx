@@ -1,18 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ArrowRightIcon, GitPullRequestIcon, Loader2Icon, RefreshCwIcon, XIcon } from "lucide-react";
+import { ArrowRightIcon, GitPullRequestIcon, Loader2Icon, RefreshCwIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StatusTag } from "@/components/ui/status-tag";
 import { useWallet } from "@/components/vault/wallet-provider";
+import {
+  HeadingSelect,
+  LINK_INPUT_CLASS,
+  LinkItemShell,
+  LinkList,
+  LinkSection,
+} from "@/components/vault/node-link-list";
 import { DoqtriRegistry, type WriteReceipt } from "@/lib/stellar/contract-client";
 import { DoqtriError } from "@/lib/stellar/errors";
 import { loadWriteTarget, reportWorkspaceAssignment } from "@/lib/stellar/write-target";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { formatRef, parseGitHubRef, refUrl } from "@/lib/github/refs";
 import { isReadyToSync, type GitHubItem, type Suggestion } from "@/lib/github/status";
+import { GITHUB_LINK_COLUMNS, linkableNodes } from "@/lib/node-links";
 
 type Node = { id: string; label: string };
 
@@ -44,6 +51,10 @@ const TOOL = "github";
  * contract needs a signature for each status change (the owner's, or for a
  * team note any editor's, WP-1.4), so the browser
  * signs — one transaction per node until a batch call exists.
+ *
+ * The GitHub provider of the ship panel's link list (node-links.tsx,
+ * WP-2.5): it reads and writes GitHub rows only, and does not offer a
+ * heading another provider has linked (`taken`, D-08).
  */
 export function GitHubLinks({
   docId,
@@ -52,6 +63,8 @@ export function GitHubLinks({
   canSign = true,
   signerLoading = false,
   onSynced,
+  taken = [],
+  onLinkedChange,
 }: {
   docId: string;
   nodes: Node[];
@@ -66,6 +79,10 @@ export function GitHubLinks({
    */
   signerLoading?: boolean;
   onSynced: () => void;
+  /** Headings linked by another provider. */
+  taken?: string[];
+  /** The headings this provider has linked, after every load. */
+  onLinkedChange?: (nodeIds: string[]) => void;
 }) {
   const wallet = useWallet();
   const [links, setLinks] = useState<LinkRow[]>([]);
@@ -81,8 +98,9 @@ export function GitHubLinks({
   const loadLinks = useCallback(async (): Promise<LinkRow[]> => {
     const { data, error } = await createSupabaseBrowserClient()
       .from("node_links")
-      .select("id, node_id, node_label, repo, number")
+      .select(GITHUB_LINK_COLUMNS)
       .eq("document_id", docId)
+      .eq("provider", "github")
       .order("created_at");
     if (error) {
       toast.error("Could not load GitHub links");
@@ -90,8 +108,9 @@ export function GitHubLinks({
     }
     const rows = (data ?? []) as LinkRow[];
     setLinks(rows);
+    onLinkedChange?.(rows.map((r) => r.node_id));
     return rows;
-  }, [docId]);
+  }, [docId, onLinkedChange]);
 
   const readChain = useCallback(
     async (rows: LinkRow[]) => {
@@ -148,8 +167,7 @@ export function GitHubLinks({
     };
   }, [loadLinks, check]);
 
-  const linkedIds = new Set(links.map((l) => l.node_id));
-  const unlinked = nodes.filter((n) => !linkedIds.has(n.id));
+  const unlinked = linkableNodes(nodes, "github", [...links.map((l) => l.node_id), ...taken]);
   const selectedNode = unlinked.some((n) => n.id === linkNode) ? linkNode : unlinked[0]?.id ?? "";
 
   async function addLink() {
@@ -238,13 +256,11 @@ export function GitHubLinks({
   }
 
   return (
-    <section className="border-border grid gap-2 border-t pt-3">
-      <div className="flex items-center justify-between">
-        <span className="text-foreground flex items-center gap-1.5 font-medium">
-          <GitPullRequestIcon className="size-3.5" />
-          GitHub
-        </span>
-        {links.length > 0 ? (
+    <LinkSection
+      icon={<GitPullRequestIcon className="size-3.5" />}
+      title="GitHub"
+      action={
+        links.length > 0 ? (
           <Button
             type="button"
             size="sm"
@@ -256,52 +272,38 @@ export function GitHubLinks({
             {busy === "check" ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
             Check
           </Button>
-        ) : null}
-      </div>
-
-      {links.length === 0 ? (
-        <p className="text-muted-foreground text-[11px] leading-snug">
-          Link a heading to a GitHub issue or pull request. When the work merges and CI passes,
-          Doqtri suggests moving the node forward for you to sign.
-        </p>
-      ) : (
-        <ul className="grid gap-1.5">
-          {links.map((link) => (
-            <LinkItem
-              key={link.id}
-              link={link}
-              result={checks[link.id]}
-              chainStatus={chain[link.node_id] ?? null}
-              drifted={drifted(link)}
-              anchored={anchored}
-              onRemove={() => void removeLink(link)}
-            />
-          ))}
-        </ul>
-      )}
+        ) : null
+      }
+    >
+      <LinkList
+        count={links.length}
+        empty={
+          <>
+            Link a heading to a GitHub issue or pull request. When the work merges and CI passes,
+            Doqtri suggests moving the node forward for you to sign.
+          </>
+        }
+      >
+        {links.map((link) => (
+          <LinkItem
+            key={link.id}
+            link={link}
+            result={checks[link.id]}
+            chainStatus={chain[link.node_id] ?? null}
+            drifted={drifted(link)}
+            anchored={anchored}
+            onRemove={() => void removeLink(link)}
+          />
+        ))}
+      </LinkList>
 
       {unlinked.length > 0 ? (
         <div className="grid gap-1.5">
-          <Select
-            value={selectedNode}
-            onValueChange={(next) => next && setLinkNode(next as string)}
-            items={Object.fromEntries(unlinked.map((n) => [n.id, n.label]))}
-          >
-            <SelectTrigger aria-label="Heading to link" className="h-8 text-[12px] max-lg:h-10 max-lg:text-base">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {unlinked.map((n) => (
-                <SelectItem key={n.id} value={n.id}>
-                  {n.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <HeadingSelect nodes={unlinked} value={selectedNode} onChange={setLinkNode} />
           <div className="flex gap-1.5">
             <input
               aria-label="GitHub issue or pull request"
-              className="text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-[10px] border border-[var(--glass-lo)] bg-[var(--glass)] min-w-0 flex-1 px-2.5 shadow-[inset_0_1px_0_0_var(--glass-hi)] outline-none focus-visible:ring-3"
+              className={LINK_INPUT_CLASS}
               placeholder="owner/repo#12 or PR URL"
               value={refText}
               onChange={(e) => setRefText(e.target.value)}
@@ -345,7 +347,7 @@ export function GitHubLinks({
       {canSign && ready.length > 1 ? (
         <p className="text-muted-foreground text-[11px]">Each node is a separate signature.</p>
       ) : null}
-    </section>
+    </LinkSection>
   );
 }
 
@@ -369,21 +371,7 @@ function LinkItem({
   const moving = s != null && isReadyToSync(chainStatus, s);
 
   return (
-    <li className="glass grid gap-1 rounded-xl px-2.5 py-2">
-      <div className="flex items-start justify-between gap-2">
-        <span className="text-foreground truncate text-[12px]" title={link.node_label}>
-          {link.node_label || link.node_id}
-        </span>
-        <button
-          type="button"
-          aria-label={`Unlink ${formatRef(ref)}`}
-          className="text-muted-foreground hover:text-foreground shrink-0"
-          onClick={onRemove}
-        >
-          <XIcon className="size-3.5" />
-        </button>
-      </div>
-
+    <LinkItemShell label={link.node_label || link.node_id} removeLabel={`Unlink ${formatRef(ref)}`} onRemove={onRemove}>
       <div className="flex flex-wrap items-center gap-1.5">
         <a
           href={result?.item?.url ?? refUrl(ref)}
@@ -420,6 +408,6 @@ function LinkItem({
           The heading this was linked to has moved. Unlink and link it again before syncing.
         </p>
       ) : null}
-    </li>
+    </LinkItemShell>
   );
 }

@@ -12,6 +12,8 @@ import {
   parseEditSession,
 } from "@/lib/doc-lock";
 import { liveLockHolder } from "@/lib/doc-lock-server";
+import { afterNoteSaved, noteBeforeSave } from "@/lib/integrations/qdit-save-hook";
+import { qditIntegrationEnabled } from "@/lib/integrations/qdit-config";
 import { isTitleTaken, MAX_TITLE_LENGTH } from "@/lib/title";
 import {
   loadMemberDocument,
@@ -117,6 +119,10 @@ export async function PUT(
     );
   }
 
+  // With the qdit integration on, the text being replaced, so the save can
+  // work out which linked headings moved (WP-2.5). Null otherwise.
+  const before = await noteBeforeSave(supabase, id);
+
   const { data, error } = await supabase.rpc("save_document", {
     p_document_id: id,
     p_markdown: markdown,
@@ -150,6 +156,7 @@ export async function PUT(
   if (!Number.isSafeInteger(saved)) {
     return NextResponse.json({ error: "Unexpected save result" }, { status: 500 });
   }
+  await afterNoteSaved({ userId: user.id, docId: id, baseVersion: version, savedVersion: saved, markdown, before });
   return NextResponse.json({ id, version: saved });
 }
 
@@ -303,6 +310,34 @@ export async function DELETE(
   const locked = await refuseIfLockedByOther(admin, id, user.id);
   if (locked) return locked;
 
+  // A note linked to a qdit project is kept until an admin unlinks it
+  // (D-10): deleting it here would leave qdit's links pointing at nothing,
+  // with no way left to remove them (WP-2.5). The database refuses it too
+  // (20261025110000_qdit_linking.sql); this says why first. No row exists
+  // unless the qdit integration was used.
+  const { data: qditProject, error: qditProjectError } = await admin
+    .from("doc_project_links")
+    .select("project_name")
+    .eq("document_id", id)
+    .maybeSingle();
+  if (qditProjectError) {
+    return NextResponse.json({ error: qditProjectError.message }, { status: 500 });
+  }
+  if (qditProject) {
+    const name = (qditProject as { project_name: string }).project_name;
+    // With the integration off the ship panel shows no qdit section, so
+    // there is nothing to point the user at (an operator turns it back on).
+    return NextResponse.json(
+      {
+        error: qditIntegrationEnabled()
+          ? `This note is linked to the qdit project ${name}. A workspace admin must unlink it in the ship panel first, so qdit drops its links too (or forget the link there, if qdit no longer has the project).`
+          : `This note is linked to the qdit project ${name}, and the qdit integration is turned off on this site, so the link can't be removed for now. The note is kept until it is.`,
+        code: "QDIT_LINKED",
+      },
+      { status: 409 },
+    );
+  }
+
   // Strict read: it tells "not anchored" apart from "the ledger is down", and
   // only the first of those may proceed.
   let anchored: boolean;
@@ -374,6 +409,16 @@ export async function DELETE(
     .eq("workspace_id", note.workspace_id);
 
   if (deleteError) {
+    // 23001: linked to qdit since the check above (the database's guard).
+    if (deleteError.code === "23001") {
+      return NextResponse.json(
+        {
+          error: "This note was just linked to a qdit project. A workspace admin must unlink it first.",
+          code: "QDIT_LINKED",
+        },
+        { status: 409 },
+      );
+    }
     return NextResponse.json({ error: deleteError.message }, { status: 500 });
   }
 

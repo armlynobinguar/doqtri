@@ -49,6 +49,12 @@ vi.mock("@/lib/stellar/contract-client", () => ({
   DoqtriRegistry: { readDocument: (...args: unknown[]) => readDocument(...args) },
 }));
 
+const saveHook = vi.hoisted(() => ({
+  noteBeforeSave: vi.fn(async () => null as unknown),
+  afterNoteSaved: vi.fn(async () => undefined),
+}));
+vi.mock("@/lib/integrations/qdit-save-hook", () => saveHook);
+
 const { PUT, PATCH, DELETE } = await import("./route");
 
 function ctx(id = DOC) {
@@ -111,6 +117,28 @@ describe("PUT /api/notes/[id] (save)", () => {
     });
     // The service role never writes the text.
     expect(adminWrites).toEqual([]);
+  });
+
+  it("hands a successful save to the qdit link hook (WP-2.5), with the text it replaced", async () => {
+    const before = { title: "Roadmap", markdown: "# v3", version: 3 };
+    saveHook.noteBeforeSave.mockResolvedValueOnce(before);
+    session.rpc.mockResolvedValue({ data: 4, error: null });
+    await PUT(put({ markdown: "# v4", version: 3, session: TAB }), ctx());
+    expect(saveHook.afterNoteSaved).toHaveBeenCalledWith({
+      userId: ME,
+      docId: DOC,
+      baseVersion: 3,
+      savedVersion: 4,
+      markdown: "# v4",
+      before,
+    });
+  });
+
+  it("does not call the hook for a refused save", async () => {
+    saveHook.afterNoteSaved.mockClear();
+    session.rpc.mockResolvedValue({ data: null, error: { code: "DQVER", message: "stale", details: "5" } });
+    await PUT(put({ markdown: "# v4", version: 3, session: TAB }), ctx());
+    expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
   });
 
   it("answers 423 naming the holder when the caller does not hold the lock", async () => {
@@ -216,5 +244,38 @@ describe("rename and delete while someone else is editing", () => {
     expect(res.status).toBe(423);
     expect(readDocument).not.toHaveBeenCalled();
     expect(adminWrites).toEqual([]);
+  });
+});
+
+describe("deleting a note linked to qdit (WP-2.5)", () => {
+  it("refuses until an admin unlinks the project, before asking the ledger", async () => {
+    adminRows.doc_project_links = { project_name: "Soroban payroll" };
+    const res = await DELETE(new Request(`http://localhost/api/notes/${DOC}`, { method: "DELETE" }), ctx());
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.code).toBe("QDIT_LINKED");
+    expect(body.error).toContain("Soroban payroll");
+    expect(readDocument).not.toHaveBeenCalled();
+    expect(adminWrites).toEqual([]);
+  });
+
+  it("does not point at the ship panel while the integration is off", async () => {
+    adminRows.doc_project_links = { project_name: "Soroban payroll" };
+    vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "");
+    const off = await (await DELETE(new Request(`http://localhost/api/notes/${DOC}`, { method: "DELETE" }), ctx())).json();
+    vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "1");
+    const on = await (await DELETE(new Request(`http://localhost/api/notes/${DOC}`, { method: "DELETE" }), ctx())).json();
+    vi.unstubAllEnvs();
+    expect(off).toMatchObject({ code: "QDIT_LINKED" });
+    expect(off.error).toContain("turned off");
+    expect(off.error).not.toContain("ship panel");
+    expect(on.error).toContain("ship panel");
+  });
+
+  it("deletes an unlinked note as before", async () => {
+    readDocument.mockResolvedValue(null);
+    const res = await DELETE(new Request(`http://localhost/api/notes/${DOC}`, { method: "DELETE" }), ctx());
+    expect(res.status).toBe(200);
+    expect(adminWrites).toEqual(["delete documents"]);
   });
 });
