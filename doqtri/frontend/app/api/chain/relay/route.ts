@@ -2,7 +2,7 @@ import { after } from "next/server";
 import { Address } from "@stellar/stellar-sdk";
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
 import { walletAddressFromEmail } from "@/lib/wallet-address";
-import { CONTRACT_ID, IS_MAINNET, MARKET_CONTRACT_ID, NETWORK_PASSPHRASE } from "@/lib/stellar/config";
+import { CONTRACT_ID, IS_MAINNET, MARKET_CONTRACT_ID, NETWORK_PASSPHRASE, REGISTRY_EDITORS } from "@/lib/stellar/config";
 import {
   DOQTRI_RELAYER,
   FEE_FORWARDER,
@@ -16,10 +16,12 @@ import {
   WEBAUTHN_VERIFIER,
 } from "@/lib/stellar/smart-wallet-config";
 import {
+  authorizeRegistryWrite,
   deployedContractAddress,
   deployerAddress,
   forwardedMarketCallOf,
   forwardedTarget,
+  isDocumentWrite,
   marketCallOf,
   parseRelayBody,
   RelayRejection,
@@ -29,9 +31,12 @@ import {
   validateRegistryWrite,
   validateWalletAdmin,
   validateWalletDeploy,
+  V3_FUNCTIONS,
   type MarketCall,
+  type RegistryWrite,
   type RelaySubmission,
 } from "@/lib/stellar/relay-validation";
+import { registryAccess } from "@/lib/stellar/registry-access";
 import { MAX_MARKET_FEE_STROOPS } from "@/lib/stellar/market-config";
 import { marketCallPlan, purchaseColumns, syncTemplate, type SaleRecord } from "@/lib/market-server";
 import { simulateWithinCap, submitAndConfirm } from "@/lib/stellar/channels";
@@ -49,11 +54,12 @@ import { topUpWallet } from "@/lib/stellar/friendbot-topup";
  * fit the per-user and global quota, and simulate under the fee cap.
  *
  * Four kinds of submission: a wallet deployment; a DoqtriRegistry write
- * signed by the caller's own wallet for one of the caller's own notes; a
+ * signed by the caller's own wallet on a note (or, with REGISTRY_EDITORS, a
+ * workspace) the caller's current workspace role lets them write; a
  * TemplateMarket write by the caller's wallet on a template Doqtri lists
  * (progress/004); and a passkey change (add or remove) on the caller's own
  * wallet. Each relayed
- * registry write is indexed in chain_writes, because Horizon cannot list a
+ * note write is indexed in chain_writes, because Horizon cannot list a
  * contract account's writes by owner.
  */
 
@@ -164,35 +170,48 @@ async function relayRegistryWrite(userId: string, submission: RelaySubmission) {
   if (!wallet) return fail("Create your passkey wallet first.", 409);
 
   const write = validateRegistryWrite(submission, { registry: CONTRACT_ID, wallet: wallet.address });
-
-  // The contract checks the signature; this checks the note is the caller's,
-  // so nobody can anchor (and spend fees on) arbitrary document ids.
-  const { data: doc } = await admin
-    .from("documents")
-    .select("id")
-    .eq("id", write.docId)
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (!doc) return fail("That note isn't in your vault.", 403);
+  await authorizeWrite(userId, write);
 
   const refused = await chargeQuota(userId, "write", WRITES_PER_USER, WRITES_GLOBAL);
   if (refused) return refused;
 
   await simulateWithinCap(submission.func, submission.auth);
   const sent = await submitAndConfirm(submission.func, submission.auth);
-
-  const { error } = await admin.from("chain_writes").insert({
-    network: NETWORK,
-    tx_hash: sent.hash,
-    document_id: write.docId,
-    fn: write.fn,
-    owner: wallet.address,
-  });
-  // The write is on-chain either way; a missing index row only hides it from
-  // the history list until reconciled, so report success and log loudly.
-  if (error) console.error(`[chain/relay] ${write.fn} ${sent.hash} not indexed: ${error.message}`);
+  await indexWrite(write, sent.hash, wallet.address);
 
   return Response.json({ success: true, data: sent });
+}
+
+/**
+ * The contract checks the signature; this checks, against the database at
+ * this moment, that the caller may make this write at all, so nobody spends
+ * fees on arbitrary documents or workspaces and a member removed in the app
+ * is cut off at once (D-16). The v3 calls are refused until the deployed
+ * registry has them.
+ */
+async function authorizeWrite(userId: string, write: RegistryWrite): Promise<void> {
+  if (!REGISTRY_EDITORS && V3_FUNCTIONS.includes(write.fn)) {
+    throw new RelayRejection("Workspace calls aren't enabled on this registry yet.");
+  }
+  await authorizeRegistryWrite(write, userId, registryAccess(createSupabaseAdminClient()));
+}
+
+/**
+ * Note writes go into chain_writes, keyed by the wallet that signed them.
+ * The write is on-chain either way; a missing index row only hides it from
+ * the history list until reconciled, so report success and log loudly.
+ * Membership writes belong to no note and are not indexed.
+ */
+async function indexWrite(write: RegistryWrite, hash: string, wallet: string): Promise<void> {
+  if (!isDocumentWrite(write)) return;
+  const { error } = await createSupabaseAdminClient().from("chain_writes").insert({
+    network: NETWORK,
+    tx_hash: hash,
+    document_id: write.docId,
+    fn: write.fn,
+    owner: wallet,
+  });
+  if (error) console.error(`[chain/relay] ${write.fn} ${hash} not indexed: ${error.message}`);
 }
 
 /**
@@ -219,13 +238,7 @@ async function relayPaidWrite(userId: string, submission: RelaySubmission) {
     maxFeeCap: MAX_USER_FEE_STROOPS,
   });
 
-  const { data: doc } = await admin
-    .from("documents")
-    .select("id")
-    .eq("id", write.docId)
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (!doc) return fail("That note isn't in your vault.", 403);
+  await authorizeWrite(userId, write);
 
   // Still rate-limited: the user pays the fee, but each request costs our
   // relayer a submission and RPC calls.
@@ -233,15 +246,7 @@ async function relayPaidWrite(userId: string, submission: RelaySubmission) {
   if (refused) return refused;
 
   const { hash, feeStroops } = await submitPaidWrite(submission.func, walletAuthEntry(submission, wallet.address), write.maxFee);
-
-  const { error } = await admin.from("chain_writes").insert({
-    network: NETWORK,
-    tx_hash: hash,
-    document_id: write.docId,
-    fn: write.fn,
-    owner: wallet.address,
-  });
-  if (error) console.error(`[chain/relay] ${write.fn} ${hash} not indexed: ${error.message}`);
+  await indexWrite(write, hash, wallet.address);
 
   return Response.json({ success: true, data: { hash, status: "confirmed", feeStroops: feeStroops.toString() } });
 }
