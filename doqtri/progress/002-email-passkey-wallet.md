@@ -209,6 +209,11 @@ Findings that change later sections:
       confirm email on, minimum password length 8, leaked-password protection
       on (security advisor flags it off), captcha → Turnstile secret.
 - [ ] Signed-in email vault checked end to end (needs the dashboard config).
+- [ ] Workspace invites by email (D-49, WP-1.5): only after "Confirm email" is
+      on, run `update public.invite_settings set email_invites = true;`. Until
+      then invites go to wallet addresses only. With confirmations off,
+      Supabase confirms an email at signup, so an email invite would go to
+      whoever registered the address first. Part of the G1 sign-off (D-47).
 
 ### 2. Wallet data model — **Done 2026-10-08, applied to production**
 

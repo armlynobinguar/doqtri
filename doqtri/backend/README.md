@@ -159,6 +159,14 @@ The trade-offs, stated plainly:
 
 - Unverified addresses can register. Anyone can sign up as
   `someone-elses@address` without proving they own it.
+- Workspace invites by email stay off. An invite can wait for an address
+  nobody has signed up with, and with confirmations off Supabase marks a new
+  account's email confirmed at signup, so whoever registered
+  `colleague@corp.com` first would take an invite sent there, at its role
+  (admin, even). While `public.invite_settings.email_invites` is false (as the
+  WP-1.5 migration ships it), the database refuses email invites and delivers
+  none, and the members screen asks for a wallet address. Members who only
+  have an email cannot be invited until a wallet is set up or the switch is on.
 - There is no password reset, because that also sends mail.
 
 That is acceptable while the vault is private and single-user. It is **not**
@@ -194,6 +202,14 @@ sign-up that returns a user but no session, showing a "check your inbox" toast.
    sender's reputation. Adjust it under *Authentication → Rate Limits*.
 5. **Re-enable Confirm email**, then sign up with a real address and confirm
    the mail arrives.
+6. **Then switch email invites on** (D-49), in the SQL editor, and not before:
+
+   ```sql
+   update public.invite_settings set email_invites = true;
+   ```
+
+   Turning confirmations off again later means setting it back to `false`
+   first; open email invites are then held back until it is on again.
 
 Equivalent Management API call, if you would rather script it than click
 (requires a personal access token with account-wide scope):
