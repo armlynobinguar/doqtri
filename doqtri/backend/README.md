@@ -34,6 +34,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261018000000_create_referrals.sql       # NOT yet applied: apply before deploying
 20261019000000_chain_writes_anchor.sql    # NOT yet applied: apply before deploying
 20261021000000_create_mindmap_styles.sql
+20261024000000_add_promo_submission_rating.sql
 ```
 
 The remote records its own version stamps (e.g. `20260929114657` for

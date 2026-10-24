@@ -7,6 +7,8 @@ export const MINDMAP_PROMO = {
   id: "mindmap-showcase",
   active: true,
   prizePool: "$100 USD",
+  /** What entrants were asked to map; the AI rating scores relevance against it. */
+  brief: "A note on anything Web3, shown as a Doqtri mindmap.",
   xHandle: "usedoqtri",
   maxImages: 4,
   /** Mirrors the bucket's file_size_limit; the bucket is what enforces it. */

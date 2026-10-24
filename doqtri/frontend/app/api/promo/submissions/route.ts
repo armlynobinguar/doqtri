@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import {
   createSupabaseServerClient,
   createSupabaseAdminClient,
@@ -9,6 +9,12 @@ import {
   promoPathsInFolder,
   promoUploadFolder,
 } from "@/lib/promo";
+import { consumeAiQuota } from "@/lib/ai-quota";
+import { rateAndStoreSubmission } from "@/lib/promo-rating-ai";
+
+export const runtime = "nodejs";
+// The AI rating runs in after(), inside this function's lifetime.
+export const maxDuration = 120;
 
 /**
  * Step 2 of a promo entry: record the screenshots uploaded through the URLs
@@ -71,20 +77,28 @@ export async function POST(request: Request) {
     .maybeSingle();
 
   const imagePaths = names.map((name) => `${folder}/${name}`);
-  const { error: upsertError } = await admin.from("promo_submissions").upsert(
-    {
-      user_id: user.id,
-      promo: MINDMAP_PROMO.id,
-      image_paths: imagePaths,
-      caption,
-      contact,
-      updated_at: new Date().toISOString(),
-      // New screenshots need a fresh review.
-      status: "pending",
-      reviewed_at: null,
-    },
-    { onConflict: "user_id,promo" },
-  );
+  const { data: saved, error: upsertError } = await admin
+    .from("promo_submissions")
+    .upsert(
+      {
+        user_id: user.id,
+        promo: MINDMAP_PROMO.id,
+        image_paths: imagePaths,
+        caption,
+        contact,
+        updated_at: new Date().toISOString(),
+        // New screenshots need a fresh review.
+        status: "pending",
+        reviewed_at: null,
+        ai_score: null,
+        ai_rating: null,
+        ai_rated_at: null,
+        ai_rating_error: null,
+      },
+      { onConflict: "user_id,promo" },
+    )
+    .select("id")
+    .single();
   if (upsertError) {
     return NextResponse.json({ error: upsertError.message }, { status: 500 });
   }
@@ -94,6 +108,30 @@ export async function POST(request: Request) {
     (path) => !imagePaths.includes(path),
   );
   if (replaced.length) await admin.storage.from(PROMO_BUCKET).remove(replaced);
+
+  // Rate after responding, so the entrant is not kept waiting on the model.
+  // Charged to the entrant's AI budget, which bounds resubmit loops; an entry
+  // over budget or whose rating fails stays unrated for an admin to rate.
+  after(async () => {
+    const quota = await consumeAiQuota(admin, user.id, "promo-rating");
+    if (!quota.ok) {
+      await admin
+        .from("promo_submissions")
+        .update({
+          ai_rating_error:
+            quota.reason === "exceeded"
+              ? "Not rated: the entrant's daily AI limit was used up."
+              : "Not rated: the AI budget could not be checked.",
+        })
+        .eq("id", saved.id);
+      return;
+    }
+    try {
+      await rateAndStoreSubmission(admin, saved.id as string);
+    } catch (error) {
+      console.error(`[promo-rating] ${saved.id}: ${error instanceof Error ? error.message : error}`);
+    }
+  });
 
   return NextResponse.json({ ok: true });
 }
