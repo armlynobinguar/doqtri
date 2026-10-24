@@ -6,6 +6,9 @@ import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/sup
 import { ProfileView, type ReferralSummary } from "@/components/vault/profile-view";
 import { referralUrl } from "@/lib/referral";
 import { getActiveWorkspace } from "@/lib/active-workspace";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { ConnectedAppsData } from "@/components/vault/connected-apps";
+import { qditIntegrationEnabled } from "@/lib/integrations/qdit-config";
 
 export const metadata: Metadata = {
   title: "Profile & wallet · Doqtri",
@@ -25,10 +28,19 @@ export default async function ProfilePage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const [referral, { active }] = await Promise.all([loadReferral(user.id), getActiveWorkspace(user.id)]);
+  const [referral, { active }, connectedApps] = await Promise.all([
+    loadReferral(user.id),
+    getActiveWorkspace(user.id),
+    qditIntegrationEnabled() ? loadConnectedApps(supabase) : Promise.resolve(null),
+  ]);
   return (
     <Suspense>
-      <ProfileView joinedAt={user.created_at} referral={referral} workspaceId={active.id} />
+      <ProfileView
+        joinedAt={user.created_at}
+        referral={referral}
+        workspaceId={active.id}
+        connectedApps={connectedApps}
+      />
     </Suspense>
   );
 }
@@ -51,4 +63,30 @@ async function loadReferral(userId: string): Promise<ReferralSummary | null> {
   const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
   const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
   return { url: referralUrl(`${proto}://${host}`, data.code), referred: data.referred };
+}
+
+type ConnectionRow = {
+  provider: string;
+  subject: string;
+  account_label: string | null;
+  status: "connected" | "needs_reconnect" | "revoked";
+  connected_at: string;
+};
+
+/**
+ * The user's qdit connection for Connected apps (WP-2.3), read as the user
+ * through my_integration_connections(), which never returns a token.
+ */
+async function loadConnectedApps(supabase: SupabaseClient): Promise<ConnectedAppsData> {
+  const { data, error } = await supabase.rpc("my_integration_connections");
+  if (error) {
+    console.warn(`[profile] connected apps not loaded: ${error.message}`);
+    return { qdit: null, unavailable: true };
+  }
+  const row = ((data ?? []) as ConnectionRow[]).find((r) => r.provider === "qdit");
+  return {
+    qdit: row
+      ? { status: row.status, subject: row.subject, accountLabel: row.account_label, connectedAt: row.connected_at }
+      : null,
+  };
 }

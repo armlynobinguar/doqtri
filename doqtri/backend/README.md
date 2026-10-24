@@ -43,6 +43,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261024150500_workspace_members_management.sql  # NOT yet applied (WP-1.5)
 20261024160000_workspace_member_removals.sql  # NOT yet applied (WP-1.8)
 20261025090000_chain_jobs_scheduler.sql   # NOT yet applied (WP-1.9)
+20261025100000_integration_connections.sql    # NOT yet applied (WP-2.3)
 ```
 
 The remote records its own version stamps (e.g. `20260929114657` for
@@ -154,6 +155,16 @@ Two supporting tables:
   caller without the lock in that session (`DQLCK`) or with a stale version
   (`DQVER`). A plain client UPDATE of `markdown` is refused. Removing or
   demoting a member drops their locks.
+
+- `public.integration_connections` — a user's OAuth connection to their qdit
+  account (WP-2.3, D-02): one row per user and provider, with the qdit user id,
+  the granted scopes and the access and refresh tokens as AES-256-GCM
+  ciphertext (encrypted by the app with `INTEGRATION_TOKEN_KEY`). Service role
+  only: RLS on with no policies, and no privileges for anon or authenticated.
+  The browser reads its own connection's status, never a token, through
+  `my_integration_connections()`. `generation` goes up on every token write,
+  so concurrent refreshes on different server instances cannot overwrite each
+  other's rotated refresh token.
 
 The notes table itself is still the only content store. There are deliberately **no** graph tables: nodes and
 edges are parsed from `markdown` at render time by `lib/wikilinks.ts`, so the
