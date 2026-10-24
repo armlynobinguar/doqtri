@@ -28,6 +28,7 @@ import { expertTxUrl } from "@/lib/stellar/config";
 import { sha256Hex } from "@/lib/stellar/hash";
 import { DoqtriError } from "@/lib/stellar/errors";
 import { getDocumentHistory, type DocumentHistory } from "@/lib/stellar/history";
+import { loadWriteTarget, reportWorkspaceAssignment } from "@/lib/stellar/write-target";
 import { NODE_STATUSES, type NodeStatus } from "@/lib/stellar/types";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useWallet } from "@/components/vault/wallet-provider";
@@ -270,11 +271,13 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
       const registering = chainVersion == null;
       setAnchorStep("signing");
       const result = await withWallet(async (address) => {
+        const target = await loadWriteTarget(docId);
         if (registering) {
-          return DoqtriRegistry.registerDocument(address, docId, contentHash);
+          return DoqtriRegistry.registerDocument(address, docId, contentHash, target);
         }
-        return DoqtriRegistry.updateDocument(address, docId, contentHash);
+        return DoqtriRegistry.updateDocument(address, docId, contentHash, target);
       });
+      reportWorkspaceAssignment(result);
       setReceipt({
         ...result,
         kind: registering ? "register" : "update",
@@ -303,7 +306,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
       if (chainVersion == null) {
         throw new DoqtriError("NOT_REGISTERED", "Anchor the document first");
       }
-      const result = await withWallet((address) =>
+      const result = await withWallet(async (address) =>
         DoqtriRegistry.setNodeStatus(
           address,
           docId,
@@ -311,8 +314,10 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
           status,
           tool || "manual",
           artifact,
+          await loadWriteTarget(docId),
         ),
       );
+      reportWorkspaceAssignment(result);
       setReceipt({ ...result, kind: "node", nodeId, version: chainVersion });
       toast.success(`Node “${nodeId}” synced on-chain`);
       await refreshChain();
@@ -339,6 +344,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
       const saved = await onSave();
       const contentHash = await sha256Hex(saved);
       const address = await wallet.ensureWallet();
+      const target = await loadWriteTarget(docId);
 
       // The version this call will leave: the same one if the text is already
       // anchored, otherwise the next (v1 for a new document).
@@ -347,9 +353,14 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
         current != null && contentHash === chainDoc?.contentHash ? current : (current ?? 0) + 1;
 
       setDoneStep("anchoring");
-      const anchored = await DoqtriRegistry.anchor(address, docId, contentHash, [
-        { nodeId: DONE_NODE, status: "Verified", tool: DONE_TOOL, artifactRef: doneRef(version) },
-      ]);
+      const anchored = await DoqtriRegistry.anchor(
+        address,
+        docId,
+        contentHash,
+        [{ nodeId: DONE_NODE, status: "Verified", tool: DONE_TOOL, artifactRef: doneRef(version) }],
+        target,
+      );
+      reportWorkspaceAssignment(anchored);
       setReceipt({ ...anchored, kind: "done", version: anchored.version ?? version, contentHash });
       toast.success(`Mindmap marked done and anchored as v${version}`);
       await refreshChain();

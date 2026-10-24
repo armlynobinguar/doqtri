@@ -7,8 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StatusTag } from "@/components/ui/status-tag";
 import { useWallet } from "@/components/vault/wallet-provider";
-import { DoqtriRegistry } from "@/lib/stellar/contract-client";
+import { DoqtriRegistry, type WriteReceipt } from "@/lib/stellar/contract-client";
 import { DoqtriError } from "@/lib/stellar/errors";
+import { loadWriteTarget, reportWorkspaceAssignment } from "@/lib/stellar/write-target";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { formatRef, parseGitHubRef, refUrl } from "@/lib/github/refs";
 import { isReadyToSync, type GitHubItem, type Suggestion } from "@/lib/github/status";
@@ -40,7 +41,8 @@ const TOOL = "github";
  * Each heading can point at one issue or pull request. "Check" asks
  * /api/github/status what that work looks like now and which status it
  * suggests; "Sync" signs every suggestion that moves a node forward. The
- * contract needs the owner's signature for each status change, so the browser
+ * contract needs a signature for each status change (the owner's, or for a
+ * team note any editor's, WP-1.4), so the browser
  * signs — one transaction per node until a batch call exists.
  */
 export function GitHubLinks({
@@ -198,14 +200,18 @@ export function GitHubLinks({
     let done = 0;
     try {
       const address = await wallet.ensureWallet();
+      const target = await loadWriteTarget(docId);
+      let last: WriteReceipt | null = null;
       for (const link of ready) {
         const s = checks[link.id]?.suggestion;
         if (!s || s.status == null) continue;
         setProgress(`Signing ${done + 1} of ${ready.length}…`);
-        await DoqtriRegistry.setNodeStatus(address, docId, link.node_id, s.status, TOOL, s.artifactRef);
+        last = await DoqtriRegistry.setNodeStatus(address, docId, link.node_id, s.status, TOOL, s.artifactRef, target);
         done += 1;
         toast.success(`“${link.node_label}” → ${s.status}`);
       }
+      // Once, for the last write: each one retried the same assignment.
+      if (last) reportWorkspaceAssignment(last);
     } catch (e) {
       if (e instanceof DoqtriError && e.code === "NOT_FUNDED") void wallet.refreshBalance();
       const message = e instanceof Error ? e.message : "Sync failed";
