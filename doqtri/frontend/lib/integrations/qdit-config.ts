@@ -69,3 +69,15 @@ export function qditConfig(env: NodeJS.ProcessEnv = process.env): QditConfig | n
 export function redirectUriFor(config: QditConfig, origin: string): string {
   return config.redirectUri ?? `${trimSlash(origin)}${QDIT_CALLBACK_PATH}`;
 }
+
+/**
+ * The secret qdit signs its status webhook with (section 9; WP-2.8), the same
+ * value qdit keeps encrypted in its integration_webhooks row. Null when the
+ * integration is off or it is not set. Read per call, untrimmed apart from a
+ * trailing newline a dashboard may add: every other byte is part of the key.
+ */
+export function qditWebhookSecret(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (env.NEXT_PUBLIC_QDIT_INTEGRATION !== "1") return null;
+  const secret = env.QDIT_WEBHOOK_SECRET?.replace(/\r?\n$/, "");
+  return secret ? secret : null;
+}
