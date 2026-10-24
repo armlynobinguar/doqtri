@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ExternalLinkIcon, Loader2Icon, MilestoneIcon, PlugIcon, RefreshCwIcon } from "lucide-react";
+import { Loader2Icon, MilestoneIcon, PlugIcon, RefreshCwIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { StatusTag } from "@/components/ui/status-tag";
+import { QditMilestoneCard } from "@/components/integrations/qdit-milestone-card";
 import {
   HeadingSelect,
   LINK_INPUT_CLASS,
@@ -36,7 +37,8 @@ import {
  *
  * Rows are read straight from the database (viewers may read them, RLS) and
  * re-read a few seconds after the note changes, since each save may move or
- * rename links (R-03).
+ * rename links (R-03). Each linked heading shows its milestone card
+ * (WP-2.6), read from qdit as the user.
  */
 
 const CONNECT_URL = "/api/integrations/qdit/connect";
@@ -411,20 +413,18 @@ export function QditLinks({
                 removeLabel={`Unlink the milestone from “${link.node_label}”`}
                 onRemove={canEdit && busy == null ? () => void unlinkMilestone(link) : undefined}
               >
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <StatusTag tone={TONE[link.qdit_state]}>{text.tag}</StatusTag>
-                  {link.qdit_url ? (
-                    <a
-                      href={link.qdit_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-muted-foreground inline-flex items-center gap-1 text-[11px] hover:underline"
-                    >
-                      Open in qdit
-                      <ExternalLinkIcon className="size-3" />
-                    </a>
-                  ) : null}
-                </div>
+                {link.qdit_state === "linked" ? null : (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <StatusTag tone={TONE[link.qdit_state]}>{text.tag}</StatusTag>
+                  </div>
+                )}
+                {/* The milestone as qdit has it now (WP-2.6), as this user. */}
+                <QditMilestoneCard
+                  milestoneId={link.qdit_milestone_id}
+                  connection={connection}
+                  showTitle={false}
+                  fallbackUrl={link.qdit_url}
+                />
                 {text.note ? (
                   <p className={problem ? "text-warning text-[11px] leading-snug" : "text-muted-foreground text-[11px] leading-snug"}>
                     {text.note}
