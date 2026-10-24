@@ -168,6 +168,12 @@ alter table public.node_links
 -- between workspaces is left to the service role, for whichever package
 -- defines what a move does to its on-chain owner (D-28).
 --
+-- Showing a document's headings on its public audit page (publish_headings)
+-- is the workspace's decision, not any one editor's: only an admin or owner
+-- of the document's workspace may turn it on or off (D-40), whether on an
+-- existing document or by creating one with it on. Editors still write every
+-- other column. In a personal workspace that is its owner (D-30).
+--
 -- Not security definer: current_user must be the writer's own role. The
 -- `on delete set null` actions run as the table owner, so they pass.
 create function public.documents_before_update()
@@ -183,6 +189,14 @@ begin
     raise exception 'a document''s author and workspace cannot be changed'
       using errcode = 'check_violation';
   end if;
+  if current_user in ('anon', 'authenticated')
+     and new.publish_headings is distinct from old.publish_headings
+     and (current_user = 'anon'
+          or not public.is_workspace_member(old.workspace_id, 'admin'))
+  then
+    raise exception 'only an admin of the workspace can change whether headings are public'
+      using errcode = 'insufficient_privilege';
+  end if;
   return new;
 end;
 $$;
@@ -190,6 +204,28 @@ $$;
 create trigger documents_before_update
   before update on public.documents
   for each row execute function public.documents_before_update();
+
+create function public.documents_before_insert()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if current_user in ('anon', 'authenticated')
+     and new.publish_headings
+     and (current_user = 'anon'
+          or not public.is_workspace_member(new.workspace_id, 'admin'))
+  then
+    raise exception 'only an admin of the workspace can change whether headings are public'
+      using errcode = 'insufficient_privilege';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger documents_before_insert
+  before insert on public.documents
+  for each row execute function public.documents_before_insert();
 
 create function public.node_links_before_update()
 returns trigger
@@ -212,6 +248,7 @@ create trigger node_links_before_update
   for each row execute function public.node_links_before_update();
 
 revoke execute on function public.documents_before_update() from public, anon, authenticated;
+revoke execute on function public.documents_before_insert() from public, anon, authenticated;
 revoke execute on function public.node_links_before_update() from public, anon, authenticated;
 
 

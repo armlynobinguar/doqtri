@@ -25,7 +25,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(106);
+select plan(117);
 
 -- A test-only lookup of a user's personal workspace that works under any
 -- role, so the tests can name it without being a member.
@@ -141,14 +141,16 @@ select ok(
   (select bool_and(not p.prosecdef and p.proconfig @> array['search_path=""'])
      from pg_proc p
     where p.oid in ('public.documents_before_update()'::regprocedure,
+                    'public.documents_before_insert()'::regprocedure,
                     'public.node_links_before_update()'::regprocedure)),
-  'the author guards run as the writer, with an empty search_path');
+  'the author and public-headings guards run as the writer, with an empty search_path');
 select ok(
   (select p.prosecdef and p.proconfig @> array['search_path=""']
      from pg_proc p where p.oid = 'public.handle_deleted_user_workspaces()'::regprocedure),
   'the account deletion trigger function still pins search_path to empty');
-select ok(not has_function_privilege('authenticated', 'public.documents_before_update()', 'execute'),
-  'authenticated cannot call the document guard trigger function');
+select ok(not has_function_privilege('authenticated', 'public.documents_before_update()', 'execute')
+          and not has_function_privilege('authenticated', 'public.documents_before_insert()', 'execute'),
+  'authenticated cannot call the document guard trigger functions');
 select ok(
   (select bool_and(relrowsecurity) from pg_class
     where oid in ('public.documents'::regclass, 'public.node_links'::regclass,
@@ -382,6 +384,56 @@ reset role;
 
 
 -- ---------------------------------------------------------------------------
+-- Public headings: admin and above only (D-40)
+-- ---------------------------------------------------------------------------
+
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000003","role":"authenticated"}';
+select throws_ok(
+  $$ update public.documents set publish_headings = true
+      where id = '30000000-0000-4000-8000-000000000010' $$,
+  '42501', 'only an admin of the workspace can change whether headings are public',
+  'an editor cannot make a team document''s headings public');
+select throws_ok(
+  $$ insert into public.documents (user_id, workspace_id, title, publish_headings) values
+       ('00000000-0000-4000-8000-000000000003', '10000000-0000-4000-8000-000000000001', 'Loud', true) $$,
+  '42501', 'only an admin of the workspace can change whether headings are public',
+  'nor create one with its headings public');
+with u as (update public.documents set markdown = '# Roadmap v2.1', publish_headings = false
+               where id = '30000000-0000-4000-8000-000000000010' returning 1)
+select is(count(*)::int, 1, 'an editor still edits the other columns, the setting written back unchanged') from u;
+
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000002","role":"authenticated"}';
+with u as (update public.documents set publish_headings = true
+               where id = '30000000-0000-4000-8000-000000000010' returning 1)
+select is(count(*)::int, 1, 'an admin makes a team document''s headings public') from u;
+
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000003","role":"authenticated"}';
+with u as (update public.documents set markdown = '# Roadmap v2.2'
+               where id = '30000000-0000-4000-8000-000000000010' returning 1)
+select is(count(*)::int, 1, 'an editor edits a document whose headings are public') from u;
+select throws_ok(
+  $$ update public.documents set publish_headings = false
+      where id = '30000000-0000-4000-8000-000000000010' $$,
+  '42501', 'only an admin of the workspace can change whether headings are public',
+  'but cannot hide them again either');
+
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
+with u as (update public.documents set publish_headings = false
+               where id = '30000000-0000-4000-8000-000000000010' returning 1)
+select is(count(*)::int, 1, 'an owner turns it off') from u;
+select lives_ok(
+  $$ insert into public.documents (id, user_id, workspace_id, title, publish_headings) values
+       ('30000000-0000-4000-8000-000000000016', '00000000-0000-4000-8000-000000000001',
+        '10000000-0000-4000-8000-000000000001', 'Public plan', true) $$,
+  'and creates a document with its headings public');
+reset role;
+select is((select publish_headings from public.documents where id = '30000000-0000-4000-8000-000000000010'),
+  false, 'the refused changes left the setting as the owner last set it');
+delete from public.documents where id = '30000000-0000-4000-8000-000000000016';
+
+
+-- ---------------------------------------------------------------------------
 -- Outsider
 -- ---------------------------------------------------------------------------
 
@@ -467,11 +519,20 @@ set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000005","
 with u as (update public.documents set markdown = '# Private, shared'
                where id = '30000000-0000-4000-8000-000000000001' returning 1)
 select is(count(*)::int, 1, 'an editor added to a personal workspace edits its documents') from u;
+select throws_ok(
+  $$ update public.documents set publish_headings = true
+      where id = '30000000-0000-4000-8000-000000000001' $$,
+  '42501', 'only an admin of the workspace can change whether headings are public',
+  'but cannot make their headings public: that is the owner''s call');
 select lives_ok(
   $$ insert into public.documents (id, user_id, workspace_id, title) values
        ('30000000-0000-4000-8000-000000000021', '00000000-0000-4000-8000-000000000005',
         wp12_test.personal('00000000-0000-4000-8000-000000000001'), 'Guest note') $$,
   'and writes new ones there');
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
+with u as (update public.documents set publish_headings = true
+               where id = '30000000-0000-4000-8000-000000000021' returning 1)
+select is(count(*)::int, 1, 'the owner of a personal workspace sets it on any document there, a guest''s included') from u;
 reset role;
 
 
