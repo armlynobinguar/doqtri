@@ -17,13 +17,12 @@
  * database kept for them (D-35). formerOwnerFollowUp() says when the new
  * owner must follow with `add_admin`.
  *
- * TODO(WP-1.5): nothing transfers a workspace yet: there is no transfer
- * screen and no database function that moves the owner role. Whatever adds
- * them must (1) build the on-chain call with buildOwnershipTransfer(), never
- * by hand, so a personal workspace is never handed on; (2) once it lands,
- * call formerOwnerFollowUp() with the former owner's address and, when it
- * returns a call, have the new owner sign it with DoqtriRegistry.addAdmin(),
- * which the relay pays for and checks like any other membership write.
+ * WP-1.5 uses both: the members screen's transfer (acceptTransfer() in
+ * lib/workspace-transfer.ts, behind /api/workspaces/[id]/transfer) builds
+ * `transfer_workspace` here and, once it lands and the database has moved
+ * the role, asks formerOwnerFollowUp() for the `add_admin` the new owner
+ * then signs with DoqtriRegistry.addAdmin(); the D-31 handover job
+ * (lib/stellar/chain-jobs.ts) builds `admin_reassign_owner` here.
  */
 import { Address, xdr } from "@stellar/stellar-sdk";
 import { RelayRejection, type RegistryAccess } from "@/lib/stellar/relay-validation";
