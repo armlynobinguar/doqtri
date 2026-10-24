@@ -4,6 +4,14 @@ import {
   createSupabaseAdminClient,
 } from "@/lib/supabase/server";
 import { DoqtriRegistry } from "@/lib/stellar/contract-client";
+import {
+  EDITING_ELSEWHERE,
+  editingMessage,
+  lockErrorAnswer,
+  parseDocLockStatus,
+  parseEditSession,
+} from "@/lib/doc-lock";
+import { liveLockHolder } from "@/lib/doc-lock-server";
 import { isTitleTaken, MAX_TITLE_LENGTH } from "@/lib/title";
 import {
   loadMemberDocument,
@@ -32,12 +40,128 @@ function refusal(result: MemberDocumentRefusal) {
 }
 
 /**
+ * Refuses a change to a note while someone other than the caller holds its
+ * edit lock (D-17): they are typing into it and would not see the change.
+ * The caller's own lock does not stop them. Null when the change may go on.
+ */
+async function refuseIfLockedByOther(
+  admin: ReturnType<typeof createSupabaseAdminClient>,
+  docId: string,
+  userId: string,
+) {
+  const { holder, error } = await liveLockHolder(admin, docId);
+  if (error) return NextResponse.json({ error }, { status: 500 });
+  if (holder && holder !== userId) {
+    return NextResponse.json(
+      {
+        error: `${editingMessage(null)}. Try again when they are done.`,
+        code: "LOCKED",
+      },
+      { status: 423 },
+    );
+  }
+  return null;
+}
+
+/**
+ * Saves a note's text (WP-1.6, D-17). Body: `{ markdown, version, session }`,
+ * where `version` is the save version the caller's copy is based on and
+ * `session` the editor's edit session (lib/doc-lock.ts). Answers
+ * `{ id, version }` with the new version.
+ *
+ * Runs on the session client: save_document() checks, as the caller, that
+ * they are an editor or above, that they hold a live edit lock from this
+ * session, not another tab (else 423
+ * NOT_LOCK_HOLDER, with the lock's status so the editor can name the
+ * holder), and that nobody saved since their copy was loaded (else 409
+ * STALE_VERSION, with the current version). Nothing is written unless all
+ * three hold, so no save overwrites another.
+ */
+export async function PUT(
+  request: Request,
+  context: RouteContext<"/api/notes/[id]">,
+) {
+  const { id } = await context.params;
+
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+  }
+
+  if (!UUID.test(id)) {
+    return NextResponse.json({ error: "Note not found" }, { status: 404 });
+  }
+
+  let markdown: string | null = null;
+  let version: number | null = null;
+  let editSession: string | null = null;
+  try {
+    const body = (await request.json()) as { markdown?: unknown; version?: unknown; session?: unknown };
+    if (typeof body.markdown === "string") markdown = body.markdown;
+    editSession = parseEditSession(body.session);
+    if (typeof body.version === "number" && Number.isSafeInteger(body.version) && body.version >= 1) {
+      version = body.version;
+    }
+  } catch {
+    // falls through to the refusal below
+  }
+
+  if (markdown === null || version === null || editSession === null) {
+    return NextResponse.json(
+      { error: "A save needs the note's markdown, the version it is based on and the editor's session" },
+      { status: 400 },
+    );
+  }
+
+  const { data, error } = await supabase.rpc("save_document", {
+    p_document_id: id,
+    p_markdown: markdown,
+    p_base_version: version,
+    p_session: editSession,
+  });
+
+  if (error) {
+    const answer = lockErrorAnswer(error);
+    const body: Record<string, unknown> = { error: answer.error, code: answer.code };
+    if (answer.code === "STALE_VERSION") {
+      const current = Number(error.details);
+      if (Number.isSafeInteger(current)) body.version = current;
+    }
+    if (answer.code === "NOT_LOCK_HOLDER") {
+      const { data: status } = await supabase.rpc("doc_lock_status_for", {
+        p_document_id: id,
+        p_session: editSession,
+      });
+      const lock = parseDocLockStatus(status);
+      if (lock) {
+        body.lock = lock;
+        if (lock.mineElsewhere) body.error = `${EDITING_ELSEWHERE}, so this copy was not saved.`;
+        else if (lock.holder && !lock.mine) body.error = editingMessage(lock.holderName);
+      }
+    }
+    return NextResponse.json(body, { status: answer.status });
+  }
+
+  const saved = typeof data === "number" ? data : Number(data);
+  if (!Number.isSafeInteger(saved)) {
+    return NextResponse.json({ error: "Unexpected save result" }, { status: 500 });
+  }
+  return NextResponse.json({ id, version: saved });
+}
+
+/**
  * Renames a note. Only the `title` column changes: the markdown is left alone,
  * so an anchored note's content hash still matches the ledger and stays
  * renameable. Titles are the graph's join key, so a clash with another note
  * in the same workspace is refused rather than silently suffixed — the user
  * picked this name and should see that it did not stick. Editors and above
  * of the note's workspace may rename it.
+ *
+ * Refused with 423 while someone else holds the note's edit lock (D-17).
  *
  * Other notes' [[wikilinks]] to the old title are not rewritten. Editing their
  * markdown would un-anchor any of them that are on the ledger.
@@ -91,6 +215,9 @@ export async function PATCH(
   if (!found.ok) return refusal(found);
   const note = found.doc;
 
+  const locked = await refuseIfLockedByOther(admin, id, user.id);
+  if (locked) return locked;
+
   const { titles: others, error: titlesError } = await workspaceTitles(admin, note.workspace_id, {
     excludeId: id,
   });
@@ -135,7 +262,8 @@ export async function PATCH(
  * the explorer last looked.
  *
  * Editors and above of the note's workspace may delete it; its ingest
- * attempts go with it whoever uploaded them.
+ * attempts go with it whoever uploaded them. Not while someone else holds
+ * its edit lock (D-17): 423, as for a rename.
  *
  * The uploads are purged before the row is deleted: a Storage failure leaves
  * the note intact and the delete retryable, rather than orphaning private
@@ -171,6 +299,9 @@ export async function DELETE(
   });
   if (!found.ok) return refusal(found);
   const note = found.doc;
+
+  const locked = await refuseIfLockedByOther(admin, id, user.id);
+  if (locked) return locked;
 
   // Strict read: it tells "not anchored" apart from "the ledger is down", and
   // only the first of those may proceed.

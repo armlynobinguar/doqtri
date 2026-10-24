@@ -12,6 +12,8 @@ export type DocumentRow = {
   updated_at: string;
   mindmap: DocMindmap | null;
   mindmap_hash: string | null;
+  /** Save counter, bumped on every markdown change; saves are checked against it (D-17). */
+  version: number;
 };
 
 /**
@@ -67,4 +69,6 @@ export type Doc = {
   markdown: string;
   mindmap?: DocMindmap | null;
   mindmapStale?: boolean;
+  /** The save version `markdown` was read at; absent in the demo vault. */
+  version?: number;
 };

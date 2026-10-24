@@ -14,6 +14,13 @@
 -- PLAN, Plan 2) when the database was seeded with them before this migration
 -- ran, and skips those checks otherwise; its general checks always run.
 --
+-- Since WP-1.6 a client cannot change `markdown` with a plain UPDATE: text is
+-- saved through save_document(), which checks the edit lock and the version
+-- (20261024150000_doc_locks.sql, tested in doc_locks.test.sql). The checks
+-- below that a role may edit a document therefore update `updated_at`, which
+-- the same update policy governs; the checks that a role may not still try
+-- `markdown`, since RLS filters the row before any trigger sees it.
+--
 -- Cast:
 --   o  owner@example.com     owner of the team workspace "acme"
 --   ad admin@example.com     admin of acme
@@ -101,7 +108,7 @@ select case when (select yes from wp12_test.seeded) then
 select case when (select yes from wp12_test.seeded) then
   is((select count(*)::int from public.mindmap_styles), 1, 'and their saved map style')
   else skip('database not seeded with legacy documents', 1) end;
-with u as (update public.documents set markdown = '# Old, edited'
+with u as (update public.documents set updated_at = now()
             where title = 'Old' and (select yes from wp12_test.seeded) returning 1)
 select case when (select yes from wp12_test.seeded) then
   is(count(*)::int, 1, 'and can still edit them')
@@ -234,7 +241,7 @@ set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000003","
 select is((select count(*)::int from public.documents
             where id = '30000000-0000-4000-8000-000000000001'),
   0, 'but not a teammate''s personal ones');
-with u as (update public.documents set markdown = '# Roadmap v2'
+with u as (update public.documents set updated_at = now()
                where id = '30000000-0000-4000-8000-000000000010' returning 1)
 select is(count(*)::int, 1, 'an editor edits a team document') from u;
 select throws_ok(
@@ -315,7 +322,7 @@ select is((select count(*)::int from public.documents
             where workspace_id = '10000000-0000-4000-8000-000000000001'),
   2, 'a viewer reads the workspace''s documents');
 select is((select markdown from public.documents where id = '30000000-0000-4000-8000-000000000010'),
-  '# Roadmap v2', 'with their content');
+  '# Roadmap', 'with their content');
 select throws_ok(
   $$ insert into public.documents (user_id, workspace_id, title) values
        ('00000000-0000-4000-8000-000000000004', '10000000-0000-4000-8000-000000000001', 'Viewer note') $$,
@@ -355,7 +362,7 @@ set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000002","
 select is((select count(*)::int from public.documents
             where workspace_id = '10000000-0000-4000-8000-000000000001'),
   2, 'an admin reads the workspace''s documents');
-with u as (update public.documents set markdown = '# Roadmap v3'
+with u as (update public.documents set updated_at = now()
                where id = '30000000-0000-4000-8000-000000000010' returning 1)
 select is(count(*)::int, 1, 'an admin edits a document an editor wrote') from u;
 with u as (update public.node_links set number = 11
@@ -422,7 +429,7 @@ select throws_ok(
        ('00000000-0000-4000-8000-000000000003', '10000000-0000-4000-8000-000000000001', 'Loud', true) $$,
   '42501', 'only an admin of the workspace can change whether headings are public',
   'nor create one with its headings public');
-with u as (update public.documents set markdown = '# Roadmap v2.1', publish_headings = false
+with u as (update public.documents set updated_at = now(), publish_headings = false
                where id = '30000000-0000-4000-8000-000000000010' returning 1)
 select is(count(*)::int, 1, 'an editor still edits the other columns, the setting written back unchanged') from u;
 
@@ -432,7 +439,7 @@ with u as (update public.documents set publish_headings = true
 select is(count(*)::int, 1, 'an admin makes a team document''s headings public') from u;
 
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000003","role":"authenticated"}';
-with u as (update public.documents set markdown = '# Roadmap v2.2'
+with u as (update public.documents set updated_at = now()
                where id = '30000000-0000-4000-8000-000000000010' returning 1)
 select is(count(*)::int, 1, 'an editor edits a document whose headings are public') from u;
 select throws_ok(
@@ -539,7 +546,7 @@ insert into public.workspace_members (workspace_id, user_id, role) values
   (wp12_test.personal('00000000-0000-4000-8000-000000000001'), '00000000-0000-4000-8000-000000000005', 'editor');
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000005","role":"authenticated"}';
-with u as (update public.documents set markdown = '# Private, shared'
+with u as (update public.documents set updated_at = now()
                where id = '30000000-0000-4000-8000-000000000001' returning 1)
 select is(count(*)::int, 1, 'an editor added to a personal workspace edits its documents') from u;
 select throws_ok(
@@ -592,7 +599,7 @@ set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000002","role":"authenticated"}';
 select is((select count(*)::int from public.documents where id = '30000000-0000-4000-8000-000000000010'),
   1, 'teammates still read it');
-with u as (update public.documents set markdown = '# Roadmap v4'
+with u as (update public.documents set updated_at = now()
                where id = '30000000-0000-4000-8000-000000000010' returning 1)
 select is(count(*)::int, 1, 'and edit it') from u;
 reset role;

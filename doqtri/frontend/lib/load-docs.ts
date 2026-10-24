@@ -22,7 +22,7 @@ export async function loadVaultDocs(supabase: SupabaseClient, userId: string): P
   const workspaceId = await personalWorkspaceId(supabase, userId);
   const { data, error } = await supabase
     .from("documents")
-    .select("id, title, markdown, mindmap, mindmap_hash")
+    .select("id, title, markdown, mindmap, mindmap_hash, version")
     .eq("workspace_id", workspaceId)
     .order("title", { ascending: true });
 
@@ -34,6 +34,7 @@ export async function loadVaultDocs(supabase: SupabaseClient, userId: string): P
       id: row.id,
       title: row.title,
       markdown: row.markdown,
+      version: Number(row.version),
       mindmap,
       // A note with no map is not "stale" — it has nothing to be stale against.
       mindmapStale: mindmap !== null && isMindmapStale(row.markdown, row.mindmap_hash),
