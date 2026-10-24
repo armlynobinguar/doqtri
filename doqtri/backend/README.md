@@ -94,8 +94,12 @@ Two supporting tables:
   the migration's backfill, new ones through the `on_auth_user_created_workspace`
   trigger on `auth.users`. Members read their workspaces and rosters; owners
   manage members, admins manage everyone but owners, anyone may leave, and a
-  trigger keeps at least one owner per workspace. Any user may create a
-  workspace and becomes its owner. Documents do not belong to workspaces yet;
+  trigger keeps at least one owner per workspace and keeps each personal
+  workspace's creator as its owner. Any user may create a team workspace
+  through the `create_workspace(name, slug)` RPC and becomes its owner; there
+  is no direct insert. Members are still added without their consent, so
+  WP-1.5 must replace that with an invite the invitee accepts. Documents do
+  not belong to workspaces yet;
   WP-1.2 adds `documents.workspace_id` and moves the policies over to
   `is_workspace_member()`.
 

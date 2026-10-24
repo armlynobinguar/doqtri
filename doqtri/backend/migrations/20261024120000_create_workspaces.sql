@@ -21,9 +21,22 @@
 -- trigger on auth.users. That is where WP-1.2 moves each user's documents, so
 -- no document is left without a workspace to belong to.
 --
--- The browser may create workspaces and manage members directly under RLS.
--- The membership checks follow qdit's project_members helpers (qdit
+-- The browser creates workspaces through create_workspace(), which makes the
+-- caller the owner in the same statement, and manages members directly under
+-- RLS. The membership checks follow qdit's project_members helpers (qdit
 -- supabase/migrations/20260731133313_rls.sql); see is_workspace_member().
+--
+-- A personal workspace always belongs to the account it was made for: its
+-- creator stays an owner and cannot leave, be demoted or be removed, by a
+-- co-owner or anyone else (workspace_members_keep_owner). WP-1.2 moves each
+-- user's documents into it on that guarantee.
+--
+-- Adding a member needs no consent from the person added. Admins and owners
+-- may add anyone as viewer, editor or admin, and an owner may then promote
+-- them to owner and leave. That is acceptable while nothing but names lives
+-- here, but WP-1.5 must replace direct inserts into workspace_members with an
+-- invite the invitee accepts before documents arrive in team workspaces;
+-- otherwise a user can be made responsible for a workspace they never joined.
 
 create type public.workspace_role as enum ('viewer', 'editor', 'admin', 'owner');
 
@@ -117,27 +130,22 @@ grant execute on function public.is_workspace_member(uuid, public.workspace_role
 
 -- workspaces
 --
--- Members read their workspaces. The creator can also read the row they
--- created: an insert that returns the row (`.insert().select()`) checks the
--- read policy before the trigger below has added their owner membership, so
--- without it creating a workspace from the browser would fail. A creator who
--- later leaves keeps seeing only the name and slug, never its documents.
+-- Members read their workspaces, and only while they are members: whoever
+-- is removed, the creator included, stops seeing even the name at once
+-- (D-16).
 --
--- Anyone signed in may create a workspace, as themselves and never a personal
--- one; on_workspace_created makes them its owner. Admins and owners rename it.
--- There is no delete policy: deleting a workspace will delete or orphan its
--- documents once WP-1.2 lands, so it stays with the service role until a
--- package decides what deletion means.
+-- There is no insert policy. Anyone signed in creates a workspace through
+-- create_workspace() below, never a personal one; on_workspace_created makes
+-- them its owner. Going through a function rather than a direct insert means
+-- the row can be returned to its creator without a read clause for
+-- non-members. Admins and owners rename it. There is no delete policy:
+-- deleting a workspace will delete or orphan its documents once WP-1.2 lands,
+-- so it stays with the service role until a package decides what deletion
+-- means.
 
 create policy "workspaces - select as member" on public.workspaces
   for select to authenticated
-  using (
-    public.is_workspace_member(id, 'viewer')
-    or created_by = (select auth.uid())
-  );
-create policy "workspaces - insert as self" on public.workspaces
-  for insert to authenticated
-  with check (created_by = (select auth.uid()) and not is_personal);
+  using (public.is_workspace_member(id, 'viewer'));
 create policy "workspaces - update as admin" on public.workspaces
   for update to authenticated
   using (public.is_workspace_member(id, 'admin'))
@@ -146,17 +154,21 @@ create policy "workspaces - update as admin" on public.workspaces
 
 -- workspace_members
 --
--- Members read the roster of their own workspaces. Owners add, change and
--- remove anyone. Admins do the same for everyone but owners: they cannot
--- touch an owner's row (the USING clause sees the row as it is) and cannot
--- make anyone an owner (the WITH CHECK clause sees the row as it will be).
+-- Members read the roster of their own workspaces. Owners change and remove
+-- anyone. Admins do the same for everyone but owners: they cannot touch an
+-- owner's row (the USING clause sees the row as it is) and cannot make anyone
+-- an owner (the WITH CHECK clause sees the row as it will be). Admins and
+-- owners add members, but never straight in as owner: an owner promotes an
+-- existing member instead, so nobody becomes an owner in one step without
+-- having been in the workspace (see the header on consent and WP-1.5).
 -- Anyone may remove their own row, i.e. leave. Viewers and editors cannot
 -- change any row, their own included, so nobody promotes themselves.
 --
--- Two rules RLS cannot express, because they depend on the other rows, are
--- enforced by workspace_members_keep_owner below for every writer, the
--- service role included: the last owner can neither leave nor be demoted,
--- and a row cannot be moved to another workspace or user.
+-- Rules RLS cannot express, because they depend on other rows, are enforced
+-- by workspace_members_keep_owner below for every writer, the service role
+-- included: the last owner can neither leave nor be demoted, the creator of a
+-- personal workspace can neither leave, be demoted nor be removed, and a row
+-- cannot be moved to another workspace or user.
 --
 -- Every clause goes through is_workspace_member() rather than querying
 -- workspace_members inline; that is the recursion the helper exists to avoid.
@@ -166,10 +178,7 @@ create policy "workspace members - select as member" on public.workspace_members
   using (public.is_workspace_member(workspace_id, 'viewer'));
 create policy "workspace members - insert as admin" on public.workspace_members
   for insert to authenticated
-  with check (
-    public.is_workspace_member(workspace_id, 'owner')
-    or (public.is_workspace_member(workspace_id, 'admin') and role <> 'owner')
-  );
+  with check (public.is_workspace_member(workspace_id, 'admin') and role <> 'owner');
 create policy "workspace members - update as admin" on public.workspace_members
   for update to authenticated
   using (
@@ -216,18 +225,25 @@ create trigger on_workspace_created
 
 -- Stamps updated_at, and keeps who created a workspace, and whether it is
 -- someone's personal one, fixed: the update policy lets admins write the
--- whole row, and these are not theirs to change. created_by may still become
--- null, which is the `on delete set null` of an account being deleted.
+-- whole row, and these are not theirs to change. created_by may become null
+-- only once that account is gone from auth.users, which is the
+-- `on delete set null` of an account being deleted; nulling it otherwise
+-- would detach a personal workspace from its user.
+--
+-- Security definer only to read auth.users for that check.
 create function public.workspaces_before_update()
 returns trigger
 language plpgsql
+security definer
 set search_path = ''
 as $$
 begin
   if new.id <> old.id
      or new.is_personal <> old.is_personal
      or new.created_at <> old.created_at
-     or (new.created_by is distinct from old.created_by and new.created_by is not null)
+     or (new.created_by is distinct from old.created_by
+         and (new.created_by is not null
+              or exists (select 1 from auth.users u where u.id = old.created_by)))
   then
     raise exception 'a workspace''s id, created_by, is_personal and created_at cannot change'
       using errcode = 'check_violation';
@@ -241,7 +257,13 @@ create trigger workspaces_before_update
   before update on public.workspaces
   for each row execute function public.workspaces_before_update();
 
--- Keeps every workspace with at least one owner, and membership rows in place.
+-- Keeps every workspace with at least one owner, keeps the creator of a
+-- personal workspace as its owner, and keeps membership rows in place.
+--
+-- Without the personal rule a co-owner could remove the creator, or the
+-- creator could hand ownership over and leave, and the workspace would still
+-- be that user's personal one (created_by, is_personal) while someone else
+-- controls it; WP-1.2 would then move the creator's documents into it.
 --
 -- Runs after the statement's row change, so it sees the roster as the change
 -- leaves it, and locks the workspace row first so two owners demoting each
@@ -276,6 +298,14 @@ begin
     return null;
   end if;
 
+  if exists (
+    select 1 from public.workspaces w
+     where w.id = old.workspace_id and w.is_personal and w.created_by = old.user_id
+  ) then
+    raise exception 'the owner of a personal workspace cannot leave it or be demoted'
+      using errcode = 'check_violation';
+  end if;
+
   perform 1 from public.workspaces w where w.id = old.workspace_id for update;
   if not exists (
     select 1 from public.workspace_members m
@@ -294,7 +324,29 @@ create trigger workspace_members_keep_owner
   for each row execute function public.workspace_members_keep_owner();
 
 
+-- Makes p_user_id an owner of p_workspace_id. A no-op, writing nothing, when
+-- they already are, so re-running the backfill changes no row. Promoting
+-- passes workspace_members_keep_owner, which only guards rows losing owner.
+-- Only ensure_personal_workspace() calls it.
+create function public.restore_personal_owner(p_workspace_id uuid, p_user_id uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  insert into public.workspace_members as m (workspace_id, user_id, role)
+  values (p_workspace_id, p_user_id, 'owner')
+  on conflict (workspace_id, user_id) do update set role = 'owner'
+   where m.role <> 'owner';
+$$;
+
 -- The user's personal workspace, created on first call. Returns its id.
+--
+-- Also makes sure the user is an owner of it, restoring the membership if it
+-- is missing or demoted. workspace_members_keep_owner prevents that through
+-- any normal write, but this is the repair path, and WP-1.2 moves documents
+-- into whatever id it returns, so it must never return a workspace the user
+-- does not control.
 --
 -- Named after the email's local part. Wallet accounts have a synthetic
 -- address (`<G-address>@stellar.doqtri.local`, see lib/wallet-auth.ts) and
@@ -303,7 +355,7 @@ create trigger workspace_members_keep_owner
 -- into URLs.
 --
 -- Security definer because it reads auth.users and creates a personal
--- workspace, which the insert policy refuses to everyone. Execute is granted
+-- workspace, which no client may insert. Execute is granted
 -- to the service role only, so the app can heal an account that somehow
 -- lacks one.
 create function public.ensure_personal_workspace(p_user_id uuid)
@@ -321,6 +373,7 @@ begin
     from public.workspaces w
    where w.created_by = p_user_id and w.is_personal;
   if v_id is not null then
+    perform public.restore_personal_owner(v_id, p_user_id);
     return v_id;
   end if;
 
@@ -358,9 +411,46 @@ begin
   if v_id is null then
     raise exception 'could not create a personal workspace for %', p_user_id;
   end if;
+  -- A fresh workspace already has its owner from on_workspace_created; one a
+  -- concurrent call made is checked like any existing one.
+  perform public.restore_personal_owner(v_id, p_user_id);
   return v_id;
 end;
 $$;
+
+-- Creates a team workspace owned by the caller and returns it. This is the
+-- browser's only way to create one (`supabase.rpc('create_workspace', ...)`).
+--
+-- Security definer because there is no insert policy on workspaces. The row
+-- is always the caller's and never personal, whatever the client sends;
+-- on_workspace_created adds the owner membership within the same statement,
+-- so the caller can read the workspace as soon as this returns. The name and
+-- slug checks on the table still apply, and a taken slug raises
+-- unique_violation (23505) for the app to report.
+create function public.create_workspace(p_name text, p_slug text)
+returns public.workspaces
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := (select auth.uid());
+  v_row public.workspaces;
+begin
+  if v_uid is null then
+    raise exception 'sign in to create a workspace'
+      using errcode = 'insufficient_privilege';
+  end if;
+
+  insert into public.workspaces (name, slug, created_by, is_personal)
+  values (btrim(p_name), p_slug, v_uid, false)
+  returning * into v_row;
+  return v_row;
+end;
+$$;
+
+revoke execute on function public.create_workspace(text, text) from public, anon;
+grant execute on function public.create_workspace(text, text) to authenticated, service_role;
 
 -- New accounts get their personal workspace as they are created, whichever
 -- way they sign up: the email form, /api/auth/wallet's admin createUser, or
@@ -382,11 +472,13 @@ create trigger on_auth_user_created_workspace
   after insert on auth.users
   for each row execute function public.handle_new_user_workspace();
 
--- Trigger functions are called by Postgres, never by a client.
+-- Trigger functions and the internal helpers are called by Postgres or by
+-- other functions here, never by a client.
 revoke execute on function public.handle_new_workspace() from public, anon, authenticated;
 revoke execute on function public.workspaces_before_update() from public, anon, authenticated;
 revoke execute on function public.workspace_members_keep_owner() from public, anon, authenticated;
 revoke execute on function public.handle_new_user_workspace() from public, anon, authenticated;
+revoke execute on function public.restore_personal_owner(uuid, uuid) from public, anon, authenticated;
 revoke execute on function public.ensure_personal_workspace(uuid) from public, anon, authenticated;
 grant execute on function public.ensure_personal_workspace(uuid) to service_role;
 
