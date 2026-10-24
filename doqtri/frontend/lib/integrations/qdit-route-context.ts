@@ -22,6 +22,8 @@ export type LinkingDoc = { id: string; workspace_id: string; title: string; mark
 
 export type QditRouteContext = {
   userId: string;
+  /** The caller's role in the note's workspace (at least the route's minRole). */
+  role: WorkspaceRole;
   admin: SupabaseClient;
   client: QditClient;
   doc: LinkingDoc;
@@ -98,6 +100,7 @@ export async function qditRouteContext(
     ok: true,
     ctx: {
       userId: user.id,
+      role: found.role,
       admin,
       client: createQditClient(user.id, { config: setup.config, store: setup.store }),
       doc: {

@@ -10,6 +10,7 @@ import {
   adoptMilestoneLink,
   createMilestoneLink,
   docUrl,
+  projectChainColumns,
   LinkingError,
   linkProject,
   relinkMilestone,
@@ -317,6 +318,24 @@ describe("linkProject (D-09, D-10, D-45)", () => {
         linked_by: USER,
       }),
     ]);
+  });
+
+  it("keeps the project's chain, so the status webhook knows which contract to read (WP-2.8)", async () => {
+    await linked();
+    expect(db.doc_project_links[0]).toMatchObject({ chain_network: null, chain_contract_id: null });
+    qdit.state.projects[0] = {
+      ...project(PROJECT, "admin"),
+      chain: { network: "testnet", contract_id: "CBP3NKXCRUSOJLLUXDF5AIRNPAC6IL7TFJ2KCNL5A2GTKC2MB7M4OHVG" },
+    };
+    await linked();
+    expect(db.doc_project_links[0]).toMatchObject({
+      chain_network: "testnet",
+      chain_contract_id: "CBP3NKXCRUSOJLLUXDF5AIRNPAC6IL7TFJ2KCNL5A2GTKC2MB7M4OHVG",
+    });
+    expect(projectChainColumns({ network: "testnet", contract_id: "CNOTAKEY" })).toEqual({
+      chain_network: null,
+      chain_contract_id: null,
+    });
   });
 
   it("builds the doc URL on the configured origin, whatever trailing slash", () => {

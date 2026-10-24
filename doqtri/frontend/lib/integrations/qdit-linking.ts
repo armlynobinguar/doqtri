@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { QditError, type QditClient, type QditMilestone, type QditRole } from "@/lib/integrations/qdit-client";
+import { isProjectChain } from "@/lib/integrations/qdit-chain";
+import { QditError, type QditClient, type QditMilestone, type QditProject, type QditRole } from "@/lib/integrations/qdit-client";
 import { headingsOf, planRemap, remapChanges, type Heading, type RemapLink } from "@/lib/node-remap";
 import {
   DOC_PROJECT_LINK_COLUMNS,
@@ -90,6 +91,14 @@ export type ChainVersion = (docId: string) => Promise<number | null>;
 /** The URL qdit links back to: doqtri's own origin and the note's page (D-45, section 8). */
 export function docUrl(siteUrl: string, docId: string): string {
   return `${siteUrl.replace(/\/+$/, "")}/d/${docId}`;
+}
+
+/** doc_project_links' chain columns for a project's `chain` (section 7), null unless it is a valid one. */
+export function projectChainColumns(chain: QditProject["chain"]): { chain_network: string | null; chain_contract_id: string | null } {
+  const parsed = chain ? { network: chain.network, contractId: chain.contract_id } : null;
+  return isProjectChain(parsed)
+    ? { chain_network: parsed.network, chain_contract_id: parsed.contractId }
+    : { chain_network: null, chain_contract_id: null };
 }
 
 /** qdit takes a title of 1 to 300 characters after trimming (section 8). */
@@ -183,6 +192,9 @@ export async function linkProject(params: {
     project_url: /^https?:\/\//.test(project.url) ? project.url : null,
     qdit_link_id: link.id,
     doc_url: link.doc_url,
+    // The contract the status sync reads (WP-2.8): null until the project
+    // is registered on milestone_proof, and refreshed by the panel's re-check.
+    ...projectChainColumns(project.chain),
     linked_by: userId,
     updated_at: new Date().toISOString(),
   };

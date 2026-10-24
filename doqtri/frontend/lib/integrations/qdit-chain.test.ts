@@ -31,7 +31,7 @@ function recordScVal(overrides: { status?: string; version?: number; project?: s
     entry("proof_hash", xdr.ScVal.scvBytes(Buffer.alloc(32, 0xab))),
     entry("status", xdr.ScVal.scvVec([xdr.ScVal.scvSymbol(overrides.status ?? "Approved")])),
     entry("submitter", nativeToScVal("GBZXN7PIRZGNMHGA7MUUUF4GWPY5AYPV6LY4UV2GL6VJGIQRXFDNMADI", { type: "address" })),
-    entry("timestamp", nativeToScVal(1_792_843_000n, { type: "u64" })),
+    entry("timestamp", nativeToScVal(BigInt(1_792_843_000), { type: "u64" })),
     entry("version", nativeToScVal(overrides.version ?? 2, { type: "u32" })),
   ]);
 }
