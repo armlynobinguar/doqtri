@@ -14,8 +14,8 @@ import { roleAtLeast, type WorkspaceRole } from "@/lib/workspace-roles";
 export { roleAtLeast, type WorkspaceRole } from "@/lib/workspace-roles";
 
 /**
- * The user's personal workspace, where their notes go until WP-1.7 adds a
- * workspace switcher. Every account has one (a trigger on auth.users makes
+ * The user's personal workspace: the vault's default, and where a new note
+ * goes when no other workspace is active (WP-1.7). Every account has one (a trigger on auth.users makes
  * it); should one be missing or have lost its owner row, it is repaired
  * through ensure_personal_workspace(), which only the service role may call.
  *

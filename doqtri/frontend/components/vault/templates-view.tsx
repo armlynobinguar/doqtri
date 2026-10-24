@@ -47,6 +47,7 @@ import { BuyTemplateDialog } from "@/components/vault/buy-template-dialog";
 import { ReportTemplateDialog } from "@/components/vault/report-template-dialog";
 import { EarningsView } from "@/components/vault/earnings-view";
 import { createBlankNote } from "@/lib/create-note";
+import { useActiveWorkspace } from "@/components/vault/workspace-context";
 
 /** Rough label width at the preview's 11px type, for laying out columns. */
 function labelWidth(label: string): number {
@@ -189,6 +190,8 @@ export function TemplatesView() {
   const tab: PageTab = isTab(requested) ? requested : "starter";
   const [category, setCategory] = useState<TemplateCategory | "All">("All");
   const [creating, setCreating] = useState(false);
+  // Template copies go into the workspace on screen (WP-1.7).
+  const { active: workspace } = useActiveWorkspace();
 
   function setTab(next: PageTab) {
     router.replace(next === "starter" ? "/vault/templates" : `/vault/templates?tab=${next}`, { scroll: false });
@@ -206,7 +209,7 @@ export function TemplatesView() {
     if (creating) return;
     setCreating(true);
     try {
-      opened(await createBlankNote(template.title, template.body));
+      opened(await createBlankNote(template.title, template.body, workspace.id));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not create note");
     } finally {
@@ -393,6 +396,7 @@ function CommunityGallery({
   onCreated: (note: { id: string; title: string }) => void;
 }) {
   const [sort, setSort] = useState<Sort>("popular");
+  const { active: workspace } = useActiveWorkspace();
   // Results remember the query they answer; a newer query reads as loading
   // until its own response lands, without resetting state inside the effect.
   const query = `${sort}|${category}`;
@@ -447,7 +451,7 @@ function CommunityGallery({
       const res = await fetch("/api/market/claim", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ templateId: template.id }),
+        body: JSON.stringify({ templateId: template.id, workspaceId: workspace.id }),
       });
       const body = (await res.json().catch(() => ({}))) as { id?: string; title?: string; error?: string };
       if (!res.ok || !body.id) throw new Error(body.error || "The template could not be copied.");

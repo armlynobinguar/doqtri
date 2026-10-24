@@ -18,6 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useWallet } from "@/components/vault/wallet-provider";
+import { useActiveWorkspace } from "@/components/vault/workspace-context";
 import { formatAmount, shortAddress, type CommunityTemplate } from "@/lib/market";
 import { quoteBuy, TemplateMarket, type BuyQuote } from "@/lib/stellar/market-client";
 import { expertTxUrl } from "@/lib/stellar/config";
@@ -52,6 +53,9 @@ export function BuyTemplateDialog({
   onBought: (note: { id: string; title: string }) => void;
 }) {
   const wallet = useWallet();
+  // The copy goes into the workspace on screen; a viewer there can't take
+  // one (D-14), so they are stopped before paying, not after.
+  const { active: workspace, canCreate } = useActiveWorkspace();
   const [quote, setQuote] = useState<BuyQuote | null>(null);
   // Mounted only while open (see CommunityPreview), so it starts quoting.
   const [quoting, setQuoting] = useState(true);
@@ -95,7 +99,7 @@ export function BuyTemplateDialog({
       const res = await fetch("/api/market/claim", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ templateId: template.id, txHash }),
+        body: JSON.stringify({ templateId: template.id, txHash, workspaceId: workspace.id }),
       });
       const body = (await res.json().catch(() => ({}))) as { id?: string; title?: string; error?: string };
       if (res.ok && body.id) return { id: body.id, title: body.title ?? template.title };
@@ -108,7 +112,7 @@ export function BuyTemplateDialog({
 
   /** Already bought (the copy failed last time): just copy it again. */
   async function copyOwned() {
-    if (busy) return;
+    if (busy || !canCreate) return;
     setError(null);
     try {
       setStep("copying");
@@ -123,7 +127,7 @@ export function BuyTemplateDialog({
   }
 
   async function buy() {
-    if (!quote || quote.problems.length > 0 || busy) return;
+    if (!quote || quote.problems.length > 0 || busy || !canCreate) return;
     setError(null);
     let txHash: string | null = null;
     try {
@@ -150,7 +154,7 @@ export function BuyTemplateDialog({
 
   const code = quote?.token.code ?? template.tokenCode;
   const amount = (units: bigint) => `${formatAmount(units)} ${code}`;
-  const blocked = !quote || quote.problems.length > 0;
+  const blocked = !quote || quote.problems.length > 0 || !canCreate;
 
   return (
     <Dialog
@@ -213,6 +217,12 @@ export function BuyTemplateDialog({
                 <li key={p}>{p}</li>
               ))}
             </ul>
+          ) : null}
+          {!canCreate ? (
+            <p role="alert" className="text-destructive" data-testid="buy-viewer">
+              You&apos;re a viewer in {workspace.name}, so a copy can&apos;t be added to it. Switch to a workspace you
+              edit first.
+            </p>
           ) : null}
           {error ? (
             <p role="alert" className="text-destructive">

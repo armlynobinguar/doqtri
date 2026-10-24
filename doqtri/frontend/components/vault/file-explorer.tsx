@@ -33,6 +33,8 @@ import type { FailedImport, NoteSummary } from "@/lib/types";
 export function FileExplorer({
   notes,
   activeId,
+  header,
+  canCreate = true,
   onNewNote,
   onUploadClick,
   onTemplatesClick,
@@ -46,6 +48,10 @@ export function FileExplorer({
 }: {
   notes: NoteSummary[];
   activeId?: string;
+  /** Replaces the "Vault" heading: the vault shell puts the workspace switcher here. */
+  header?: React.ReactNode;
+  /** False for a viewer of the workspace shown (D-14): the create buttons are disabled. */
+  canCreate?: boolean;
   onNewNote: () => void;
   onUploadClick: () => void;
   onTemplatesClick?: () => void;
@@ -61,12 +67,12 @@ export function FileExplorer({
   return (
     <aside className="bg-sidebar flex h-full min-h-0 flex-col">
       <header className="border-border flex h-10 shrink-0 pointer-coarse:h-12 items-center justify-between gap-1 border-b pr-1.5 pl-3">
-        <span className="eyebrow">Vault</span>
-        <div className="flex items-center">
+        <div className="flex min-w-0 items-center">{header ?? <span className="eyebrow">Vault</span>}</div>
+        <div className="flex shrink-0 items-center">
           <Tooltip>
             <TooltipTrigger
               aria-label="New note"
-              disabled={creating}
+              disabled={creating || !canCreate}
               onClick={onNewNote}
               className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-7 items-center justify-center rounded-lg transition-colors pointer-coarse:size-10 focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden disabled:opacity-50"
             >
@@ -94,8 +100,9 @@ export function FileExplorer({
           <Tooltip>
             <TooltipTrigger
               aria-label="Upload document"
+              disabled={!canCreate}
               onClick={onUploadClick}
-              className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-7 items-center justify-center rounded-lg transition-colors pointer-coarse:size-10 focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden"
+              className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-7 items-center justify-center rounded-lg transition-colors pointer-coarse:size-10 focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden disabled:opacity-50"
             >
               <UploadIcon className="size-4" strokeWidth={1.5} />
             </TooltipTrigger>

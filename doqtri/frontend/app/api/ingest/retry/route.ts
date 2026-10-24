@@ -3,6 +3,7 @@ import { createSupabaseServerClient, createSupabaseAdminClient } from "@/lib/sup
 import { consumeAiQuota, quotaRefusal } from "@/lib/ai-quota";
 import { INGEST_ERRORS, type IngestErrorCode } from "@/lib/ingest/errors";
 import { ingestStream, runIngest } from "@/lib/ingest/pipeline";
+import { readActiveWorkspaceCookie, workspaceForCreate } from "@/lib/active-workspace";
 import type { UploadKind } from "@/lib/openai";
 
 export const runtime = "nodejs";
@@ -17,7 +18,8 @@ function reject(code: IngestErrorCode, status: number) {
  * user never has to find the file again. `raw: true` skips the AI formatting
  * pass and keeps the extracted text, for when that pass is what keeps failing.
  *
- * Responds with the same NDJSON stream as /api/ingest.
+ * Responds with the same NDJSON stream as /api/ingest. The note goes into
+ * the workspace the vault is showing at retry time, like a fresh upload.
  */
 export async function POST(request: Request) {
   const supabase = await createSupabaseServerClient();
@@ -27,7 +29,7 @@ export async function POST(request: Request) {
 
   if (!user) return reject("NOT_SIGNED_IN", 401);
 
-  let body: { ingestId?: unknown; raw?: unknown };
+  let body: { ingestId?: unknown; raw?: unknown; workspaceId?: unknown };
   try {
     body = (await request.json()) as typeof body;
   } catch {
@@ -48,6 +50,14 @@ export async function POST(request: Request) {
 
   if (!attempt || attempt.status === "succeeded") return reject("NOT_FOUND", 404);
 
+  const target = await workspaceForCreate(admin, user.id, {
+    requested: body.workspaceId,
+    cookie: await readActiveWorkspaceCookie(user.id),
+  });
+  if (!target.ok) {
+    return NextResponse.json({ error: target.error, code: "WORKSPACE_REFUSED" }, { status: target.status });
+  }
+
   // A raw retry still builds the mindmap (and a PDF is read by the model), so
   // every retry draws on the budget.
   const quota = await consumeAiQuota(admin, user.id, "ingest-retry");
@@ -64,6 +74,7 @@ export async function POST(request: Request) {
     runIngest({
       admin,
       userId: user.id,
+      workspaceId: target.workspaceId,
       source: {
         filename: attempt.filename as string,
         mimeType: blob.type,

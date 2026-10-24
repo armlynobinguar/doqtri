@@ -49,10 +49,13 @@ function initialStages(): Record<IngestStage, StageStatus> {
 }
 
 export function UploadDialog({
+  workspaceId,
   open,
   onOpenChange,
   retry = null,
 }: {
+  /** Where the imported note goes: the workspace the vault is showing (WP-1.7). */
+  workspaceId?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   retry?: RetryTarget | null;
@@ -127,6 +130,7 @@ export function UploadDialog({
     if (!file) return;
     const body = new FormData();
     body.append("file", file);
+    if (workspaceId) body.append("workspaceId", workspaceId);
     void run(file.name, () => fetch("/api/ingest", { method: "POST", body }));
   }
 
@@ -135,7 +139,7 @@ export function UploadDialog({
       fetch("/api/ingest/retry", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ingestId, raw }),
+        body: JSON.stringify({ ingestId, raw, ...(workspaceId ? { workspaceId } : {}) }),
       }),
     );
   }
