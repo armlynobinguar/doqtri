@@ -110,6 +110,47 @@ describe("anchor (registry v2)", () => {
   });
 });
 
+describe("the *_as writes (registry v3)", () => {
+  const SIGNER = Keypair.random().publicKey();
+  const signer = new Address(SIGNER).toScVal();
+  const nodeUpdate = xdr.ScVal.scvMap([
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("artifact_ref"), val: str("v1") }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("node_id"), val: str("root") }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("status"), val: status("Built") }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("tool"), val: str("doqtri-done") }),
+  ]);
+
+  it("decodes them as the writes they stand for, skipping the signer", () => {
+    expect(decodeInvocation(op("anchor_as", [signer, str(DOC), bytes(hashOf(1)), xdr.ScVal.scvVec([nodeUpdate])]), CONTRACT)).toEqual({
+      fn: "anchor",
+      docId: DOC,
+      hash: hashOf(1).toString("hex"),
+      nodes: [{ nodeId: "root", status: "Built", tool: "doqtri-done", artifactRef: "v1" }],
+    });
+    expect(decodeInvocation(op("update_document_as", [signer, str(DOC), bytes(hashOf(2))]), CONTRACT)).toEqual({
+      fn: "update_document",
+      docId: DOC,
+      hash: hashOf(2).toString("hex"),
+    });
+    expect(
+      decodeInvocation(op("set_node_status_as", [signer, str(DOC), str("h1"), status("Verified"), str("gh"), str("pr#2")]), CONTRACT),
+    ).toEqual({ fn: "set_node_status", docId: DOC, nodeId: "h1", status: "Verified", tool: "gh", artifactRef: "pr#2" });
+  });
+
+  it("numbers versions across owner-only and *_as writes", () => {
+    const ops = [
+      anchorOp(1),
+      op("update_document_as", [signer, str(DOC), bytes(hashOf(2))]),
+      op("anchor_as", [signer, str(DOC), bytes(hashOf(2)), xdr.ScVal.scvVec([nodeUpdate])]),
+      // Assigning moves no version.
+      op("assign_document", [str(DOC), str("7a000000-0000-4000-8000-0000000000d1")]),
+    ];
+    const history = buildHistory(ops, DOC, CONTRACT, OWNER);
+    expect(history.versions.map((v) => v.version)).toEqual([1, 2]);
+    expect(history.nodes).toEqual([expect.objectContaining({ nodeId: "root", status: "Built", docVersion: 2 })]);
+  });
+});
+
 describe("decodeInvocation", () => {
   it("decodes each registry call", () => {
     expect(decodeInvocation(register(), CONTRACT)).toEqual({

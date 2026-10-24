@@ -150,10 +150,26 @@ export function decodeInvocation(
           tool: String(args[3] ?? ""),
           artifactRef: String(args[4] ?? ""),
         };
-      // anchor(owner, doc_id, content_hash, nodes)
-      case "anchor":
+      // The *_as writes (registry v3, WP-1.4) are the same writes with the
+      // signer first; history folds them in like the owner-only ones.
+      // update_document_as(signer, doc_id, new_hash)
+      case "update_document_as":
+        return { fn: "update_document", docId: String(args[1]), hash: toHex(args[2]) };
+      // set_node_status_as(signer, doc_id, node_id, status, tool, artifact_ref)
+      case "set_node_status_as":
         return {
-          fn,
+          fn: "set_node_status",
+          docId: String(args[1]),
+          nodeId: String(args[2]),
+          status: enumTag(args[3]),
+          tool: String(args[4] ?? ""),
+          artifactRef: String(args[5] ?? ""),
+        };
+      // anchor(owner, doc_id, content_hash, nodes); anchor_as(signer, …) alike
+      case "anchor":
+      case "anchor_as":
+        return {
+          fn: "anchor",
           docId: String(args[1]),
           hash: toHex(args[2]),
           nodes: ((args[3] as Record<string, unknown>[] | undefined) ?? []).map((n) => ({
