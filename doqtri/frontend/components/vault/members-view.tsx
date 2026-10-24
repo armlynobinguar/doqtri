@@ -146,6 +146,10 @@ async function loadAll(workspaceId: string): Promise<Loaded> {
   };
 }
 
+function ledgerNotReady(chain: undefined | "unreachable"): string {
+  return chain === undefined ? "Still reading the ledger. Try again in a moment." : "The ledger couldn't be reached. Try again.";
+}
+
 /** Asks the server to work the workspace's on-chain follow-ups now (D-16). */
 async function syncChain(workspaceId: string): Promise<void> {
   if (!REGISTRY_EDITORS) return;
@@ -293,7 +297,7 @@ export function MembersView({
         if (!target) throw new Error("Choose the member to hand the workspace to.");
         let chainArgs: Record<string, string | null> = { p_owner_address: null, p_new_owner_address: null, p_owner_approval: null };
         if (chainShown) {
-          if (chain === undefined || chain === "unreachable") throw new Error("The ledger couldn't be reached. Try again.");
+          if (chain === undefined || chain === "unreachable") throw new Error(ledgerNotReady(chain));
           if (chain) {
             const source = needWallet();
             if (chain.owner !== source) throw new Error("Your wallet isn't this workspace's owner on-chain.");
@@ -321,7 +325,7 @@ export function MembersView({
       if (!transfer) return;
       let approval: string | undefined;
       if (chainShown && transfer.ownerApproval && transfer.ownerAddress) {
-        if (chain === undefined || chain === "unreachable") throw new Error("The ledger couldn't be reached. Try again.");
+        if (chain === undefined || chain === "unreachable") throw new Error(ledgerNotReady(chain));
         const source = needWallet();
         if (chain && chain.owner !== source) {
           approval = await DoqtriRegistry.signTransferApproval(

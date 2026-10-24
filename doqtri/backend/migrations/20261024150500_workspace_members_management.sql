@@ -225,11 +225,17 @@ as $$
   on conflict do nothing;
 $$;
 
--- After a membership row loses an editor or admin role (removed, left,
--- demoted), queue its revocation. Owners are left out: the owner's role
--- leaves only by a transfer, which moves it on-chain itself, or with the
--- account, which handle_deleted_user_workspaces covers. Nothing is queued
--- when the workspace itself is going (its rows cascade).
+-- After a membership row loses rights (removed, left, demoted):
+--
+-- * an editor or admin's on-chain revocation is queued. Owners are left
+--   out: the owner's role leaves only by a transfer, which moves it
+--   on-chain itself, or with the account, which
+--   handle_deleted_user_workspaces covers.
+-- * someone who is no longer an admin can no longer invite, so the invites
+--   they sent and nobody has accepted are withdrawn; otherwise a removed
+--   admin's invite could still bring someone in, as an admin.
+--
+-- Nothing happens when the workspace itself is going (its rows cascade).
 create function public.workspace_members_chain_sync()
 returns trigger
 language plpgsql
@@ -237,9 +243,6 @@ security definer
 set search_path = ''
 as $$
 begin
-  if old.role not in ('editor', 'admin') then
-    return null;
-  end if;
   if tg_op = 'UPDATE'
      and public.workspace_role_rank(new.role) >= public.workspace_role_rank(old.role)
   then
@@ -248,7 +251,15 @@ begin
   if not exists (select 1 from public.workspaces w where w.id = old.workspace_id) then
     return null;
   end if;
-  perform public.enqueue_chain_revocation(old.workspace_id, old.user_id);
+  if old.role in ('editor', 'admin') then
+    perform public.enqueue_chain_revocation(old.workspace_id, old.user_id);
+  end if;
+  if old.role in ('admin', 'owner')
+     and (tg_op = 'DELETE' or public.workspace_role_rank(new.role) < public.workspace_role_rank('admin'))
+  then
+    delete from public.workspace_invites i
+     where i.workspace_id = old.workspace_id and i.invited_by = old.user_id;
+  end if;
   return null;
 end;
 $$;

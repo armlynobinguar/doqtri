@@ -17,7 +17,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(106);
+select plan(112);
 
 insert into auth.users (id, email) values
   ('00000000-0000-4000-8000-0000000000a1', 'owner@example.com'),
@@ -341,6 +341,32 @@ select lives_ok(
   $$ select public.set_workspace_member_role('11000000-0000-4000-8000-000000000001',
        '00000000-0000-4000-8000-0000000000a2', 'admin') $$,
   'the admin is restored');
+
+-- An admin's open invites go when they stop being an admin.
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a2","role":"authenticated"}';
+select lives_ok(
+  $$ select public.invite_workspace_member('11000000-0000-4000-8000-000000000001', 'outsider@example.com', 'admin') $$,
+  'the admin invites the outsider as admin');
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a1","role":"authenticated"}';
+select lives_ok(
+  $$ select public.invite_workspace_member('11000000-0000-4000-8000-000000000001', 'G' || repeat('W', 55), 'viewer') $$,
+  'and the owner invites w');
+select lives_ok(
+  $$ select public.set_workspace_member_role('11000000-0000-4000-8000-000000000001',
+       '00000000-0000-4000-8000-0000000000a2', 'editor') $$,
+  'the owner demotes the admin');
+select results_eq(
+  $$ select invitee_id from public.workspace_invites where workspace_id = '11000000-0000-4000-8000-000000000001' $$,
+  $$ values ('00000000-0000-4000-8000-0000000000a6'::uuid) $$,
+  'the invites the demoted admin sent are withdrawn; the owner''s stay');
+select lives_ok(
+  $$ select public.cancel_workspace_invite((select id from public.workspace_invites
+       where workspace_id = '11000000-0000-4000-8000-000000000001')) $$,
+  'the owner withdraws theirs too');
+select lives_ok(
+  $$ select public.set_workspace_member_role('11000000-0000-4000-8000-000000000001',
+       '00000000-0000-4000-8000-0000000000a2', 'admin') $$,
+  'and makes them admin again');
 
 
 -- ---------------------------------------------------------------------------
