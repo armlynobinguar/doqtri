@@ -1,6 +1,6 @@
 # doqtri x qdit integration contract
 
-Status: v1.0.2, WP-2.0 (history in section 12, Changelog). This file is
+Status: v1.0.3, WP-2.0 (history in section 12, Changelog). This file is
 byte-identical in both repos (`qdit/docs/integration/CONTRACT.md`,
 `doqtri/docs/integration/CONTRACT.md`).
 Change it in both repos in the same phase, through the masterplan's decision
@@ -79,6 +79,9 @@ Rules that follow from the decisions:
   (answer 2xx and drop them). Servers MUST NOT remove, rename or retype a
   field, or make an optional request field required.
 - Any breaking change ships as `/api/v2` next to v1, after a decision.
+- A stricter validation rule on a request field MAY land within v1 by a
+  recorded decision, but only when every existing client already conforms to
+  it, so no conforming request starts failing (as D-45 did for `doc_url`).
 
 ## 4. Conventions
 
@@ -301,9 +304,9 @@ refreshes `doc_title` and `doc_url`.
 { "doc_id": "c2d1e0f9-8a7b-4c6d-9e5f-4a3b2c1d0e9f", "doc_title": "Payroll v1 plan", "doc_url": "https://www.doqtri.xyz/d/c2d1e0f9-8a7b-4c6d-9e5f-4a3b2c1d0e9f" }
 ```
 
-`doc_title` 1 to 300 characters after trim. `doc_url` MUST start with
-doqtri's origin followed by `/` (D-45): `https://www.doqtri.xyz/` in
-production. qdit sets the allowed origin per environment (for example
+`doc_title` 1 to 300 characters after trim. `doc_url` MUST be a valid
+absolute `https` URL and MUST start with doqtri's origin followed by `/`
+(D-45): `https://www.doqtri.xyz/` in production. qdit sets the allowed origin per environment (for example
 `DOQTRI_ORIGIN`), so preview and local deployments accept their own doqtri
 origin and nothing else. The trailing `/` is part of the check, so
 `https://www.doqtri.xyz.example.com/...` does not pass. Any other value is
@@ -547,6 +550,14 @@ so a third party can recompute it from those children's own records. Example:
 `children:h3,h4,h7`. A node with its own qdit link is never signed with
 `tool = "rollup"`; it is signed with `tool = "qdit"` as above.
 
+### Known limits
+
+doqtri's relayer refuses `create_workspace` for a personal workspace (D-52),
+but `DoqtriRegistry` is a public contract: a Freighter owner can still call
+`create_workspace` or `transfer_workspace` on it directly, outside the
+relayer. Neither call touches qdit, and qdit MUST NOT rely on doqtri's
+workspace rules being enforced on chain.
+
 ### Status mapping (D-19)
 
 | qdit `milestone_status` | `milestone_proof` `MilestoneStatus` | doqtri `NodeStatus` |
@@ -600,7 +611,17 @@ signature writes the record at the new id (R-03).
 ## 12. Changelog
 
 Every change here is additive within v1 (section 3), except that v1.0.2
-narrows what `doc_url` accepts (D-45); doqtri only ever sent its own URLs.
+narrows what `doc_url` accepts (D-45). Section 3 allows that because
+doqtri only ever sent its own URLs.
+
+- v1.0.3 (2026-10-25): wording only, no behaviour change.
+  - Section 8: `doc_url` MUST be a valid absolute `https` URL as well as
+    start with doqtri's origin followed by `/` (D-45).
+  - Section 3: a stricter validation rule may land within v1 by recorded
+    decision when every existing client already conforms (D-45).
+  - Section 10: known limit that a Freighter owner can call
+    `create_workspace` or `transfer_workspace` on `DoqtriRegistry` directly,
+    outside the relayer (D-52).
 
 - v1.0.2 (2026-10-24): applies D-38, D-45 and D-46.
   - D-38: `TRACE`, `TRACK` and `CONNECT` may get the platform's own error
