@@ -79,8 +79,10 @@ pub struct NodeUpdate {
     pub artifact_ref: String,
 }
 
-/// A shared space whose members may write its documents. Its owner is fixed
-/// at creation, holds every right in it, and owns every document in it.
+/// A shared space whose members may write its documents. Its owner holds
+/// every right in it and owns every document in it (D-28); ownership moves
+/// only by `transfer_workspace` or the contract admin's
+/// `admin_reassign_owner`.
 /// `members` is the on-chain member list (D-15): every address with a role,
 /// the owner aside, at most `MAX_MEMBERS` of them, so it can be read whole
 /// to audit who holds write access.
@@ -242,23 +244,45 @@ fn is_workspace_writer(ws: &Workspace, who: &Address) -> bool {
     *who == ws.owner || ws.members.contains_key(who.clone())
 }
 
-/// Fails unless `signer` may write `doc`: its owner, or the owner or a member
-/// of the workspace it is assigned to. A document in a workspace is owned by
-/// the workspace's owner (`assign_document`), so the owner check never lets
-/// a removed member back in.
-fn check_writer(env: &Env, doc_id: &String, doc: &Document, signer: &Address) -> Result<(), Error> {
-    if *signer == doc.owner {
-        return Ok(());
-    }
+/// The workspace a document is assigned to, kept alive since the caller is
+/// about to rely on it. None for a document in no workspace.
+fn doc_workspace(env: &Env, doc_id: &String) -> Result<Option<Workspace>, Error> {
     let ws_key = DataKey::DocWorkspace(doc_id.clone());
-    let workspace_id: String = env
-        .storage()
-        .persistent()
-        .get(&ws_key)
-        .ok_or(Error::NotEditor)?;
-    touch(env, &ws_key);
-    let ws = load_workspace(env, &workspace_id)?;
-    if is_workspace_writer(&ws, signer) {
+    let workspace_id: Option<String> = env.storage().persistent().get(&ws_key);
+    match workspace_id {
+        None => Ok(None),
+        Some(workspace_id) => {
+            touch(env, &ws_key);
+            Ok(Some(load_workspace(env, &workspace_id)?))
+        }
+    }
+}
+
+/// Loads a document with its owner resolved for an authorization check: a
+/// document in a workspace is owned by the workspace's CURRENT owner (D-28),
+/// whatever its stored `owner` says, so a `transfer_workspace` moves every
+/// document in it without rewriting any. The returned `owner` is the one to
+/// authorize against, and the one stored when the caller writes the
+/// document back, so the stored copy catches up on its next write.
+fn load_owned_doc(env: &Env, doc_id: &String) -> Result<(Document, Option<Workspace>), Error> {
+    let mut doc = load_doc(env, doc_id)?;
+    let ws = doc_workspace(env, doc_id)?;
+    if let Some(ws) = &ws {
+        doc.owner = ws.owner.clone();
+    }
+    Ok((doc, ws))
+}
+
+/// Fails unless `signer` may write the document: for one in a workspace, the
+/// workspace's current owner or a member; otherwise its owner. Its stored
+/// owner never counts for a workspace document, so neither a removed member
+/// nor a workspace's former owner gets back in through it.
+fn check_writer(doc: &Document, ws: &Option<Workspace>, signer: &Address) -> Result<(), Error> {
+    let allowed = match ws {
+        Some(ws) => is_workspace_writer(ws, signer),
+        None => *signer == doc.owner,
+    };
+    if allowed {
         Ok(())
     } else {
         Err(Error::NotEditor)
@@ -313,16 +337,16 @@ fn anchor_doc(
 ) -> Result<u32, Error> {
     let event_signer = if as_signer { Some(&signer) } else { None };
     let now = env.ledger().timestamp();
-    let mut doc = match load_doc(env, &doc_id) {
-        Ok(doc) => {
+    let mut doc = match load_owned_doc(env, &doc_id) {
+        Ok((doc, ws)) => {
             if as_signer {
-                check_writer(env, &doc_id, &doc, &signer)?;
+                check_writer(&doc, &ws, &signer)?;
             } else if doc.owner != signer {
                 return Err(Error::NotOwner);
             }
             doc
         }
-        Err(_) => {
+        Err(Error::DocumentNotFound) => {
             publish_doc_event(env, symbol_short!("register"), event_signer, &doc_id);
             Document {
                 owner: signer.clone(),
@@ -332,6 +356,7 @@ fn anchor_doc(
                 updated_at: now,
             }
         }
+        Err(e) => return Err(e),
     };
 
     if doc.content_hash != content_hash {
@@ -463,18 +488,15 @@ impl DoqtriRegistry {
     }
 
     /// Anchor a new content hash after a semantic change in the source doc.
-    /// Only the document owner may call. Returns the new version number.
+    /// Only the document owner may call (for a workspace document, the
+    /// workspace's current owner). Returns the new version number.
     pub fn update_document(
         env: Env,
         doc_id: String,
         new_hash: BytesN<32>,
     ) -> Result<u32, Error> {
         let key = DataKey::Doc(doc_id.clone());
-        let mut doc: Document = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(Error::DocumentNotFound)?;
+        let (mut doc, _) = load_owned_doc(&env, &doc_id)?;
 
         doc.owner.require_auth();
 
@@ -496,7 +518,8 @@ impl DoqtriRegistry {
 
     /// Record or update the build status of a mindmap node.
     /// `tool` is the builder used (e.g. "n8n"); `artifact_ref` points to the
-    /// built artifact (workflow ID, URL, or hash). Owner-only.
+    /// built artifact (workflow ID, URL, or hash). Owner-only (for a
+    /// workspace document, the workspace's current owner).
     pub fn set_node_status(
         env: Env,
         doc_id: String,
@@ -506,11 +529,7 @@ impl DoqtriRegistry {
         artifact_ref: String,
     ) -> Result<(), Error> {
         let doc_key = DataKey::Doc(doc_id.clone());
-        let mut doc: Document = env
-            .storage()
-            .persistent()
-            .get(&doc_key)
-            .ok_or(Error::DocumentNotFound)?;
+        let (mut doc, _) = load_owned_doc(&env, &doc_id)?;
 
         doc.owner.require_auth();
 
@@ -543,12 +562,20 @@ impl DoqtriRegistry {
         Ok(())
     }
 
-    /// Fetch a document's anchored state.
+    /// Fetch a document's anchored state. For a document in a workspace,
+    /// `owner` is the workspace's current owner (D-28), even before the
+    /// stored record has caught up with a transfer.
     pub fn get_document(env: Env, doc_id: String) -> Result<Document, Error> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Doc(doc_id))
-            .ok_or(Error::DocumentNotFound)
+        let store = env.storage().persistent();
+        let mut doc: Document = store
+            .get(&DataKey::Doc(doc_id.clone()))
+            .ok_or(Error::DocumentNotFound)?;
+        let workspace_id: Option<String> = store.get(&DataKey::DocWorkspace(doc_id));
+        if let Some(workspace_id) = workspace_id {
+            let ws = Self::get_workspace(env, workspace_id)?;
+            doc.owner = ws.owner;
+        }
+        Ok(doc)
     }
 
     /// Fetch a node's build-status record.
@@ -745,12 +772,17 @@ impl DoqtriRegistry {
     /// workspace. The workspace's owner becomes the document's owner: its
     /// author then writes it as a member, so removing them from the
     /// workspace removes their write access to it too, and it can leave the
-    /// workspace only with its owner's signature.
+    /// workspace only with its owner's signature. A document already in a
+    /// workspace is moved by that workspace's current owner.
     pub fn assign_document(env: Env, doc_id: String, workspace_id: String) -> Result<(), Error> {
         let mut doc = load_doc(&env, &doc_id)?;
-        doc.owner.require_auth();
+        let owner = match doc_workspace(&env, &doc_id)? {
+            Some(current) => current.owner,
+            None => doc.owner.clone(),
+        };
+        owner.require_auth();
         let ws = load_workspace(&env, &workspace_id)?;
-        if !is_workspace_writer(&ws, &doc.owner) {
+        if !is_workspace_writer(&ws, &owner) {
             return Err(Error::NotEditor);
         }
         persist(&env, &DataKey::DocWorkspace(doc_id.clone()), &workspace_id);
@@ -766,17 +798,25 @@ impl DoqtriRegistry {
     }
 
     /// Takes a document out of its workspace; its members can no longer
-    /// write it. It stays with its owner, the workspace's owner. Owner only.
-    /// Returns false, changing nothing, when it is in no workspace.
+    /// write it. It stays with the workspace's current owner, who signs, and
+    /// is stored with them as its owner, since with no workspace left to
+    /// resolve from the stored owner is the owner again. Returns false,
+    /// changing nothing, when it is in no workspace.
     pub fn unassign_document(env: Env, doc_id: String) -> Result<bool, Error> {
-        let doc = load_doc(&env, &doc_id)?;
-        doc.owner.require_auth();
+        let mut doc = load_doc(&env, &doc_id)?;
         let key = DataKey::DocWorkspace(doc_id.clone());
         let workspace_id: Option<String> = env.storage().persistent().get(&key);
         let Some(workspace_id) = workspace_id else {
+            doc.owner.require_auth();
             return Ok(false);
         };
+        let ws = load_workspace(&env, &workspace_id)?;
+        ws.owner.require_auth();
         env.storage().persistent().remove(&key);
+        if doc.owner != ws.owner {
+            doc.owner = ws.owner;
+            store_doc(&env, &doc_id, &doc);
+        }
         env.events().publish(
             (WS_TOPIC, symbol_short!("unassign")),
             (doc_id, workspace_id),
@@ -793,8 +833,8 @@ impl DoqtriRegistry {
         new_hash: BytesN<32>,
     ) -> Result<u32, Error> {
         signer.require_auth();
-        let mut doc = load_doc(&env, &doc_id)?;
-        check_writer(&env, &doc_id, &doc, &signer)?;
+        let (mut doc, ws) = load_owned_doc(&env, &doc_id)?;
+        check_writer(&doc, &ws, &signer)?;
 
         doc.content_hash = new_hash;
         doc.version += 1;
@@ -816,8 +856,8 @@ impl DoqtriRegistry {
         artifact_ref: String,
     ) -> Result<(), Error> {
         signer.require_auth();
-        let mut doc = load_doc(&env, &doc_id)?;
-        check_writer(&env, &doc_id, &doc, &signer)?;
+        let (mut doc, ws) = load_owned_doc(&env, &doc_id)?;
+        check_writer(&doc, &ws, &signer)?;
 
         let record = NodeRecord {
             status,
