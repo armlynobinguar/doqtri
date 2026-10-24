@@ -849,3 +849,4 @@ impl DoqtriRegistry {
 mod test;
 mod test_anchor;
 mod test_workspace;
+mod test_editor_writes;
