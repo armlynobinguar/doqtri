@@ -157,7 +157,7 @@ export function ProfileView({
 }: {
   joinedAt: string;
   referral: ReferralSummary | null;
-  /** The personal workspace, whose notes the vault shows (WP-1.7 adds others). */
+  /** The active workspace, whose notes the vault shows and this page counts (WP-1.7). */
   workspaceId: string;
 }) {
   const wallet = useWallet();

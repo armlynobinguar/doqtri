@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { loadVaultDocs } from "@/lib/load-docs";
+import { crossWorkspaceRedirect, getActiveWorkspace } from "@/lib/active-workspace";
 import { loadMindmapStyle } from "@/lib/load-mindmap-style";
 import { DocumentMindmap } from "@/components/vault/document-mindmap";
 
@@ -19,12 +20,21 @@ export default async function DocMindmapPage(
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
+  const { active: workspace } = await getActiveWorkspace(user.id);
   const [docs, savedStyle] = await Promise.all([
-    loadVaultDocs(supabase, user.id),
+    loadVaultDocs(supabase, workspace.id),
     loadMindmapStyle(supabase, user.id, `doc:${docId}`),
   ]);
   const active = docs.find((doc) => doc.id === docId);
-  if (!active) notFound();
+  if (!active) {
+    const other = await crossWorkspaceRedirect(supabase, {
+      docId,
+      activeId: workspace.id,
+      next: `/vault/${docId}/mindmap`,
+    });
+    if (other) redirect(other);
+    notFound();
+  }
 
   return (
     <DocumentMindmap

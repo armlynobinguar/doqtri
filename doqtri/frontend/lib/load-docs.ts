@@ -2,7 +2,6 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { isMindmapStale } from "@/lib/mindmap-hash";
 import { parseDocMindmap } from "@/lib/mindmap-types";
 import type { Doc } from "@/lib/types";
-import { personalWorkspaceId } from "@/lib/workspace-docs";
 
 /**
  * Loads the caller's whole vault as `Doc`s, with stored mindmaps parsed and
@@ -14,12 +13,13 @@ import { personalWorkspaceId } from "@/lib/workspace-docs";
  * the note no longer contains.
  *
  * Pass a session-bound client: RLS is what limits this to documents the
- * caller may read. Of those, only the caller's personal workspace is loaded:
- * RLS also lets in every team workspace they belong to, and the vault shows
- * one workspace at a time (WP-1.7 adds the switcher).
+ * caller may read. Of those, only `workspaceId`'s are loaded: RLS also lets
+ * in every other workspace they belong to, and the vault shows one workspace
+ * at a time (WP-1.7). Pass the active workspace (getActiveWorkspace()), so
+ * the graph, the mindmaps and [[wikilink]] resolution never reach across
+ * workspaces.
  */
-export async function loadVaultDocs(supabase: SupabaseClient, userId: string): Promise<Doc[]> {
-  const workspaceId = await personalWorkspaceId(supabase, userId);
+export async function loadVaultDocs(supabase: SupabaseClient, workspaceId: string): Promise<Doc[]> {
   const { data, error } = await supabase
     .from("documents")
     .select("id, title, markdown, mindmap, mindmap_hash, version")

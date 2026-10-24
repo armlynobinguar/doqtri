@@ -28,11 +28,14 @@ export function MobileTopBar({
   title,
   saveState,
   creating,
+  canCreate = true,
   onNewNote,
 }: {
   title: string;
   saveState: SaveState;
   creating: boolean;
+  /** False for a viewer of the active workspace (D-14): nothing to add to. */
+  canCreate?: boolean;
   onNewNote: () => void;
 }) {
   return (
@@ -55,7 +58,7 @@ export function MobileTopBar({
       <button
         type="button"
         aria-label="New note"
-        disabled={creating}
+        disabled={creating || !canCreate}
         onClick={onNewNote}
         className="text-sidebar-foreground hover:text-foreground active:bg-sidebar-accent focus-visible:ring-ring flex size-10 shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:ring-1 focus-visible:outline-hidden disabled:opacity-50"
       >

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { loadVaultDocs } from "@/lib/load-docs";
+import { getActiveWorkspace } from "@/lib/active-workspace";
 import { GlobalGraph } from "@/components/vault/global-graph";
 
 /**
@@ -16,7 +17,9 @@ export default async function GlobalGraphPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const docs = await loadVaultDocs(supabase, user.id);
+  // The active workspace's notes only (WP-1.7): links never reach across.
+  const { active: workspace } = await getActiveWorkspace(user.id);
+  const docs = await loadVaultDocs(supabase, workspace.id);
 
   return <GlobalGraph docs={docs} />;
 }

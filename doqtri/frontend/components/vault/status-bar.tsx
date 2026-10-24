@@ -14,12 +14,15 @@ const SAVE_LABEL: Record<SaveState, string> = {
 
 export function StatusBar({
   noteCount,
+  workspaceName,
   wordCount,
   saveState = "idle",
   trailing,
   className,
 }: {
   noteCount: number;
+  /** The workspace the vault shows; its notes are what `noteCount` counts. */
+  workspaceName?: string;
   wordCount?: number;
   saveState?: SaveState;
   trailing?: React.ReactNode;
@@ -32,6 +35,11 @@ export function StatusBar({
         className,
       )}
     >
+      {workspaceName ? (
+        <span className="max-w-48 truncate" data-testid="status-workspace" title={`Workspace: ${workspaceName}`}>
+          {workspaceName}
+        </span>
+      ) : null}
       <span className="tabular-nums">
         {noteCount} {noteCount === 1 ? "note" : "notes"}
       </span>
