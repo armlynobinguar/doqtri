@@ -26,15 +26,16 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(150);
 
-insert into auth.users (id, email) values
-  ('00000000-0000-4000-8000-000000000001', 'owner@example.com'),
-  ('00000000-0000-4000-8000-000000000002', 'admin@example.com'),
-  ('00000000-0000-4000-8000-000000000003', 'editor@example.com'),
-  ('00000000-0000-4000-8000-000000000004', 'viewer@example.com'),
-  ('00000000-0000-4000-8000-000000000005', 'outsider@example.com'),
-  ('00000000-0000-4000-8000-000000000006', 'g' || repeat('a', 55) || '@stellar.doqtri.local'),
-  ('00000000-0000-4000-8000-000000000007', null),
-  ('00000000-0000-4000-8000-000000000008', 'legacy@example.com');
+-- Confirmed emails: invites by email reach only those (D-49).
+insert into auth.users (id, email, email_confirmed_at) values
+  ('00000000-0000-4000-8000-000000000001', 'owner@example.com', now()),
+  ('00000000-0000-4000-8000-000000000002', 'admin@example.com', now()),
+  ('00000000-0000-4000-8000-000000000003', 'editor@example.com', now()),
+  ('00000000-0000-4000-8000-000000000004', 'viewer@example.com', now()),
+  ('00000000-0000-4000-8000-000000000005', 'outsider@example.com', now()),
+  ('00000000-0000-4000-8000-000000000006', 'g' || repeat('a', 55) || '@stellar.doqtri.local', now()),
+  ('00000000-0000-4000-8000-000000000007', null, null),
+  ('00000000-0000-4000-8000-000000000008', 'legacy@example.com', now());
 
 
 -- ---------------------------------------------------------------------------

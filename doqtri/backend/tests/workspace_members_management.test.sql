@@ -13,22 +13,25 @@
 --   x  outsider@example.com in no workspace but their own, no wallet
 --   w  a wallet account (G...), in no workspace yet
 --   y  late@example.com     invited later
---   n  newcomer@example.com signs up after being invited
+--   n  newcomer@example.com signs up after being invited, confirms the
+--                           email later, then holds a passkey wallet
+--   h  held@example.com     an account that never confirms its email
 --   g  guest@example.com    an editor of x's personal workspace
 
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(135);
+select plan(150);
 
-insert into auth.users (id, email) values
-  ('00000000-0000-4000-8000-0000000000a1', 'owner@example.com'),
-  ('00000000-0000-4000-8000-0000000000a2', 'admin@example.com'),
-  ('00000000-0000-4000-8000-0000000000a3', 'editor@example.com'),
-  ('00000000-0000-4000-8000-0000000000a4', 'viewer@example.com'),
-  ('00000000-0000-4000-8000-0000000000a5', 'outsider@example.com'),
-  ('00000000-0000-4000-8000-0000000000a6', lower('G' || repeat('W', 55)) || '@stellar.doqtri.local'),
-  ('00000000-0000-4000-8000-0000000000a7', 'Late@Example.com');
+-- Confirmed emails, except where a test says otherwise (D-49).
+insert into auth.users (id, email, email_confirmed_at) values
+  ('00000000-0000-4000-8000-0000000000a1', 'owner@example.com', now()),
+  ('00000000-0000-4000-8000-0000000000a2', 'admin@example.com', now()),
+  ('00000000-0000-4000-8000-0000000000a3', 'editor@example.com', now()),
+  ('00000000-0000-4000-8000-0000000000a4', 'viewer@example.com', now()),
+  ('00000000-0000-4000-8000-0000000000a5', 'outsider@example.com', now()),
+  ('00000000-0000-4000-8000-0000000000a6', lower('G' || repeat('W', 55)) || '@stellar.doqtri.local', now()),
+  ('00000000-0000-4000-8000-0000000000a7', 'Late@Example.com', now());
 
 insert into public.smart_wallets (user_id, network, address, created_tx) values
   ('00000000-0000-4000-8000-0000000000a1', 'testnet', 'C' || repeat('O', 55), repeat('a', 64)),
@@ -617,13 +620,28 @@ select lives_ok(
   $$ select public.invite_workspace_member((select id from probe), 'Newcomer@Example.com', 'editor') $$,
   'an invite can go to an email no account uses yet');
 reset role;
+create temp table newcomer_invite as
+  select id from public.workspace_invites where invitee = 'newcomer@example.com';
+grant select on newcomer_invite to authenticated;
+-- Signing up is not owning the inbox: with confirmations off the account is
+-- signed in before it has confirmed anything (D-49).
 insert into auth.users (id, email) values ('00000000-0000-4000-8000-0000000000a8', 'newcomer@example.com');
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a8","role":"authenticated"}';
+select is((select count(*)::int from public.my_workspace_invites()), 0,
+  'an account that has not confirmed the invited email does not see the invite');
+select is((select count(*)::int from public.workspace_invites), 0,
+  'nor read it from the table');
+select throws_ok(
+  $$ select public.accept_workspace_invite((select id from newcomer_invite)) $$,
+  'P0002', null, 'nor accept it by its id');
+reset role;
+update auth.users set email_confirmed_at = now() where id = '00000000-0000-4000-8000-0000000000a8';
+set local role authenticated;
 select results_eq(
   $$ select workspace_name, role::text from public.my_workspace_invites() $$,
   $$ values ('Probe'::text, 'editor'::text) $$,
-  'whoever signs up with that email finds it');
+  'once the email is confirmed, its account finds the invite');
 
 -- Nobody floods strangers with invites.
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a5","role":"authenticated"}';
@@ -676,10 +694,8 @@ select results_eq(
   'the deleted account''s editor role elsewhere is queued for revocation, by its Stellar account');
 
 -- The heir deletes their account before the chain caught up: the handover
--- is still pending, as it stays while REGISTRY_EDITORS is off. (A passkey
--- wallet's record restricts deleting its account, so the heirs' records
--- go first, as the operator deleting an account clears them.)
-delete from public.smart_wallets where user_id in ('00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000a2');
+-- is still pending, as it stays while REGISTRY_EDITORS is off. Both heirs
+-- hold passkey wallets, which are retired with their accounts (D-51).
 select lives_ok(
   $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000a1' $$,
   'the heir deletes their own account while the handover to them is still pending');
@@ -712,12 +728,27 @@ select results_eq(
   $$ values ('00000000-0000-4000-8000-0000000000a5'::uuid) $$,
   'and acme''s own handover goes to its admin');
 
+select results_eq(
+  $$ select address from public.workspace_chain_jobs
+      where workspace_id = '11000000-0000-4000-8000-000000000001' and kind = 'revoke'
+        and address = 'C' || repeat('D', 55) and status = 'pending' $$,
+  $$ values ('C' || repeat('D', 55)) $$,
+  'the deleted admin''s passkey wallet is queued for revocation in acme');
+select is((select count(*)::int from public.smart_wallets
+            where user_id in ('00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000a2')),
+  0, 'and the deleted heirs'' wallet records are gone');
+
 -- An editor of someone else's personal workspace loses that role on-chain too.
-insert into auth.users (id, email) values ('00000000-0000-4000-8000-0000000000a9', 'guest@example.com');
+insert into auth.users (id, email, email_confirmed_at)
+  values ('00000000-0000-4000-8000-0000000000a9', 'guest@example.com', now());
 insert into public.wallet_accounts (address, user_id) values ('G' || repeat('G', 55), '00000000-0000-4000-8000-0000000000a9');
 insert into public.workspace_members (workspace_id, user_id, role)
   select w.id, '00000000-0000-4000-8000-0000000000a9', 'editor' from public.workspaces w
    where w.is_personal and w.created_by = '00000000-0000-4000-8000-0000000000a5';
+-- and has open invites, to their email and to their Stellar account
+insert into public.workspace_invites (workspace_id, invitee, role, invited_by)
+  select p.id, x.invitee, 'viewer', '00000000-0000-4000-8000-0000000000a5'
+    from probe p, (values ('guest@example.com'), ('G' || repeat('G', 55))) x (invitee);
 select lives_ok(
   $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000a9' $$,
   'an editor of x''s personal workspace deletes their account');
@@ -727,6 +758,61 @@ select results_eq(
       where w.is_personal and w.created_by = '00000000-0000-4000-8000-0000000000a5' $$,
   $$ values ('revoke'::text, ('G' || repeat('G', 55))::text) $$,
   'and their editor role there is queued for revocation, like anywhere else');
+select is((select count(*)::int from public.workspace_invites
+            where invitee in ('guest@example.com', 'G' || repeat('G', 55))),
+  0, 'the invites to their email and Stellar account go with the account (D-50)');
+
+
+-- ---------------------------------------------------------------------------
+-- Deleting an account: its invites (D-50) and its passkey wallet (D-51)
+-- ---------------------------------------------------------------------------
+
+-- n, now confirmed, joins Probe as an editor with a passkey wallet, and
+-- has open invites to acme by email and by that wallet.
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a8","role":"authenticated"}';
+select lives_ok(
+  $$ select public.accept_workspace_invite((select id from newcomer_invite)) $$,
+  'the newcomer accepts the editor invite');
+reset role;
+insert into public.smart_wallets (user_id, network, address, created_tx) values
+  ('00000000-0000-4000-8000-0000000000a8', 'testnet', 'C' || repeat('N', 55), repeat('d', 64));
+insert into public.wallet_passkeys (credential_id, user_id, network, public_key, rp_id) values
+  ('newcomer-key', '00000000-0000-4000-8000-0000000000a8', 'testnet',
+   '\x04'::bytea || decode(repeat('11', 64), 'hex'), 'www.doqtri.xyz');
+insert into public.workspace_invites (workspace_id, invitee, role, invited_by) values
+  ('11000000-0000-4000-8000-000000000001', 'newcomer@example.com', 'viewer', '00000000-0000-4000-8000-0000000000a5'),
+  ('11000000-0000-4000-8000-000000000001', 'C' || repeat('N', 55), 'editor', '00000000-0000-4000-8000-0000000000a5');
+
+-- An unconfirmed account with an invited email: its deletion leaves the
+-- invite for whoever owns the inbox.
+insert into auth.users (id, email) values ('00000000-0000-4000-8000-0000000000aa', 'held@example.com');
+insert into public.workspace_invites (workspace_id, invitee, role, invited_by) values
+  ('11000000-0000-4000-8000-000000000001', 'held@example.com', 'viewer', '00000000-0000-4000-8000-0000000000a5');
+
+select lives_ok(
+  $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000a8' $$,
+  'an editor holding a passkey wallet deletes their account');
+select results_eq(
+  $$ select kind, address, network from public.workspace_chain_jobs
+      where workspace_id = (select id from probe) and address = 'C' || repeat('N', 55) $$,
+  $$ values ('revoke'::text, ('C' || repeat('N', 55))::text, 'testnet'::text) $$,
+  'their editor role is queued for revocation by the wallet''s C address first (D-51)');
+select is((select count(*)::int from public.smart_wallets where user_id = '00000000-0000-4000-8000-0000000000a8'),
+  0, 'then the wallet record is retired');
+select is((select count(*)::int from public.wallet_passkeys where user_id = '00000000-0000-4000-8000-0000000000a8'),
+  0, 'with its passkeys');
+select is((select count(*)::int from public.workspace_invites
+            where invitee in ('newcomer@example.com', 'C' || repeat('N', 55))),
+  0, 'the invites to their email and passkey wallet are deleted (D-50)');
+select is((select count(*)::int from public.workspace_invites where invitee = 'spam5@example.com'),
+  1, 'invites to other people stay');
+
+select lives_ok(
+  $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000aa' $$,
+  'an unconfirmed account deletes itself');
+select is((select count(*)::int from public.workspace_invites where invitee = 'held@example.com'),
+  1, 'and the invite to the email it never confirmed stays open');
 
 select * from finish();
 rollback;

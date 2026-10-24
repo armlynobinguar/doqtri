@@ -106,10 +106,20 @@ create index workspace_invites_invited_by_idx on public.workspace_invites (invit
 
 alter table public.workspace_invites enable row level security;
 
--- Every identifier the caller can be invited by: their email (not a wallet
--- account's synthetic one), their Stellar account and their passkey
--- wallets. Only ever the caller's own.
-create function public.my_invite_identifiers()
+-- Every identifier an account can be invited by: its email (not a wallet
+-- account's synthetic one) once confirmed, its Stellar account and its
+-- passkey wallets.
+--
+-- The email counts only once confirmed (D-49). An invite can wait for an
+-- email nobody has signed up with, and with confirmations off Supabase
+-- signs a new account in at once; without the check, whoever registered
+-- the address first would take the invite, at its role, without owning
+-- the inbox. Wallet addresses need no such check: the service role writes
+-- them only after the wallet has signed.
+--
+-- Internal: account deletion uses it for any account; clients reach only
+-- my_invite_identifiers() below.
+create function public.invite_identifiers_of(p_user_id uuid)
 returns text[]
 language sql
 stable
@@ -120,14 +130,26 @@ as $$
     from (
       select lower(u.email) as identifier
         from auth.users u
-       where u.id = (select auth.uid())
+       where u.id = p_user_id
          and u.email is not null
+         and u.email_confirmed_at is not null
          and lower(u.email) not like '%@stellar.doqtri.local'
       union
-      select a.address from public.wallet_accounts a where a.user_id = (select auth.uid())
+      select a.address from public.wallet_accounts a where a.user_id = p_user_id
       union
-      select s.address from public.smart_wallets s where s.user_id = (select auth.uid())
+      select s.address from public.smart_wallets s where s.user_id = p_user_id
     ) x;
+$$;
+
+-- The caller's own invite identifiers. Only ever the caller's.
+create function public.my_invite_identifiers()
+returns text[]
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select public.invite_identifiers_of((select auth.uid()));
 $$;
 
 -- The invitee sees the invites addressed to them; admins and owners see
@@ -356,7 +378,10 @@ begin
   elsif v_id ~ '^C' then
     select s.user_id into v_user from public.smart_wallets s where s.address = v_id limit 1;
   else
-    select u.id into v_user from auth.users u where lower(u.email) = v_id limit 1;
+    -- Confirmed emails only, as in invite_identifiers_of (D-49).
+    select u.id into v_user from auth.users u
+     where lower(u.email) = v_id and u.email_confirmed_at is not null
+     limit 1;
   end if;
   return v_user;
 end;
@@ -816,7 +841,7 @@ $$;
 -- Deleting an account (D-31, D-39)
 -- ---------------------------------------------------------------------------
 --
--- WP-1.2's version, with two additions:
+-- WP-1.2's version, with these additions:
 --
 -- * Before anything cascades, the account's editor and admin roles in every
 --   workspace, someone else's personal one included, are queued for
@@ -824,6 +849,17 @@ $$;
 --   cascades with the account, before the memberships do, so the members
 --   trigger would find no wallet). A workspace that is not on-chain makes
 --   the job a no-op for the revoker.
+-- * Open invites addressed to the account's identifiers (its confirmed
+--   email, its Stellar account, its passkey wallets) are deleted (D-50).
+--   They name an address, not the account, so nothing would cascade them.
+--   An unconfirmed email was never the account's, so an invite to it stays
+--   for whoever owns the inbox.
+-- * The passkey wallet is retired (D-51): once its revocations are queued,
+--   which is what needs its C address, its passkeys and its record go.
+--   smart_wallets keeps `on delete restrict` against auth.users, so no path
+--   but this one drops a wallet record. The ledger keeps the wallet's
+--   history, and chain_writes, which does not reference the record, keeps
+--   the index of its writes.
 -- * Each team workspace handed to its longest-standing admin also queues
 --   the on-chain `admin_reassign_owner` (D-36) to that admin's wallet. A
 --   handover still open from an earlier one (the heir is now deleting their
@@ -856,6 +892,12 @@ begin
   perform public.enqueue_chain_revocation(m.workspace_id, old.id)
      from public.workspace_members m
     where m.user_id = old.id and m.role in ('editor', 'admin');
+
+  delete from public.workspace_invites i
+   where i.invitee = any (public.invite_identifiers_of(old.id));
+
+  delete from public.wallet_passkeys p where p.user_id = old.id;
+  delete from public.smart_wallets s where s.user_id = old.id;
 
   delete from public.documents d
    using public.workspaces w
@@ -922,6 +964,7 @@ revoke execute on function public.enqueue_chain_revocation(uuid, uuid) from publ
 revoke execute on function public.workspace_members_chain_sync() from public, anon, authenticated;
 revoke execute on function public.handle_deleted_user_workspaces() from public, anon, authenticated;
 revoke execute on function public.find_account(text) from public, anon, authenticated;
+revoke execute on function public.invite_identifiers_of(uuid) from public, anon, authenticated;
 revoke execute on function public.invite_identifier(text) from public, anon, authenticated;
 -- The invites policy evaluates it as the caller; it only ever returns the
 -- caller's own identifiers.
