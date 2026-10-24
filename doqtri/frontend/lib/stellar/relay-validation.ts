@@ -214,7 +214,9 @@ export const EDITOR_DOCUMENT_FUNCTIONS = [
  * `transfer_workspace` is not relayed: both owners must sign it, and a relay
  * submission carries one wallet's approval. The calls only the contract admin
  * or the revoker makes (upgrade, import_*, set_revoker, admin_reassign_owner,
- * revocations) are signed by server keys and never pass through here.
+ * revocations) are signed by server keys and never pass through here. The
+ * server builds both ownership calls with buildOwnershipTransfer()
+ * (ownership-transfer.ts), which refuses a personal workspace (D-37).
  */
 export const WORKSPACE_FUNCTIONS = ["create_workspace", "add_editor", "remove_editor", "add_admin", "remove_admin"] as const;
 
