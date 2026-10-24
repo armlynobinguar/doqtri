@@ -43,6 +43,12 @@ const WRITE_LABELS: Record<string, string> = {
   update_document: "Anchored a new version",
   anchor: "Anchored a note",
   set_node_status: "Synced a mindmap node",
+  // Team notes (WP-1.4): written as a workspace editor.
+  anchor_as: "Anchored a team note",
+  update_document_as: "Anchored a new version of a team note",
+  set_node_status_as: "Synced a team note's mindmap node",
+  assign_document: "Shared a note with its workspace",
+  unassign_document: "Took a note out of its workspace",
 };
 
 function formatDate(iso: string): string {

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { uniqueTitle } from "@/lib/title";
+import { roleAtLeast, type WorkspaceRole } from "@/lib/workspace-roles";
 
 /**
  * Documents belong to workspaces (WP-1.2). These are the server-side helpers
@@ -10,14 +11,7 @@ import { uniqueTitle } from "@/lib/title";
  * Server-only: it imports the admin client.
  */
 
-export type WorkspaceRole = "viewer" | "editor" | "admin" | "owner";
-
-const RANK: Record<WorkspaceRole, number> = { viewer: 1, editor: 2, admin: 3, owner: 4 };
-
-/** Same order as public.workspace_role_rank(). */
-export function roleAtLeast(role: WorkspaceRole | null | undefined, min: WorkspaceRole): boolean {
-  return role != null && RANK[role] >= RANK[min];
-}
+export { roleAtLeast, type WorkspaceRole } from "@/lib/workspace-roles";
 
 /**
  * The user's personal workspace, where their notes go until WP-1.7 adds a

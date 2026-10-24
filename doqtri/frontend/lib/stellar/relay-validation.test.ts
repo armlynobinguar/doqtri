@@ -1,6 +1,7 @@
 import { Address, hash, Keypair, nativeToScVal, Networks, StrKey, xdr } from "@stellar/stellar-sdk";
 import { describe, expect, it } from "vitest";
 import {
+  authorizeRegistryWrite,
   deployedContractAddress,
   deployerAddress,
   parseRelayBody,
@@ -9,8 +10,12 @@ import {
   validateRegistryWrite,
   validateWalletAdmin,
   validateWalletDeploy,
+  type NoteWorkspace,
+  type RegistryAccess,
+  type RegistryWrite,
   type RelaySubmission,
 } from "./relay-validation";
+import type { WorkspaceRole } from "@/lib/workspace-roles";
 
 const contract = (seed: string) => StrKey.encodeContract(hash(Buffer.from(seed)));
 
@@ -273,6 +278,328 @@ describe("registry write validation", () => {
     mismatched.auth = call("update_document", [str(docId), hash32]).auth;
     expect(() => check(mismatched)).toThrow(/from your wallet/);
   });
+
+  // ---- v3 (WP-1.3): writes that name their signer, and workspaces ----
+  const workspaceId = "7a000000-0000-4000-8000-0000000000a1";
+  const addr = (a: string) => Address.fromString(a).toScVal();
+  const member = contract("member");
+
+  it("accepts the *_as writes from your own wallet and reports the note", () => {
+    expect(check(call("anchor_as", [addr(wallet), str(docId), hash32, xdr.ScVal.scvVec([nodeUpdate()])]))).toEqual({
+      fn: "anchor_as",
+      docId,
+    });
+    expect(check(call("anchor_as", [addr(wallet), str(docId), hash32, xdr.ScVal.scvVec([])]))).toEqual({ fn: "anchor_as", docId });
+    expect(check(call("update_document_as", [addr(wallet), str(docId), hash32]))).toEqual({ fn: "update_document_as", docId });
+    expect(
+      check(call("set_node_status_as", [addr(wallet), str(docId), str("h1"), status, str("gh"), str("pr#1")])),
+    ).toEqual({ fn: "set_node_status_as", docId });
+  });
+
+  it("refuses *_as writes naming someone else as the signer", () => {
+    const victim = contract("victim");
+    expect(() => check(call("anchor_as", [addr(victim), str(docId), hash32, xdr.ScVal.scvVec([])]))).toThrow(
+      /anchor_as must name your wallet as the signer/,
+    );
+    expect(() => check(call("update_document_as", [addr(victim), str(docId), hash32]))).toThrow(/name your wallet/);
+    expect(() =>
+      check(call("set_node_status_as", [addr(victim), str(docId), str("h1"), status, str(""), str("")])),
+    ).toThrow(/name your wallet/);
+  });
+
+  it("applies anchor's node rules to anchor_as and the shape rules to the other *_as writes", () => {
+    const tooMany = xdr.ScVal.scvVec(Array.from({ length: 33 }, () => nodeUpdate()));
+    expect(() => check(call("anchor_as", [addr(wallet), str(docId), hash32, tooMany]))).toThrow(/at most 32/);
+    expect(() => check(call("anchor_as", [addr(wallet), str(docId), hash32, xdr.ScVal.scvVec([str("x")])]))).toThrow(/at most 32/);
+    // The owner-only shape (no signer) is not an *_as call.
+    expect(() => check(call("update_document_as", [str(docId), hash32]))).toThrow(/invalid argument/);
+    expect(() => check(call("update_document_as", [addr(wallet), str(docId), xdr.ScVal.scvBytes(Buffer.alloc(31))]))).toThrow(
+      /invalid argument/,
+    );
+    expect(() => check(call("set_node_status_as", [addr(wallet), str(docId), str("h1"), str("Built"), str(""), str("")]))).toThrow(
+      /invalid argument/,
+    );
+  });
+
+  it("accepts assigning a note to a workspace and taking it out", () => {
+    expect(check(call("assign_document", [str(docId), str(workspaceId)]))).toEqual({ fn: "assign_document", docId, workspaceId });
+    expect(check(call("unassign_document", [str(docId)]))).toEqual({ fn: "unassign_document", docId });
+    // Workspace ids are app workspace ids.
+    expect(() => check(call("assign_document", [str(docId), str("acme")]))).toThrow(/invalid argument/);
+    expect(() => check(call("unassign_document", [str(docId), str(workspaceId)]))).toThrow(/invalid argument/);
+  });
+
+  it("accepts membership writes from your own wallet and reports the workspace and member", () => {
+    expect(check(call("create_workspace", [str(workspaceId), addr(wallet)]))).toEqual({
+      fn: "create_workspace",
+      workspaceId,
+      subject: null,
+    });
+    for (const fn of ["add_editor", "remove_editor", "add_admin", "remove_admin"]) {
+      expect(check(call(fn, [str(workspaceId), addr(wallet), addr(member)]))).toEqual({ fn, workspaceId, subject: member });
+    }
+  });
+
+  it("refuses membership writes for someone else's wallet or with a bad shape", () => {
+    const victim = contract("victim");
+    expect(() => check(call("create_workspace", [str(workspaceId), addr(victim)]))).toThrow(/name your wallet as the owner/);
+    expect(() => check(call("add_editor", [str(workspaceId), addr(victim), addr(member)]))).toThrow(/name your wallet as the admin/);
+    expect(() => check(call("add_admin", [str(workspaceId), addr(victim), addr(member)]))).toThrow(/name your wallet as the owner/);
+    expect(() => check(call("remove_editor", [str(workspaceId), addr(victim), addr(member)]))).toThrow(/name your wallet as the caller/);
+    expect(() => check(call("add_editor", [str("acme"), addr(wallet), addr(member)]))).toThrow(/invalid argument/);
+    expect(() => check(call("add_editor", [str(workspaceId), addr(wallet), str("member")]))).toThrow(/invalid argument/);
+  });
+
+  it("never relays the calls that need two owners or a server key", () => {
+    for (const fn of ["transfer_workspace", "admin_reassign_owner", "set_revoker", "upgrade", "import_document", "import_node"]) {
+      expect(() => check(call(fn, [str(workspaceId), addr(wallet), addr(member)]))).toThrow(/not allowed/);
+    }
+  });
+
+  it("requires the v3 writes to carry exactly one approval from your wallet", () => {
+    const assign = () => call("assign_document", [str(docId), str(workspaceId)]);
+    expect(() => check(call("assign_document", [str(docId), str(workspaceId)], { signer: member }))).toThrow(/from your wallet/);
+    expect(() => check(call("add_editor", [str(workspaceId), addr(wallet), addr(member)], { entries: 2 }))).toThrow(
+      /exactly one auth entry/,
+    );
+    const mismatched = assign();
+    mismatched.auth = call("unassign_document", [str(docId)]).auth;
+    expect(() => check(mismatched)).toThrow(/from your wallet/);
+  });
+});
+
+describe("registry write authorization (workspace roles)", () => {
+  const team = "7a000000-0000-4000-8000-0000000000b1";
+  const other = "7a000000-0000-4000-8000-0000000000b2";
+  const home = "7a000000-0000-4000-8000-0000000000b3";
+  const note = "3f1c2a9e-0000-4000-8000-0000000000b1";
+  const homeNote = "3f1c2a9e-0000-4000-8000-0000000000b2";
+  const orphanNote = "3f1c2a9e-0000-4000-8000-0000000000b3";
+  const users = {
+    owner: "u-owner",
+    admin: "u-admin",
+    editor: "u-editor",
+    author: "u-author",
+    viewer: "u-viewer",
+    removed: "u-removed",
+    outsider: "u-outsider",
+  };
+  const editorWallet = contract("editor-wallet");
+  const viewerWallet = contract("viewer-wallet");
+  const strangerWallet = contract("stranger-wallet");
+
+  /**
+   * The team as doqtri's database has it. `removed` was an editor and has
+   * just been removed in the app: no membership row, even though the chain
+   * may still list their wallet (D-16). `home` is the owner's personal
+   * workspace, which took the editor as a member (D-30).
+   */
+  const roles: Record<string, Record<string, WorkspaceRole>> = {
+    [team]: {
+      [users.owner]: "owner",
+      [users.admin]: "admin",
+      [users.editor]: "editor",
+      [users.author]: "editor",
+      [users.viewer]: "viewer",
+    },
+    [other]: { [users.outsider]: "owner" },
+    [home]: { [users.owner]: "owner", [users.admin]: "admin", [users.editor]: "editor", [users.viewer]: "viewer" },
+  };
+  const notes: Record<string, NoteWorkspace> = {
+    // Written by `author`, an editor of the team.
+    [note]: { workspaceId: team, personal: false, creatorId: users.author },
+    [homeNote]: { workspaceId: home, personal: true, creatorId: users.owner },
+    // Its author deleted their account.
+    [orphanNote]: { workspaceId: team, personal: false, creatorId: null },
+  };
+  const walletUsers: Record<string, string> = { [editorWallet]: users.editor, [viewerWallet]: users.viewer };
+  const personalWorkspaces = new Set([home]);
+  const access: RegistryAccess = {
+    documentWorkspace: async (docId) => notes[docId] ?? null,
+    workspace: async (workspaceId) => (roles[workspaceId] ? { personal: personalWorkspaces.has(workspaceId) } : null),
+    memberRole: async (workspaceId, userId) => roles[workspaceId]?.[userId] ?? null,
+    addressRole: async (workspaceId, address) => {
+      const userId = walletUsers[address];
+      return userId ? (roles[workspaceId]?.[userId] ?? null) : null;
+    },
+  };
+  /** Defaults to REGISTRY_EDITORS on: the v3 registry. */
+  const authorize = (write: RegistryWrite, userId: string, editors = true) =>
+    authorizeRegistryWrite(write, userId, access, editors);
+  const ownerOnly = (docId: string): RegistryWrite[] => [
+    { fn: "anchor", docId },
+    { fn: "update_document", docId },
+    { fn: "set_node_status", docId },
+    { fn: "register_document", docId },
+  ];
+  const editorWrites = (docId: string): RegistryWrite[] => [
+    { fn: "anchor_as", docId },
+    { fn: "update_document_as", docId },
+    { fn: "set_node_status_as", docId },
+    { fn: "assign_document", docId, workspaceId: team },
+  ];
+  const noteWrites = [...editorWrites(note), ...ownerOnly(note)];
+
+  it("lets an editor, admin or owner sign every *_as write on a team note", async () => {
+    for (const userId of [users.editor, users.admin, users.owner]) {
+      for (const write of editorWrites(note)) await expect(authorize(write, userId)).resolves.toBeUndefined();
+    }
+  });
+
+  it("refuses a viewer: viewers read, they never sign (D-14)", async () => {
+    for (const editors of [true, false]) {
+      for (const write of [...ownerOnly(note), ...ownerOnly(homeNote)]) {
+        await expect(authorize(write, users.viewer, editors)).rejects.toThrow(/Viewers can read this note but not sign/);
+      }
+    }
+    for (const write of editorWrites(note)) {
+      await expect(authorize(write, users.viewer)).rejects.toThrow(/Viewers can read this note but not sign/);
+    }
+  });
+
+  it("refuses a removed member at once, as if the note were not there (D-16)", async () => {
+    for (const write of noteWrites) {
+      await expect(authorize(write, users.removed)).rejects.toThrow(RelayRejection);
+      await expect(authorize(write, users.removed)).rejects.toThrow(/isn't in your vault/);
+    }
+    for (const write of ownerOnly(note)) {
+      await expect(authorize(write, users.removed, false)).rejects.toThrow(/isn't in your vault/);
+    }
+  });
+
+  it("refuses an outsider, even one who owns another workspace", async () => {
+    for (const write of noteWrites) await expect(authorize(write, users.outsider)).rejects.toThrow(/isn't in your vault/);
+    for (const write of ownerOnly(homeNote)) {
+      await expect(authorize(write, users.outsider, false)).rejects.toThrow(/isn't in your vault/);
+    }
+  });
+
+  it("refuses a note that does not exist", async () => {
+    await expect(authorize({ fn: "anchor_as", docId: "3f1c2a9e-0000-4000-8000-0000000000ff" }, users.owner)).rejects.toThrow(
+      /isn't in your vault/,
+    );
+  });
+
+  it("refuses a team note's owner-only writes once the *_as calls exist, so no editor takes the note over", async () => {
+    for (const userId of [users.author, users.editor, users.admin, users.owner]) {
+      for (const write of ownerOnly(note)) {
+        await expect(authorize(write, userId)).rejects.toThrow(/written through the workspace calls/);
+      }
+    }
+  });
+
+  it("on the live registry, lets only a team note's author or the workspace owner sign it", async () => {
+    for (const userId of [users.author, users.owner]) {
+      for (const write of ownerOnly(note)) await expect(authorize(write, userId, false)).resolves.toBeUndefined();
+    }
+    // Anchoring first would make them its on-chain owner (registry v2).
+    for (const userId of [users.editor, users.admin]) {
+      for (const write of ownerOnly(note)) {
+        await expect(authorize(write, userId, false)).rejects.toThrow(/Only this note's author or its workspace owner/);
+      }
+    }
+    // With its author gone, only the owner.
+    await expect(authorize({ fn: "anchor", docId: orphanNote }, users.owner, false)).resolves.toBeUndefined();
+    await expect(authorize({ fn: "anchor", docId: orphanNote }, users.editor, false)).rejects.toThrow(
+      /Only this note's author or its workspace owner/,
+    );
+  });
+
+  it("refuses every v3 call while the registry has none of them", async () => {
+    const v3: RegistryWrite[] = [
+      ...editorWrites(note),
+      { fn: "unassign_document", docId: note },
+      { fn: "create_workspace", workspaceId: team, subject: null },
+      { fn: "add_editor", workspaceId: team, subject: editorWallet },
+      { fn: "remove_editor", workspaceId: team, subject: editorWallet },
+      { fn: "add_admin", workspaceId: team, subject: editorWallet },
+      { fn: "remove_admin", workspaceId: team, subject: editorWallet },
+    ];
+    for (const write of v3) {
+      await expect(authorize(write, users.owner, false)).rejects.toThrow(/aren't enabled on this registry yet/);
+    }
+  });
+
+  it("lets only the owner of a personal workspace write its notes, even with editor members (D-30)", async () => {
+    for (const editors of [true, false]) {
+      for (const write of ownerOnly(homeNote)) await expect(authorize(write, users.owner, editors)).resolves.toBeUndefined();
+      for (const userId of [users.editor, users.admin]) {
+        for (const write of ownerOnly(homeNote)) {
+          await expect(authorize(write, userId, editors)).rejects.toThrow(/Only the owner of a personal workspace/);
+        }
+      }
+    }
+    for (const write of editorWrites(homeNote).slice(0, 3)) {
+      await expect(authorize(write, users.editor)).rejects.toThrow(/Only the owner of a personal workspace/);
+    }
+  });
+
+  it("never assigns a personal workspace's note on-chain", async () => {
+    await expect(authorize({ fn: "assign_document", docId: homeNote, workspaceId: home }, users.owner)).rejects.toThrow(
+      /aren't put in a workspace on-chain/,
+    );
+  });
+
+  it("assigns a note only to the workspace it belongs to", async () => {
+    await expect(authorize({ fn: "assign_document", docId: note, workspaceId: other }, users.editor)).rejects.toThrow(
+      /only be assigned to the workspace it belongs to/,
+    );
+  });
+
+  it("lets only an owner take a note out of its workspace", async () => {
+    await expect(authorize({ fn: "unassign_document", docId: note }, users.owner)).resolves.toBeUndefined();
+    for (const userId of [users.admin, users.editor]) {
+      await expect(authorize({ fn: "unassign_document", docId: note }, userId)).rejects.toThrow(/Only an owner/);
+    }
+  });
+
+  it("lets admins add and remove editors, and only editors be added", async () => {
+    const add = (subject: string): RegistryWrite => ({ fn: "add_editor", workspaceId: team, subject });
+    await expect(authorize(add(editorWallet), users.admin)).resolves.toBeUndefined();
+    await expect(authorize(add(editorWallet), users.owner)).resolves.toBeUndefined();
+    await expect(authorize(add(editorWallet), users.editor)).rejects.toThrow(/Only a workspace admin/);
+    await expect(authorize(add(editorWallet), users.removed)).rejects.toThrow(/aren't a member/);
+    // A viewer never gets chain write access, nor does a wallet nobody in the workspace holds.
+    await expect(authorize(add(viewerWallet), users.admin)).rejects.toThrow(/Only a workspace editor/);
+    await expect(authorize(add(strangerWallet), users.admin)).rejects.toThrow(/Only a workspace editor/);
+    // Removing is always allowed to an admin, whoever the member is.
+    await expect(
+      authorize({ fn: "remove_editor", workspaceId: team, subject: strangerWallet }, users.admin),
+    ).resolves.toBeUndefined();
+  });
+
+  it("lets only the owner of a personal workspace sign its membership calls (D-44)", async () => {
+    const homeCall = (fn: "add_editor" | "remove_editor" | "add_admin" | "remove_admin"): RegistryWrite => ({
+      fn,
+      workspaceId: home,
+      subject: editorWallet,
+    });
+    // The same admin may add an editor to the team, but not to someone's personal workspace.
+    await expect(authorize({ fn: "add_editor", workspaceId: team, subject: editorWallet }, users.admin)).resolves.toBeUndefined();
+    for (const fn of ["add_editor", "remove_editor"] as const) {
+      await expect(authorize(homeCall(fn), users.admin)).rejects.toThrow(/Only the owner of a personal workspace/);
+      await expect(authorize(homeCall(fn), users.owner)).resolves.toBeUndefined();
+    }
+    await expect(authorize(homeCall("remove_admin"), users.owner)).resolves.toBeUndefined();
+    await expect(authorize({ fn: "create_workspace", workspaceId: home, subject: null }, users.owner)).resolves.toBeUndefined();
+  });
+
+  it("lets only the owner manage admins and create the workspace on-chain", async () => {
+    await expect(authorize({ fn: "add_admin", workspaceId: team, subject: editorWallet }, users.owner)).rejects.toThrow(
+      /Only a workspace admin can be made an admin/,
+    );
+    await expect(authorize({ fn: "remove_admin", workspaceId: team, subject: editorWallet }, users.owner)).resolves.toBeUndefined();
+    await expect(authorize({ fn: "remove_admin", workspaceId: team, subject: editorWallet }, users.admin)).rejects.toThrow(
+      /Only a workspace owner/,
+    );
+    await expect(authorize({ fn: "create_workspace", workspaceId: team, subject: null }, users.owner)).resolves.toBeUndefined();
+    await expect(authorize({ fn: "create_workspace", workspaceId: team, subject: null }, users.admin)).rejects.toThrow(
+      /Only a workspace owner/,
+    );
+    await expect(authorize({ fn: "create_workspace", workspaceId: team, subject: null }, users.outsider)).rejects.toThrow(
+      /aren't a member/,
+    );
+  });
 });
 
 describe("wallet admin validation (passkey changes)", () => {
@@ -404,7 +731,7 @@ describe("forwarded write validation (user pays)", () => {
 
   it("accepts a forwarded register and reports the note and fee cap", () => {
     expect(check(build())).toEqual({ fn: "register_document", docId, maxFee: BigInt(1_000_000), expirationLedger: 5000 });
-    expect(check(build({ withRelayerEntry: true })).docId).toBe(docId);
+    expect(check(build({ withRelayerEntry: true }))).toMatchObject({ docId });
   });
 
   it("refuses other forwarders, tokens, targets, payers and fee recipients", () => {
@@ -418,6 +745,17 @@ describe("forwarded write validation (user pays)", () => {
   it("caps what the user can be asked to pay", () => {
     expect(() => check(build({ max: cap + BigInt(1) }))).toThrow(/outside the allowed range/);
     expect(() => check(build({ max: BigInt(0) }))).toThrow(/outside the allowed range/);
+  });
+
+  it("forwards the *_as writes with the same rules", () => {
+    const asArgs = (signer = wallet) => [addr(signer), xdr.ScVal.scvString(docId), xdr.ScVal.scvBytes(Buffer.alloc(32, 2))];
+    expect(check(build({ fn: "update_document_as", args: asArgs() }))).toEqual({
+      fn: "update_document_as",
+      docId,
+      maxFee: BigInt(1_000_000),
+      expirationLedger: 5000,
+    });
+    expect(() => check(build({ fn: "update_document_as", args: asArgs(contract("someone-else")) }))).toThrow(/name your wallet/);
   });
 
   it("still applies the registry rules to the wrapped call", () => {

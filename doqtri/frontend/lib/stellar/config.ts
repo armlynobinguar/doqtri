@@ -13,6 +13,7 @@ const RAW = {
   EXPERT_NETWORK: process.env.NEXT_PUBLIC_EXPERT_NETWORK,
   LAB_NETWORK: process.env.NEXT_PUBLIC_LAB_NETWORK,
   EXPERT_TX_BASE: process.env.NEXT_PUBLIC_EXPERT_TX_BASE,
+  REGISTRY_EDITORS: process.env.NEXT_PUBLIC_REGISTRY_EDITORS,
 } as const;
 
 /** Dashboard values often arrive wrapped in quotes or with a stray newline. */
@@ -69,6 +70,17 @@ export const CONTRACT_ID = (() => {
   }
   return TESTNET_CONTRACT;
 })();
+
+/**
+ * Workspace editors on-chain (WP-1.4): writes on a document in a team
+ * workspace go through the registry's `*_as` calls, which name the signer,
+ * and a team document is assigned to its workspace after its first anchor.
+ * Those calls exist only once the deployed registry runs the v3 code
+ * (WP-1.3), so this stays off until the product owner upgrades it; until
+ * then every write uses the owner-only calls, and the relay refuses the new
+ * ones. Set NEXT_PUBLIC_REGISTRY_EDITORS=1 to switch.
+ */
+export const REGISTRY_EDITORS = ["1", "true"].includes(env("REGISTRY_EDITORS", "").toLowerCase());
 
 /** Earlier registries whose writes still count toward a document's history. */
 export const LEGACY_CONTRACT_IDS: readonly string[] =

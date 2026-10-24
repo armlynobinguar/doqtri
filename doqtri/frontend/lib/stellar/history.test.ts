@@ -5,6 +5,7 @@ import {
   buildHistory,
   decodeInvocation,
   inLedgerOrder,
+  mergeOperations,
   withCompleteness,
   type HorizonOperation,
 } from "@/lib/stellar/history";
@@ -107,6 +108,47 @@ describe("anchor (registry v2)", () => {
     expect(history.nodes[0]).toEqual(expect.objectContaining({ nodeId: "root", docVersion: 3 }));
     // Without the old registry, only the new write counts.
     expect(buildHistory(ops, DOC, CONTRACT, OWNER).versions).toHaveLength(1);
+  });
+});
+
+describe("the *_as writes (registry v3)", () => {
+  const SIGNER = Keypair.random().publicKey();
+  const signer = new Address(SIGNER).toScVal();
+  const nodeUpdate = xdr.ScVal.scvMap([
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("artifact_ref"), val: str("v1") }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("node_id"), val: str("root") }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("status"), val: status("Built") }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("tool"), val: str("doqtri-done") }),
+  ]);
+
+  it("decodes them as the writes they stand for, skipping the signer", () => {
+    expect(decodeInvocation(op("anchor_as", [signer, str(DOC), bytes(hashOf(1)), xdr.ScVal.scvVec([nodeUpdate])]), CONTRACT)).toEqual({
+      fn: "anchor",
+      docId: DOC,
+      hash: hashOf(1).toString("hex"),
+      nodes: [{ nodeId: "root", status: "Built", tool: "doqtri-done", artifactRef: "v1" }],
+    });
+    expect(decodeInvocation(op("update_document_as", [signer, str(DOC), bytes(hashOf(2))]), CONTRACT)).toEqual({
+      fn: "update_document",
+      docId: DOC,
+      hash: hashOf(2).toString("hex"),
+    });
+    expect(
+      decodeInvocation(op("set_node_status_as", [signer, str(DOC), str("h1"), status("Verified"), str("gh"), str("pr#2")]), CONTRACT),
+    ).toEqual({ fn: "set_node_status", docId: DOC, nodeId: "h1", status: "Verified", tool: "gh", artifactRef: "pr#2" });
+  });
+
+  it("numbers versions across owner-only and *_as writes", () => {
+    const ops = [
+      anchorOp(1),
+      op("update_document_as", [signer, str(DOC), bytes(hashOf(2))]),
+      op("anchor_as", [signer, str(DOC), bytes(hashOf(2)), xdr.ScVal.scvVec([nodeUpdate])]),
+      // Assigning moves no version.
+      op("assign_document", [str(DOC), str("7a000000-0000-4000-8000-0000000000d1")]),
+    ];
+    const history = buildHistory(ops, DOC, CONTRACT, OWNER);
+    expect(history.versions.map((v) => v.version)).toEqual([1, 2]);
+    expect(history.nodes).toEqual([expect.objectContaining({ nodeId: "root", status: "Built", docVersion: 2 })]);
   });
 });
 
@@ -276,5 +318,31 @@ describe("user-paid writes (wrapped in the fee forwarder)", () => {
       [1, "direct"],
       [2, "paid"],
     ]);
+  });
+});
+
+describe("workspace-note history (owner feed and write index together)", () => {
+  const token = (op: HorizonOperation, t: string): HorizonOperation => ({ ...op, paging_token: t });
+
+  it("keeps an editor's indexed passkey write that the owner's feed lacks, and counts a shared write once", () => {
+    const registered = token(register(DOC, 1, { tx: "owner-register" }), "100");
+    const ownerFeed = [registered, token(update(DOC, 3, { tx: "owner-update" }), "300")];
+    // The editor's update_document_as was relayed and indexed; the index can also list the owner's own write.
+    const editorWrite = token(op("update_document_as", [new Address(OWNER).toScVal(), str(DOC), bytes(hashOf(2))], { tx: "editor-update" }), "200");
+    const indexed = [editorWrite, registered];
+
+    const history = withCompleteness(buildHistory(mergeOperations(ownerFeed, indexed), DOC, CONTRACT, OWNER), 3);
+    expect(history.versions.map((v) => [v.version, v.txHash])).toEqual([
+      [1, "owner-register"],
+      [2, "editor-update"],
+      [3, "owner-update"],
+    ]);
+    expect(history.incomplete).toBeUndefined();
+  });
+
+  it("marks the history incomplete when a write is in neither source", () => {
+    const ownerFeed = [token(register(DOC, 1, { tx: "owner-register" }), "100")];
+    const history = withCompleteness(buildHistory(mergeOperations(ownerFeed, []), DOC, CONTRACT, OWNER), 2);
+    expect(history.incomplete).toBe(true);
   });
 });
