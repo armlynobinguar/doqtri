@@ -110,7 +110,8 @@ pub enum Role {
 pub enum DataKey {
     Doc(String),
     Node(String, String),
-    /// Who may `upgrade` the contract and `import_*` documents (instance storage).
+    /// Who may `upgrade` the contract, `import_*` documents, set the revoker
+    /// and `admin_reassign_owner` (instance storage).
     Admin,
     /// workspace_id -> `Workspace`, members included.
     Workspace(String),
@@ -408,8 +409,9 @@ fn anchor_doc(
 
 #[contractimpl]
 impl DoqtriRegistry {
-    /// Sets the admin, who alone may `upgrade` the contract and `import_*`
-    /// documents from an earlier registry. Runs once, at deploy.
+    /// Sets the admin, who alone may `upgrade` the contract, `import_*`
+    /// documents from an earlier registry, set the revoker and reassign a
+    /// workspace's owner. Runs once, at deploy.
     pub fn __constructor(env: Env, admin: Address) {
         env.storage().instance().set(&DataKey::Admin, &admin);
     }
@@ -467,7 +469,8 @@ impl DoqtriRegistry {
         Ok(())
     }
 
-    /// The address that may upgrade the contract and import documents.
+    /// The address that may upgrade the contract, import documents, set the
+    /// revoker and reassign a workspace's owner.
     pub fn admin(env: Env) -> Address {
         env.storage()
             .instance()
