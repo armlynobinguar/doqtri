@@ -9,6 +9,7 @@ import {
 const DOC = "30000000-0000-4000-8000-000000000010";
 const ME = "00000000-0000-4000-8000-000000000003";
 const ANA = "00000000-0000-4000-8000-000000000006";
+const TAB = "a0000000-0000-4000-8000-000000000003";
 
 const HEARTBEAT = 60_000;
 const IDLE = 10 * 60_000;
@@ -23,6 +24,7 @@ function status(over: Partial<DocLockStatus> = {}): DocLockStatus {
     heartbeatAt: null,
     expiresAt: null,
     mine: false,
+    mineElsewhere: false,
     canEdit: true,
     canTakeOver: false,
     version: 1,
@@ -32,6 +34,9 @@ function status(over: Partial<DocLockStatus> = {}): DocLockStatus {
 
 const mine = (over: Partial<DocLockStatus> = {}) =>
   status({ holder: ME, holderName: "me", mine: true, ...over });
+/** The caller's own lock, held from another tab. */
+const elsewhere = (over: Partial<DocLockStatus> = {}) =>
+  status({ holder: ME, holderName: "me", mineElsewhere: true, ...over });
 const ana = (over: Partial<DocLockStatus> = {}) =>
   status({ holder: ANA, holderName: "ana", ...over });
 
@@ -40,6 +45,7 @@ function fakeApi(initial: DocLockStatus = status()) {
   const calls: string[] = [];
   const server = { current: initial, takeResult: null as DocLockStatus | null };
   const api: DocLockApi = {
+    session: TAB,
     status: vi.fn(async () => {
       calls.push("status");
       return server.current;
@@ -47,7 +53,7 @@ function fakeApi(initial: DocLockStatus = status()) {
     take: vi.fn(async (takeover: boolean) => {
       calls.push(takeover ? "takeover" : "take");
       if (server.takeResult) return server.takeResult;
-      if (!server.current.holder || server.current.mine || takeover) {
+      if (!server.current.holder || server.current.mine || (takeover && (server.current.canTakeOver || server.current.mineElsewhere))) {
         server.current = mine({ version: server.current.version, canTakeOver: server.current.canTakeOver });
       }
       return server.current;
@@ -255,6 +261,89 @@ describe("while someone else edits", () => {
   });
 });
 
+describe("the same user in two tabs", () => {
+  it("is read-only while another tab holds the lock, and takes nothing on an edit", async () => {
+    const { api } = fakeApi(elsewhere());
+    const c = controllerFor(api);
+    c.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(c.getState()).toMatchObject({ phase: "elsewhere", holderName: null });
+    expect(await c.noteEdit()).toBe(false);
+    expect(await c.ensure()).toBe(false);
+    expect(api.take).not.toHaveBeenCalled();
+    c.stop();
+  });
+
+  it("never releases another tab's lock, idle or leaving", async () => {
+    const { api } = fakeApi(elsewhere());
+    const c = controllerFor(api);
+    c.start();
+    await vi.advanceTimersByTimeAsync(IDLE * 2);
+    c.stop({ keepalive: true });
+    expect(api.release).not.toHaveBeenCalled();
+  });
+
+  it("may take its own lock over from the other tab, without being an admin", async () => {
+    const { api, calls } = fakeApi(elsewhere({ canTakeOver: false }));
+    const c = controllerFor(api);
+    c.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await c.takeOver()).toBe(true);
+    expect(calls).toContain("takeover");
+    expect(c.getState().phase).toBe("mine");
+    c.stop();
+  });
+
+  it("reports the loss when the other tab takes it back", async () => {
+    const onLost = vi.fn();
+    const { api, server } = fakeApi();
+    const c = controllerFor(api, { api, onLost });
+    c.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await c.noteEdit();
+    server.takeResult = elsewhere();
+    await c.noteEdit();
+    await vi.advanceTimersByTimeAsync(HEARTBEAT);
+    expect(c.getState().phase).toBe("elsewhere");
+    expect(onLost).toHaveBeenCalledTimes(1);
+    c.stop();
+  });
+
+  it("does not count idle time from before it started", async () => {
+    // A status that already says "mine" (a page back from the cache whose
+    // release did not land) must not read as ten idle minutes at once.
+    const { api, calls } = fakeApi(mine());
+    const c = controllerFor(api);
+    c.start();
+    await vi.advanceTimersByTimeAsync(HEARTBEAT);
+    expect(calls).not.toContain("release");
+    expect(c.getState().phase).toBe("mine");
+    c.stop();
+  });
+
+  it("names its session on the controller", () => {
+    const { api } = fakeApi();
+    expect(controllerFor(api).session).toBe(TAB);
+  });
+});
+
+describe("activity before a long write", () => {
+  it("ensure() restarts the idle timer while the lock is held", async () => {
+    const { api, calls } = fakeApi();
+    const c = controllerFor(api);
+    c.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await c.noteEdit();
+    await vi.advanceTimersByTimeAsync(IDLE - 2 * HEARTBEAT);
+    // e.g. Regenerate, nine-ish quiet minutes after the last keystroke.
+    expect(await c.ensure()).toBe(true);
+    await vi.advanceTimersByTimeAsync(5 * HEARTBEAT);
+    expect(calls).not.toContain("release");
+    expect(c.getState().phase).toBe("mine");
+    c.stop();
+  });
+});
+
 describe("leaving", () => {
   it("releases a held lock with keepalive and stops the schedule", async () => {
     const { api, calls } = fakeApi();
@@ -312,21 +401,28 @@ describe("createDocLockApi", () => {
     version: 2,
   };
 
-  it("calls the lock route with the right methods", async () => {
+  it("calls the lock route with the right methods, naming its session", async () => {
     const fetchImpl = vi.fn(async () => respond(200, { lock: { ...row, mine: true } }));
-    const api = createDocLockApi(DOC, fetchImpl as unknown as typeof fetch);
+    const api = createDocLockApi(DOC, fetchImpl as unknown as typeof fetch, TAB);
+    expect(api.session).toBe(TAB);
     await api.status();
     await api.take(false);
     await api.take(true);
     await api.release({ keepalive: true });
     const calls = fetchImpl.mock.calls as unknown as [string, RequestInit][];
     expect(calls.map(([url, init]) => `${init.method} ${url}`)).toEqual([
-      `GET /api/notes/${DOC}/lock`,
-      `POST /api/notes/${DOC}/lock`,
-      `POST /api/notes/${DOC}/lock?takeover=1`,
-      `DELETE /api/notes/${DOC}/lock`,
+      `GET /api/notes/${DOC}/lock?session=${TAB}`,
+      `POST /api/notes/${DOC}/lock?session=${TAB}`,
+      `POST /api/notes/${DOC}/lock?session=${TAB}&takeover=1`,
+      `DELETE /api/notes/${DOC}/lock?session=${TAB}`,
     ]);
     expect(calls[3][1].keepalive).toBe(true);
+  });
+
+  it("makes a fresh session per API when none is given", () => {
+    const a = createDocLockApi(DOC);
+    const b = createDocLockApi(DOC);
+    expect(a.session).not.toBe(b.session);
   });
 
   it("reads the status out of a 423", async () => {

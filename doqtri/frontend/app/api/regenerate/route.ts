@@ -4,8 +4,12 @@ import { improveMarkdown } from "@/lib/openai";
 import { consumeAiQuota, quotaRefusal } from "@/lib/ai-quota";
 import { generateAndStoreMindmap } from "@/lib/mindmap-store";
 import { loadMemberDocument, workspaceTitles } from "@/lib/workspace-docs";
-import { lockErrorAnswer } from "@/lib/doc-lock";
-import { liveLockHolder } from "@/lib/doc-lock-server";
+import {
+  EDITING_ELSEWHERE,
+  lockErrorAnswer,
+  parseDocLockStatus,
+  parseEditSession,
+} from "@/lib/doc-lock";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -21,16 +25,20 @@ export async function POST(request: Request) {
   }
 
   let id: string;
+  let editSession: string | null;
   try {
     const body: unknown = await request.json();
-    const candidate =
-      body && typeof body === "object" && "id" in body
-        ? (body as { id: unknown }).id
-        : null;
+    const fields = (body && typeof body === "object" ? body : {}) as { id?: unknown; session?: unknown };
+    const candidate = fields.id;
     if (typeof candidate !== "string" || candidate.length === 0) {
       return NextResponse.json({ error: "Missing document id" }, { status: 400 });
     }
     id = candidate;
+    // The editor's edit session: the lock is held by one tab (D-17).
+    editSession = parseEditSession(fields.session);
+    if (!editSession) {
+      return NextResponse.json({ error: "Missing the editor's session", code: "BAD_SESSION" }, { status: 400 });
+    }
   } catch {
     return NextResponse.json({ error: "Malformed request body" }, { status: 400 });
   }
@@ -57,25 +65,40 @@ export async function POST(request: Request) {
   const doc = found.doc;
 
   // Regenerating rewrites the note, so it is an edit like any other (D-17):
-  // only whoever holds the edit lock may do it. Checked before the quota is
-  // charged and the model called; save_document() checks again at the end.
-  const { holder, error: lockError } = await liveLockHolder(admin, id);
+  // only the editor session holding the lock may do it. The lock is renewed
+  // here, as the user, before the quota is charged and the model called, so
+  // it cannot lapse during the call (at most maxDuration, well under the ten
+  // idle minutes). A lock that is free is taken, as an edit would; one held
+  // by someone else, or by another tab, refuses. save_document() checks
+  // again at the end, which only an admin takeover meanwhile can fail.
+  const { data: lockRow, error: lockError } = await supabase.rpc("take_doc_lock", {
+    p_document_id: id,
+    p_session: editSession,
+    p_takeover: false,
+  });
   if (lockError) {
-    return NextResponse.json({ error: lockError }, { status: 500 });
+    const answer = lockErrorAnswer(lockError);
+    return NextResponse.json({ error: answer.error, code: answer.code }, { status: answer.status });
   }
-  if (holder !== user.id) {
+  const lock = parseDocLockStatus(lockRow);
+  if (!lock) {
+    return NextResponse.json({ error: "Unexpected lock status from the database" }, { status: 500 });
+  }
+  if (!lock.mine) {
     return NextResponse.json(
       {
-        error: holder
-          ? "Someone else is editing this note, so it cannot be regenerated now."
-          : "Start editing the note before regenerating it.",
+        error: lock.mineElsewhere
+          ? `${EDITING_ELSEWHERE}, so it cannot be regenerated here.`
+          : "Someone else is editing this note, so it cannot be regenerated now.",
         code: "NOT_LOCK_HOLDER",
+        lock,
       },
       { status: 423 },
     );
   }
 
-  // Charged after the ownership check, so a bad id costs nothing.
+  // Charged after the ownership and lock checks, so a bad id or a note
+  // someone else is editing costs nothing.
   const quota = await consumeAiQuota(admin, user.id, "regenerate");
   if (!quota.ok) return quotaRefusal(quota);
 
@@ -108,6 +131,7 @@ export async function POST(request: Request) {
     p_document_id: id,
     p_markdown: markdown,
     p_base_version: doc.version,
+    p_session: editSession,
   });
 
   if (saveError) {

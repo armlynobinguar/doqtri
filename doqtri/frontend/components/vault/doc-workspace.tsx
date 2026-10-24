@@ -21,7 +21,7 @@ import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { createNoteSaver } from "@/lib/note-saver";
 import { useDocLock } from "@/hooks/use-doc-lock";
 import { EditLockBanner } from "@/components/vault/edit-lock-banner";
-import { editingMessage } from "@/lib/doc-lock";
+import { EDITING_ELSEWHERE, editingMessage } from "@/lib/doc-lock";
 import type { Doc } from "@/lib/types";
 
 const SETTLE_MS = 700;
@@ -52,8 +52,11 @@ function countWords(markdown: string): number {
  * lock, and every save goes through /api/notes/[id] with the version the text
  * is based on. While someone else holds the lock the editor is read-only,
  * names them, and loads their text whenever its version moves on; an admin
- * may take the lock over. A save the server refuses as stale is never
- * retried over the newer text: the editor stops and offers a reload.
+ * may take the lock over. The lock belongs to this editor's edit session, so
+ * a second tab of the same user is read-only too, with "Edit here". A save
+ * the server refuses as stale is never retried over the newer text: the
+ * editor stops and offers a reload, and nothing reloads on its own while
+ * that offer stands, so the unsaved text stays put to be copied.
  */
 export function DocWorkspace({
   docs,
@@ -71,6 +74,11 @@ export function DocWorkspace({
   const [mobileView, setMobileView] = useState<MobileView>("note");
   // A save was refused because someone else saved since this copy loaded.
   const [conflict, setConflict] = useState(false);
+  // Read by the lock callbacks, which outlive a render.
+  const conflictRef = useRef(conflict);
+  useEffect(() => {
+    conflictRef.current = conflict;
+  }, [conflict]);
   const markdownRef = useRef(markdown);
 
   const { lock, controller } = useDocLock(active.id);
@@ -112,6 +120,9 @@ export function DocWorkspace({
     controller.setHandlers({
       onStatus: (status) => {
         if (status.version === saver.version) return;
+        // The conflict banner asked the user to copy their text first; only
+        // its Reload button replaces it.
+        if (conflictRef.current) return;
         // Someone else's save moved the note on. Load it, unless this user
         // holds the lock with edits not yet saved: those are theirs, and
         // the version check refuses their save if it would overwrite.
@@ -119,8 +130,9 @@ export function DocWorkspace({
         void reloadLatest();
       },
       onLost: (status) => {
-        toast.info(`${editingMessage(status.holderName)} now. Your copy is read-only.`);
-        void reloadLatest();
+        const who = status.mineElsewhere ? EDITING_ELSEWHERE : editingMessage(status.holderName);
+        toast.info(`${who} now. This copy is read-only.`);
+        if (!conflictRef.current) void reloadLatest();
       },
     });
   }, [controller, reloadLatest, saver, saves]);
@@ -129,7 +141,8 @@ export function DocWorkspace({
     conflict ||
     !lock.canEdit ||
     lock.phase === "loading" ||
-    lock.phase === "other";
+    lock.phase === "other" ||
+    lock.phase === "elsewhere";
 
   /** The editor's onChange: the first edit takes the lock. */
   const handleChange = useCallback(
@@ -137,7 +150,8 @@ export function DocWorkspace({
       setMarkdown(next);
       void controller.noteEdit().then((held) => {
         // Lost the race for a free lock: drop the keystroke for their text.
-        if (!held && controller.getState().phase === "other") void reloadLatest();
+        const { phase } = controller.getState();
+        if (!held && (phase === "other" || phase === "elsewhere")) void reloadLatest();
       });
     },
     [controller, reloadLatest],
@@ -244,9 +258,12 @@ export function DocWorkspace({
 
   const handleRegenerate = useCallback(async () => {
     // Regenerating rewrites the note: it needs the lock, and the model must
-    // see what the editor shows, so pending edits are saved first.
+    // see what the editor shows, so pending edits are saved first. ensure()
+    // also counts as activity, so the idle timer does not let the lock go
+    // while the model runs; the route renews it on the server.
     if (!(await controller.ensure())) {
-      toast.error(editingMessage(controller.getState().holderName));
+      const { phase, holderName } = controller.getState();
+      toast.error(phase === "elsewhere" ? EDITING_ELSEWHERE : editingMessage(holderName));
       return;
     }
     try {
@@ -259,7 +276,7 @@ export function DocWorkspace({
     const res = await fetch("/api/regenerate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: active.id }),
+      body: JSON.stringify({ id: active.id, session: controller.session }),
     });
 
     const payload: unknown = await res.json().catch(() => null);

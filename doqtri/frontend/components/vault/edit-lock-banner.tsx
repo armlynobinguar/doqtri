@@ -2,14 +2,14 @@
 
 import { LockIcon, RefreshCwIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { editingMessage } from "@/lib/doc-lock";
+import { EDITING_ELSEWHERE, editingMessage } from "@/lib/doc-lock";
 import type { DocLockState } from "@/lib/doc-lock-client";
 
 /**
  * The strip above the editor that says why it is read-only (WP-1.6, D-17):
- * someone else holds the edit lock, the caller is a viewer, or a save was
- * refused because the note changed elsewhere. Renders nothing while the
- * caller can edit.
+ * someone else holds the edit lock, the caller holds it in another tab, the
+ * caller is a viewer, or a save was refused because the note changed
+ * elsewhere. Renders nothing while the caller can edit.
  */
 export function EditLockBanner({
   lock,
@@ -37,6 +37,34 @@ export function EditLockBanner({
         <Button type="button" size="sm" variant="ghost" className="h-7 px-2.5 text-[12px]" onClick={onReload}>
           Reload
         </Button>
+      </div>
+    );
+  }
+
+  if (lock.phase === "elsewhere") {
+    return (
+      <div
+        role="status"
+        data-testid="edit-lock-elsewhere-banner"
+        className="border-border bg-background text-muted-foreground flex shrink-0 items-center gap-2 border-b px-3 py-2 text-[12px]"
+      >
+        <LockIcon className="size-3.5 shrink-0" strokeWidth={1.5} />
+        <span className="min-w-0 flex-1">
+          <span className="text-foreground">{EDITING_ELSEWHERE}.</span> This copy is read-only; it
+          updates when that one saves.
+        </span>
+        {lock.canEdit ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2.5 text-[12px]"
+            title="Edit here instead. The other tab becomes read-only, and anything it has not saved yet is lost."
+            onClick={onTakeOver}
+          >
+            Edit here
+          </Button>
+        ) : null}
       </div>
     );
   }

@@ -105,13 +105,18 @@ Two supporting tables:
   `is_workspace_member()`.
 
 - `public.doc_locks` — who is editing a document (D-17). One editor holds a
-  document's lock at a time; it frees after ten minutes without a heartbeat,
-  and an admin or owner may take it over. Written only by `take_doc_lock()`,
-  `release_doc_lock()` and `save_document()`; workspace members read it.
-  `documents.version` counts saves, and the browser saves text only through
-  `save_document(id, markdown, base_version)`, which refuses a caller without
-  the lock (`DQLCK`) or with a stale version (`DQVER`). A plain client UPDATE
-  of `markdown` is refused. Removing or demoting a member drops their locks.
+  document's lock at a time, from one edit session (one open tab: every call
+  names it, so a user's second tab is read-only and cannot release the
+  first's); it frees after ten minutes without a heartbeat, and an admin or
+  owner may take it over (anyone may take over their own lock from another
+  tab). Written only by `take_doc_lock()`, `release_doc_lock()` and
+  `save_document()`; workspace members read who holds it, and only editors
+  and above are told the holder's name. `documents.version` counts saves,
+  and the browser saves text only through
+  `save_document(id, markdown, base_version, session)`, which refuses a
+  caller without the lock in that session (`DQLCK`) or with a stale version
+  (`DQVER`). A plain client UPDATE of `markdown` is refused. Removing or
+  demoting a member drops their locks.
 
 The notes table itself is still the only content store. There are deliberately **no** graph tables: nodes and
 edges are parsed from `markdown` at render time by `lib/wikilinks.ts`, so the

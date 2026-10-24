@@ -16,7 +16,9 @@ import {
  * callbacks with `controller.setHandlers()` from an effect.
  */
 export function useDocLock(docId: string): { lock: DocLockState; controller: DocLockController } {
-  // The page remounts the editor per note, so one controller per mount.
+  // The page remounts the editor per note, so one controller per mount, and
+  // with it one edit session: each tab, and each visit to a note, holds the
+  // lock as itself (lib/doc-lock.ts).
   const [controller] = useState(() => createDocLockController({ api: createDocLockApi(docId) }));
 
   useEffect(() => {

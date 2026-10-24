@@ -4,6 +4,7 @@ const DOC = "30000000-0000-4000-8000-000000000010";
 const WS = "10000000-0000-4000-8000-000000000001";
 const ME = "00000000-0000-4000-8000-000000000003";
 const ANA = "00000000-0000-4000-8000-000000000006";
+const TAB = "a0000000-0000-4000-8000-000000000003";
 
 type DbError = { code?: string; message?: string; details?: string };
 type RpcResult = { data: unknown; error: DbError | null };
@@ -75,13 +76,22 @@ beforeEach(() => {
 describe("PUT /api/notes/[id] (save)", () => {
   it("refuses a signed-out caller", async () => {
     session.user = null;
-    const res = await PUT(put({ markdown: "# a", version: 1 }), ctx());
+    const res = await PUT(put({ markdown: "# a", version: 1, session: TAB }), ctx());
     expect(res.status).toBe(401);
     expect(session.rpc).not.toHaveBeenCalled();
   });
 
-  it("needs the markdown and the version it is based on", async () => {
-    for (const body of [{ markdown: "# a" }, { version: 1 }, { markdown: 1, version: 1 }, { markdown: "# a", version: 0 }, { markdown: "# a", version: 1.5 }, "not json"]) {
+  it("needs the markdown, the version it is based on and the editor's session", async () => {
+    for (const body of [
+      { markdown: "# a", session: TAB },
+      { version: 1, session: TAB },
+      { markdown: 1, version: 1, session: TAB },
+      { markdown: "# a", version: 0, session: TAB },
+      { markdown: "# a", version: 1.5, session: TAB },
+      { markdown: "# a", version: 1 },
+      { markdown: "# a", version: 1, session: "tab-1" },
+      "not json",
+    ]) {
       const res = await PUT(put(body), ctx());
       expect(res.status).toBe(400);
     }
@@ -90,13 +100,14 @@ describe("PUT /api/notes/[id] (save)", () => {
 
   it("saves through save_document as the caller and returns the new version", async () => {
     session.rpc.mockResolvedValue({ data: 4, error: null });
-    const res = await PUT(put({ markdown: "# v4", version: 3 }), ctx());
+    const res = await PUT(put({ markdown: "# v4", version: 3, session: TAB }), ctx());
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ id: DOC, version: 4 });
     expect(session.rpc).toHaveBeenCalledWith("save_document", {
       p_document_id: DOC,
       p_markdown: "# v4",
       p_base_version: 3,
+      p_session: TAB,
     });
     // The service role never writes the text.
     expect(adminWrites).toEqual([]);
@@ -120,11 +131,29 @@ describe("PUT /api/notes/[id] (save)", () => {
         error: null,
       };
     });
-    const res = await PUT(put({ markdown: "# mine", version: 3 }), ctx());
+    const res = await PUT(put({ markdown: "# mine", version: 3, session: TAB }), ctx());
     expect(res.status).toBe(423);
     const body = await res.json();
     expect(body).toMatchObject({ code: "NOT_LOCK_HOLDER", error: "ana is editing this note" });
     expect(body.lock).toMatchObject({ holder: ANA, mine: false });
+    expect(session.rpc).toHaveBeenCalledWith("doc_lock_status_for", { p_document_id: DOC, p_session: TAB });
+  });
+
+  it("says so when the caller holds the lock from another tab", async () => {
+    session.rpc.mockImplementation(async (fn) => {
+      if (fn === "save_document") {
+        return { data: null, error: { code: "DQLCK", message: "you are not holding the edit lock on this note" } };
+      }
+      return {
+        data: { document_id: DOC, holder: ME, holder_name: "editor", mine: false, mine_elsewhere: true, version: 3 },
+        error: null,
+      };
+    });
+    const res = await PUT(put({ markdown: "# tab b", version: 3, session: TAB }), ctx());
+    expect(res.status).toBe(423);
+    const body = await res.json();
+    expect(body.error).toMatch(/another tab/);
+    expect(body.lock).toMatchObject({ mineElsewhere: true });
   });
 
   it("answers 409 with the current version when the copy is stale", async () => {
@@ -132,7 +161,7 @@ describe("PUT /api/notes/[id] (save)", () => {
       data: null,
       error: { code: "DQVER", message: "this note was saved elsewhere", details: "5" },
     });
-    const res = await PUT(put({ markdown: "# old", version: 3 }), ctx());
+    const res = await PUT(put({ markdown: "# old", version: 3, session: TAB }), ctx());
     expect(res.status).toBe(409);
     expect(await res.json()).toMatchObject({ code: "STALE_VERSION", version: 5 });
   });
@@ -142,9 +171,9 @@ describe("PUT /api/notes/[id] (save)", () => {
       data: null,
       error: { code: "42501", message: "you can read this note but not edit it" },
     });
-    expect((await PUT(put({ markdown: "x", version: 1 }), ctx())).status).toBe(403);
+    expect((await PUT(put({ markdown: "x", version: 1, session: TAB }), ctx())).status).toBe(403);
     session.rpc.mockResolvedValueOnce({ data: null, error: { code: "P0002", message: "note not found" } });
-    expect((await PUT(put({ markdown: "x", version: 1 }), ctx())).status).toBe(404);
+    expect((await PUT(put({ markdown: "x", version: 1, session: TAB }), ctx())).status).toBe(404);
   });
 });
 

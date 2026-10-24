@@ -1,11 +1,12 @@
 import { createSaveQueue, type SaveQueue } from "@/lib/save-queue";
-import { editingMessage } from "@/lib/doc-lock";
+import { EDITING_ELSEWHERE, editingMessage } from "@/lib/doc-lock";
 import type { DocLockController } from "@/lib/doc-lock-client";
 
 /**
  * The editor's save path (WP-1.6, D-17): a save queue whose writes hold the
  * edit lock and go to PUT /api/notes/[id] with the version the text is based
- * on, keeping that version current as saves land.
+ * on and the editor's edit session, keeping that version current as saves
+ * land.
  *
  *   no lock to be had     the write fails; nothing is sent
  *   423 (lock lost)       the lock status is re-read, so the editor goes
@@ -25,7 +26,7 @@ export function createNoteSaver(params: {
   docId: string;
   markdown: string;
   version: number;
-  lock: Pick<DocLockController, "ensure" | "refresh" | "getState">;
+  lock: Pick<DocLockController, "session" | "ensure" | "refresh" | "getState">;
   onConflict: () => void;
   fetchImpl?: typeof fetch;
 }): NoteSaver {
@@ -35,12 +36,13 @@ export function createNoteSaver(params: {
 
   const queue = createSaveQueue(params.markdown, async (text) => {
     if (!(await lock.ensure())) {
-      throw new Error(editingMessage(lock.getState().holderName));
+      const { phase, holderName } = lock.getState();
+      throw new Error(phase === "elsewhere" ? EDITING_ELSEWHERE : editingMessage(holderName));
     }
     const res = await fetchImpl(`/api/notes/${encodeURIComponent(docId)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ markdown: text, version }),
+      body: JSON.stringify({ markdown: text, version, session: lock.session }),
     });
     const payload: unknown = await res.json().catch(() => null);
     const body = (payload && typeof payload === "object" ? payload : {}) as {

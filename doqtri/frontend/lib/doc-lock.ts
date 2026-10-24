@@ -23,18 +23,40 @@ export const LOCK_NOT_HELD = "DQLCK";
 /** SQLSTATE save_document() raises when the caller's copy is behind. */
 export const STALE_VERSION = "DQVER";
 
+/**
+ * A lock is held by one user from one edit session: one open editor, in one
+ * tab. Each editor makes a random session id when it opens a note and names
+ * it on every lock call and save, so a second tab of the same user neither
+ * renews, saves under, nor releases the first tab's lock.
+ */
+export function newEditSession(): string {
+  return globalThis.crypto.randomUUID();
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The edit session out of a request value, or null when it is not a uuid. */
+export function parseEditSession(value: unknown): string | null {
+  return typeof value === "string" && UUID.test(value) ? value : null;
+}
+
 /** A note's lock, from the caller's side (public.doc_lock_status). */
 export type DocLockStatus = {
   documentId: string;
   /** Null when the lock is free. */
   holder: string | null;
-  /** How to name the holder in "<name> is editing"; null when unknown. */
+  /**
+   * How to name the holder in "<name> is editing"; null when unknown, and
+   * always for a viewer (the database names holders to editors and above).
+   */
   holderName: string | null;
   acquiredAt: string | null;
   heartbeatAt: string | null;
   expiresAt: string | null;
-  /** The caller holds it. */
+  /** The caller holds it, from this edit session. */
   mine: boolean;
+  /** The caller holds it from another edit session (another tab or device). */
+  mineElsewhere: boolean;
   /** The caller may take a free lock (editor and above). */
   canEdit: boolean;
   /** The caller may take a held lock (admin and above). */
@@ -62,6 +84,7 @@ export function parseDocLockStatus(raw: unknown): DocLockStatus | null {
     heartbeatAt: str(row.heartbeat_at),
     expiresAt: str(row.expires_at),
     mine: row.mine === true,
+    mineElsewhere: row.mine_elsewhere === true,
     canEdit: row.can_edit === true,
     canTakeOver: row.can_take_over === true,
     version,
@@ -74,6 +97,10 @@ export function isLockLive(heartbeatAt: string | null | undefined, now: number =
   const at = Date.parse(heartbeatAt);
   return Number.isFinite(at) && now - at < DOC_LOCK_IDLE_MS;
 }
+
+/** What the editor says when the caller is editing the note in another tab. */
+export const EDITING_ELSEWHERE =
+  "You are editing this note in another tab or window";
 
 /** "<name> is editing", for a banner or an error. */
 export function editingMessage(holderName: string | null): string {
@@ -89,6 +116,8 @@ export type LockErrorAnswer = { status: number; code: string; error: string };
  */
 export function lockErrorAnswer(error: { code?: string | null; message?: string | null }): LockErrorAnswer {
   switch (error.code) {
+    case "22023":
+      return { status: 400, code: "BAD_SESSION", error: "This editor has no edit session. Reload the note." };
     case "P0002":
       return { status: 404, code: "NOT_FOUND", error: "Note not found" };
     case "42501":

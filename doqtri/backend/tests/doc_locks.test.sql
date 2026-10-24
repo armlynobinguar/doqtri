@@ -19,6 +19,9 @@
 --   x   outsider@example.com  in no workspace but their own
 --   w   a wallet account      editor of acme, named by its address
 --
+-- Edit sessions: each user's first tab is public._t_session(), their id with
+-- its first digit made "a"; a second tab of user 3 is b0000000-...-03.
+--
 -- Documents:
 --   R   "Roadmap" in acme
 --   P   "Private" in o's personal workspace, which nobody else is in
@@ -26,7 +29,13 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(70);
+select plan(84);
+
+-- The calling user's first tab. Created in the rolled-back transaction.
+create function public._t_session() returns uuid language sql stable as $$
+  select ('a' || substr((select auth.uid())::text, 2))::uuid
+$$;
+grant execute on function public._t_session() to authenticated;
 
 insert into auth.users (id, email) values
   ('00000000-0000-4000-8000-000000000001', 'owner@example.com'),
@@ -71,9 +80,9 @@ select is(
                         'doc_lock_status_for', 'doc_lock_holder_name')
       and p.prosecdef and p.proconfig @> array['search_path=""']),
   5, 'the lock functions are security definer with an empty search_path');
-select ok(not has_function_privilege('anon', 'public.take_doc_lock(uuid, boolean)', 'execute'),
+select ok(not has_function_privilege('anon', 'public.take_doc_lock(uuid, uuid, boolean)', 'execute'),
   'anon cannot take a lock');
-select ok(not has_function_privilege('anon', 'public.save_document(uuid, text, bigint)', 'execute'),
+select ok(not has_function_privilege('anon', 'public.save_document(uuid, text, bigint, uuid)', 'execute'),
   'anon cannot save');
 select ok(not has_function_privilege('authenticated', 'public.doc_lock_holder_name(uuid)', 'execute'),
   'clients cannot look up a holder''s name for an arbitrary user');
@@ -107,15 +116,15 @@ select is((select version from public.documents where id = '30000000-0000-4000-8
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000003","role":"authenticated"}';
 
-select is((select holder from public.doc_lock_status_for('30000000-0000-4000-8000-000000000010')),
+select is((select holder from public.doc_lock_status_for('30000000-0000-4000-8000-000000000010', public._t_session())),
   null, 'a document starts unlocked');
 select results_eq(
   $$ select mine, holder, holder_name, can_edit, can_take_over, version
-       from public.take_doc_lock('30000000-0000-4000-8000-000000000010') $$,
+       from public.take_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session()) $$,
   $$ values (true, '00000000-0000-4000-8000-000000000003'::uuid, 'editor', true, false, 1::bigint) $$,
   'an editor takes a free lock');
 select is(
-  (select expires_at - heartbeat_at from public.doc_lock_status_for('30000000-0000-4000-8000-000000000010')),
+  (select expires_at - heartbeat_at from public.doc_lock_status_for('30000000-0000-4000-8000-000000000010', public._t_session())),
   interval '10 minutes', 'which lasts ten idle minutes');
 select throws_ok(
   $$ insert into public.doc_locks (document_id, holder) values
@@ -125,6 +134,12 @@ select throws_ok(
   $$ update public.doc_locks set heartbeat_at = now() + interval '1 day' $$,
   '42501', null, 'nor stretches a lock');
 select throws_ok(
+  $$ select session_id from public.doc_locks $$,
+  '42501', null, 'nor reads the session a lock is held from');
+select throws_ok(
+  $$ select public.take_doc_lock('30000000-0000-4000-8000-000000000010', null) $$,
+  '22023', 'an edit session is required', 'a take names its edit session');
+select throws_ok(
   $$ update public.documents set markdown = 'direct'
       where id = '30000000-0000-4000-8000-000000000010' $$,
   '42501', 'a note''s text is saved through save_document(), which checks the edit lock and version',
@@ -133,38 +148,40 @@ select throws_ok(
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000004","role":"authenticated"}';
 select results_eq(
   $$ select mine, holder, holder_name, can_edit, can_take_over
-       from public.doc_lock_status_for('30000000-0000-4000-8000-000000000010') $$,
-  $$ values (false, '00000000-0000-4000-8000-000000000003'::uuid, 'editor', false, false) $$,
-  'a viewer sees who is editing');
+       from public.doc_lock_status_for('30000000-0000-4000-8000-000000000010', public._t_session()) $$,
+  $$ values (false, '00000000-0000-4000-8000-000000000003'::uuid, null::text, false, false) $$,
+  'a viewer sees that someone is editing, but not their name');
 select is((select count(*)::int from public.doc_locks), 1, 'and reads the lock row');
 select throws_ok(
-  $$ select public.take_doc_lock('30000000-0000-4000-8000-000000000010') $$,
+  $$ select public.take_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session()) $$,
   '42501', 'you can read this note but not edit it', 'a viewer cannot take a lock');
 select throws_ok(
-  $$ select public.take_doc_lock('30000000-0000-4000-8000-000000000001') $$,
+  $$ select public.take_doc_lock('30000000-0000-4000-8000-000000000001', public._t_session()) $$,
   'P0002', 'note not found', 'nor one on a note in a workspace they are not in');
 
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000005","role":"authenticated"}';
 select is((select count(*)::int from public.doc_locks), 0, 'an outsider reads no lock rows');
 select throws_ok(
-  $$ select public.doc_lock_status_for('30000000-0000-4000-8000-000000000010') $$,
+  $$ select public.doc_lock_status_for('30000000-0000-4000-8000-000000000010', public._t_session()) $$,
   'P0002', 'note not found', 'nor the status of one');
 select throws_ok(
-  $$ select public.doc_lock_status_for('30000000-0000-4000-8000-0000000000ff') $$,
+  $$ select public.doc_lock_status_for('30000000-0000-4000-8000-0000000000ff', public._t_session()) $$,
   'P0002', 'note not found', 'a missing note looks the same');
 
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000006","role":"authenticated"}';
 select results_eq(
-  $$ select mine, holder from public.take_doc_lock('30000000-0000-4000-8000-000000000010') $$,
+  $$ select mine, holder from public.take_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session()) $$,
   $$ values (false, '00000000-0000-4000-8000-000000000003'::uuid) $$,
   'a second editor finds the lock held and does not get it');
+select is((select holder_name from public.doc_lock_status_for('30000000-0000-4000-8000-000000000010', public._t_session())),
+  'editor', 'and is told who holds it');
 select throws_ok(
-  $$ select public.take_doc_lock('30000000-0000-4000-8000-000000000010', true) $$,
+  $$ select public.take_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session(), true) $$,
   '42501', 'only an admin of the workspace can take over a note someone is editing',
   'an editor cannot take over');
-select is((select release_doc_lock from public.release_doc_lock('30000000-0000-4000-8000-000000000010')),
+select is((select release_doc_lock from public.release_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session())),
   false, 'nor release someone else''s lock');
-select is((select holder from public.doc_lock_status_for('30000000-0000-4000-8000-000000000010')),
+select is((select holder from public.doc_lock_status_for('30000000-0000-4000-8000-000000000010', public._t_session())),
   '00000000-0000-4000-8000-000000000003'::uuid, 'which stays with its holder');
 
 
@@ -179,13 +196,13 @@ update public.doc_locks
 
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000006","role":"authenticated"}';
-select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000000010')),
+select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session())),
   false, 'a lock nine minutes idle is still held');
 
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000003","role":"authenticated"}';
 select results_eq(
   $$ select mine, heartbeat_at = now(), acquired_at = now() - interval '30 minutes'
-       from public.take_doc_lock('30000000-0000-4000-8000-000000000010') $$,
+       from public.take_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session()) $$,
   $$ values (true, true, true) $$,
   'its holder renews it: heartbeat now, acquired_at kept');
 
@@ -195,13 +212,13 @@ update public.doc_locks set heartbeat_at = now() - interval '10 minutes'
 
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000004","role":"authenticated"}';
-select is((select holder from public.doc_lock_status_for('30000000-0000-4000-8000-000000000010')),
+select is((select holder from public.doc_lock_status_for('30000000-0000-4000-8000-000000000010', public._t_session())),
   null, 'after ten idle minutes the lock is free');
 
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000006","role":"authenticated"}';
 select results_eq(
   $$ select mine, holder, acquired_at = now()
-       from public.take_doc_lock('30000000-0000-4000-8000-000000000010') $$,
+       from public.take_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session()) $$,
   $$ values (true, '00000000-0000-4000-8000-000000000006'::uuid, true) $$,
   'and another editor takes it, from now');
 
@@ -211,7 +228,7 @@ update public.doc_locks set heartbeat_at = now() - interval '20 minutes'
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000006","role":"authenticated"}';
 select results_eq(
-  $$ select mine, acquired_at = now() from public.take_doc_lock('30000000-0000-4000-8000-000000000010') $$,
+  $$ select mine, acquired_at = now() from public.take_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session()) $$,
   $$ values (true, true) $$,
   'a holder coming back to a lapsed lock nobody took gets it again, as a new hold');
 
@@ -221,30 +238,30 @@ select results_eq(
 -- ---------------------------------------------------------------------------
 
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000002","role":"authenticated"}';
-select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000000010')),
+select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session())),
   false, 'an admin taking a held lock without takeover does not get it');
 select results_eq(
   $$ select mine, holder, holder_name, can_take_over
-       from public.take_doc_lock('30000000-0000-4000-8000-000000000010', true) $$,
+       from public.take_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session(), true) $$,
   $$ values (true, '00000000-0000-4000-8000-000000000002'::uuid, 'admin', true) $$,
   'an admin takes it over');
 
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000006","role":"authenticated"}';
 select results_eq(
-  $$ select mine, holder from public.doc_lock_status_for('30000000-0000-4000-8000-000000000010') $$,
+  $$ select mine, holder from public.doc_lock_status_for('30000000-0000-4000-8000-000000000010', public._t_session()) $$,
   $$ values (false, '00000000-0000-4000-8000-000000000002'::uuid) $$,
   'the former holder sees that they lost it');
 select throws_ok(
-  $$ select public.save_document('30000000-0000-4000-8000-000000000010', 'mine now', 1) $$,
+  $$ select public.save_document('30000000-0000-4000-8000-000000000010', 'mine now', 1, public._t_session()) $$,
   'DQLCK', 'you are not holding the edit lock on this note',
   'and cannot save over the admin');
 
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
-select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000000010', true)),
+select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session(), true)),
   true, 'an owner takes over too');
 
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000002","role":"authenticated"}';
-select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000000010', true)),
+select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session(), true)),
   true, 'and an admin takes it back');
 
 
@@ -252,12 +269,12 @@ select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000
 -- Release
 -- ---------------------------------------------------------------------------
 
-select is((select release_doc_lock from public.release_doc_lock('30000000-0000-4000-8000-000000000010')),
+select is((select release_doc_lock from public.release_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session())),
   true, 'the holder releases their lock');
 select is((select count(*)::int from public.doc_locks
             where document_id = '30000000-0000-4000-8000-000000000010'),
   0, 'which removes the row');
-select is((select release_doc_lock from public.release_doc_lock('30000000-0000-4000-8000-000000000010')),
+select is((select release_doc_lock from public.release_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session())),
   false, 'releasing again is a no-op');
 
 
@@ -267,31 +284,31 @@ select is((select release_doc_lock from public.release_doc_lock('30000000-0000-4
 
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000003","role":"authenticated"}';
 select throws_ok(
-  $$ select public.save_document('30000000-0000-4000-8000-000000000010', '# v2', 1) $$,
+  $$ select public.save_document('30000000-0000-4000-8000-000000000010', '# v2', 1, public._t_session()) $$,
   'DQLCK', 'you are not holding the edit lock on this note',
   'an editor without the lock cannot save');
-select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000000010')),
+select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session())),
   true, 'they take it');
-select is(public.save_document('30000000-0000-4000-8000-000000000010', '# v2', 1),
+select is(public.save_document('30000000-0000-4000-8000-000000000010', '# v2', 1, public._t_session()),
   2::bigint, 'and save on the current version, getting the next one');
 select results_eq(
   $$ select markdown, version from public.documents where id = '30000000-0000-4000-8000-000000000010' $$,
   $$ values ('# v2', 2::bigint) $$, 'the text and version are stored');
 select throws_ok(
-  $$ select public.save_document('30000000-0000-4000-8000-000000000010', '# stale', 1) $$,
+  $$ select public.save_document('30000000-0000-4000-8000-000000000010', '# stale', 1, public._t_session()) $$,
   'DQVER', 'this note was saved elsewhere since your copy was loaded (version 2 now, yours 1)',
   'a save based on an older version is refused');
 select is((select markdown from public.documents where id = '30000000-0000-4000-8000-000000000010'),
   '# v2', 'and overwrites nothing');
 select throws_ok(
-  $$ select public.save_document('30000000-0000-4000-8000-000000000010', '# ahead', 7) $$,
+  $$ select public.save_document('30000000-0000-4000-8000-000000000010', '# ahead', 7, public._t_session()) $$,
   'DQVER', null, 'as is one claiming a version that does not exist yet');
-select is(public.save_document('30000000-0000-4000-8000-000000000010', '# v2', 2),
+select is(public.save_document('30000000-0000-4000-8000-000000000010', '# v2', 2, public._t_session()),
   2::bigint, 'saving the stored text again writes nothing');
-select is(public.save_document('30000000-0000-4000-8000-000000000010', '# v3', 2),
+select is(public.save_document('30000000-0000-4000-8000-000000000010', '# v3', 2, public._t_session()),
   3::bigint, 'the next change is version 3');
 select throws_ok(
-  $$ select public.save_document('30000000-0000-4000-8000-000000000010', null, 3) $$,
+  $$ select public.save_document('30000000-0000-4000-8000-000000000010', null, 3, public._t_session()) $$,
   '23502', null, 'null text is refused');
 
 reset role;
@@ -299,7 +316,7 @@ update public.doc_locks set heartbeat_at = now() - interval '5 minutes'
  where document_id = '30000000-0000-4000-8000-000000000010';
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000003","role":"authenticated"}';
-select is(public.save_document('30000000-0000-4000-8000-000000000010', '# v4', 3),
+select is(public.save_document('30000000-0000-4000-8000-000000000010', '# v4', 3, public._t_session()),
   4::bigint, 'a save on a live lock succeeds');
 select is((select heartbeat_at from public.doc_locks
             where document_id = '30000000-0000-4000-8000-000000000010'),
@@ -311,17 +328,17 @@ update public.doc_locks set heartbeat_at = now() - interval '11 minutes'
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000003","role":"authenticated"}';
 select throws_ok(
-  $$ select public.save_document('30000000-0000-4000-8000-000000000010', '# late', 4) $$,
+  $$ select public.save_document('30000000-0000-4000-8000-000000000010', '# late', 4, public._t_session()) $$,
   'DQLCK', null, 'a save on a lapsed lock is refused');
 
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000004","role":"authenticated"}';
 select throws_ok(
-  $$ select public.save_document('30000000-0000-4000-8000-000000000010', 'vandalised', 4) $$,
+  $$ select public.save_document('30000000-0000-4000-8000-000000000010', 'vandalised', 4, public._t_session()) $$,
   '42501', 'you can read this note but not edit it', 'a viewer cannot save');
 
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000005","role":"authenticated"}';
 select throws_ok(
-  $$ select public.save_document('30000000-0000-4000-8000-000000000010', 'vandalised', 4) $$,
+  $$ select public.save_document('30000000-0000-4000-8000-000000000010', 'vandalised', 4, public._t_session()) $$,
   'P0002', 'note not found', 'an outsider cannot save');
 
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000003","role":"authenticated"}';
@@ -331,11 +348,49 @@ select is((select version from u), 4::bigint, 'an editor still renames with a pl
 
 
 -- ---------------------------------------------------------------------------
+-- Two tabs of one user: the lock is held by one edit session
+-- ---------------------------------------------------------------------------
+
+select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session())),
+  true, 'the first tab takes the lapsed lock back');
+select results_eq(
+  $$ select mine, mine_elsewhere, holder
+       from public.take_doc_lock('30000000-0000-4000-8000-000000000010', 'b0000000-0000-4000-8000-000000000003') $$,
+  $$ values (false, true, '00000000-0000-4000-8000-000000000003'::uuid) $$,
+  'a second tab of the same user does not get it, and is told it holds it elsewhere');
+select throws_ok(
+  $$ select public.save_document('30000000-0000-4000-8000-000000000010', '# from tab b', 4,
+                                 'b0000000-0000-4000-8000-000000000003') $$,
+  'DQLCK', null, 'the second tab cannot save under the first tab''s lock');
+select is((select public.release_doc_lock('30000000-0000-4000-8000-000000000010', 'b0000000-0000-4000-8000-000000000003')),
+  false, 'nor release it');
+select results_eq(
+  $$ select mine, mine_elsewhere
+       from public.doc_lock_status_for('30000000-0000-4000-8000-000000000010', public._t_session()) $$,
+  $$ values (true, false) $$,
+  'which stays with the first tab');
+select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000000010',
+                                                 'b0000000-0000-4000-8000-000000000003', true)),
+  true, 'an editor may take over their own lock from another tab');
+select throws_ok(
+  $$ select public.save_document('30000000-0000-4000-8000-000000000010', '# from tab a', 4, public._t_session()) $$,
+  'DQLCK', null, 'after which the first tab cannot save');
+select is((select public.release_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session())),
+  false, 'nor release it');
+select is((select public.release_doc_lock('30000000-0000-4000-8000-000000000010', 'b0000000-0000-4000-8000-000000000003')),
+  true, 'the second tab releases it');
+select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session(), true)),
+  true, 'an editor''s takeover of a free lock is a plain take');
+select is((select public.release_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session())),
+  true, 'and is released like one');
+
+
+-- ---------------------------------------------------------------------------
 -- Wallet accounts are named by their address
 -- ---------------------------------------------------------------------------
 
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000007","role":"authenticated"}';
-select is((select holder_name from public.take_doc_lock('30000000-0000-4000-8000-000000000010')),
+select is((select holder_name from public.take_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session())),
   'GABC…WXYZ', 'a wallet account is named by its shortened address');
 
 
@@ -358,18 +413,18 @@ select is((select count(*)::int from public.doc_locks
 
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000006","role":"authenticated"}';
-select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000000010')),
+select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session())),
   true, 'another editor takes it');
 -- An admin removes them, through RLS as the app does.
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000002","role":"authenticated"}';
 delete from public.workspace_members
  where workspace_id = '10000000-0000-4000-8000-000000000001'
    and user_id = '00000000-0000-4000-8000-000000000006';
-select is((select holder from public.doc_lock_status_for('30000000-0000-4000-8000-000000000010')),
+select is((select holder from public.doc_lock_status_for('30000000-0000-4000-8000-000000000010', public._t_session())),
   null, 'removing a member frees their lock at once');
 
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000003","role":"authenticated"}';
-select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000000010')),
+select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000000010', public._t_session())),
   true, 'an editor takes it');
 reset role;
 delete from auth.users where id = '00000000-0000-4000-8000-000000000003';
@@ -383,12 +438,12 @@ select is((select count(*)::int from public.doc_locks), 0, 'deleting the holder'
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
 select results_eq(
-  $$ select mine, can_edit, can_take_over from public.take_doc_lock('30000000-0000-4000-8000-000000000001') $$,
+  $$ select mine, can_edit, can_take_over from public.take_doc_lock('30000000-0000-4000-8000-000000000001', public._t_session()) $$,
   $$ values (true, true, true) $$,
   'the owner of a personal workspace takes the lock on their note');
-select is(public.save_document('30000000-0000-4000-8000-000000000001', '# Private, edited', 2),
+select is(public.save_document('30000000-0000-4000-8000-000000000001', '# Private, edited', 2, public._t_session()),
   3::bigint, 'and saves');
-select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000000001', true)),
+select is((select mine from public.take_doc_lock('30000000-0000-4000-8000-000000000001', public._t_session(), true)),
   true, 'taking over their own lock is just a renewal');
 
 reset role;

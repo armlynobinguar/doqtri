@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const DOC = "30000000-0000-4000-8000-000000000010";
 const ME = "00000000-0000-4000-8000-000000000003";
+const TAB = "a0000000-0000-4000-8000-000000000003";
 
 type RpcResult = { data: unknown; error: { code?: string; message?: string } | null };
 
@@ -42,7 +43,10 @@ function row(over: Record<string, unknown> = {}) {
   };
 }
 
+/** A request from the editor's tab; `query` adds to its `session=`. */
 const req = (method: string, query = "") =>
+  new Request(`http://localhost/api/notes/${DOC}/lock?session=${TAB}${query}`, { method });
+const bare = (method: string, query = "") =>
   new Request(`http://localhost/api/notes/${DOC}/lock${query}`, { method });
 
 beforeEach(() => {
@@ -70,7 +74,7 @@ describe("/api/notes/[id]/lock", () => {
     session.rpc.mockResolvedValue({ data: row({ mine: false, holder: null, holder_name: null }), error: null });
     const res = await GET(req("GET"), ctx());
     expect(res.status).toBe(200);
-    expect(session.rpc).toHaveBeenCalledWith("doc_lock_status_for", { p_document_id: DOC });
+    expect(session.rpc).toHaveBeenCalledWith("doc_lock_status_for", { p_document_id: DOC, p_session: TAB });
     expect((await res.json()).lock).toMatchObject({ holder: null, version: 2 });
   });
 
@@ -78,7 +82,11 @@ describe("/api/notes/[id]/lock", () => {
     session.rpc.mockResolvedValue({ data: row(), error: null });
     const res = await POST(req("POST"), ctx());
     expect(res.status).toBe(200);
-    expect(session.rpc).toHaveBeenCalledWith("take_doc_lock", { p_document_id: DOC, p_takeover: false });
+    expect(session.rpc).toHaveBeenCalledWith("take_doc_lock", {
+      p_document_id: DOC,
+      p_session: TAB,
+      p_takeover: false,
+    });
     expect((await res.json()).lock).toMatchObject({ mine: true, holder: ME });
   });
 
@@ -94,11 +102,42 @@ describe("/api/notes/[id]/lock", () => {
     expect(body.lock).toMatchObject({ holderName: "ana", mine: false });
   });
 
+  it("POST answers 423 LOCKED_ELSEWHERE when the caller is editing in another tab", async () => {
+    session.rpc.mockResolvedValue({ data: row({ mine: false, mine_elsewhere: true }), error: null });
+    const res = await POST(req("POST"), ctx());
+    expect(res.status).toBe(423);
+    const body = await res.json();
+    expect(body).toMatchObject({ code: "LOCKED_ELSEWHERE" });
+    expect(body.lock).toMatchObject({ mine: false, mineElsewhere: true });
+  });
+
+  it("POST and DELETE need the editor's session; nothing reaches the database without it", async () => {
+    for (const handler of [POST, DELETE]) {
+      const res = await handler(bare("POST"), ctx());
+      expect(res.status).toBe(400);
+      expect((await res.json()).code).toBe("BAD_SESSION");
+    }
+    const bad = await POST(bare("POST", "?session=tab-1"), ctx());
+    expect(bad.status).toBe(400);
+    expect(session.rpc).not.toHaveBeenCalled();
+  });
+
+  it("GET without a session reads the status with none", async () => {
+    session.rpc.mockResolvedValue({ data: row({ mine: false, mine_elsewhere: true }), error: null });
+    const res = await GET(bare("GET"), ctx());
+    expect(res.status).toBe(200);
+    expect(session.rpc).toHaveBeenCalledWith("doc_lock_status_for", { p_document_id: DOC, p_session: null });
+  });
+
   it("POST ?takeover=1 asks for a takeover", async () => {
     session.rpc.mockResolvedValue({ data: row({ can_take_over: true }), error: null });
-    const res = await POST(req("POST", "?takeover=1"), ctx());
+    const res = await POST(req("POST", "&takeover=1"), ctx());
     expect(res.status).toBe(200);
-    expect(session.rpc).toHaveBeenCalledWith("take_doc_lock", { p_document_id: DOC, p_takeover: true });
+    expect(session.rpc).toHaveBeenCalledWith("take_doc_lock", {
+      p_document_id: DOC,
+      p_session: TAB,
+      p_takeover: true,
+    });
   });
 
   it("POST ?takeover=1 by a non-admin is a 403", async () => {
@@ -109,7 +148,7 @@ describe("/api/notes/[id]/lock", () => {
         message: "only an admin of the workspace can take over a note someone is editing",
       },
     });
-    const res = await POST(req("POST", "?takeover=1"), ctx());
+    const res = await POST(req("POST", "&takeover=1"), ctx());
     expect(res.status).toBe(403);
     expect((await res.json()).code).toBe("TAKEOVER_FORBIDDEN");
   });
@@ -140,7 +179,7 @@ describe("/api/notes/[id]/lock", () => {
     session.rpc.mockResolvedValue({ data: true, error: null });
     const res = await DELETE(req("DELETE"), ctx());
     expect(res.status).toBe(200);
-    expect(session.rpc).toHaveBeenCalledWith("release_doc_lock", { p_document_id: DOC });
+    expect(session.rpc).toHaveBeenCalledWith("release_doc_lock", { p_document_id: DOC, p_session: TAB });
     expect(await res.json()).toEqual({ released: true });
   });
 

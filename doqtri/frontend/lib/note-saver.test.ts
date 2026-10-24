@@ -3,6 +3,7 @@ import { createNoteSaver } from "@/lib/note-saver";
 import type { DocLockState } from "@/lib/doc-lock-client";
 
 const DOC = "30000000-0000-4000-8000-000000000010";
+const TAB = "a0000000-0000-4000-8000-000000000003";
 
 function respond(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -18,6 +19,7 @@ function fakeLock(held = true, holderName: string | null = null) {
     error: null,
   };
   return {
+    session: TAB,
     ensure: vi.fn(async () => held),
     refresh: vi.fn(async () => {}),
     getState: () => state,
@@ -42,7 +44,7 @@ describe("createNoteSaver", () => {
     const [url, init] = (fetchImpl.mock.calls as unknown as [string, RequestInit][])[0];
     expect(url).toBe(`/api/notes/${DOC}`);
     expect(init.method).toBe("PUT");
-    expect(JSON.parse(String(init.body))).toEqual({ markdown: "# b", version: 3 });
+    expect(JSON.parse(String(init.body))).toEqual({ markdown: "# b", version: 3, session: TAB });
 
     await saver.queue.save("# c");
     const second = (fetchImpl.mock.calls as unknown as [string, RequestInit][])[1];

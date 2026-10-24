@@ -4,7 +4,9 @@ import {
   editingMessage,
   isLockLive,
   lockErrorAnswer,
+  newEditSession,
   parseDocLockStatus,
+  parseEditSession,
 } from "@/lib/doc-lock";
 
 const row = {
@@ -30,10 +32,15 @@ describe("parseDocLockStatus", () => {
       heartbeatAt: row.heartbeat_at,
       expiresAt: row.expires_at,
       mine: false,
+      mineElsewhere: false,
       canEdit: true,
       canTakeOver: false,
       version: 4,
     });
+  });
+
+  it("reads a lock the caller holds from another tab", () => {
+    expect(parseDocLockStatus({ ...row, mine_elsewhere: true })?.mineElsewhere).toBe(true);
   });
 
   it("reads a free lock as a null holder", () => {
@@ -77,6 +84,7 @@ describe("lockErrorAnswer", () => {
   it("maps the save refusals", () => {
     expect(lockErrorAnswer({ code: "DQLCK" })).toMatchObject({ status: 423, code: "NOT_LOCK_HOLDER" });
     expect(lockErrorAnswer({ code: "DQVER" })).toMatchObject({ status: 409, code: "STALE_VERSION" });
+    expect(lockErrorAnswer({ code: "22023" })).toMatchObject({ status: 400, code: "BAD_SESSION" });
   });
   it("tells a takeover refusal from a read-only one", () => {
     expect(
@@ -109,5 +117,20 @@ describe("editingMessage", () => {
   it("names the holder, or says someone", () => {
     expect(editingMessage("ana")).toBe("ana is editing this note");
     expect(editingMessage(null)).toBe("Someone else is editing this note");
+  });
+});
+
+describe("edit sessions", () => {
+  it("makes a fresh uuid per editor", () => {
+    const a = newEditSession();
+    expect(parseEditSession(a)).toBe(a);
+    expect(newEditSession()).not.toBe(a);
+  });
+
+  it("accepts only a uuid", () => {
+    expect(parseEditSession(undefined)).toBeNull();
+    expect(parseEditSession("")).toBeNull();
+    expect(parseEditSession("tab-1")).toBeNull();
+    expect(parseEditSession(42)).toBeNull();
   });
 });

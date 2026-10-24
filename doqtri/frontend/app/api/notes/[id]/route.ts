@@ -4,7 +4,13 @@ import {
   createSupabaseAdminClient,
 } from "@/lib/supabase/server";
 import { DoqtriRegistry } from "@/lib/stellar/contract-client";
-import { editingMessage, lockErrorAnswer, parseDocLockStatus } from "@/lib/doc-lock";
+import {
+  EDITING_ELSEWHERE,
+  editingMessage,
+  lockErrorAnswer,
+  parseDocLockStatus,
+  parseEditSession,
+} from "@/lib/doc-lock";
 import { liveLockHolder } from "@/lib/doc-lock-server";
 import { isTitleTaken, MAX_TITLE_LENGTH } from "@/lib/title";
 import {
@@ -58,12 +64,14 @@ async function refuseIfLockedByOther(
 }
 
 /**
- * Saves a note's text (WP-1.6, D-17). Body: `{ markdown, version }`, where
- * `version` is the save version the caller's copy is based on. Answers
+ * Saves a note's text (WP-1.6, D-17). Body: `{ markdown, version, session }`,
+ * where `version` is the save version the caller's copy is based on and
+ * `session` the editor's edit session (lib/doc-lock.ts). Answers
  * `{ id, version }` with the new version.
  *
  * Runs on the session client: save_document() checks, as the caller, that
- * they are an editor or above, that they hold a live edit lock (else 423
+ * they are an editor or above, that they hold a live edit lock from this
+ * session, not another tab (else 423
  * NOT_LOCK_HOLDER, with the lock's status so the editor can name the
  * holder), and that nobody saved since their copy was loaded (else 409
  * STALE_VERSION, with the current version). Nothing is written unless all
@@ -90,9 +98,11 @@ export async function PUT(
 
   let markdown: string | null = null;
   let version: number | null = null;
+  let editSession: string | null = null;
   try {
-    const body = (await request.json()) as { markdown?: unknown; version?: unknown };
+    const body = (await request.json()) as { markdown?: unknown; version?: unknown; session?: unknown };
     if (typeof body.markdown === "string") markdown = body.markdown;
+    editSession = parseEditSession(body.session);
     if (typeof body.version === "number" && Number.isSafeInteger(body.version) && body.version >= 1) {
       version = body.version;
     }
@@ -100,9 +110,9 @@ export async function PUT(
     // falls through to the refusal below
   }
 
-  if (markdown === null || version === null) {
+  if (markdown === null || version === null || editSession === null) {
     return NextResponse.json(
-      { error: "A save needs the note's markdown and the version it is based on" },
+      { error: "A save needs the note's markdown, the version it is based on and the editor's session" },
       { status: 400 },
     );
   }
@@ -111,6 +121,7 @@ export async function PUT(
     p_document_id: id,
     p_markdown: markdown,
     p_base_version: version,
+    p_session: editSession,
   });
 
   if (error) {
@@ -121,11 +132,15 @@ export async function PUT(
       if (Number.isSafeInteger(current)) body.version = current;
     }
     if (answer.code === "NOT_LOCK_HOLDER") {
-      const { data: status } = await supabase.rpc("doc_lock_status_for", { p_document_id: id });
+      const { data: status } = await supabase.rpc("doc_lock_status_for", {
+        p_document_id: id,
+        p_session: editSession,
+      });
       const lock = parseDocLockStatus(status);
       if (lock) {
         body.lock = lock;
-        if (lock.holder && !lock.mine) body.error = editingMessage(lock.holderName);
+        if (lock.mineElsewhere) body.error = `${EDITING_ELSEWHERE}, so this copy was not saved.`;
+        else if (lock.holder && !lock.mine) body.error = editingMessage(lock.holderName);
       }
     }
     return NextResponse.json(body, { status: answer.status });

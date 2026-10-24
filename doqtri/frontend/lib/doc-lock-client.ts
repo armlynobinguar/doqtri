@@ -2,6 +2,7 @@ import {
   DOC_LOCK_HEARTBEAT_MS,
   DOC_LOCK_IDLE_MS,
   DOC_LOCK_POLL_MS,
+  newEditSession,
   parseDocLockStatus,
   type DocLockStatus,
 } from "@/lib/doc-lock";
@@ -15,6 +16,12 @@ import {
  * editor has been idle for ten minutes or the note is left (`stop()`). While
  * someone else holds it, the status is polled so the editor learns when they
  * finish, and when they saved, so it can load their text.
+ *
+ * The lock belongs to one edit session, not just one user: each controller
+ * has its own session id (lib/doc-lock.ts), which the API names on every
+ * call. A second tab of the same user therefore sees the lock as held
+ * elsewhere ("elsewhere"), goes read-only, and can neither renew, save under
+ * nor release the first tab's lock; it may take it over on purpose.
  */
 
 export type DocLockPhase =
@@ -27,7 +34,9 @@ export type DocLockPhase =
   /** The caller holds it. */
   | "mine"
   /** Someone else holds it: read-only. */
-  | "other";
+  | "other"
+  /** The caller holds it from another tab or device: read-only here. */
+  | "elsewhere";
 
 export type DocLockState = {
   phase: DocLockPhase;
@@ -42,6 +51,8 @@ export type DocLockState = {
 
 /** What the controller calls; `createDocLockApi()` is the real one. */
 export type DocLockApi = {
+  /** The edit session every call names. */
+  readonly session: string;
   status(): Promise<DocLockStatus>;
   /** Resolves with the status after the attempt; `mine` says whether it worked. */
   take(takeover: boolean): Promise<DocLockStatus>;
@@ -62,6 +73,8 @@ const realTimers: DocLockTimers = {
 };
 
 export type DocLockController = {
+  /** This editor's edit session, for saves and other writes that need the lock. */
+  readonly session: string;
   getState(): DocLockState;
   subscribe(listener: () => void): () => void;
   /** Loads the status and starts the schedule. */
@@ -71,9 +84,15 @@ export type DocLockController = {
    * the caller holds it afterwards.
    */
   noteEdit(): Promise<boolean>;
-  /** Holds the lock before a save: takes it if free, renews nothing otherwise. */
+  /**
+   * Holds the lock before a save or regenerate: takes it if free. Counts as
+   * activity, so the idle timer starts over.
+   */
   ensure(): Promise<boolean>;
-  /** Takes the lock from whoever holds it (admins and owners). */
+  /**
+   * Takes the lock from whoever holds it: admins and owners, or anyone who
+   * can edit when it is their own lock in another tab.
+   */
   takeOver(): Promise<boolean>;
   /** Re-reads the status now, e.g. after a save was refused. */
   refresh(): Promise<void>;
@@ -86,7 +105,7 @@ export type DocLockController = {
 export type DocLockHandlers = {
   /** Called with every status received, so the editor can compare versions. */
   onStatus?: (status: DocLockStatus) => void;
-  /** Called when a lock the caller held turns out to be someone else's. */
+  /** Called when a lock this editor held turns out to be someone else's, or another tab's. */
   onLost?: (status: DocLockStatus) => void;
 };
 
@@ -126,17 +145,23 @@ export function createDocLockController(params: {
 
   function apply(status: DocLockStatus) {
     const wasMine = state.phase === "mine";
-    const phase: DocLockPhase = status.mine ? "mine" : status.holder ? "other" : "free";
+    const phase: DocLockPhase = status.mine
+      ? "mine"
+      : status.mineElsewhere
+        ? "elsewhere"
+        : status.holder
+          ? "other"
+          : "free";
     set({
       phase,
-      holderName: status.mine ? null : status.holderName,
+      holderName: phase === "other" ? status.holderName : null,
       canEdit: status.canEdit,
       canTakeOver: status.canTakeOver,
       version: status.version,
       error: null,
     });
     handlers.onStatus?.(status);
-    if (wasMine && phase === "other") handlers.onLost?.(status);
+    if (wasMine && (phase === "other" || phase === "elsewhere")) handlers.onLost?.(status);
   }
 
   function fail(e: unknown) {
@@ -197,6 +222,7 @@ export function createDocLockController(params: {
   }
 
   return {
+    session: api.session,
     getState: () => state,
     subscribe(listener) {
       listeners.add(listener);
@@ -204,6 +230,11 @@ export function createDocLockController(params: {
     },
     start() {
       stopped = false;
+      // The idle timer counts from opening (or coming back to) the note, not
+      // from the epoch: a status that says the lock is already this
+      // session's must not read as ten idle minutes.
+      lastEdit = timers.now();
+      editedSinceBeat = false;
       if (state.phase !== "loading") set({ phase: "loading" });
       void refreshStatus()
         .catch((e) => {
@@ -217,18 +248,19 @@ export function createDocLockController(params: {
       editedSinceBeat = true;
       if (state.phase === "mine") return true;
       if (state.phase === "taking" && inflight) return inflight;
-      if (state.phase === "other" || !state.canEdit) return false;
+      if (state.phase === "other" || state.phase === "elsewhere" || !state.canEdit) return false;
       return take(false);
     },
     async ensure() {
+      lastEdit = timers.now();
       if (state.phase === "mine") return true;
       if (inflight) return inflight;
-      if (!state.canEdit || state.phase === "other") return false;
-      lastEdit = timers.now();
+      if (!state.canEdit || state.phase === "other" || state.phase === "elsewhere") return false;
       return take(false);
     },
     async takeOver() {
-      if (!state.canTakeOver) return false;
+      const ownElsewhere = state.phase === "elsewhere" && state.canEdit;
+      if (!state.canTakeOver && !ownElsewhere) return false;
       lastEdit = timers.now();
       return take(true);
     },
@@ -248,8 +280,13 @@ export function createDocLockController(params: {
       stopped = true;
       if (timer !== null) timers.clearTimeout(timer);
       timer = null;
+      // Only this session's lock is released (the API names the session),
+      // so a tab that never held it cannot free another tab's.
       if (state.phase === "mine" || state.phase === "taking") {
-        void api.release({ keepalive: options?.keepalive }).catch(() => {});
+        const release = () => api.release({ keepalive: options?.keepalive }).catch(() => {});
+        void release();
+        // A take still in flight may land after that release: let go again.
+        if (inflight) void inflight.then(release, release);
       }
     },
   };
@@ -270,15 +307,23 @@ async function readLock(res: Response): Promise<DocLockStatus> {
   throw new Error(message);
 }
 
-/** The lock API over /api/notes/[id]/lock. */
-export function createDocLockApi(docId: string, fetchImpl: typeof fetch = fetch): DocLockApi {
-  const url = `/api/notes/${encodeURIComponent(docId)}/lock`;
+/**
+ * The lock API over /api/notes/[id]/lock, for one edit session (a fresh one
+ * unless given).
+ */
+export function createDocLockApi(
+  docId: string,
+  fetchImpl: typeof fetch = fetch,
+  session: string = newEditSession(),
+): DocLockApi {
+  const url = `/api/notes/${encodeURIComponent(docId)}/lock?session=${encodeURIComponent(session)}`;
   return {
+    session,
     async status() {
       return readLock(await fetchImpl(url, { method: "GET", cache: "no-store" }));
     },
     async take(takeover) {
-      return readLock(await fetchImpl(takeover ? `${url}?takeover=1` : url, { method: "POST" }));
+      return readLock(await fetchImpl(takeover ? `${url}&takeover=1` : url, { method: "POST" }));
     },
     async release(options) {
       await fetchImpl(url, { method: "DELETE", keepalive: options?.keepalive ?? false });
