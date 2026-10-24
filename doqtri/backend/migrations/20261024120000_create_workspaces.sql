@@ -73,6 +73,9 @@ create table public.workspace_members (
   workspace_id uuid not null references public.workspaces(id) on delete cascade,
   user_id      uuid not null references auth.users(id) on delete cascade,
   role         public.workspace_role not null default 'viewer',
+  -- When this membership began. Decides who takes over a workspace whose
+  -- last owner deletes their account (D-31), so clients never write it:
+  -- workspace_members_before_write stamps it and keeps it fixed.
   joined_at    timestamptz not null default now(),
   primary key (workspace_id, user_id)
 );
@@ -177,7 +180,9 @@ create policy "workspaces - update as admin" on public.workspaces
 -- included: the last owner can neither leave nor be demoted, the creator of a
 -- personal workspace can neither leave, be demoted nor be removed, nobody
 -- else is ever an owner of a personal workspace (D-30), and a row cannot be
--- moved to another workspace or user.
+-- moved to another workspace or user. joined_at is the server's, not the
+-- writer's (workspace_members_before_write): the policies let admins write
+-- whole rows, and a backdated joined_at would jump the D-31 succession queue.
 --
 -- Every clause goes through is_workspace_member() rather than querying
 -- workspace_members inline; that is the recursion the helper exists to avoid.
@@ -265,6 +270,41 @@ $$;
 create trigger workspaces_before_update
   before update on public.workspaces
   for each row execute function public.workspaces_before_update();
+
+-- Keeps joined_at true. The longest-standing admin inherits a workspace whose
+-- last owner deletes their account (D-31), and the insert and update policies
+-- let an admin write every column, so a client-chosen joined_at would let an
+-- admin backdate themselves, or put an outsider at the head of the queue,
+-- and make an owner by a route admins are otherwise denied.
+--
+-- A client insert (anon, authenticated) always gets now(), whatever it sends;
+-- the service role and the migration role may still give one, to import a
+-- roster with its history. Nobody changes it afterwards: someone who leaves
+-- and is added back starts again from the day they are added back.
+--
+-- Not security definer: current_user must be the writer's own role. It reads
+-- no tables.
+create function public.workspace_members_before_write()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if tg_op = 'INSERT' then
+    if current_user in ('anon', 'authenticated') then
+      new.joined_at := now();
+    end if;
+  elsif new.joined_at is distinct from old.joined_at then
+    raise exception 'a workspace membership''s joined_at cannot change'
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger workspace_members_before_write
+  before insert or update on public.workspace_members
+  for each row execute function public.workspace_members_before_write();
 
 -- Keeps every workspace with at least one owner, keeps the creator of a
 -- personal workspace as its only owner, and keeps membership rows in place.
@@ -511,9 +551,18 @@ create trigger on_auth_user_created_workspace
 -- would refuse it, naming the workspace: the account must first make another
 -- member an owner or admin. Editors and viewers are never promoted.
 --
+-- "Joined earliest" is trustworthy because no client writes joined_at
+-- (workspace_members_before_write).
+--
 -- A before trigger, so it runs while the account's rows are still in place
 -- and before any cascade. Each workspace row is locked first, as
 -- workspace_members_keep_owner does, so a concurrent change of owners waits.
+-- Then every admin row of the workspace is locked, and only after that is the
+-- earliest one picked: an admin being demoted or removed by a transaction
+-- still in flight is waited for and then skipped, where `limit 1 for update`
+-- would wait for that one row, find it no longer an admin, and return none,
+-- refusing the deletion although another admin is there. Holding those locks
+-- also makes any demotion or removal of an admin wait for this deletion.
 -- Should the promotion be lost to a concurrent write anyway, the cascade
 -- that removes the account's memberships trips workspace_members_keep_owner
 -- and the deletion fails instead of leaving the workspace ownerless.
@@ -547,12 +596,15 @@ begin
        where m.workspace_id = v_ws.id and m.role = 'owner' and m.user_id <> old.id
     );
 
+    perform 1
+       from public.workspace_members m
+      where m.workspace_id = v_ws.id and m.role = 'admin'
+        for update;
     select m.user_id into v_admin
       from public.workspace_members m
      where m.workspace_id = v_ws.id and m.role = 'admin'
      order by m.joined_at, m.user_id
-     limit 1
-       for update;
+     limit 1;
     if v_admin is null then
       raise exception 'this account is the last owner of workspace "%" (%), which has no admin to take it over',
         v_ws.name, v_ws.id
@@ -578,6 +630,7 @@ create trigger on_auth_user_deleted_workspaces
 revoke execute on function public.handle_new_workspace() from public, anon, authenticated;
 revoke execute on function public.workspaces_before_update() from public, anon, authenticated;
 revoke execute on function public.workspace_members_keep_owner() from public, anon, authenticated;
+revoke execute on function public.workspace_members_before_write() from public, anon, authenticated;
 revoke execute on function public.handle_new_user_workspace() from public, anon, authenticated;
 revoke execute on function public.handle_deleted_user_workspaces() from public, anon, authenticated;
 revoke execute on function public.restore_personal_owner(uuid, uuid) from public, anon, authenticated;

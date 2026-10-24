@@ -24,7 +24,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(139);
+select plan(147);
 
 insert into auth.users (id, email) values
   ('00000000-0000-4000-8000-000000000001', 'owner@example.com'),
@@ -59,6 +59,14 @@ select ok(
                         'ensure_personal_workspace', 'handle_new_user_workspace',
                         'handle_deleted_user_workspaces')),
   'every security definer function pins search_path to empty');
+select ok(
+  (select not p.prosecdef and p.proconfig @> array['search_path=""']
+     from pg_proc p
+    where p.oid = 'public.workspace_members_before_write()'::regprocedure),
+  'the joined_at guard runs as the writer, so it sees who is writing');
+select ok(not has_function_privilege('authenticated',
+  'public.workspace_members_before_write()', 'execute'),
+  'authenticated cannot call the joined_at guard trigger function');
 
 select ok(not has_function_privilege('anon',
   'public.is_workspace_member(uuid, public.workspace_role)', 'execute'),
@@ -370,6 +378,18 @@ with d as (delete from public.workspace_members
             where workspace_id = '10000000-0000-4000-8000-000000000001'
               and user_id = '00000000-0000-4000-8000-000000000005' returning 1)
 select is(count(*)::int, 1, 'admin removes a member') from d;
+select throws_ok(
+  $$ update public.workspace_members set joined_at = '1970-01-01'
+      where workspace_id = '10000000-0000-4000-8000-000000000001'
+        and user_id = '00000000-0000-4000-8000-000000000002' $$,
+  '23514', 'a workspace membership''s joined_at cannot change',
+  'admin cannot backdate their own membership');
+select throws_ok(
+  $$ update public.workspace_members set joined_at = '1970-01-01'
+      where workspace_id = '10000000-0000-4000-8000-000000000001'
+        and user_id = '00000000-0000-4000-8000-000000000003' $$,
+  '23514', 'a workspace membership''s joined_at cannot change',
+  'nor anyone else''s');
 
 -- the removed member loses access at once
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000005","role":"authenticated"}';
@@ -389,6 +409,12 @@ select lives_ok(
   $$ insert into public.workspace_members (workspace_id, user_id, role)
      values ('10000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000004', 'viewer') $$,
   'owner adds the viewer back');
+select throws_ok(
+  $$ update public.workspace_members set joined_at = '1970-01-01'
+      where workspace_id = '10000000-0000-4000-8000-000000000001'
+        and user_id = '00000000-0000-4000-8000-000000000002' $$,
+  '23514', 'a workspace membership''s joined_at cannot change',
+  'not even the owner rewrites when someone joined');
 select throws_ok(
   $$ delete from public.workspace_members
       where workspace_id = '10000000-0000-4000-8000-000000000001'
@@ -629,7 +655,8 @@ reset role;
 -- "longest-standing" is deterministic:
 --   acme   owner ad, editor ed, viewer vw (from the sections above)
 --   vw's   personal workspace, with ed added as editor
---   beta   owner x; editor ed (earliest), admin n, admin w (latest)
+--   beta   owner x; editor ed (earliest), admin n, admin w (latest), and
+--          admin o, added by w with a backdated joined_at the server ignores
 --   gamma  owners o and x; admin w
 --   solo   owner z; editor ed, viewer n
 -- ---------------------------------------------------------------------------
@@ -684,6 +711,37 @@ select set_eq(
   'select * from docs_before where user_id <> ''00000000-0000-4000-8000-000000000004''',
   'every other account''s documents are untouched, the other member''s included');
 
+-- joined_at decides the succession, so no client can choose it. w, beta's
+-- latest admin, adds o as an admin backdated to 1960 and tries to backdate
+-- themselves; neither moves anyone ahead of n.
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000006","role":"authenticated"}';
+insert into public.workspace_members (workspace_id, user_id, role, joined_at)
+values ('10000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000001', 'admin', '1960-01-01');
+reset role;
+select is(
+  (select joined_at from public.workspace_members
+    where workspace_id = '10000000-0000-4000-8000-000000000002'
+      and user_id = '00000000-0000-4000-8000-000000000001'),
+  now(), 'a joined_at sent with a client insert is replaced by now()');
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000006","role":"authenticated"}';
+select throws_ok(
+  $$ update public.workspace_members set joined_at = '1970-01-01'
+      where workspace_id = '10000000-0000-4000-8000-000000000002'
+        and user_id = '00000000-0000-4000-8000-000000000006' $$,
+  '23514', 'a workspace membership''s joined_at cannot change',
+  'an admin cannot backdate themselves to the head of the succession');
+reset role;
+set local role service_role;
+select throws_ok(
+  $$ update public.workspace_members set joined_at = '1970-01-01'
+      where workspace_id = '10000000-0000-4000-8000-000000000002'
+        and user_id = '00000000-0000-4000-8000-000000000006' $$,
+  '23514', 'a workspace membership''s joined_at cannot change',
+  'nor can the service role rewrite it');
+reset role;
+
 -- The last owner of a team workspace: the earliest admin takes over.
 select lives_ok(
   $$ delete from auth.users where id = '00000000-0000-4000-8000-000000000005' $$,
@@ -691,10 +749,11 @@ select lives_ok(
 select results_eq(
   $$ select user_id, role::text from public.workspace_members
       where workspace_id = '10000000-0000-4000-8000-000000000002' order by user_id $$,
-  $$ values ('00000000-0000-4000-8000-000000000003'::uuid, 'editor'),
+  $$ values ('00000000-0000-4000-8000-000000000001'::uuid, 'admin'),
+            ('00000000-0000-4000-8000-000000000003'::uuid, 'editor'),
             ('00000000-0000-4000-8000-000000000006'::uuid, 'admin'),
             ('00000000-0000-4000-8000-000000000007'::uuid, 'owner') $$,
-  'the longest-standing admin becomes owner; a longer-standing editor and a later admin do not');
+  'the longest-standing admin becomes owner; a longer-standing editor, a later admin and a backdated one do not');
 select results_eq(
   $$ select name, created_by from public.workspaces where id = '10000000-0000-4000-8000-000000000002' $$,
   $$ values ('Beta'::text, null::uuid) $$,
@@ -730,7 +789,11 @@ select is(
   (select count(*)::int from public.documents where user_id = '00000000-0000-4000-8000-000000000008'),
   1, 'and so is its document');
 
--- Two accounts in one statement: n is beta's owner and w its only admin.
+-- Two accounts in one statement: n is beta's owner and, once o is gone
+-- again, w its only admin.
+delete from public.workspace_members
+ where workspace_id = '10000000-0000-4000-8000-000000000002'
+   and user_id = '00000000-0000-4000-8000-000000000001';
 -- Whichever row goes first, n's trigger promotes w, and then either w's
 -- trigger finds no admin left (23001) or, had w's row gone first, the
 -- cascade removing w's new owner row trips workspace_members_keep_owner
