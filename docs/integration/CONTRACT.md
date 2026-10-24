@@ -119,7 +119,11 @@ Rules that follow from the decisions:
 
 qdit never answers `405`. A method that a known `/api/v1` path does not
 support (for example `PUT /milestones/{id}`) is `404 not_found` with no
-`Allow` header, the same as an unknown path (D-27).
+`Allow` header, the same as an unknown path (D-27). This includes `HEAD` and
+`OPTIONS`: they are not exceptions, so qdit MUST answer them with
+`404 not_found` too rather than let the framework answer them (no implicit
+`HEAD` from `GET`, no `204` with `Allow` for `OPTIONS`). `/api/v1` is
+server-to-server only and sends no CORS headers, so no preflight is needed.
 
 | HTTP | `code` | When |
 | --- | --- | --- |
@@ -206,10 +210,13 @@ Milestone:
   OAuth tokens may read these rows (D-32), so every milestone response,
   `GET /milestones/{id}` included, carries it. `network`, `contract_id`,
   `version`, `last_action` (`submit | approve | reject`), `last_tx_hash` and
-  `anchored_at` come from the newest row (by `created_at`, then `version`).
-  `proof_hash` comes from the newest `submit` row, because only `submit`
-  carries a hash: approve and reject attest to the hash already on chain. It
-  is a convenience pointer, not proof (D-04).
+  `anchored_at` come from the newest row. Newest means highest `version`
+  (`MilestoneRecord.version`, which only goes up on chain), with `created_at`
+  as the tie-break, because rows are recorded by clients after the
+  transaction and can arrive out of chain order. `proof_hash` comes from the
+  newest `submit` row by the same ordering, because only `submit` carries a
+  hash: approve and reject attest to the hash already on chain. It is a
+  convenience pointer, not proof (D-04).
 
 Doc link:
 
@@ -247,7 +254,8 @@ they can see and `404 not_found` on one they cannot.
 | `DELETE /links/{id}` | member | 204 |
 
 These are the only method and path pairs in v1. Any other method on one of
-these paths is `404 not_found` (D-27, section 6).
+these paths, `HEAD` and `OPTIONS` included, is `404 not_found` (D-27,
+section 6).
 
 ### GET /api/v1/me
 
@@ -298,9 +306,14 @@ were removed so doqtri can clear its `node_links`:
 
 `removed_link_ids` is an array of link ids (the `link.id` values from
 section 7), `[]` when the doc had no milestone links. doqtri MUST clear the
-`node_links` row for every id in it. 404 if the doc is not linked to this
-project; doqtri treats that as already done and clears its own qdit
-`node_links` for that doc.
+`node_links` row for every id in it.
+
+`404` means either the doc is not linked to this project or the caller can no
+longer see the project (section 6). doqtri treats a `404` as already done,
+and clears its own qdit `node_links` for that doc, only when the project
+still appears in the caller's `GET /projects`. Otherwise it reports the
+failure to the user and keeps its local links, since qdit may still hold the
+doc link and title-locked milestones.
 
 ### POST /api/v1/milestones
 
@@ -345,14 +358,15 @@ or the doc was re-anchored (D-21, section 11). `{id}` is the link id
 (`link.id`), not the milestone id.
 
 ```json
-{ "node_id": "h5", "node_label": "Escrow contract", "doc_version": 8 }
+{ "node_id": "h5", "doc_version": 8 }
 ```
 
 - `node_id`: optional, a doqtri node id (section 4).
-- `node_label`: optional, 1 to 300 characters after trim. It corrects qdit's
-  stored copy of the heading text only and never renames the milestone; a
-  rename is `PATCH /milestones/{id}`, which sets both.
 - `doc_version`: optional, integer >= 1, or `null`.
+
+`node_label` is not accepted here. The only way to change it is
+`PATCH /milestones/{id}`, which sets `milestones.title` and `node_label`
+together, so the two never differ (D-12).
 
 At least one field is required; any other field is `400 invalid_request`.
 Fields left out keep their value. Response `200 {"data": Milestone}`.
@@ -364,7 +378,10 @@ it).
 
 Deletes one `milestone_external_links` row. The milestone stays and its title
 becomes editable in qdit again. `204` with no body. A repeated delete is
-`404`; doqtri treats `404` as already done.
+`404`, but so is a link in a project the caller can no longer see. doqtri
+treats a `404` as already done only when `GET /milestones/{milestone_id}`
+succeeds and its `link` is `null` or has a different `id`; otherwise it
+reports the failure and keeps its `node_links` row.
 
 ## 9. Webhook
 
@@ -547,11 +564,13 @@ case-sensitive, moves handled before renames:
 2. `L` appears at exactly one other id `N'`: the heading moved. Update
    doqtri's `node_links.node_id` to `N'` and call `PATCH /links/{id}` with
    `node_id = N'` (D-21), plus `doc_version` when the doc has been anchored
-   since the link was last written.
+   since the link was last written. The label stays `L`, which is what the
+   heading at `N'` reads, so no label is sent.
 3. `L` appears at more than one other id: ambiguous; ask the owner to relink.
 4. `L` appears nowhere and `N` still exists: the heading was renamed. Call
    `PATCH /milestones/{id}` with the heading text at `N` as the new title, and
-   store it as the new label.
+   store it as the new label. This is the only rename path; qdit sets the
+   milestone title and the link's `node_label` together.
 5. `L` appears nowhere and `N` no longer exists: the heading was deleted. Mark
    the link broken in doqtri and ask the owner to relink or unlink. Never
    delete the milestone (D-03).
@@ -564,8 +583,9 @@ signature writes the record at the new id (R-03).
 Every change here is additive within v1 (section 3).
 
 - v1.0.1 (2026-10-24): applies D-21 to D-27 and D-32.
-  - D-21: `PATCH /links/{id}` takes `{node_id?, node_label?, doc_version?}`
-    and updates the link in place.
+  - D-21: `PATCH /links/{id}` takes `{node_id?, doc_version?}` and updates
+    the link in place. `node_label` changes only with the title, through
+    `PATCH /milestones/{id}` (D-12).
   - D-22: `DELETE /projects/{id}/docs/{doc_id}` removes the doc's milestone
     links in the same transaction and returns `removed_link_ids`.
   - D-23: minimum project role per endpoint spelled out (section 8).
@@ -574,7 +594,9 @@ Every change here is additive within v1 (section 3).
   - D-25: webhook order is best effort; a later event for a milestone waits
     until the earlier one is delivered or dead.
   - D-26: recording a `milestone_anchors` row emits the same webhook body.
-  - D-27: an unsupported method on a known path is `404 not_found`.
+  - D-27: an unsupported method on a known path, `HEAD` and `OPTIONS`
+    included, is `404 not_found`.
   - D-32: OAuth tokens may read anchor records; milestone responses carry
-    the latest anchor's proof hash and transaction hash.
+    the latest anchor's proof hash and transaction hash ("latest" = highest
+    `version`, then `created_at`).
 - v1.0.0 (2026-10-24): initial contract (WP-2.0).
