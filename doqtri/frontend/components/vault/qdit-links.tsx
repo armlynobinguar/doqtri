@@ -170,6 +170,7 @@ export function QditLinks({
   const selectedNode = unlinked.some((n) => n.id === nodeChoice) ? nodeChoice : unlinked[0]?.id ?? "";
   const headingNodes = nodes.filter((n) => n.id !== "root");
   const pending = links.filter((l) => l.qdit_state === "pending");
+  const labelOf = (nodeId: string) => nodes.find((n) => n.id === nodeId)?.label;
 
   async function chooseProject() {
     await run("projects", async () => {
@@ -197,8 +198,14 @@ export function QditLinks({
     run("create", async () => {
       // Milestones are made from the saved heading; a failed save is
       // reported by the route if the heading is not stored yet.
+      // The heading's text goes along: if the save was refused, the stored
+      // note may have another heading at this id, and the route says so.
       await onSave().catch(() => undefined);
-      await call("POST", `/docs/${docId}/milestones`, { nodeId: selectedNode, ...(milestoneId ? { milestoneId } : {}) });
+      await call("POST", `/docs/${docId}/milestones`, {
+        nodeId: selectedNode,
+        nodeLabel: labelOf(selectedNode),
+        ...(milestoneId ? { milestoneId } : {}),
+      });
       setExistingId("");
       setShowExisting(false);
       toast.success(milestoneId ? "Milestone linked" : "Milestone created in qdit");
@@ -213,7 +220,10 @@ export function QditLinks({
   const relink = (link: QditLinkRow, nodeId: string) =>
     run(`relink:${link.id}`, async () => {
       await onSave().catch(() => undefined);
-      const { failed } = await call<{ failed: { message: string }[] }>("PATCH", `/links/${link.id}`, { nodeId });
+      const { failed } = await call<{ failed: { message: string }[] }>("PATCH", `/links/${link.id}`, {
+        nodeId,
+        nodeLabel: labelOf(nodeId),
+      });
       if (failed.length > 0) toast.warning(`Relinked here; qdit will follow: ${failed[0].message}`);
       else toast.success("Relinked");
     });

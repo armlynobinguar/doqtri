@@ -20,11 +20,13 @@ let user: { id: string } | null = { id: ME };
 let role: WorkspaceRole | null = "admin";
 let configured = true;
 let linkRow: Record<string, unknown> | null = null;
+let adminReads = 0;
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServerClient: async () => ({ auth: { getUser: async () => ({ data: { user } }) } }),
   createSupabaseAdminClient: () => ({
     from: () => {
+      adminReads += 1;
       const query = { select: () => query, eq: () => query, maybeSingle: async () => ({ data: linkRow, error: null }) };
       return query;
     },
@@ -88,6 +90,7 @@ beforeEach(() => {
   role = "admin";
   configured = true;
   linkRow = { document_id: DOC, id: LINK, node_id: "h0", node_label: "A", qdit_link_id: "l", qdit_milestone_id: "m" };
+  adminReads = 0;
   loadMemberDocument.mockClear();
   for (const fn of Object.values(lib)) fn.mockReset();
   qditClient.listAllProjects.mockReset();
@@ -191,6 +194,13 @@ describe("POST /docs/[docId]/milestones", () => {
     expect(lib.adoptMilestoneLink).not.toHaveBeenCalled();
   });
 
+  it("passes the heading's text along, for the saved-note check", async () => {
+    role = "editor";
+    lib.createMilestoneLink.mockResolvedValue({ id: "row" });
+    await milestones.POST(req({ nodeId: "h0", nodeLabel: "Escrow" }), docCtx());
+    expect(lib.createMilestoneLink).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "h0", nodeLabel: "Escrow" }));
+  });
+
   it("takes over an existing milestone when given its id", async () => {
     role = "editor";
     lib.adoptMilestoneLink.mockResolvedValue({ id: "row" });
@@ -215,6 +225,15 @@ describe("POST /docs/[docId]/sync", () => {
 });
 
 describe("DELETE and PATCH /links/[id]", () => {
+  it("answers a signed-out caller the same for any id, before looking the link up", async () => {
+    user = null;
+    expect((await links.DELETE(req(), linkCtx())).status).toBe(401);
+    linkRow = null;
+    expect((await links.DELETE(req(), linkCtx())).status).toBe(401);
+    expect((await links.PATCH(req({ nodeId: "h1" }), linkCtx())).status).toBe(401);
+    expect(adminReads).toBe(0);
+  });
+
   it("does not find a link that is not a qdit link", async () => {
     linkRow = null;
     expect((await links.DELETE(req(), linkCtx())).status).toBe(404);
@@ -248,7 +267,9 @@ describe("DELETE and PATCH /links/[id]", () => {
     const res = await links.PATCH(req({ nodeId: "h2" }), linkCtx());
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ link: { id: LINK, node_id: "h2" }, failed: [{ id: LINK, message: "down" }] });
-    expect(lib.relinkMilestone).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "h2" }));
+    expect(lib.relinkMilestone).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "h2", nodeLabel: undefined }));
+    await links.PATCH(req({ nodeId: "h2", nodeLabel: "Escrow" }), linkCtx());
+    expect(lib.relinkMilestone).toHaveBeenLastCalledWith(expect.objectContaining({ nodeId: "h2", nodeLabel: "Escrow" }));
   });
 });
 

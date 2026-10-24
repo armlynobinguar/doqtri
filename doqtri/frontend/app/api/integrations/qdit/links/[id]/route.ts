@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
 import { qditIntegrationEnabled } from "@/lib/integrations/qdit-config";
 import { relinkMilestone, syncQditLinks, unlinkMilestone } from "@/lib/integrations/qdit-linking";
 import {
@@ -16,13 +16,19 @@ import { QDIT_LINK_COLUMNS, type QditLinkRow } from "@/lib/node-links";
  * of the note's workspace.
  *
  * DELETE unlinks the heading; the milestone stays in qdit. PATCH
- * `{ nodeId }` points the link at another heading (how an ambiguous, broken
+ * `{ nodeId, nodeLabel? }` points the link at another heading (how an ambiguous, broken
  * or conflicting link is settled) and tells qdit at once. Answers `{ link }`
  * for a PATCH, with what the sync could not do in `failed`.
  */
 
 async function load(id: string) {
   if (!qditIntegrationEnabled()) return { response: NextResponse.json({ error: "Not found" }, { status: 404 }) };
+  // Signed in first, as every other route: the lookup below must not tell a
+  // stranger which link ids exist.
+  const {
+    data: { user },
+  } = await (await createSupabaseServerClient()).auth.getUser();
+  if (!user) return { response: noStoreJson(401, { error: "Not signed in" }) };
   if (!isUuid(id)) return { response: noStoreJson(404, { error: "Link not found" }) };
   // Only to find the note; qditRouteContext() then checks the caller's role
   // in its workspace before anything is returned or changed.
@@ -59,11 +65,12 @@ export async function PATCH(request: Request, context: RouteContext<"/api/integr
   const body = await readBody(request);
   const nodeId = typeof body?.nodeId === "string" ? body.nodeId : null;
   if (!nodeId) return noStoreJson(400, { error: "Pick a heading." });
+  const nodeLabel = typeof body?.nodeLabel === "string" ? body.nodeLabel : undefined;
   const loaded = await load(id);
   if (!loaded.row) return loaded.response;
   const { admin, client, doc, chainVersion } = loaded.ctx;
   try {
-    const link = await relinkMilestone({ admin, doc, row: loaded.row, nodeId });
+    const link = await relinkMilestone({ admin, doc, row: loaded.row, nodeId, nodeLabel });
     const sync = await syncQditLinks({ admin, client, docId: doc.id, chainVersion });
     return noStoreJson(200, { link, failed: sync.failed.filter((f) => f.id === link.id) });
   } catch (error) {

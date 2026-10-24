@@ -22,7 +22,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(68);
+select plan(73);
 
 insert into auth.users (id, email) values
   ('00000000-0000-4000-8000-000000000001', 'owner@example.com'),
@@ -353,10 +353,39 @@ reset role;
 insert into public.doc_project_links (document_id, project_id, project_name, project_slug, qdit_link_id, doc_url)
 values ('30000000-0000-4000-8000-000000000002', '3f6c2a1e-8b4d-4c7e-9a10-2d5b7e9f1c34',
         'Soroban payroll', 'soroban-payroll', '8a4b3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d', 'https://doqtri.test/vault/z');
-delete from public.documents where id = '30000000-0000-4000-8000-000000000002';
-select is((select count(*)::int from public.doc_project_links
-            where document_id = '30000000-0000-4000-8000-000000000002'),
-  0, 'deleting a note deletes its project link');
+select throws_ok(
+  $$delete from public.documents where id = '30000000-0000-4000-8000-000000000002'$$,
+  '23001', 'note 30000000-0000-4000-8000-000000000002 is linked to the qdit project "Soroban payroll"',
+  'a note linked to a qdit project cannot be deleted, not even by the service role');
+
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000003","role":"authenticated"}';
+select throws_ok(
+  $$delete from public.documents where id = '30000000-0000-4000-8000-000000000002'$$,
+  '23001', null, 'nor by an editor straight through PostgREST');
+reset role;
+
+delete from public.doc_project_links where document_id = '30000000-0000-4000-8000-000000000002';
+select lives_ok(
+  $$delete from public.documents where id = '30000000-0000-4000-8000-000000000002'$$,
+  'once the project is unlinked, the note can be deleted');
+select is((select count(*)::int from public.documents where id = '30000000-0000-4000-8000-000000000002'),
+  0, 'and it is gone');
+
+-- The outsider's personal workspace holds a linked note: deleting the
+-- account would take it, so the account deletion is refused and nothing goes.
+insert into public.documents (id, user_id, workspace_id, title, markdown)
+select '30000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-000000000005', w.id, 'Mine', '# M'
+  from public.workspaces w
+ where w.is_personal and w.created_by = '00000000-0000-4000-8000-000000000005';
+insert into public.doc_project_links (document_id, project_id, project_name, project_slug, qdit_link_id, doc_url)
+values ('30000000-0000-4000-8000-000000000003', '3f6c2a1e-8b4d-4c7e-9a10-2d5b7e9f1c34',
+        'Soroban payroll', 'soroban-payroll', '9b5c4d3e-2f10-4b0a-9d8e-7f6a5b4c3d2e', 'https://doqtri.test/d/m');
+select throws_ok(
+  $$delete from auth.users where id = '00000000-0000-4000-8000-000000000005'$$,
+  '23001', 'note 30000000-0000-4000-8000-000000000003 is linked to the qdit project "Soroban payroll"', 'an account whose personal workspace holds a linked note cannot be deleted');
+select is((select count(*)::int from public.documents where id = '30000000-0000-4000-8000-000000000003'),
+  1, 'and the note stays');
 
 select * from finish();
 rollback;

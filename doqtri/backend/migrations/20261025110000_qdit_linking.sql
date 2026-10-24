@@ -95,6 +95,42 @@ revoke all on table public.doc_project_links from public, anon, authenticated;
 grant select on table public.doc_project_links to authenticated;
 grant select, insert, update, delete on table public.doc_project_links to service_role;
 
+-- A linked note is not deleted. qdit holds a link back to it and, for each
+-- linked heading, a milestone link that keeps the milestone's title
+-- read-only there (D-12). If the note went, the cascade would drop doqtri's
+-- rows, ids included, and nothing could take qdit's out again: qdit leaves
+-- unlinking to doqtri (D-10). So an admin unlinks the project first, and
+-- until then every path is refused: the note route (which says so before
+-- it gets here), a delete straight through PostgREST, and the account
+-- deletion that takes a personal workspace's notes with it, which this
+-- rolls back as D-39's refusals do.
+create function public.refuse_qdit_linked_document_delete()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_project text;
+begin
+  select l.project_name into v_project
+    from public.doc_project_links l
+   where l.document_id = old.id;
+  if found then
+    raise exception 'note % is linked to the qdit project "%"', old.id, v_project
+      using errcode = 'restrict_violation',
+            hint = 'A workspace admin must unlink the qdit project first, so qdit drops its links too.';
+  end if;
+  return old;
+end;
+$$;
+
+revoke all on function public.refuse_qdit_linked_document_delete() from public, anon, authenticated;
+
+create trigger documents_refuse_qdit_linked_delete
+  before delete on public.documents
+  for each row execute function public.refuse_qdit_linked_document_delete();
+
 
 -- ---------------------------------------------------------------------------
 -- node_links: provider

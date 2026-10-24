@@ -429,6 +429,61 @@ describe("createMilestoneLink (D-06, D-08, D-11)", () => {
     expect(row.qdit_milestone_id).toBe(first.id);
   });
 
+  it("does not take over a milestone whose doqtri row moved off the heading before qdit heard", async () => {
+    await linked();
+    const beta = await milestoneOn("# Beta", "h0");
+    // A heading inserted above: doqtri's row moves to h1 at once, qdit is
+    // told later (here, never: the sync has not run).
+    db.documents[0].version = 6;
+    await remapAfterSave(admin, { docId: DOC, version: 6, title: "Plan", markdown: "# Alpha\n# Beta", previousMarkdown: "# Beta" });
+    expect(qditRow(beta.id)).toMatchObject({ node_id: "h1", qdit_state: "pending" });
+    qdit.calls.length = 0;
+
+    await expect(milestoneOn("# Alpha\n# Beta", "h0")).rejects.toMatchObject({ status: 409, code: "QDIT_CONFLICT" });
+    // Beta's link is untouched in qdit and in doqtri.
+    expect(qdit.calls.some((c) => c.startsWith("DELETE /links"))).toBe(false);
+    expect(qdit.state.milestones[0].link).toMatchObject({ id: beta.qdit_link_id, node_id: "h0" });
+    expect(db.node_links).toHaveLength(1);
+    // Once qdit has caught up, the create goes through.
+    await syncQditLinks({ admin, client: qdit.client, docId: DOC, chainVersion });
+    const alpha = await milestoneOn("# Alpha\n# Beta", "h0");
+    expect(alpha.qdit_milestone_id).not.toBe(beta.qdit_milestone_id);
+    expect(qdit.state.milestones.find((m) => m.id === beta.qdit_milestone_id)!.link).toMatchObject({ node_id: "h1" });
+  });
+
+  it("takes back only a link it made itself when the heading is taken meanwhile", async () => {
+    await linked();
+    // Another editor's link lands on h0 between the free-heading check and the insert.
+    const insert = admin.from;
+    let raced = false;
+    admin.from = ((table: string) => {
+      const q = insert(table as never);
+      if (table === "node_links" && !raced) {
+        const orig = q.insert;
+        q.insert = ((row: Record<string, unknown>) => {
+          raced = true;
+          db.node_links.push({ id: "gh", document_id: DOC, node_id: "h0", node_label: "A", provider: "github", repo: "a/b", number: 1 });
+          return orig(row);
+        }) as typeof q.insert;
+      }
+      return q;
+    }) as typeof admin.from;
+    await expect(milestoneOn("# A", "h0")).rejects.toMatchObject({ code: "HEADING_TAKEN" });
+    admin.from = insert;
+    expect(qdit.state.milestones).toHaveLength(1);
+    expect(qdit.state.milestones[0].link).toBeNull();
+  });
+
+  it("refuses a heading whose saved text is not the one picked (positional ids, R-03)", async () => {
+    await linked();
+    await expect(
+      createMilestoneLink({ admin, client: qdit.client, userId: USER, doc: doc("# Intro\n# Beta"), nodeId: "h0", nodeLabel: "Alpha", chainVersion }),
+    ).rejects.toMatchObject({ status: 409, code: "STALE_HEADING" });
+    expect(qdit.calls).not.toContain("POST /milestones");
+    const row = await createMilestoneLink({ admin, client: qdit.client, userId: USER, doc: doc("# Intro\n# Beta"), nodeId: "h1", nodeLabel: " Beta ", chainVersion });
+    expect(row.node_label).toBe("Beta");
+  });
+
   it("explains a project link that qdit no longer has", async () => {
     await linked();
     qdit.state.docLinks = [];

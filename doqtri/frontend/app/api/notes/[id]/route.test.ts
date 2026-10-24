@@ -246,3 +246,23 @@ describe("rename and delete while someone else is editing", () => {
     expect(adminWrites).toEqual([]);
   });
 });
+
+describe("deleting a note linked to qdit (WP-2.5)", () => {
+  it("refuses until an admin unlinks the project, before asking the ledger", async () => {
+    adminRows.doc_project_links = { project_name: "Soroban payroll" };
+    const res = await DELETE(new Request(`http://localhost/api/notes/${DOC}`, { method: "DELETE" }), ctx());
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.code).toBe("QDIT_LINKED");
+    expect(body.error).toContain("Soroban payroll");
+    expect(readDocument).not.toHaveBeenCalled();
+    expect(adminWrites).toEqual([]);
+  });
+
+  it("deletes an unlinked note as before", async () => {
+    readDocument.mockResolvedValue(null);
+    const res = await DELETE(new Request(`http://localhost/api/notes/${DOC}`, { method: "DELETE" }), ctx());
+    expect(res.status).toBe(200);
+    expect(adminWrites).toEqual(["delete documents"]);
+  });
+});

@@ -247,13 +247,17 @@ export async function unlinkProject(params: {
 
 type LinkableDoc = { id: string; title: string; markdown: string };
 
-/** The saved heading at `nodeId`, or a LinkingError. */
-function savedHeading(doc: LinkableDoc, nodeId: string): Heading {
+/**
+ * The saved heading at `nodeId`, or a LinkingError. `expectedLabel` is the
+ * heading's text as the user picked it: ids are positional (R-03), so an
+ * unsaved edit above it would otherwise point the link at another heading.
+ */
+function savedHeading(doc: LinkableDoc, nodeId: string, expectedLabel?: string): Heading {
   if (!isHeadingId(nodeId)) {
     throw new LinkingError(400, "Only a heading can be linked to a milestone.", "NOT_A_HEADING");
   }
   const heading = headingsOf(doc.title, doc.markdown).find((h) => h.id === nodeId);
-  if (!heading) {
+  if (!heading || (expectedLabel !== undefined && heading.label !== expectedLabel.trim())) {
     throw new LinkingError(409, "That heading isn't in the saved note. Save and try again.", "STALE_HEADING");
   }
   if (heading.label.length > MAX_TITLE) {
@@ -325,7 +329,9 @@ async function insertQditRow(
  * Creates a milestone from a heading (POST /milestones): its title is the
  * heading's text, and it starts `proposed` in the note's project. A retry of
  * a create that reached qdit (409 `node_already_linked`, with the milestone
- * named) takes over that milestone instead of failing.
+ * named) takes over that milestone instead of failing, unless doqtri already
+ * has a row for it (a link moved off this heading that qdit has not caught
+ * up with yet).
  */
 export async function createMilestoneLink(params: {
   admin: SupabaseClient;
@@ -333,15 +339,20 @@ export async function createMilestoneLink(params: {
   userId: string;
   doc: LinkableDoc;
   nodeId: string;
+  /** The heading's text as the user picked it, checked against the saved note. */
+  nodeLabel?: string;
   chainVersion: ChainVersion;
 }): Promise<QditLinkRow> {
   const { admin, client, userId, doc, nodeId } = params;
-  const heading = savedHeading(doc, nodeId);
+  const heading = savedHeading(doc, nodeId, params.nodeLabel);
   const project = await requireProject(admin, doc.id);
   await requireFreeHeading(admin, doc.id, nodeId);
   const docVersion = await chainVersionOf(params.chainVersion, doc.id);
 
   let milestone: QditMilestone;
+  // Whether this call made the milestone. Only then is its link this call's
+  // to take back out of qdit.
+  let created = false;
   try {
     milestone = await client.createMilestone({
       project_id: project.project_id,
@@ -350,6 +361,7 @@ export async function createMilestoneLink(params: {
       due_date: null,
       link: { doc_id: doc.id, node_id: nodeId, doc_version: docVersion },
     });
+    created = true;
   } catch (error) {
     if (isQdit(error, "conflict", "doc_not_linked")) {
       throw new LinkingError(
@@ -368,6 +380,24 @@ export async function createMilestoneLink(params: {
       if (milestone.link?.doc_id !== doc.id || milestone.link.node_id !== nodeId) {
         throw new LinkingError(409, "qdit already has a milestone on this heading.", "QDIT_CONFLICT");
       }
+      // qdit may still hold here a link doqtri has already moved to another
+      // heading (its row `pending` until the sync tells qdit, or someone
+      // else's create that just landed): that milestone is not this
+      // retry's to take over.
+      const { data: held, error: heldError } = await admin
+        .from("node_links")
+        .select("id")
+        .eq("provider", "qdit")
+        .eq("qdit_milestone_id", milestone.id)
+        .limit(1);
+      if (heldError) throw new LinkingError(500, `Could not read the note's links: ${heldError.message}`);
+      if ((held ?? []).length > 0) {
+        throw new LinkingError(
+          409,
+          "qdit still has another of this note's milestones on this heading. Wait a moment for qdit to catch up, then try again.",
+          "QDIT_CONFLICT",
+        );
+      }
     } else if (isQdit(error, "conflict", "node_already_linked")) {
       throw new LinkingError(409, "qdit already has a milestone on this heading.", "QDIT_CONFLICT");
     } else {
@@ -381,9 +411,11 @@ export async function createMilestoneLink(params: {
   try {
     return await insertQditRow(admin, { userId, docId: doc.id, heading, milestone, projectId: project.project_id });
   } catch (error) {
-    // Someone linked the heading meanwhile: take the new link back out of
-    // qdit (the milestone stays; qdit never lets doqtri delete one, D-03).
-    if (error instanceof LinkingError && error.code === "HEADING_TAKEN") {
+    // Someone linked the heading meanwhile: take the link this call made
+    // back out of qdit (the milestone stays; qdit never lets doqtri delete
+    // one, D-03). A milestone this call only took over may be another
+    // row's, so its link is left alone.
+    if (created && error instanceof LinkingError && error.code === "HEADING_TAKEN") {
       await client.deleteLink(milestone.link.id).catch(() => undefined);
     }
     throw error;
@@ -403,11 +435,12 @@ export async function adoptMilestoneLink(params: {
   userId: string;
   doc: LinkableDoc;
   nodeId: string;
+  nodeLabel?: string;
   milestoneId: string;
   chainVersion: ChainVersion;
 }): Promise<QditLinkRow> {
   const { admin, client, userId, doc, nodeId, milestoneId } = params;
-  const heading = savedHeading(doc, nodeId);
+  const heading = savedHeading(doc, nodeId, params.nodeLabel);
   const project = await requireProject(admin, doc.id);
   await requireFreeHeading(admin, doc.id, nodeId);
 
@@ -475,9 +508,10 @@ export async function relinkMilestone(params: {
   doc: LinkableDoc;
   row: QditLinkRow;
   nodeId: string;
+  nodeLabel?: string;
 }): Promise<QditLinkRow> {
   const { admin, doc, row, nodeId } = params;
-  const heading = savedHeading(doc, nodeId);
+  const heading = savedHeading(doc, nodeId, params.nodeLabel);
   await requireFreeHeading(admin, doc.id, nodeId, row.id);
   const { data, error } = await admin
     .from("node_links")

@@ -146,7 +146,9 @@ Two supporting tables:
   still write GitHub rows from the browser, and qdit rows are written by the
   routes only. Each save remaps moved headings through
   `apply_node_link_remap()` (R-03), and `qdit_state` says whether qdit has
-  been told yet.
+  been told yet. A note linked to a project cannot be deleted, by any path
+  (its owner's account deletion included), until an admin unlinks it: qdit
+  would keep links to it that nothing could remove.
 
 The notes table itself is still the only content store. There are deliberately **no** graph tables: nodes and
 edges are parsed from `markdown` at render time by `lib/wikilinks.ts`, so the
