@@ -15,6 +15,7 @@ version-controlled source of what lives in the remote project.
 
 ```
 migrations/   SQL already applied to the remote project, in order
+tests/        pgTAP tests for the migrations (run with pg_prove, see each file)
 prompts/      The two AI prompts, mirrored from lib/openai.ts
 ```
 
@@ -35,6 +36,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261019000000_chain_writes_anchor.sql    # NOT yet applied: apply before deploying
 20261021000000_create_mindmap_styles.sql
 20261024000000_add_promo_submission_rating.sql
+20261024120000_create_workspaces.sql      # NOT yet applied: dry-run on a branch first
 ```
 
 The remote records its own version stamps (e.g. `20260929114657` for
@@ -85,6 +87,21 @@ Two supporting tables:
   after the last change; edits the server has not confirmed yet are parked in
   localStorage and resent on the next visit. `updated_at` is set by a trigger
   and acts as the row's version. The demo vault's styles stay in the browser.
+
+- `public.workspaces` / `public.workspace_members` — team workspaces and who
+  is in them, as viewer, editor, admin or owner. Every account has one
+  personal workspace (`is_personal`) that it owns: existing accounts through
+  the migration's backfill, new ones through the `on_auth_user_created_workspace`
+  trigger on `auth.users`. Members read their workspaces and rosters; owners
+  manage members, admins manage everyone but owners, anyone may leave, and a
+  trigger keeps at least one owner per workspace and keeps each personal
+  workspace's creator as its owner. Any user may create a team workspace
+  through the `create_workspace(name, slug)` RPC and becomes its owner; there
+  is no direct insert. Members are still added without their consent, so
+  WP-1.5 must replace that with an invite the invitee accepts. Documents do
+  not belong to workspaces yet;
+  WP-1.2 adds `documents.workspace_id` and moves the policies over to
+  `is_workspace_member()`.
 
 The notes table itself is still the only content store. There are deliberately **no** graph tables: nodes and
 edges are parsed from `markdown` at render time by `lib/wikilinks.ts`, so the
