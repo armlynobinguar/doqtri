@@ -24,7 +24,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(113);
+select plan(121);
 
 insert into auth.users (id, email) values
   ('00000000-0000-4000-8000-000000000001', 'owner@example.com'),
@@ -424,55 +424,102 @@ select is((select count(*)::int from public.workspace_members where workspace_id
 -- ---------------------------------------------------------------------------
 -- A personal workspace stays with its creator
 --
--- o makes ad a co-owner of o's personal workspace. Without the guard, ad
--- could then remove o, or o could leave, and o's personal workspace (where
--- WP-1.2 puts o's documents) would belong to ad alone.
+-- Personal workspaces may take members (D-30), but only their creator is ever
+-- an owner there. o adds ad to o's personal workspace and tries every way of
+-- making ad an owner; then ad, as admin, tries to remove or demote o. Without
+-- these guards o's personal workspace (where WP-1.2 puts o's documents)
+-- could end up belonging to ad.
 -- ---------------------------------------------------------------------------
+
+create temp table o_personal as
+  select id from public.workspaces
+   where is_personal and created_by = '00000000-0000-4000-8000-000000000001';
+grant select on o_personal to authenticated, service_role;
 
 select lives_ok(
   $$ insert into public.workspace_members (workspace_id, user_id, role)
-     values ((select id from public.workspaces where is_personal and created_by = '00000000-0000-4000-8000-000000000001'),
-             '00000000-0000-4000-8000-000000000002', 'editor') $$,
+     values ((select id from o_personal), '00000000-0000-4000-8000-000000000002', 'editor') $$,
   'an owner adds a member to their personal workspace');
-with u as (update public.workspace_members set role = 'owner'
-            where workspace_id = (select id from public.workspaces where is_personal and created_by = '00000000-0000-4000-8000-000000000001')
+with u as (update public.workspace_members set role = 'admin'
+            where workspace_id = (select id from o_personal)
               and user_id = '00000000-0000-4000-8000-000000000002' returning 1)
-select is(count(*)::int, 1, 'and makes them a co-owner') from u;
+select is(count(*)::int, 1, 'and makes them an admin') from u;
+select throws_ok(
+  $$ update public.workspace_members set role = 'owner'
+      where workspace_id = (select id from o_personal)
+        and user_id = '00000000-0000-4000-8000-000000000002' $$,
+  '23514', 'only the creator of a personal workspace can be its owner',
+  'but not a co-owner (D-30)');
+select throws_ok(
+  $$ insert into public.workspace_members (workspace_id, user_id, role)
+     values ((select id from o_personal), '00000000-0000-4000-8000-000000000003', 'owner') $$,
+  '42501', null, 'nor add anyone straight in as owner');
 select throws_ok(
   $$ delete from public.workspace_members
-      where workspace_id = (select id from public.workspaces where is_personal and created_by = '00000000-0000-4000-8000-000000000001')
+      where workspace_id = (select id from o_personal)
         and user_id = '00000000-0000-4000-8000-000000000001' $$,
   '23514', 'the owner of a personal workspace cannot leave it or be demoted',
-  'the creator cannot leave their personal workspace, even with a co-owner');
+  'the creator cannot leave their personal workspace');
 select throws_ok(
   $$ update public.workspace_members set role = 'admin'
-      where workspace_id = (select id from public.workspaces where is_personal and created_by = '00000000-0000-4000-8000-000000000001')
+      where workspace_id = (select id from o_personal)
         and user_id = '00000000-0000-4000-8000-000000000001' $$,
   '23514', 'the owner of a personal workspace cannot leave it or be demoted',
   'nor step down in it');
 
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000002","role":"authenticated"}';
+select is((select count(*)::int from public.workspaces where id = (select id from o_personal)),
+  1, 'a member of a personal workspace reads it');
+with d as (delete from public.workspace_members
+            where workspace_id = (select id from o_personal)
+              and user_id = '00000000-0000-4000-8000-000000000001' returning 1)
+select is(count(*)::int, 0, 'an admin cannot remove the creator of a personal workspace') from d;
+with u as (update public.workspace_members set role = 'viewer'
+            where workspace_id = (select id from o_personal)
+              and user_id = '00000000-0000-4000-8000-000000000001' returning 1)
+select is(count(*)::int, 0, 'nor demote them') from u;
 select throws_ok(
-  $$ delete from public.workspace_members
-      where workspace_id = (select id from public.workspaces where is_personal and created_by = '00000000-0000-4000-8000-000000000001')
-        and user_id = '00000000-0000-4000-8000-000000000001' $$,
-  '23514', 'the owner of a personal workspace cannot leave it or be demoted',
-  'a co-owner cannot remove the creator of a personal workspace');
-select throws_ok(
-  $$ update public.workspace_members set role = 'viewer'
-      where workspace_id = (select id from public.workspaces where is_personal and created_by = '00000000-0000-4000-8000-000000000001')
-        and user_id = '00000000-0000-4000-8000-000000000001' $$,
-  '23514', 'the owner of a personal workspace cannot leave it or be demoted',
-  'nor demote them');
-select throws_ok(
-  $$ update public.workspaces set created_by = null where id = (select id from public.workspaces where is_personal and created_by = '00000000-0000-4000-8000-000000000001') $$,
+  $$ update public.workspaces set created_by = null where id = (select id from o_personal) $$,
   '23514', null, 'nor detach the workspace from its creator');
 
+-- The rule holds for writers RLS does not apply to: the service role, and
+-- a direct write by the migration role.
+reset role;
+set local role service_role;
+select throws_ok(
+  $$ update public.workspace_members set role = 'owner'
+      where workspace_id = (select id from o_personal)
+        and user_id = '00000000-0000-4000-8000-000000000002' $$,
+  '23514', 'only the creator of a personal workspace can be its owner',
+  'the service role cannot promote a co-owner in a personal workspace either');
+select throws_ok(
+  $$ insert into public.workspace_members (workspace_id, user_id, role)
+     values ((select id from o_personal), '00000000-0000-4000-8000-000000000003', 'owner') $$,
+  '23514', 'only the creator of a personal workspace can be its owner',
+  'nor insert one');
+reset role;
+select throws_ok(
+  $$ insert into public.workspace_members (workspace_id, user_id, role)
+     values ((select id from o_personal), '00000000-0000-4000-8000-000000000003', 'owner')
+     on conflict (workspace_id, user_id) do update set role = 'owner' $$,
+  '23514', 'only the creator of a personal workspace can be its owner',
+  'nor does a direct upsert');
+select lives_ok(
+  $$ select public.ensure_personal_workspace('00000000-0000-4000-8000-000000000001') $$,
+  'ensure_personal_workspace still runs for a personal workspace with members');
+select results_eq(
+  $$ select user_id, role::text from public.workspace_members
+      where workspace_id = (select id from o_personal) order by user_id $$,
+  $$ values ('00000000-0000-4000-8000-000000000001'::uuid, 'owner'),
+            ('00000000-0000-4000-8000-000000000002'::uuid, 'admin') $$,
+  'the creator is still the personal workspace''s only owner');
+
+set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
 with d as (delete from public.workspace_members
-            where workspace_id = (select id from public.workspaces where is_personal and created_by = '00000000-0000-4000-8000-000000000001')
+            where workspace_id = (select id from o_personal)
               and user_id = '00000000-0000-4000-8000-000000000002' returning 1)
-select is(count(*)::int, 1, 'the creator removes the co-owner') from d;
+select is(count(*)::int, 1, 'the creator removes the member') from d;
 
 reset role;
 

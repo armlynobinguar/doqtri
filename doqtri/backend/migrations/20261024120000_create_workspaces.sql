@@ -26,14 +26,15 @@
 -- RLS. The membership checks follow qdit's project_members helpers (qdit
 -- supabase/migrations/20260731133313_rls.sql); see is_workspace_member().
 --
--- A personal workspace always belongs to the account it was made for: its
--- creator stays an owner and cannot leave, be demoted or be removed, by a
--- co-owner or anyone else (workspace_members_keep_owner). WP-1.2 moves each
--- user's documents into it on that guarantee.
+-- A personal workspace always belongs to the account it was made for. It
+-- may take members (D-30), but its creator is its only owner: nobody else
+-- can be added as or promoted to owner, and the creator cannot leave, be
+-- demoted or be removed, by anyone (workspace_members_keep_owner). WP-1.2
+-- moves each user's documents into it on that guarantee.
 --
 -- Adding a member needs no consent from the person added. Admins and owners
--- may add anyone as viewer, editor or admin, and an owner may then promote
--- them to owner and leave. That is acceptable while nothing but names lives
+-- may add anyone as viewer, editor or admin, and in a team workspace an owner
+-- may then promote them to owner and leave. That is acceptable while nothing but names lives
 -- here, but WP-1.5 must replace direct inserts into workspace_members with an
 -- invite the invitee accepts before documents arrive in team workspaces;
 -- otherwise a user can be made responsible for a workspace they never joined.
@@ -167,8 +168,9 @@ create policy "workspaces - update as admin" on public.workspaces
 -- Rules RLS cannot express, because they depend on other rows, are enforced
 -- by workspace_members_keep_owner below for every writer, the service role
 -- included: the last owner can neither leave nor be demoted, the creator of a
--- personal workspace can neither leave, be demoted nor be removed, and a row
--- cannot be moved to another workspace or user.
+-- personal workspace can neither leave, be demoted nor be removed, nobody
+-- else is ever an owner of a personal workspace (D-30), and a row cannot be
+-- moved to another workspace or user.
 --
 -- Every clause goes through is_workspace_member() rather than querying
 -- workspace_members inline; that is the recursion the helper exists to avoid.
@@ -258,12 +260,15 @@ create trigger workspaces_before_update
   for each row execute function public.workspaces_before_update();
 
 -- Keeps every workspace with at least one owner, keeps the creator of a
--- personal workspace as its owner, and keeps membership rows in place.
+-- personal workspace as its only owner, and keeps membership rows in place.
 --
--- Without the personal rule a co-owner could remove the creator, or the
+-- Without the personal rules a co-owner could remove the creator, or the
 -- creator could hand ownership over and leave, and the workspace would still
 -- be that user's personal one (created_by, is_personal) while someone else
--- controls it; WP-1.2 would then move the creator's documents into it.
+-- controls it; WP-1.2 would then move the creator's documents into it. A
+-- second owner is refused outright (D-30) rather than only kept from
+-- removing the creator: an owner there could still rename the workspace and
+-- manage its members, and after WP-1.2 those are the creator's documents.
 --
 -- Runs after the statement's row change, so it sees the roster as the change
 -- leaves it, and locks the workspace row first so two owners demoting each
@@ -288,7 +293,17 @@ begin
       using errcode = 'check_violation';
   end if;
 
-  if old.role <> 'owner' or (tg_op = 'UPDATE' and new.role = 'owner') then
+  if tg_op in ('INSERT', 'UPDATE') and new.role = 'owner' and exists (
+    select 1 from public.workspaces w
+     where w.id = new.workspace_id and w.is_personal
+       and w.created_by is distinct from new.user_id
+  ) then
+    raise exception 'only the creator of a personal workspace can be its owner'
+      using errcode = 'check_violation',
+            hint = 'Make them an admin instead, or create a team workspace.';
+  end if;
+
+  if tg_op = 'INSERT' or old.role <> 'owner' or (tg_op = 'UPDATE' and new.role = 'owner') then
     return null;
   end if;
   if not exists (select 1 from public.workspaces w where w.id = old.workspace_id) then
@@ -320,7 +335,7 @@ end;
 $$;
 
 create trigger workspace_members_keep_owner
-  after update or delete on public.workspace_members
+  after insert or update or delete on public.workspace_members
   for each row execute function public.workspace_members_keep_owner();
 
 
