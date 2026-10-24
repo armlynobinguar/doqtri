@@ -50,7 +50,12 @@ export function FileExplorer({
   activeId?: string;
   /** Replaces the "Vault" heading: the vault shell puts the workspace switcher here. */
   header?: React.ReactNode;
-  /** False for a viewer of the workspace shown (D-14): the create buttons are disabled. */
+  /**
+   * False for a viewer of the workspace shown (D-14): the create buttons are
+   * disabled, and the write actions on rows (rename, delete, retrying an
+   * import into this workspace) are not shown. The server refuses them all
+   * anyway; this keeps a viewer from being offered them.
+   */
   canCreate?: boolean;
   onNewNote: () => void;
   onUploadClick: () => void;
@@ -152,14 +157,14 @@ export function FileExplorer({
                       />
                       <span className="truncate">{note.title}</span>
                     </NavLink>
-                    {onRenameNote ? (
+                    {onRenameNote && canCreate ? (
                       <RenameRowAction note={note} onRename={onRenameNote} />
                     ) : null}
                     <NoteRowAction
                       note={note}
                       anchored={anchored}
                       deleting={deletingId === note.id}
-                      onDelete={onDeleteNote}
+                      onDelete={canCreate ? onDeleteNote : undefined}
                     />
                   </li>
                 );
@@ -168,7 +173,7 @@ export function FileExplorer({
           )}
 
           {failedImports.length > 0 && onRetryImport ? (
-            <FailedImports items={failedImports} onRetry={onRetryImport} />
+            <FailedImports items={failedImports} onRetry={canCreate ? onRetryImport : undefined} />
           ) : null}
         </div>
       </ScrollArea>
@@ -178,14 +183,16 @@ export function FileExplorer({
 
 /**
  * Imports that never became notes. The original file is still archived, so
- * each one can be re-run without finding the file again, or dismissed.
+ * each one can be re-run without finding the file again, or dismissed. A
+ * retry lands in the workspace shown, so without `onRetry` (a viewer there)
+ * only dismissing is offered; the rows are the user's own either way.
  */
 function FailedImports({
   items,
   onRetry,
 }: {
   items: FailedImport[];
-  onRetry: (target: RetryTarget) => void;
+  onRetry?: (target: RetryTarget) => void;
 }) {
   const router = useRouter();
 
@@ -212,14 +219,16 @@ function FailedImports({
             <span className="min-w-0 flex-1 truncate" title={item.error_code ?? "Interrupted"}>
               {item.filename}
             </span>
-            <button
-              type="button"
-              aria-label={`Retry import of ${item.filename}`}
-              onClick={() => onRetry({ ingestId: item.id, filename: item.filename })}
-              className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-6 items-center justify-center rounded-lg pointer-coarse:size-10"
-            >
-              <RotateCcwIcon className="size-3.5" strokeWidth={1.5} />
-            </button>
+            {onRetry ? (
+              <button
+                type="button"
+                aria-label={`Retry import of ${item.filename}`}
+                onClick={() => onRetry({ ingestId: item.id, filename: item.filename })}
+                className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-6 items-center justify-center rounded-lg pointer-coarse:size-10"
+              >
+                <RotateCcwIcon className="size-3.5" strokeWidth={1.5} />
+              </button>
+            ) : null}
             <button
               type="button"
               aria-label={`Dismiss failed import of ${item.filename}`}
