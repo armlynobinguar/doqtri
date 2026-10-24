@@ -13,6 +13,7 @@ import {
 } from "@/lib/doc-lock";
 import { liveLockHolder } from "@/lib/doc-lock-server";
 import { afterNoteSaved, noteBeforeSave } from "@/lib/integrations/qdit-save-hook";
+import { qditIntegrationEnabled } from "@/lib/integrations/qdit-config";
 import { isTitleTaken, MAX_TITLE_LENGTH } from "@/lib/title";
 import {
   loadMemberDocument,
@@ -323,9 +324,14 @@ export async function DELETE(
     return NextResponse.json({ error: qditProjectError.message }, { status: 500 });
   }
   if (qditProject) {
+    const name = (qditProject as { project_name: string }).project_name;
+    // With the integration off the ship panel shows no qdit section, so
+    // there is nothing to point the user at (an operator turns it back on).
     return NextResponse.json(
       {
-        error: `This note is linked to the qdit project ${(qditProject as { project_name: string }).project_name}. A workspace admin must unlink it in the ship panel first, so qdit drops its links too.`,
+        error: qditIntegrationEnabled()
+          ? `This note is linked to the qdit project ${name}. A workspace admin must unlink it in the ship panel first, so qdit drops its links too (or forget the link there, if qdit no longer has the project).`
+          : `This note is linked to the qdit project ${name}, and the qdit integration is turned off on this site, so the link can't be removed for now. The note is kept until it is.`,
         code: "QDIT_LINKED",
       },
       { status: 409 },

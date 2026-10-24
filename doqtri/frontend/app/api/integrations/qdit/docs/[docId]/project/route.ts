@@ -16,6 +16,9 @@ import {
  * POST `{ projectId }` links the note (re-posting refreshes the title qdit
  * shows); DELETE unlinks it, and with it every milestone link of the note
  * (D-22). Answers `{ project }`, or `{ removed_link_ids }` for a DELETE.
+ * DELETE `?forget=1`, sent once the admin confirmed it after a
+ * QDIT_UNCONFIRMED answer, forgets the link here when qdit no longer shows
+ * the project, and adds `{ forgotten: true, dangling_link_ids }`.
  */
 export async function POST(request: Request, context: RouteContext<"/api/integrations/qdit/docs/[docId]/project">) {
   const { docId } = await context.params;
@@ -40,14 +43,20 @@ export async function POST(request: Request, context: RouteContext<"/api/integra
   }
 }
 
-export async function DELETE(_request: Request, context: RouteContext<"/api/integrations/qdit/docs/[docId]/project">) {
+export async function DELETE(request: Request, context: RouteContext<"/api/integrations/qdit/docs/[docId]/project">) {
   const { docId } = await context.params;
   const found = await qditRouteContext(docId, "admin");
   if (!found.ok) return found.response;
   const { admin, client, doc } = found.ctx;
   try {
-    const { removedLinkIds } = await unlinkProject({ admin, client, docId: doc.id });
-    return noStoreJson(200, { removed_link_ids: removedLinkIds });
+    const forgetIfGone = new URL(request.url).searchParams.get("forget") === "1";
+    const { removedLinkIds, danglingLinkIds } = await unlinkProject({ admin, client, docId: doc.id, forgetIfGone });
+    return noStoreJson(
+      200,
+      danglingLinkIds
+        ? { removed_link_ids: removedLinkIds, forgotten: true, dangling_link_ids: danglingLinkIds }
+        : { removed_link_ids: removedLinkIds },
+    );
   } catch (error) {
     return linkingErrorResponse(error);
   }

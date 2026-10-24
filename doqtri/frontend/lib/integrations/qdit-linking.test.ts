@@ -370,6 +370,33 @@ describe("unlinkProject (D-22)", () => {
     await expect(unlinkProject({ admin, client: qdit.client, docId: DOC })).rejects.toMatchObject({ code: "QDIT_UNCONFIRMED" });
     expect(db.doc_project_links).toHaveLength(1);
   });
+
+  it("forgets the link here, once confirmed, when qdit no longer shows the project", async () => {
+    await linked();
+    const row = await milestoneOn("# A", "h0");
+    db.node_links.push({ id: "gh", document_id: DOC, node_id: "h1", node_label: "B", provider: "github", repo: "a/b", number: 1 });
+    qdit.state.docLinks = [];
+    qdit.state.projects = [];
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const result = await unlinkProject({ admin, client: qdit.client, docId: DOC, forgetIfGone: true });
+    warn.mockRestore();
+    expect(result).toEqual({ removedLinkIds: [], danglingLinkIds: [row.qdit_link_id] });
+    expect(db.doc_project_links).toEqual([]);
+    expect(db.node_links.map((r) => r.id)).toEqual(["gh"]);
+  });
+
+  it("never forgets what qdit can still unlink, or when qdit cannot be asked", async () => {
+    await linked();
+    // Still visible: qdit unlinks it for real, nothing dangles.
+    expect(await unlinkProject({ admin, client: qdit.client, docId: DOC, forgetIfGone: true })).toEqual({ removedLinkIds: [] });
+    expect(qdit.state.docLinks).toEqual([]);
+    await linked();
+    qdit.client.unlinkDoc = async () => {
+      throw new QditError("server", "qdit is down", { status: 503 });
+    };
+    await expect(unlinkProject({ admin, client: qdit.client, docId: DOC, forgetIfGone: true })).rejects.toBeInstanceOf(LinkingError);
+    expect(db.doc_project_links).toHaveLength(1);
+  });
 });
 
 describe("createMilestoneLink (D-06, D-08, D-11)", () => {
@@ -472,6 +499,53 @@ describe("createMilestoneLink (D-06, D-08, D-11)", () => {
     admin.from = insert;
     expect(qdit.state.milestones).toHaveLength(1);
     expect(qdit.state.milestones[0].link).toBeNull();
+  });
+
+  it("keeps the link when a second editor's create of the same heading records it first", async () => {
+    await linked();
+    // Editor A's POST /milestones lands; before A records it, editor B's
+    // whole create runs: qdit answers B with node_already_linked naming A's
+    // milestone, B finds no row for it and records it.
+    const create = qdit.client.createMilestone;
+    let b: QditLinkRow | null = null;
+    qdit.client.createMilestone = async (input) => {
+      const made = await create(input);
+      qdit.client.createMilestone = create;
+      b = await milestoneOn("# A", "h0");
+      return made;
+    };
+    const a = await milestoneOn("# A", "h0");
+    expect(b).not.toBeNull();
+    expect(a).toMatchObject({ id: b!.id, qdit_state: "linked" });
+    const m = qdit.state.milestones[0];
+    expect(qdit.state.milestones).toHaveLength(1);
+    expect(m.link).toMatchObject({ node_id: "h0" });
+    expect(qdit.calls.some((c) => c.startsWith("DELETE /links"))).toBe(false);
+    expect(db.node_links).toEqual([expect.objectContaining({ node_id: "h0", qdit_milestone_id: m.id, qdit_link_id: m.link!.id })]);
+  });
+
+  it("keeps the link when the rollback cannot tell whether a row holds it", async () => {
+    await linked();
+    const from = admin.from;
+    let inserted = false;
+    admin.from = ((table: string) => {
+      const q = from(table as never);
+      if (table !== "node_links") return q;
+      const insert = q.insert;
+      q.insert = ((row: Record<string, unknown>) => {
+        inserted = true;
+        db.node_links.push({ id: "gh", document_id: DOC, node_id: "h0", node_label: "A", provider: "github", repo: "a/b", number: 1 });
+        return insert(row);
+      }) as typeof q.insert;
+      if (inserted) {
+        // The read after the clash fails.
+        (q as unknown as { limit: unknown }).limit = () => Promise.resolve({ data: null, error: { message: "down" } });
+      }
+      return q;
+    }) as typeof admin.from;
+    await expect(milestoneOn("# A", "h0")).rejects.toMatchObject({ code: "HEADING_TAKEN" });
+    admin.from = from;
+    expect(qdit.state.milestones[0].link).not.toBeNull();
   });
 
   it("refuses a heading whose saved text is not the one picked (positional ids, R-03)", async () => {

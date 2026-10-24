@@ -103,7 +103,11 @@ grant select, insert, update, delete on table public.doc_project_links to servic
 -- until then every path is refused: the note route (which says so before
 -- it gets here), a delete straight through PostgREST, and the account
 -- deletion that takes a personal workspace's notes with it, which this
--- rolls back as D-39's refusals do.
+-- rolls back as D-39's refusals do. When qdit no longer shows the project
+-- (deleted, or out of the admin's sight), the admin can instead confirm
+-- forgetting the link on doqtri's side alone (unlinkProject's
+-- forgetIfGone). With the integration turned off neither is offered, and
+-- removing the row takes SQL by whoever runs the database.
 create function public.refuse_qdit_linked_document_delete()
 returns trigger
 language plpgsql
@@ -119,7 +123,7 @@ begin
   if found then
     raise exception 'note % is linked to the qdit project "%"', old.id, v_project
       using errcode = 'restrict_violation',
-            hint = 'A workspace admin must unlink the qdit project first, so qdit drops its links too.';
+            hint = 'A workspace admin must unlink the qdit project first (or forget the link, if qdit no longer has the project).';
   end if;
   return old;
 end;

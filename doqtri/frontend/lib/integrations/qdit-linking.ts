@@ -205,18 +205,26 @@ export async function linkProject(params: {
  *
  * A 404 is taken as already done only while the project is still in the
  * user's project list; otherwise qdit may still hold the link and its
- * title-locked milestones, so nothing local is removed (section 8).
+ * title-locked milestones, so nothing local is removed (section 8) unless
+ * the admin confirmed `forgetIfGone`: then doqtri forgets its side alone,
+ * since qdit gave it no way left to remove the links (the project deleted,
+ * or out of the admin's sight). Without it a linked note could never be
+ * deleted (documents_refuse_qdit_linked_delete). The link ids qdit may
+ * still hold are logged and answered as `danglingLinkIds`.
  */
 export async function unlinkProject(params: {
   admin: SupabaseClient;
   client: QditClient;
   docId: string;
-}): Promise<{ removedLinkIds: string[] }> {
+  /** Forget the link here when qdit no longer shows the project at all. */
+  forgetIfGone?: boolean;
+}): Promise<{ removedLinkIds: string[]; danglingLinkIds?: string[] }> {
   const { admin, client, docId } = params;
   const existing = await loadProjectLink(admin, docId);
   if (!existing) throw new LinkingError(404, "This note isn't linked to a qdit project.", "NOT_LINKED");
 
   let removedLinkIds: string[] = [];
+  let danglingLinkIds: string[] | undefined;
   try {
     removedLinkIds = (await client.unlinkDoc(existing.project_id, docId)).removed_link_ids ?? [];
   } catch (error) {
@@ -227,18 +235,32 @@ export async function unlinkProject(params: {
     } catch (listError) {
       throw fromQditError(listError);
     }
-    if (!stillVisible) {
+    if (!stillVisible && !params.forgetIfGone) {
       throw new LinkingError(
         409,
-        `qdit didn't confirm the unlink: you may no longer have access to ${existing.project_name}. Nothing was removed here.`,
+        `qdit didn't confirm the unlink: you may no longer have access to ${existing.project_name}. Nothing was removed here; if the project is gone for good, you can forget the link in Doqtri only.`,
         "QDIT_UNCONFIRMED",
+      );
+    }
+    if (!stillVisible) {
+      const { data: rows, error: rowsError } = await admin
+        .from("node_links")
+        .select("qdit_link_id")
+        .eq("document_id", docId)
+        .eq("provider", "qdit");
+      if (rowsError) throw new LinkingError(500, `Could not read the note's links: ${rowsError.message}`);
+      danglingLinkIds = ((rows ?? []) as { qdit_link_id: string | null }[])
+        .map((r) => r.qdit_link_id)
+        .filter((id): id is string => typeof id === "string");
+      console.warn(
+        `[qdit-linking] forgot note ${docId}'s link to qdit project ${existing.project_id} without qdit's confirmation; qdit may still hold its doc link and links ${danglingLinkIds.join(", ") || "(none recorded)"}`,
       );
     }
   }
 
   const { error } = await admin.from("doc_project_links").delete().eq("document_id", docId);
   if (error) throw new LinkingError(500, `qdit unlinked the note, but doqtri could not record it: ${error.message}`);
-  return { removedLinkIds };
+  return danglingLinkIds ? { removedLinkIds, danglingLinkIds } : { removedLinkIds };
 }
 
 // ---------------------------------------------------------------------------
@@ -416,7 +438,20 @@ export async function createMilestoneLink(params: {
     // one, D-03). A milestone this call only took over may be another
     // row's, so its link is left alone.
     if (created && error instanceof LinkingError && error.code === "HEADING_TAKEN") {
-      await client.deleteLink(milestone.link.id).catch(() => undefined);
+      // A concurrent create of the same heading gets qdit's 409 naming this
+      // milestone and records it first: then the row is the answer, and its
+      // link must stay. Only a link no doqtri row holds is taken back; if
+      // the read fails, the link is kept (adoptMilestoneLink can take over
+      // a link with no row, a deleted one cannot be brought back).
+      const { data: held, error: heldError } = await admin
+        .from("node_links")
+        .select(QDIT_LINK_COLUMNS)
+        .eq("provider", "qdit")
+        .eq("qdit_milestone_id", milestone.id)
+        .limit(1);
+      const holder = (held ?? [])[0] as QditLinkRow | undefined;
+      if (holder?.node_id === nodeId) return holder;
+      if (!heldError && !holder) await client.deleteLink(milestone.link.id).catch(() => undefined);
     }
     throw error;
   }

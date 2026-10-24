@@ -59,8 +59,8 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     headers: body === undefined ? undefined : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const payload = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok) throw new Error(payload.error ?? "qdit request failed");
+  const payload = (await res.json().catch(() => ({}))) as T & { error?: string; code?: string };
+  if (!res.ok) throw Object.assign(new Error(payload.error ?? "qdit request failed"), { code: payload.code });
   return payload;
 }
 
@@ -90,6 +90,10 @@ export function QditLinks({
   const [projects, setProjects] = useState<ProjectOption[] | null>(null);
   const [projectChoice, setProjectChoice] = useState("");
   const [confirmUnlink, setConfirmUnlink] = useState(false);
+  // qdit answered QDIT_UNCONFIRMED: the project is out of the admin's sight,
+  // so the only way left is to forget the link on doqtri's side.
+  const [forgettable, setForgettable] = useState(false);
+  const [confirmForget, setConfirmForget] = useState(false);
   const [nodeChoice, setNodeChoice] = useState("");
   const [existingId, setExistingId] = useState("");
   const [showExisting, setShowExisting] = useState(false);
@@ -189,9 +193,22 @@ export function QditLinks({
 
   const unlinkProject = () =>
     run("project", async () => {
-      await call("DELETE", `/docs/${docId}/project`);
       setConfirmUnlink(false);
+      try {
+        await call("DELETE", `/docs/${docId}/project`);
+      } catch (e) {
+        if ((e as { code?: string }).code === "QDIT_UNCONFIRMED") setForgettable(true);
+        throw e;
+      }
       toast.success("Note unlinked from qdit. Its milestones stay in qdit.");
+    });
+
+  const forgetProject = () =>
+    run("project", async () => {
+      setConfirmForget(false);
+      await call("DELETE", `/docs/${docId}/project?forget=1`);
+      setForgettable(false);
+      toast.success("Link forgotten in Doqtri. qdit may still list this note and its milestone links.");
     });
 
   const createMilestone = (milestoneId?: string) =>
@@ -306,6 +323,24 @@ export function QditLinks({
               {busy === "project" ? <Loader2Icon className="animate-spin" /> : null}
               {confirmUnlink ? "Unlink, and every milestone link" : "Unlink project"}
             </Button>
+          ) : null}
+          {role.admin && connected && forgettable ? (
+            <div className="flex w-full flex-wrap items-center justify-between gap-1.5">
+              <span className="text-muted-foreground min-w-0 flex-1 text-[11px]">
+                qdit no longer shows you this project. Forgetting removes the link from Doqtri only; qdit may
+                still list this note and its milestone links.
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant={confirmForget ? "destructive" : "ghost"}
+                className="h-6 px-1.5 text-[11px] max-lg:h-9 max-lg:px-2.5"
+                disabled={busy != null}
+                onClick={() => (confirmForget ? void forgetProject() : setConfirmForget(true))}
+              >
+                {confirmForget ? "Forget it in Doqtri" : "Forget link here"}
+              </Button>
+            </div>
           ) : null}
         </div>
       ) : connection === "loading" ? null : role.admin && connected ? (

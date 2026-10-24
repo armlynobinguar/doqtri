@@ -174,6 +174,14 @@ describe("POST and DELETE /docs/[docId]/project (D-10)", () => {
     lib.unlinkProject.mockResolvedValue({ removedLinkIds: ["a"] });
     const res = await project.DELETE(req(), docCtx());
     expect(await res.json()).toEqual({ removed_link_ids: ["a"] });
+    expect(lib.unlinkProject).toHaveBeenCalledWith(expect.objectContaining({ docId: DOC, forgetIfGone: false }));
+  });
+
+  it("forgets the link here only when asked with ?forget=1, and says what qdit may still hold", async () => {
+    lib.unlinkProject.mockResolvedValue({ removedLinkIds: [], danglingLinkIds: ["l1"] });
+    const res = await project.DELETE(new Request("http://localhost/x?forget=1", { method: "DELETE" }), docCtx());
+    expect(lib.unlinkProject).toHaveBeenCalledWith(expect.objectContaining({ forgetIfGone: true }));
+    expect(await res.json()).toEqual({ removed_link_ids: [], forgotten: true, dangling_link_ids: ["l1"] });
   });
 });
 

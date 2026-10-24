@@ -259,6 +259,19 @@ describe("deleting a note linked to qdit (WP-2.5)", () => {
     expect(adminWrites).toEqual([]);
   });
 
+  it("does not point at the ship panel while the integration is off", async () => {
+    adminRows.doc_project_links = { project_name: "Soroban payroll" };
+    vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "");
+    const off = await (await DELETE(new Request(`http://localhost/api/notes/${DOC}`, { method: "DELETE" }), ctx())).json();
+    vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "1");
+    const on = await (await DELETE(new Request(`http://localhost/api/notes/${DOC}`, { method: "DELETE" }), ctx())).json();
+    vi.unstubAllEnvs();
+    expect(off).toMatchObject({ code: "QDIT_LINKED" });
+    expect(off.error).toContain("turned off");
+    expect(off.error).not.toContain("ship panel");
+    expect(on.error).toContain("ship panel");
+  });
+
   it("deletes an unlinked note as before", async () => {
     readDocument.mockResolvedValue(null);
     const res = await DELETE(new Request(`http://localhost/api/notes/${DOC}`, { method: "DELETE" }), ctx());
