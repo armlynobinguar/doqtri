@@ -18,8 +18,8 @@ pub enum Error {
     /// `create_workspace` was given an id that is already taken.
     WorkspaceAlreadyExists = 6,
     WorkspaceNotFound = 7,
-    /// The call needs the workspace's owner (`add_admin`), or for
-    /// `remove_admin` the owner or the revoker.
+    /// The call needs the workspace's owner (`add_admin`,
+    /// `transfer_workspace`), or for `remove_admin` the owner or the revoker.
     NotWorkspaceOwner = 8,
     /// The call needs a workspace admin or its owner (`add_editor`), or for
     /// `remove_editor` also the revoker.
@@ -324,6 +324,27 @@ fn publish_ws_event(
     );
 }
 
+/// `transfer_workspace` and `admin_reassign_owner` share this: the caller has
+/// been authorized. Documents are not touched; they resolve their owner from
+/// the workspace (`load_owned_doc`). The event value is
+/// (workspace_id, new_owner, previous_owner).
+fn set_workspace_owner(
+    env: &Env,
+    workspace_id: &String,
+    mut ws: Workspace,
+    new_owner: Address,
+    action: Symbol,
+) {
+    if new_owner == ws.owner {
+        return;
+    }
+    let previous = ws.owner.clone();
+    ws.members.remove(new_owner.clone());
+    ws.owner = new_owner.clone();
+    store_workspace(env, workspace_id, &ws);
+    publish_ws_event(env, action, workspace_id, &new_owner, &previous);
+}
+
 /// `anchor` and `anchor_as` share this. `signer` has already authorized.
 /// With `as_signer` false it is the owner-only `anchor` (NotOwner, original
 /// events); with true any writer of the document may anchor it.
@@ -589,9 +610,11 @@ impl DoqtriRegistry {
     // ---- Workspaces ------------------------------------------------------
     //
     // A workspace lets several wallets write the same documents, each with
-    // its own signature. Roles: the owner (fixed at creation) manages admins;
-    // admins and the owner manage editors; every member may write the
-    // documents assigned to the workspace, which the workspace's owner owns.
+    // its own signature. Roles: the owner manages admins; admins and the
+    // owner manage editors; every member may write the documents assigned to
+    // the workspace, which the workspace's owner owns. The owner changes only
+    // by `transfer_workspace` (both owners sign) or, to recover a workspace
+    // whose owner can no longer sign, `admin_reassign_owner` (contract admin).
     // The revoker is one contract-wide server key, set by the contract
     // admin, that may only remove members (editors and admins), so a member
     // removed in the app loses chain access at once without waiting for an
@@ -754,6 +777,47 @@ impl DoqtriRegistry {
                 Ok(true)
             }
         }
+    }
+
+    /// Hands the workspace, and with it every document assigned to it, from
+    /// `owner` to `new_owner` (D-29). Both sign: the outgoing owner to give
+    /// it away, the incoming one to prove the destination is an address
+    /// someone controls, so a typo cannot strand the workspace. `owner` must
+    /// be the stored owner. A member becoming owner leaves the member list
+    /// (the owner holds no member role); the former owner keeps no role, and
+    /// the new owner may `add_admin` them back. Transferring to the current
+    /// owner changes nothing.
+    pub fn transfer_workspace(
+        env: Env,
+        workspace_id: String,
+        owner: Address,
+        new_owner: Address,
+    ) -> Result<(), Error> {
+        owner.require_auth();
+        new_owner.require_auth();
+        let ws = load_workspace(&env, &workspace_id)?;
+        if owner != ws.owner {
+            return Err(Error::NotWorkspaceOwner);
+        }
+        set_workspace_owner(&env, &workspace_id, ws, new_owner, symbol_short!("ws_xfer"));
+        Ok(())
+    }
+
+    /// Recovery (D-29): the contract admin makes `new_owner` the owner of a
+    /// workspace whose owner can no longer sign, e.g. a lost key or a
+    /// deleted account whose longest-standing admin the app promotes
+    /// (D-31). Contract admin only; `new_owner` does not sign, so the
+    /// server can carry it out, and a wrong address is fixed by calling
+    /// again. Members and documents follow as for `transfer_workspace`.
+    pub fn admin_reassign_owner(
+        env: Env,
+        workspace_id: String,
+        new_owner: Address,
+    ) -> Result<(), Error> {
+        require_admin(&env);
+        let ws = load_workspace(&env, &workspace_id)?;
+        set_workspace_owner(&env, &workspace_id, ws, new_owner, symbol_short!("ws_recov"));
+        Ok(())
     }
 
     /// Sets (or replaces) the contract-wide revoker: the app's server key,
