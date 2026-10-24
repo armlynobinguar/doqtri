@@ -3,6 +3,7 @@ import { MARKET_CONTRACT_ID } from "@/lib/stellar/config";
 import { NETWORK } from "@/lib/stellar/smart-wallet-config";
 import { readChainTemplate } from "@/lib/stellar/market-reads";
 import { TEMPLATE_ID_PATTERN } from "@/lib/market";
+import { loadAuthoredDocument } from "@/lib/workspace-docs";
 
 /**
  * Step 2 of publishing (progress/004): after `list_template` lands, check the
@@ -12,6 +13,11 @@ import { TEMPLATE_ID_PATTERN } from "@/lib/market";
  *
  * Idempotent, and it never trusts the browser: a client that skips signing
  * or signs something else is left with a draft nobody sees.
+ *
+ * The author is checked again here, as step 1 checked them (D-41): only the
+ * note's author, while still an editor of its workspace. Someone removed or
+ * demoted between signing and confirming keeps their on-chain listing,
+ * which only they can delist, but it is not shown in the gallery.
  */
 
 function fail(error: string, status: number) {
@@ -39,13 +45,26 @@ export async function POST(request: Request) {
   const admin = createSupabaseAdminClient();
   const { data: row } = await admin
     .from("market_templates")
-    .select("id, status, creator_wallet, content_hash, token, price::text, parent_id")
+    .select("id, status, creator_wallet, content_hash, token, price::text, parent_id, note_id")
     .eq("id", templateId)
     .eq("network", NETWORK)
     .eq("creator_id", user.id)
     .maybeSingle();
   if (!row) return fail("That template isn't yours.", 404);
   if (row.status !== "pending") return Response.json({ templateId, status: row.status });
+
+  // D-41, again: the note must still be theirs to sell. A note deleted since
+  // step 1 (note_id is then null) cannot be checked, so it is refused too.
+  const authored = row.note_id
+    ? await loadAuthoredDocument(admin, { userId: user.id, docId: row.note_id as string })
+    : ({ ok: false, reason: "not_found" } as const);
+  if (!authored.ok) {
+    if (authored.reason === "error") {
+      console.error(`[market/confirm] ${templateId}: author check failed: ${authored.message}`);
+      return fail("The template couldn't be checked. Try again.", 500);
+    }
+    return fail("Only the note's author, while an editor of its workspace, can publish it.", 403);
+  }
 
   let chain;
   try {
