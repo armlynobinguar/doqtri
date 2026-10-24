@@ -16,6 +16,7 @@ import {
 import {
   getDocumentHistory,
   getDocumentTtl,
+  type ChainNodeEvent,
   type DocumentHistory,
   type DocumentTtl,
 } from "@/lib/stellar/history";
@@ -75,7 +76,7 @@ async function loadAudit(docId: string): Promise<Audit> {
   const [history, ttl, labels, removals] = await Promise.all([
     removalsLoaded.then((removals) =>
       getDocumentHistory(docId, {
-        removedSigners: removals.map(({ address, removedAt }) => ({ address, removedAt })),
+        removedSigners: removals.map(({ address, removedAt, restoredAt }) => ({ address, removedAt, restoredAt })),
       }).catch(() => null),
     ),
     getDocumentTtl(docId).catch(() => null),
@@ -249,9 +250,17 @@ function Anchored({
     ...numbered.filter((v) => v.version !== doc.version),
     { version: doc.version, contentHash: doc.contentHash },
   ];
+  const lateSigned = (e: { signer: string | null; closedAt: string }) =>
+    e.signer != null && removalInEffect(e.signer, e.closedAt, removals) != null;
+  // nodeEvents holds every status, including ones a later status replaced.
   const signedAfterRemoval =
-    history != null &&
-    [...history.versions, ...history.nodes].some((e) => removalInEffect(e.signer, e.closedAt, removals));
+    history != null && [...history.versions, ...history.nodeEvents].some(lateSigned);
+  // Per node: replaced statuses a removed wallet signed, so they stay visible.
+  const lateReplaced = new Map<string, ChainNodeEvent[]>();
+  for (const event of history?.nodeEvents ?? []) {
+    if (!lateSigned(event) || history?.nodes.includes(event)) continue;
+    lateReplaced.set(event.nodeId, [...(lateReplaced.get(event.nodeId) ?? []), event]);
+  }
 
   return (
     <>
@@ -331,11 +340,20 @@ function Anchored({
             above is read directly from the contract.
           </p>
         ) : null}
+        {history?.partial ? (
+          <p data-testid="history-partial" className="text-muted-foreground text-[13px]">
+            Writes by the note&apos;s editors are found by reading a bounded stretch of the
+            ledger, and that read stopped before its end just now, so a recent write by an
+            editor may be missing below.
+          </p>
+        ) : null}
         {signedAfterRemoval ? (
           <p data-testid="signed-after-removal" className="text-warning text-[13px]">
             Some entries on this page were signed by a wallet after Doqtri had removed it from
-            this note&apos;s workspace: the ledger accepted them before the removal reached the
-            chain. They are marked &quot;Signed after removal&quot;.
+            this note&apos;s workspace. They are marked &quot;Signed after removal&quot;.{" "}
+            {history?.workspace
+              ? "The ledger accepted them because the removal had not yet reached the note's on-chain editor list."
+              : "This note has no on-chain editor list, so the ledger only checks that the note's owner signed; the removal is Doqtri's record."}
           </p>
         ) : null}
         {history && history.versions.length > 0 ? (
@@ -397,6 +415,29 @@ function Anchored({
                       closedAt={node.closedAt}
                       removals={removals}
                     />
+                    {(lateReplaced.get(node.nodeId) ?? []).map((event) => (
+                      <span
+                        key={event.txHash}
+                        data-testid="replaced-after-removal"
+                        className="text-muted-foreground mt-1 block text-[12px]"
+                      >
+                        Earlier: {event.status} on {formatDate(event.closedAt)} ·{" "}
+                        <a
+                          className="text-primary underline-offset-2 hover:underline"
+                          href={expertTxUrl(event.txHash)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          tx →
+                        </a>
+                        <Signer
+                          signer={event.signer}
+                          fromOwner={event.signerFrom === "owner"}
+                          closedAt={event.closedAt}
+                          removals={removals}
+                        />
+                      </span>
+                    ))}
                   </span>
                   <span className="text-muted-foreground inline-flex items-center gap-2 text-[12px]">
                     <StatusTag tone={statusTone(node.status)}>{node.status}</StatusTag>
@@ -432,7 +473,10 @@ function Anchored({
         <div className="grid content-start gap-1.5">
           <h2 className="eyebrow text-foreground/80">What this proves</h2>
           <ul className="text-muted-foreground list-disc space-y-1 pl-4">
-            <li>The wallet shown signed this exact hash at the time shown.</li>
+            <li>
+              The wallet shown signed this exact hash at the time shown (where none is shown,
+              the note&apos;s owner at that time did).
+            </li>
             <li>A copy that matches has not changed by a single byte since.</li>
             <li>Each build status was recorded by the wallet shown, in order.</li>
           </ul>
@@ -463,7 +507,9 @@ function Anchored({
 
 /**
  * Who signed an entry, and a flag when Doqtri had removed that wallet from
- * the note's workspace before the entry's ledger closed.
+ * the note's workspace before the entry's ledger closed. An owner-only
+ * entry whose signing wallet could not be read (`signer` null) names the
+ * role, not the current owner, who may not have owned the note then.
  */
 function Signer({
   signer,
@@ -471,22 +517,28 @@ function Signer({
   closedAt,
   removals,
 }: {
-  signer: string;
+  signer: string | null;
   fromOwner: boolean;
   closedAt: string;
   removals: SignerRemoval[];
 }) {
-  const removal = removalInEffect(signer, closedAt, removals);
+  const removal = signer ? removalInEffect(signer, closedAt, removals) : null;
   return (
     <span className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]">
       <span className="inline-flex items-center gap-1">
-        signed by <SignerAddress address={signer} owner={fromOwner} />
+        {signer ? (
+          <>
+            signed by <SignerAddress address={signer} owner={fromOwner} />
+          </>
+        ) : (
+          <span data-testid="signer-owner-at-time">signed by the note&apos;s owner at the time</span>
+        )}
       </span>
       {removal ? (
         <StatusTag
           tone="danger"
           data-testid="signed-after-removal-entry"
-          title={`Removed from the workspace ${formatDate(removal.removedAt)}, before this entry was signed`}
+          title={`Doqtri removed this wallet from the note's workspace ${formatDate(removal.removedAt)}, before this entry was signed`}
         >
           Signed after removal
         </StatusTag>
