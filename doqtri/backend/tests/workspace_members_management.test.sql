@@ -13,11 +13,13 @@
 --   x  outsider@example.com in no workspace but their own, no wallet
 --   w  a wallet account (G...), in no workspace yet
 --   y  late@example.com     invited later
+--   n  newcomer@example.com signs up after being invited
+--   g  guest@example.com    an editor of x's personal workspace
 
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(112);
+select plan(135);
 
 insert into auth.users (id, email) values
   ('00000000-0000-4000-8000-0000000000a1', 'owner@example.com'),
@@ -65,6 +67,7 @@ select ok(
                         'accept_workspace_invite', 'cancel_workspace_invite', 'set_workspace_member_role',
                         'remove_workspace_member', 'propose_workspace_transfer', 'cancel_workspace_transfer',
                         'accept_workspace_transfer', 'claim_workspace_chain_jobs',
+                        'invite_identifier', 'my_invite_identifiers',
                         'handle_deleted_user_workspaces')),
   'every new security definer function pins search_path to empty');
 select is(
@@ -75,8 +78,9 @@ select is(
                         'workspace_pending_invites', 'my_workspace_invites', 'invite_workspace_member',
                         'accept_workspace_invite', 'cancel_workspace_invite', 'set_workspace_member_role',
                         'remove_workspace_member', 'propose_workspace_transfer', 'cancel_workspace_transfer',
-                        'accept_workspace_transfer', 'claim_workspace_chain_jobs')),
-  17, 'and they all exist');
+                        'accept_workspace_transfer', 'claim_workspace_chain_jobs',
+                        'invite_identifier', 'my_invite_identifiers')),
+  19, 'and they all exist');
 
 select ok(not has_function_privilege('anon',
   'public.invite_workspace_member(uuid, text, public.workspace_role)', 'execute'),
@@ -95,6 +99,8 @@ select ok(not has_function_privilege('authenticated',
   'authenticated cannot claim chain jobs');
 select ok(not has_function_privilege('authenticated', 'public.find_account(text)', 'execute'),
   'authenticated cannot look accounts up directly');
+select ok(not has_function_privilege('authenticated', 'public.account_label(uuid)', 'execute'),
+  'nor read an account''s label directly');
 select ok(not has_function_privilege('authenticated', 'public.enqueue_chain_revocation(uuid, uuid)', 'execute'),
   'authenticated cannot queue chain jobs directly');
 select ok(not has_function_privilege('authenticated', 'public.account_chain_address(uuid, text)', 'execute'),
@@ -112,8 +118,8 @@ select throws_ok(
      values ('11000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-0000000000a5', 'viewer') $$,
   '42501', null, 'not even the owner inserts a member: invites only');
 select throws_ok(
-  $$ insert into public.workspace_invites (workspace_id, invitee_id, role)
-     values ('11000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-0000000000a5', 'viewer') $$,
+  $$ insert into public.workspace_invites (workspace_id, invitee, role)
+     values ('11000000-0000-4000-8000-000000000001', 'outsider@example.com', 'viewer') $$,
   '42501', null, 'nor an invite, except through invite_workspace_member');
 
 
@@ -167,16 +173,16 @@ select throws_ok(
 select throws_ok(
   $$ select public.invite_workspace_member('11000000-0000-4000-8000-000000000001', 'not an address', 'viewer') $$,
   '22023', null, 'a malformed identifier is refused');
-select throws_ok(
+select lives_ok(
   $$ select public.invite_workspace_member('11000000-0000-4000-8000-000000000001', 'nobody@example.com', 'viewer') $$,
-  'P0002', null, 'an unknown email is refused');
+  'an email no account uses is invited all the same: the answer does not say whether one exists');
 select throws_ok(
   $$ select public.invite_workspace_member('11000000-0000-4000-8000-000000000001',
        lower('G' || repeat('W', 55)) || '@stellar.doqtri.local', 'viewer') $$,
   '22023', null, 'a wallet account''s synthetic email is not an address anyone types');
-select throws_ok(
+select lives_ok(
   $$ select public.invite_workspace_member('11000000-0000-4000-8000-000000000001', 'G' || repeat('Z', 55), 'viewer') $$,
-  'P0002', null, 'an unknown wallet is refused');
+  'and so is a wallet nobody uses');
 select throws_ok(
   $$ select public.invite_workspace_member('11000000-0000-4000-8000-000000000001', 'editor@example.com', 'viewer') $$,
   '23505', null, 'a member is not invited again');
@@ -191,10 +197,10 @@ select lives_ok(
   $$ select public.invite_workspace_member('11000000-0000-4000-8000-000000000001', 'late@example.com', 'editor') $$,
   'inviting again replaces the open invite');
 select results_eq(
-  $$ select invitee_id, role::text from public.workspace_invites
-      where workspace_id = '11000000-0000-4000-8000-000000000001' $$,
-  $$ values ('00000000-0000-4000-8000-0000000000a7'::uuid, 'editor'::text) $$,
-  'one invite, with the latest role');
+  $$ select role::text from public.workspace_invites
+      where workspace_id = '11000000-0000-4000-8000-000000000001' and invitee = 'late@example.com' $$,
+  $$ values ('editor'::text) $$,
+  'one invite per address, with the latest role');
 select lives_ok(
   $$ select public.invite_workspace_member('11000000-0000-4000-8000-000000000001', 'G' || repeat('W', 55), 'admin') $$,
   'an admin invites a wallet account by its address, as admin');
@@ -203,8 +209,13 @@ select lives_ok(
   'and the outsider, as viewer');
 select results_eq(
   $$ select label, role::text from public.workspace_pending_invites('11000000-0000-4000-8000-000000000001') order by label $$,
-  $$ values ('G' || repeat('W', 55), 'admin'::text), ('Late@Example.com', 'editor'), ('outsider@example.com', 'viewer') $$,
-  'admins list the open invites, a wallet account by its address');
+  $$ values ('G' || repeat('W', 55), 'admin'::text), ('G' || repeat('Z', 55), 'viewer'),
+            ('late@example.com', 'editor'), ('nobody@example.com', 'viewer'), ('outsider@example.com', 'viewer') $$,
+  'admins list the open invites by what was typed, with or without an account behind it');
+select lives_ok(
+  $$ select public.cancel_workspace_invite(i.id) from public.workspace_invites i
+      where i.invitee in ('nobody@example.com', 'G' || repeat('Z', 55)) $$,
+  'the admin withdraws the two nobody can accept yet');
 
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a3","role":"authenticated"}';
 select is((select count(*)::int from public.workspace_pending_invites('11000000-0000-4000-8000-000000000001')),
@@ -227,7 +238,7 @@ select is((select count(*)::int from public.workspaces where id = '11000000-0000
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a5","role":"authenticated"}';
 select throws_ok(
   format($$ select public.accept_workspace_invite(%L) $$,
-    (select id from public.workspace_invites where invitee_id = '00000000-0000-4000-8000-0000000000a7')),
+    (select id from public.workspace_invites where invitee = 'late@example.com')),
   'P0002', null, 'nobody accepts someone else''s invite');
 select is((select count(*)::int from public.workspace_invites), 1,
   'the outsider reads only their own invite');
@@ -263,7 +274,7 @@ select throws_ok(
   'P0002', null, 'an editor cannot withdraw an invite');
 reset role;
 create temp table w_invite as
-  select id from public.workspace_invites where invitee_id = '00000000-0000-4000-8000-0000000000a6';
+  select id from public.workspace_invites where invitee = 'G' || repeat('W', 55);
 grant select on w_invite to authenticated;
 set local role authenticated;
 select throws_ok(
@@ -356,8 +367,8 @@ select lives_ok(
        '00000000-0000-4000-8000-0000000000a2', 'editor') $$,
   'the owner demotes the admin');
 select results_eq(
-  $$ select invitee_id from public.workspace_invites where workspace_id = '11000000-0000-4000-8000-000000000001' $$,
-  $$ values ('00000000-0000-4000-8000-0000000000a6'::uuid) $$,
+  $$ select invitee from public.workspace_invites where workspace_id = '11000000-0000-4000-8000-000000000001' $$,
+  $$ values ('G' || repeat('W', 55)) $$,
   'the invites the demoted admin sent are withdrawn; the owner''s stay');
 select lives_ok(
   $$ select public.cancel_workspace_invite((select id from public.workspace_invites
@@ -403,6 +414,11 @@ select is((select count(*)::int from public.workspace_chain_jobs), 2,
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a3","role":"authenticated"}';
 select is((select count(*)::int from public.workspace_chain_jobs), 1,
   'the removed member sees their own pending removal');
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a5","role":"authenticated"}';
+select is((select count(*)::int from public.workspace_chain_jobs) + (select count(*)::int from public.workspaces
+            where id = '11000000-0000-4000-8000-000000000001'),
+  0, 'an outsider sees neither the workspace nor its jobs, so chain-sync refuses them');
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a3","role":"authenticated"}';
 select throws_ok(
   $$ update public.workspace_chain_jobs set status = 'done' $$,
   '42501', null, 'but no client changes a job');
@@ -557,15 +573,86 @@ reset role;
 
 
 -- ---------------------------------------------------------------------------
+-- Invites say nothing about who holds an address
+-- ---------------------------------------------------------------------------
+
+-- x, a stranger to everyone, makes a workspace (so is its admin) and
+-- invites the editor's passkey wallet, whose address is public on-chain.
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a5","role":"authenticated"}';
+select lives_ok(
+  $$ select public.create_workspace('Probe', 'probe-wp15') $$,
+  'anyone can create a team workspace, and so be its admin');
+reset role;
+create temp table probe as select id from public.workspaces where slug = 'probe-wp15';
+grant select on probe to authenticated;
+set local role authenticated;
+select lives_ok(
+  $$ select public.invite_workspace_member((select id from probe), 'C' || repeat('E', 55), 'viewer') $$,
+  'the stranger invites a passkey wallet they saw on-chain');
+select results_eq(
+  $$ select label from public.workspace_pending_invites((select id from probe)) $$,
+  $$ values ('C' || repeat('E', 55)) $$,
+  'and reads back only the address they typed');
+select is(
+  (select count(*)::int from public.workspace_invites
+    where workspace_id = (select id from probe) and invitee like '%@%'),
+  0, 'not the email of the account behind it, from the table either');
+
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a3","role":"authenticated"}';
+select results_eq(
+  $$ select workspace_name, invited_by from public.my_workspace_invites() $$,
+  $$ values ('Probe'::text, 'outsider@example.com'::text) $$,
+  'the wallet''s holder finds the invite');
+select lives_ok(
+  $$ select public.accept_workspace_invite((select id from public.my_workspace_invites())) $$,
+  'and accepts it');
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a5","role":"authenticated"}';
+select is(
+  (select label from public.workspace_roster((select id from probe), 'testnet') where role = 'viewer'),
+  'editor@example.com', 'only once they have joined does the roster name them');
+
+-- An invite waits for whoever signs in with its address.
+select lives_ok(
+  $$ select public.invite_workspace_member((select id from probe), 'Newcomer@Example.com', 'editor') $$,
+  'an invite can go to an email no account uses yet');
+reset role;
+insert into auth.users (id, email) values ('00000000-0000-4000-8000-0000000000a8', 'newcomer@example.com');
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a8","role":"authenticated"}';
+select results_eq(
+  $$ select workspace_name, role::text from public.my_workspace_invites() $$,
+  $$ values ('Probe'::text, 'editor'::text) $$,
+  'whoever signs up with that email finds it');
+
+-- Nobody floods strangers with invites.
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-0000000000a5","role":"authenticated"}';
+select lives_ok(
+  $$ select count(public.invite_workspace_member((select id from probe), 'spam' || g || '@example.com', 'viewer'))
+       from generate_series(1, 99) g $$,
+  'an admin has up to 100 invites sent in a day open at once');
+select throws_ok(
+  $$ select public.invite_workspace_member((select id from probe), 'one-more@example.com', 'viewer') $$,
+  '54000', null, 'and no more');
+select lives_ok(
+  $$ select public.invite_workspace_member((select id from probe), 'spam1@example.com', 'editor') $$,
+  'changing an open invite is not another one');
+reset role;
+
+
+-- ---------------------------------------------------------------------------
 -- Deleting an account (D-31): handover and revocations
 -- ---------------------------------------------------------------------------
 
--- beta: w (wallet account, G...) owns it; o is its admin, vw an editor
--- with no wallet. Deleting w hands beta to o and queues admin_reassign_owner.
+-- beta: w (wallet account, G...) owns it; o, ad and ed are its admins, in
+-- that order of succession (same joined_at, then user id). Deleting w hands
+-- beta to o and queues admin_reassign_owner.
 insert into public.workspaces (id, name, slug, created_by) values
   ('11000000-0000-4000-8000-000000000002', 'Beta', 'beta-wp15', '00000000-0000-4000-8000-0000000000a6');
 insert into public.workspace_members (workspace_id, user_id, role) values
-  ('11000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-0000000000a1', 'admin');
+  ('11000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-0000000000a1', 'admin'),
+  ('11000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-0000000000a2', 'admin'),
+  ('11000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-0000000000a3', 'admin');
 -- and w edits acme (as an accepted invite would leave it)
 insert into public.workspace_members (workspace_id, user_id, role) values
   ('11000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-0000000000a6', 'editor');
@@ -587,6 +674,59 @@ select results_eq(
       where workspace_id = '11000000-0000-4000-8000-000000000001' and address like 'G%' $$,
   $$ values ('revoke'::text, ('G' || repeat('W', 55))::text, null::text) $$,
   'the deleted account''s editor role elsewhere is queued for revocation, by its Stellar account');
+
+-- The heir deletes their account before the chain caught up: the handover
+-- is still pending, as it stays while REGISTRY_EDITORS is off. (A passkey
+-- wallet's record restricts deleting its account, so the heirs' records
+-- go first, as the operator deleting an account clears them.)
+delete from public.smart_wallets where user_id in ('00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000a2');
+select lives_ok(
+  $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000a1' $$,
+  'the heir deletes their own account while the handover to them is still pending');
+select is((select role::text from public.workspace_members
+            where workspace_id = '11000000-0000-4000-8000-000000000002' and user_id = '00000000-0000-4000-8000-0000000000a2'),
+  'owner', 'the next admin takes beta over');
+select results_eq(
+  $$ select user_id, status, attempts from public.workspace_chain_jobs
+      where workspace_id = '11000000-0000-4000-8000-000000000002' and kind = 'reassign_owner' $$,
+  $$ values ('00000000-0000-4000-8000-0000000000a2'::uuid, 'pending'::text, 0) $$,
+  'and the open handover now names them, not the deleted heir');
+
+-- This time the handover waits for the product owner when its heir goes.
+-- ad also owns acme, which needs an admin to pass to: x.
+update public.workspace_chain_jobs set status = 'needs_product_owner', attempts = 3
+ where workspace_id = '11000000-0000-4000-8000-000000000002' and kind = 'reassign_owner';
+insert into public.workspace_members (workspace_id, user_id, role) values
+  ('11000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-0000000000a5', 'admin');
+select lives_ok(
+  $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000a2' $$,
+  'the second heir deletes their account while the handover waits for the product owner');
+select results_eq(
+  $$ select user_id, status, attempts from public.workspace_chain_jobs
+      where workspace_id = '11000000-0000-4000-8000-000000000002' and kind = 'reassign_owner' $$,
+  $$ values ('00000000-0000-4000-8000-0000000000a3'::uuid, 'pending'::text, 0) $$,
+  'the one handover is re-pointed to the third admin and tried afresh');
+select results_eq(
+  $$ select user_id from public.workspace_chain_jobs
+      where workspace_id = '11000000-0000-4000-8000-000000000001' and kind = 'reassign_owner' $$,
+  $$ values ('00000000-0000-4000-8000-0000000000a5'::uuid) $$,
+  'and acme''s own handover goes to its admin');
+
+-- An editor of someone else's personal workspace loses that role on-chain too.
+insert into auth.users (id, email) values ('00000000-0000-4000-8000-0000000000a9', 'guest@example.com');
+insert into public.wallet_accounts (address, user_id) values ('G' || repeat('G', 55), '00000000-0000-4000-8000-0000000000a9');
+insert into public.workspace_members (workspace_id, user_id, role)
+  select w.id, '00000000-0000-4000-8000-0000000000a9', 'editor' from public.workspaces w
+   where w.is_personal and w.created_by = '00000000-0000-4000-8000-0000000000a5';
+select lives_ok(
+  $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000a9' $$,
+  'an editor of x''s personal workspace deletes their account');
+select results_eq(
+  $$ select j.kind, j.address from public.workspace_chain_jobs j
+       join public.workspaces w on w.id = j.workspace_id
+      where w.is_personal and w.created_by = '00000000-0000-4000-8000-0000000000a5' $$,
+  $$ values ('revoke'::text, ('G' || repeat('G', 55))::text) $$,
+  'and their editor role there is queued for revocation, like anywhere else');
 
 select * from finish();
 rollback;

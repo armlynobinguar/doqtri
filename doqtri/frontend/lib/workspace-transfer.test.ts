@@ -94,6 +94,17 @@ describe("acceptTransfer (D-29)", () => {
     expect(d.log).toEqual([]);
   });
 
+  it("answers anyone else 404, even with the new owner's own signature, touching neither chain nor database", async () => {
+    const d = deps();
+    const heirSigned = await approval(heir);
+    for (const caller of ["u-stranger", "u-owner"]) {
+      await expect(acceptTransfer(await proposal(), caller, heirSigned, d)).rejects.toMatchObject({ name: "RelayRejection", status: 404 });
+    }
+    // Off-chain, where no signature is checked at all, still only the new owner.
+    await expect(acceptTransfer(await proposal(), "u-stranger", undefined, deps({ editors: false }))).rejects.toMatchObject({ status: 404 });
+    expect(d.log).toEqual([]);
+  });
+
   it("refuses without the new owner's signature, touching neither chain nor database", async () => {
     const d = deps();
     await expect(acceptTransfer(await proposal(), "u-heir", undefined, d)).rejects.toThrow(/new owner's approval is missing/);

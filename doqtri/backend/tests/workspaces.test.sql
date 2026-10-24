@@ -772,7 +772,7 @@ select lives_ok(
   $$ select public.accept_workspace_invite(
        (select id from public.workspace_invites
          where workspace_id = '10000000-0000-4000-8000-000000000002'
-           and invitee_id = '00000000-0000-4000-8000-000000000001')) $$,
+           and invitee = 'owner@example.com')) $$,
   'and o accepts');
 reset role;
 select is(

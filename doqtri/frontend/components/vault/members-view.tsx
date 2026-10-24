@@ -244,7 +244,7 @@ export function MembersView({
         setInviteInput("");
         await reload();
       },
-      "Invite sent. They join once they accept it.",
+      "Invite sent. Whoever signs in with that email or wallet sees it and joins once they accept it.",
     );
 
   const changeRole = (member: RosterMember, role: WorkspaceRole) =>

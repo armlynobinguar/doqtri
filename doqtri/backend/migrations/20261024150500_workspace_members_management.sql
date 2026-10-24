@@ -77,28 +77,65 @@ create policy "workspace members - update as admin" on public.workspace_members
 -- Invites
 -- ---------------------------------------------------------------------------
 
--- One open invite per person per workspace; inviting again replaces it.
--- Deleting the workspace or either account deletes the invite.
+-- An invite is addressed to what the admin typed (`invitee`: a lowercased
+-- email, or a wallet address), not to an account: whoever signs in holding
+-- that email or wallet sees it and may accept it. Nothing about an invite
+-- tells the inviter whether an account behind it exists, or whose: wallet
+-- addresses are public on-chain, and before WP-1.5 nothing mapped one to
+-- an account's email for anyone but its holder. The inviter sees back only
+-- what they typed, and an account's email only once it has joined.
+--
+-- One open invite per identifier per workspace; inviting again replaces it.
+-- Deleting the workspace deletes its invites.
 create table public.workspace_invites (
   id           uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references public.workspaces(id) on delete cascade,
-  invitee_id   uuid not null references auth.users(id) on delete cascade,
+  invitee      text not null check (
+                 char_length(invitee) <= 320
+                 and (invitee ~ '^[GC][A-Z2-7]{55}$'
+                      or (invitee ~ '^[^@\s]+@[^@\s]+$' and invitee = lower(invitee)))
+               ),
   role         public.workspace_role not null check (role <> 'owner'),
   invited_by   uuid references auth.users(id) on delete set null,
   created_at   timestamptz not null default now(),
-  unique (workspace_id, invitee_id)
+  unique (workspace_id, invitee)
 );
 
-create index workspace_invites_invitee_idx on public.workspace_invites (invitee_id);
+create index workspace_invites_invitee_idx on public.workspace_invites (invitee);
+create index workspace_invites_invited_by_idx on public.workspace_invites (invited_by, created_at);
 
 alter table public.workspace_invites enable row level security;
 
--- The invitee sees their own invites; admins and owners see their
--- workspace's. Every write goes through the functions below.
+-- Every identifier the caller can be invited by: their email (not a wallet
+-- account's synthetic one), their Stellar account and their passkey
+-- wallets. Only ever the caller's own.
+create function public.my_invite_identifiers()
+returns text[]
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select coalesce(array_agg(x.identifier), '{}'::text[])
+    from (
+      select lower(u.email) as identifier
+        from auth.users u
+       where u.id = (select auth.uid())
+         and u.email is not null
+         and lower(u.email) not like '%@stellar.doqtri.local'
+      union
+      select a.address from public.wallet_accounts a where a.user_id = (select auth.uid())
+      union
+      select s.address from public.smart_wallets s where s.user_id = (select auth.uid())
+    ) x;
+$$;
+
+-- The invitee sees the invites addressed to them; admins and owners see
+-- their workspace's. Every write goes through the functions below.
 create policy "workspace invites - select as invitee or admin" on public.workspace_invites
   for select to authenticated
   using (
-    invitee_id = (select auth.uid())
+    invitee = any (public.my_invite_identifiers())
     or public.is_workspace_member(workspace_id, 'admin')
   );
 
@@ -166,12 +203,14 @@ create table public.workspace_chain_jobs (
   next_attempt_at timestamptz not null default now(),
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now(),
-  check (kind <> 'revoke' or address is not null),
-  check (kind <> 'reassign_owner' or user_id is not null or status <> 'pending')
+  check (kind <> 'revoke' or address is not null)
 );
 
 -- One open job per wallet per workspace, so a removal queued twice (the
--- account-deletion trigger and the cascade after it) is one job.
+-- account-deletion trigger and the cascade after it) is one job, and one
+-- open handover per workspace, which a later handover re-points to its new
+-- heir (handle_deleted_user_workspaces). A handover whose heir's account is
+-- gone is left with no user_id; the server fails it rather than guess.
 create unique index workspace_chain_jobs_open_idx
   on public.workspace_chain_jobs (workspace_id, kind, coalesce(address, ''), coalesce(network, ''))
   where status in ('pending', 'needs_product_owner');
@@ -273,10 +312,34 @@ create trigger workspace_members_chain_sync
 -- Who is who
 -- ---------------------------------------------------------------------------
 
--- The account an invite names: an email address, a Stellar account (G...)
--- or a passkey wallet (C...). Wallet accounts sign in with a synthetic
--- address (lib/wallet-auth.ts) that nobody types, so an email lookup never
--- matches one; their G address does. Null when nothing matches.
+-- What an invite is addressed to, from what an admin typed: an email
+-- address (trimmed, lowercased), a Stellar account (G...) or a passkey
+-- wallet (C...). Wallet accounts sign in with a synthetic address
+-- (lib/wallet-auth.ts) that nobody types; their G address is how they are
+-- invited. Anything else is refused (22023).
+create function public.invite_identifier(p_identifier text)
+returns text
+language plpgsql
+immutable
+security definer
+set search_path = ''
+as $$
+declare
+  v_id text := btrim(coalesce(p_identifier, ''));
+begin
+  if v_id ~ '^[GC][A-Z2-7]{55}$' then
+    return v_id;
+  elsif v_id ~ '^[^@\s]+@[^@\s]+$' and char_length(v_id) <= 320
+        and lower(v_id) not like '%@stellar.doqtri.local' then
+    return lower(v_id);
+  end if;
+  raise exception 'Enter an email address or a Stellar wallet address.'
+    using errcode = '22023';
+end;
+$$;
+
+-- The account an identifier names, or null. Internal: it maps public
+-- wallet addresses to accounts, so no client ever calls it.
 create function public.find_account(p_identifier text)
 returns uuid
 language plpgsql
@@ -285,18 +348,15 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_id   text := btrim(coalesce(p_identifier, ''));
+  v_id   text := public.invite_identifier(p_identifier);
   v_user uuid;
 begin
-  if v_id ~ '^G[A-Z2-7]{55}$' then
+  if v_id ~ '^G' then
     select a.user_id into v_user from public.wallet_accounts a where a.address = v_id;
-  elsif v_id ~ '^C[A-Z2-7]{55}$' then
+  elsif v_id ~ '^C' then
     select s.user_id into v_user from public.smart_wallets s where s.address = v_id limit 1;
-  elsif v_id ~ '^[^@\s]+@[^@\s]+$' and lower(v_id) not like '%@stellar.doqtri.local' then
-    select u.id into v_user from auth.users u where lower(u.email) = lower(v_id) limit 1;
   else
-    raise exception 'Enter an email address or a Stellar wallet address.'
-      using errcode = '22023';
+    select u.id into v_user from auth.users u where lower(u.email) = v_id limit 1;
   end if;
   return v_user;
 end;
@@ -354,22 +414,24 @@ as $$
    order by public.workspace_role_rank(m.role) desc, m.joined_at, m.user_id;
 $$;
 
--- Open invites of a workspace, for its admins and owners.
+-- Open invites of a workspace, for its admins and owners, each labelled
+-- with what the admin typed and nothing about any account behind it.
 create function public.workspace_pending_invites(p_workspace_id uuid)
-returns table (id uuid, invitee_id uuid, role public.workspace_role, created_at timestamptz, label text)
+returns table (id uuid, role public.workspace_role, created_at timestamptz, label text)
 language sql
 stable
 security definer
 set search_path = ''
 as $$
-  select i.id, i.invitee_id, i.role, i.created_at, public.account_label(i.invitee_id)
+  select i.id, i.role, i.created_at, i.invitee
     from public.workspace_invites i
    where i.workspace_id = p_workspace_id
      and public.is_workspace_member(p_workspace_id, 'admin')
    order by i.created_at;
 $$;
 
--- The caller's own open invites, with the workspace's name (which they
+-- The caller's own open invites (to any of their identifiers, in
+-- workspaces they are not in yet), with the workspace's name (which they
 -- cannot read yet) and who invited them.
 create function public.my_workspace_invites()
 returns table (id uuid, workspace_id uuid, workspace_name text, role public.workspace_role,
@@ -382,7 +444,11 @@ as $$
   select i.id, i.workspace_id, w.name, i.role, public.account_label(i.invited_by), i.created_at
     from public.workspace_invites i
     join public.workspaces w on w.id = i.workspace_id
-   where i.invitee_id = (select auth.uid())
+   where i.invitee = any (public.my_invite_identifiers())
+     and not exists (
+       select 1 from public.workspace_members m
+        where m.workspace_id = i.workspace_id and m.user_id = (select auth.uid())
+     )
    order by i.created_at;
 $$;
 
@@ -391,10 +457,18 @@ $$;
 -- Member management
 -- ---------------------------------------------------------------------------
 
--- Invites the account `p_identifier` names into the workspace as `p_role`.
--- Admins and owners only; never as owner. Inviting someone with an open
--- invite replaces it. Errors: 42501 not allowed, 22023 owner or a malformed
--- identifier, P0002 no such account, 23505 already a member.
+-- Invites whoever holds `p_identifier` (an email or a wallet address) into
+-- the workspace as `p_role`. Admins and owners only; never as owner.
+-- Inviting the same identifier again replaces its open invite.
+--
+-- It answers the same whether or not an account holds the identifier: the
+-- invite waits for whoever signs in with it. The one exception is someone
+-- already in the workspace (23505), whom the admin sees on the roster
+-- anyway. An inviter has at most 100 invites sent in the last day open at
+-- once (54000), so nobody floods strangers with them.
+--
+-- Errors: 42501 not allowed, 22023 owner or a malformed identifier, 23505
+-- already a member, 54000 too many open invites.
 create function public.invite_workspace_member(
   p_workspace_id uuid,
   p_identifier   text,
@@ -406,8 +480,10 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_user   uuid;
-  v_invite uuid;
+  v_uid     uuid := (select auth.uid());
+  v_invitee text;
+  v_user    uuid;
+  v_invite  uuid;
 begin
   if not public.is_workspace_member(p_workspace_id, 'admin') then
     raise exception 'Only an admin of this workspace can invite people.'
@@ -418,29 +494,36 @@ begin
       using errcode = '22023';
   end if;
 
-  v_user := public.find_account(p_identifier);
-  if v_user is null then
-    raise exception 'No doqtri account uses that email or wallet.'
-      using errcode = 'P0002';
-  end if;
-  if exists (
+  v_invitee := public.invite_identifier(p_identifier);
+  v_user := public.find_account(v_invitee);
+  if v_user is not null and exists (
     select 1 from public.workspace_members m
      where m.workspace_id = p_workspace_id and m.user_id = v_user
   ) then
     raise exception 'They are already a member of this workspace.'
       using errcode = '23505';
   end if;
+  if (select count(*) from public.workspace_invites i
+       where i.invited_by = v_uid
+         and i.created_at > now() - interval '1 day'
+         and not (i.workspace_id = p_workspace_id and i.invitee = v_invitee)) >= 100
+  then
+    raise exception 'You have sent too many invites today. Withdraw some, or try again tomorrow.'
+      using errcode = '54000';
+  end if;
 
-  insert into public.workspace_invites as i (workspace_id, invitee_id, role, invited_by)
-  values (p_workspace_id, v_user, p_role, (select auth.uid()))
-  on conflict (workspace_id, invitee_id) do update
+  insert into public.workspace_invites as i (workspace_id, invitee, role, invited_by)
+  values (p_workspace_id, v_invitee, p_role, v_uid)
+  on conflict (workspace_id, invitee) do update
     set role = excluded.role, invited_by = excluded.invited_by, created_at = now()
   returning i.id into v_invite;
   return v_invite;
 end;
 $$;
 
--- The invitee joins with the invite's role. Returns the workspace id.
+-- The invitee joins with the invite's role, and any other invite of theirs
+-- to the same workspace (by another of their identifiers) closes. Returns
+-- the workspace id.
 create function public.accept_workspace_invite(p_invite_id uuid)
 returns uuid
 language plpgsql
@@ -448,10 +531,11 @@ security definer
 set search_path = ''
 as $$
 declare
+  v_ids    text[] := public.my_invite_identifiers();
   v_invite public.workspace_invites;
 begin
   delete from public.workspace_invites i
-   where i.id = p_invite_id and i.invitee_id = (select auth.uid())
+   where i.id = p_invite_id and i.invitee = any (v_ids)
   returning * into v_invite;
   if v_invite.id is null then
     raise exception 'That invite is no longer open.'
@@ -459,8 +543,10 @@ begin
   end if;
 
   insert into public.workspace_members (workspace_id, user_id, role)
-  values (v_invite.workspace_id, v_invite.invitee_id, v_invite.role)
+  values (v_invite.workspace_id, (select auth.uid()), v_invite.role)
   on conflict (workspace_id, user_id) do nothing;
+  delete from public.workspace_invites i
+   where i.workspace_id = v_invite.workspace_id and i.invitee = any (v_ids);
   return v_invite.workspace_id;
 end;
 $$;
@@ -475,7 +561,7 @@ as $$
 begin
   delete from public.workspace_invites i
    where i.id = p_invite_id
-     and (i.invitee_id = (select auth.uid())
+     and (i.invitee = any (public.my_invite_identifiers())
           or public.is_workspace_member(i.workspace_id, 'admin'));
   if not found then
     raise exception 'That invite is no longer open.'
@@ -732,12 +818,17 @@ $$;
 --
 -- WP-1.2's version, with two additions:
 --
--- * Before anything cascades, the account's editor and admin roles in team
---   workspaces are queued for revocation, while its wallets are still on
---   record (wallet_accounts cascades with the account, before the
---   memberships do, so the members trigger would find no wallet).
+-- * Before anything cascades, the account's editor and admin roles in every
+--   workspace, someone else's personal one included, are queued for
+--   revocation, while its wallets are still on record (wallet_accounts
+--   cascades with the account, before the memberships do, so the members
+--   trigger would find no wallet). A workspace that is not on-chain makes
+--   the job a no-op for the revoker.
 -- * Each team workspace handed to its longest-standing admin also queues
---   the on-chain `admin_reassign_owner` (D-36) to that admin's wallet.
+--   the on-chain `admin_reassign_owner` (D-36) to that admin's wallet. A
+--   handover still open from an earlier one (the heir is now deleting their
+--   own account before the chain caught up) is re-pointed to the new heir
+--   and tried afresh, so the chain ends with the owner the database has.
 
 create or replace function public.handle_deleted_user_workspaces()
 returns trigger
@@ -764,8 +855,7 @@ begin
 
   perform public.enqueue_chain_revocation(m.workspace_id, old.id)
      from public.workspace_members m
-     join public.workspaces w on w.id = m.workspace_id
-    where m.user_id = old.id and m.role in ('editor', 'admin') and not w.is_personal;
+    where m.user_id = old.id and m.role in ('editor', 'admin');
 
   delete from public.documents d
    using public.workspaces w
@@ -807,9 +897,15 @@ begin
        set role = 'owner'
      where m.workspace_id = v_ws.id and m.user_id = v_admin;
 
-    insert into public.workspace_chain_jobs (workspace_id, kind, user_id)
-    values (v_ws.id, 'reassign_owner', v_admin)
-    on conflict do nothing;
+    update public.workspace_chain_jobs j
+       set user_id = v_admin, status = 'pending', attempts = 0,
+           last_error = null, next_attempt_at = now()
+     where j.workspace_id = v_ws.id and j.kind = 'reassign_owner'
+       and j.status in ('pending', 'needs_product_owner');
+    if not found then
+      insert into public.workspace_chain_jobs (workspace_id, kind, user_id)
+      values (v_ws.id, 'reassign_owner', v_admin);
+    end if;
   end loop;
 
   return old;
@@ -826,6 +922,11 @@ revoke execute on function public.enqueue_chain_revocation(uuid, uuid) from publ
 revoke execute on function public.workspace_members_chain_sync() from public, anon, authenticated;
 revoke execute on function public.handle_deleted_user_workspaces() from public, anon, authenticated;
 revoke execute on function public.find_account(text) from public, anon, authenticated;
+revoke execute on function public.invite_identifier(text) from public, anon, authenticated;
+-- The invites policy evaluates it as the caller; it only ever returns the
+-- caller's own identifiers.
+revoke execute on function public.my_invite_identifiers() from public, anon;
+grant execute on function public.my_invite_identifiers() to authenticated, service_role;
 revoke execute on function public.account_label(uuid) from public, anon, authenticated;
 revoke execute on function public.account_chain_address(uuid, text) from public, anon, authenticated;
 grant execute on function public.account_chain_address(uuid, text) to service_role;
