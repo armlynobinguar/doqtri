@@ -18,7 +18,10 @@ import { cn } from "@/lib/utils";
 import { useVaultStatus } from "@/components/vault/vault-status";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { createSaveQueue } from "@/lib/save-queue";
+import { createNoteSaver } from "@/lib/note-saver";
+import { useDocLock } from "@/hooks/use-doc-lock";
+import { EditLockBanner } from "@/components/vault/edit-lock-banner";
+import { editingMessage } from "@/lib/doc-lock";
 import type { Doc } from "@/lib/types";
 
 const SETTLE_MS = 700;
@@ -44,6 +47,13 @@ function countWords(markdown: string): number {
  *
  * Mounted with `key={active.id}` by the page, so navigating between notes
  * remounts rather than reconciling stale editor state.
+ *
+ * Edits are locked (WP-1.6, D-17): the first keystroke takes the note's edit
+ * lock, and every save goes through /api/notes/[id] with the version the text
+ * is based on. While someone else holds the lock the editor is read-only,
+ * names them, and loads their text whenever its version moves on; an admin
+ * may take the lock over. A save the server refuses as stale is never
+ * retried over the newer text: the editor stops and offers a reload.
  */
 export function DocWorkspace({
   docs,
@@ -59,20 +69,98 @@ export function DocWorkspace({
   const [regenerateOpen, setRegenerateOpen] = useState(false);
   const isMobile = useIsCompactVault();
   const [mobileView, setMobileView] = useState<MobileView>("note");
-  // The page remounts this per note, so the queue never outlives its row.
-  const [saves] = useState(() =>
-    createSaveQueue(active.markdown, async (text) => {
-      const supabase = createSupabaseBrowserClient();
-      // Anon key + RLS: the update policy allows editors and above of the
-      // note's workspace.
-      const { error } = await supabase
-        .from("documents")
-        .update({ markdown: text, updated_at: new Date().toISOString() })
-        .eq("id", active.id);
-      if (error) throw new Error(`Could not save: ${error.message}`);
+  // A save was refused because someone else saved since this copy loaded.
+  const [conflict, setConflict] = useState(false);
+  const markdownRef = useRef(markdown);
+
+  const { lock, controller } = useDocLock(active.id);
+
+  // The page remounts this per note, so the saver never outlives its row.
+  // Its writes hold the lock and send the version the text is based on.
+  const [saver] = useState(() =>
+    createNoteSaver({
+      docId: active.id,
+      markdown: active.markdown,
+      version: active.version ?? 1,
+      lock: controller,
+      onConflict: () => setConflict(true),
     }),
   );
-  const markdownRef = useRef(markdown);
+  const saves = saver.queue;
+
+  /** Replaces the editor's text with the stored note and its version. */
+  const reloadLatest = useCallback(async () => {
+    const supabase = createSupabaseBrowserClient();
+    const { data, error } = await supabase
+      .from("documents")
+      .select("markdown, version")
+      .eq("id", active.id)
+      .maybeSingle();
+    if (error || !data) {
+      toast.error("Could not load the latest version of this note");
+      return;
+    }
+    saver.setVersion(Number(data.version));
+    saves.markSaved(data.markdown);
+    markdownRef.current = data.markdown;
+    setMarkdown(data.markdown);
+    setConflict(false);
+    setSaveState("saved");
+  }, [active.id, saver, saves, setSaveState]);
+
+  useEffect(() => {
+    controller.setHandlers({
+      onStatus: (status) => {
+        if (status.version === saver.version) return;
+        // Someone else's save moved the note on. Load it, unless this user
+        // holds the lock with edits not yet saved: those are theirs, and
+        // the version check refuses their save if it would overwrite.
+        if (status.mine && markdownRef.current !== saves.saved) return;
+        void reloadLatest();
+      },
+      onLost: (status) => {
+        toast.info(`${editingMessage(status.holderName)} now. Your copy is read-only.`);
+        void reloadLatest();
+      },
+    });
+  }, [controller, reloadLatest, saver, saves]);
+
+  const readOnly =
+    conflict ||
+    !lock.canEdit ||
+    lock.phase === "loading" ||
+    lock.phase === "other";
+
+  /** The editor's onChange: the first edit takes the lock. */
+  const handleChange = useCallback(
+    (next: string) => {
+      setMarkdown(next);
+      void controller.noteEdit().then((held) => {
+        // Lost the race for a free lock: drop the keystroke for their text.
+        if (!held && controller.getState().phase === "other") void reloadLatest();
+      });
+    },
+    [controller, reloadLatest],
+  );
+
+  const handleTakeOver = useCallback(async () => {
+    if (await controller.takeOver()) {
+      // Nobody else can save now, so the text loaded here is the latest.
+      await reloadLatest();
+      toast.success("You are editing this note now");
+    } else {
+      toast.error(controller.getState().error ?? "Could not take over this note");
+    }
+  }, [controller, reloadLatest]);
+
+  const lockBanner = (
+    <EditLockBanner
+      lock={lock}
+      conflict={conflict}
+      onTakeOver={() => void handleTakeOver()}
+      onReload={() => void reloadLatest()}
+    />
+  );
 
   // Keeps the Supabase write and the force simulation off the keystroke path.
   const settled = useDebouncedValue(markdown, SETTLE_MS);
@@ -96,6 +184,9 @@ export function DocWorkspace({
 
   useEffect(() => {
     if (settled === saves.saved) return;
+    // A read-only copy has nothing of its own to save; a keystroke that lost
+    // the race for the lock is about to be replaced by the holder's text.
+    if (readOnly) return;
 
     let cancelled = false;
 
@@ -113,7 +204,7 @@ export function DocWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [settled, saves, setSaveState]);
+  }, [settled, saves, setSaveState, readOnly]);
 
   /**
    * Writes the editor's text now instead of waiting for the debounce, and
@@ -152,6 +243,19 @@ export function DocWorkspace({
   );
 
   const handleRegenerate = useCallback(async () => {
+    // Regenerating rewrites the note: it needs the lock, and the model must
+    // see what the editor shows, so pending edits are saved first.
+    if (!(await controller.ensure())) {
+      toast.error(editingMessage(controller.getState().holderName));
+      return;
+    }
+    try {
+      await saveNow();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not save before regenerating");
+      return;
+    }
+
     const res = await fetch("/api/regenerate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -181,12 +285,17 @@ export function DocWorkspace({
 
     // The route already wrote this row, so adopt it as the saved baseline
     // rather than letting the debounced effect write it straight back.
+    const nextVersion =
+      payload && typeof payload === "object" && "version" in payload
+        ? Number((payload as { version: unknown }).version)
+        : NaN;
+    if (Number.isSafeInteger(nextVersion)) saver.setVersion(nextVersion);
     saves.markSaved(next);
     setMarkdown(next);
     setSaveState("saved");
     toast.success("Note regenerated");
     router.refresh();
-  }, [active.id, router, saves, setSaveState]);
+  }, [active.id, controller, router, saveNow, saver, saves, setSaveState]);
 
   const regenerateDialog = (
     <RegenerateDialog
@@ -243,9 +352,11 @@ export function DocWorkspace({
             compact
             title={active.title}
             markdown={markdown}
-            onChange={setMarkdown}
+            onChange={handleChange}
             onRegenerate={() => setRegenerateOpen(true)}
             linkTitles={linkTitles}
+            readOnly={readOnly}
+            banner={lockBanner}
           />
         </div>
         {mobileView === "map" && (
@@ -280,9 +391,11 @@ export function DocWorkspace({
           <EditorPane
             title={active.title}
             markdown={markdown}
-            onChange={setMarkdown}
+            onChange={handleChange}
             onRegenerate={() => setRegenerateOpen(true)}
             linkTitles={linkTitles}
+            readOnly={readOnly}
+            banner={lockBanner}
           />
         </ResizablePanel>
 

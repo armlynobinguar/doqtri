@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import { FileTextIcon, SparklesIcon } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -26,6 +26,8 @@ export function EditorPane({
   onRegenerate,
   linkTitles,
   compact = false,
+  readOnly = false,
+  banner,
 }: {
   title: string;
   markdown: string;
@@ -39,6 +41,13 @@ export function EditorPane({
    * leave each side a column a few words wide.
    */
   compact?: boolean;
+  /**
+   * Someone else holds the edit lock, or the caller may only read (D-17):
+   * the text cannot be changed and Regenerate is off.
+   */
+  readOnly?: boolean;
+  /** Shown between the tab strip and the editor, e.g. "<name> is editing". */
+  banner?: ReactNode;
 }) {
   const editorRef = useRef<HTMLDivElement>(null);
 
@@ -70,6 +79,7 @@ export function EditorPane({
                   variant="ghost"
                   size="sm"
                   onClick={onRegenerate}
+                  disabled={readOnly}
                   // The muted lavender is reserved for AI-driven affordances,
                   // and only tints the icon.
                   className="h-7 gap-1.5 px-2.5 text-[12px]"
@@ -86,16 +96,23 @@ export function EditorPane({
         </div>
       )}
 
+      {banner}
+
       <div ref={editorRef} className="min-h-0 flex-1">
         <MDEditor
           value={markdown}
-          onChange={(next) => onChange(next ?? "")}
+          onChange={(next) => {
+            if (!readOnly) onChange(next ?? "");
+          }}
+          hideToolbar={readOnly}
           height="100%"
           preview={compact ? "edit" : "live"}
           visibleDragbar={false}
           textareaProps={{
             placeholder: "Write markdown. Wrap concepts in [[double brackets]].",
             spellCheck: false,
+            readOnly,
+            "aria-readonly": readOnly,
           }}
           style={{ height: "100%" }}
         />
