@@ -24,7 +24,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(147);
+select plan(150);
 
 insert into auth.users (id, email) values
   ('00000000-0000-4000-8000-000000000001', 'owner@example.com'),
@@ -186,12 +186,20 @@ select throws_ok(
   $$ insert into public.workspace_members (workspace_id, user_id, role)
      values ('10000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000005', 'owner') $$,
   '42501', null, 'not even the owner adds someone straight in as owner');
-select lives_ok(
-  $$ insert into public.workspace_members (workspace_id, user_id, role) values
-       ('10000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002', 'admin'),
-       ('10000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000003', 'editor'),
-       ('10000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000004', 'viewer') $$,
-  'the owner adds an admin, an editor and a viewer');
+select throws_ok(
+  $$ insert into public.workspace_members (workspace_id, user_id, role)
+     values ('10000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000003', 'editor') $$,
+  '42501', null, 'not even the owner adds a member directly: people join by accepting an invite (WP-1.5)');
+
+-- The roster, as accepted invites would leave it (invites are tested in
+-- workspace_members_management.test.sql).
+reset role;
+insert into public.workspace_members (workspace_id, user_id, role) values
+  ('10000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002', 'admin'),
+  ('10000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000003', 'editor'),
+  ('10000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000004', 'viewer');
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
 
 
 -- ---------------------------------------------------------------------------
@@ -354,10 +362,16 @@ select throws_ok(
   $$ insert into public.workspace_members (workspace_id, user_id, role)
      values ('10000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000005', 'owner') $$,
   '42501', null, 'admin cannot add an owner');
-select lives_ok(
+select throws_ok(
   $$ insert into public.workspace_members (workspace_id, user_id, role)
      values ('10000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000005', 'viewer') $$,
-  'admin adds a viewer');
+  '42501', null, 'admin cannot add a member directly either');
+-- x accepts an invite as viewer.
+reset role;
+insert into public.workspace_members (workspace_id, user_id, role)
+values ('10000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000005', 'viewer');
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000002","role":"authenticated"}';
 with u as (update public.workspace_members set role = 'editor'
             where workspace_id = '10000000-0000-4000-8000-000000000001'
               and user_id = '00000000-0000-4000-8000-000000000005' returning 1)
@@ -406,10 +420,16 @@ select is(count(*)::int, 1, 'a member can leave') from d;
 
 -- owner
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
-select lives_ok(
-  $$ insert into public.workspace_members (workspace_id, user_id, role)
-     values ('10000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000004', 'viewer') $$,
-  'owner adds the viewer back');
+-- The viewer accepts a new invite.
+reset role;
+insert into public.workspace_members (workspace_id, user_id, role)
+values ('10000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000004', 'viewer');
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
+select is((select role::text from public.workspace_members
+            where workspace_id = '10000000-0000-4000-8000-000000000001'
+              and user_id = '00000000-0000-4000-8000-000000000004'),
+  'viewer', 'a member who left can be invited back');
 select throws_ok(
   $$ update public.workspace_members set joined_at = '1970-01-01'
       where workspace_id = '10000000-0000-4000-8000-000000000001'
@@ -438,10 +458,20 @@ select throws_ok(
         and user_id = '00000000-0000-4000-8000-000000000003' $$,
   '23514', 'a workspace membership cannot move to another workspace or user',
   'a membership cannot be moved to another workspace');
-with u as (update public.workspace_members set role = 'owner'
-            where workspace_id = '10000000-0000-4000-8000-000000000001'
-              and user_id = '00000000-0000-4000-8000-000000000002' returning 1)
-select is(count(*)::int, 1, 'the owner makes the admin a second owner') from u;
+select throws_ok(
+  $$ update public.workspace_members set role = 'owner'
+      where workspace_id = '10000000-0000-4000-8000-000000000001'
+        and user_id = '00000000-0000-4000-8000-000000000002' $$,
+  '42501', null, 'not even the owner makes anyone an owner: ownership is transferred (WP-1.5)');
+-- A second owner, as only the server can make one (the D-31 handover, or
+-- accept_workspace_transfer() mid-way): the keep-owner rule then lets the
+-- first one go.
+reset role;
+update public.workspace_members set role = 'owner'
+ where workspace_id = '10000000-0000-4000-8000-000000000001'
+   and user_id = '00000000-0000-4000-8000-000000000002';
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
 with d as (delete from public.workspace_members
             where workspace_id = '10000000-0000-4000-8000-000000000001'
               and user_id = '00000000-0000-4000-8000-000000000001' returning 1)
@@ -467,10 +497,14 @@ create temp table o_personal as
    where is_personal and created_by = '00000000-0000-4000-8000-000000000001';
 grant select on o_personal to authenticated, service_role;
 
-select lives_ok(
-  $$ insert into public.workspace_members (workspace_id, user_id, role)
-     values ((select id from o_personal), '00000000-0000-4000-8000-000000000002', 'editor') $$,
-  'an owner adds a member to their personal workspace');
+-- ad accepts o's invite as editor.
+reset role;
+insert into public.workspace_members (workspace_id, user_id, role)
+values ((select id from o_personal), '00000000-0000-4000-8000-000000000002', 'editor');
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
+select is((select count(*)::int from public.workspace_members where workspace_id = (select id from o_personal)),
+  2, 'a personal workspace takes members (D-30)');
 with u as (update public.workspace_members set role = 'admin'
             where workspace_id = (select id from o_personal)
               and user_id = '00000000-0000-4000-8000-000000000002' returning 1)
@@ -479,7 +513,7 @@ select throws_ok(
   $$ update public.workspace_members set role = 'owner'
       where workspace_id = (select id from o_personal)
         and user_id = '00000000-0000-4000-8000-000000000002' $$,
-  '23514', 'only the creator of a personal workspace can be its owner',
+  '42501', null,
   'but not a co-owner (D-30)');
 select throws_ok(
   $$ insert into public.workspace_members (workspace_id, user_id, role)
@@ -721,18 +755,31 @@ select set_eq(
   'every other account''s documents are untouched, the other member''s included');
 
 -- joined_at decides the succession, so no client can choose it. w, beta's
--- latest admin, adds o as an admin backdated to 1960 and tries to backdate
--- themselves; neither moves anyone ahead of n.
+-- latest admin, tries to add o as an admin backdated to 1960 and to backdate
+-- themselves; neither moves anyone ahead of n. Since WP-1.5 no client
+-- inserts a membership at all; o joins by accepting an invite, today.
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000006","role":"authenticated"}';
-insert into public.workspace_members (workspace_id, user_id, role, joined_at)
-values ('10000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000001', 'admin', '1960-01-01');
+select throws_ok(
+  $$ insert into public.workspace_members (workspace_id, user_id, role, joined_at)
+     values ('10000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000001', 'admin', '1960-01-01') $$,
+  '42501', null, 'an admin cannot insert a backdated membership');
+select lives_ok(
+  $$ select public.invite_workspace_member('10000000-0000-4000-8000-000000000002', 'owner@example.com', 'admin') $$,
+  'the admin invites o as an admin instead');
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
+select lives_ok(
+  $$ select public.accept_workspace_invite(
+       (select id from public.workspace_invites
+         where workspace_id = '10000000-0000-4000-8000-000000000002'
+           and invitee_id = '00000000-0000-4000-8000-000000000001')) $$,
+  'and o accepts');
 reset role;
 select is(
   (select joined_at from public.workspace_members
     where workspace_id = '10000000-0000-4000-8000-000000000002'
       and user_id = '00000000-0000-4000-8000-000000000001'),
-  now(), 'a joined_at sent with a client insert is replaced by now()');
+  now(), 'an accepted invite joins today');
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000006","role":"authenticated"}';
 select throws_ok(
