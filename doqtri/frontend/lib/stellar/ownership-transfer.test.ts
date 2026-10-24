@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Address, hash, Keypair, StrKey, xdr } from "@stellar/stellar-sdk";
-import { buildOwnershipTransfer } from "@/lib/stellar/ownership-transfer";
-import type { RegistryAccess } from "@/lib/stellar/relay-validation";
+import { buildOwnershipTransfer, formerOwnerFollowUp } from "@/lib/stellar/ownership-transfer";
+import { authorizeRegistryWrite, type RegistryAccess } from "@/lib/stellar/relay-validation";
 import type { WorkspaceRole } from "@/lib/workspace-roles";
 
 const contract = (seed: string) => StrKey.encodeContract(hash(Buffer.from(seed)));
@@ -99,5 +99,45 @@ describe("buildOwnershipTransfer (D-37)", () => {
     await expect(
       buildOwnershipTransfer({ fn: "admin_reassign_owner", workspaceId: team, newOwner: "bob" }, accessWith(), registry),
     ).rejects.toThrow(/new owner is not a Stellar address/);
+  });
+});
+
+describe("formerOwnerFollowUp (D-35)", () => {
+  it("asks for add_admin when the database kept the former owner as an admin", async () => {
+    await expect(formerOwnerFollowUp(team, formerOwner, accessWith())).resolves.toEqual({
+      fn: "add_admin",
+      workspaceId: team,
+      subject: formerOwner,
+    });
+  });
+
+  it("asks for nothing when the database kept them as less than an admin, or not at all", async () => {
+    for (const kept of ["editor", "viewer"] as const) {
+      const access = accessWith({ "u-new": "owner", "u-former": kept });
+      await expect(formerOwnerFollowUp(team, formerOwner, access)).resolves.toBeNull();
+    }
+    await expect(formerOwnerFollowUp(team, formerOwner, accessWith({ "u-new": "owner" }))).resolves.toBeNull();
+  });
+
+  it("asks for nothing while the database still has them as owner (its side of the transfer hasn't happened)", async () => {
+    const access = accessWith({ "u-former": "owner", "u-new": "admin" });
+    await expect(formerOwnerFollowUp(team, formerOwner, access)).resolves.toBeNull();
+  });
+
+  it("asks for nothing on a personal workspace, which is never transferred", async () => {
+    await expect(formerOwnerFollowUp(home, formerOwner, accessWith())).resolves.toBeNull();
+    await expect(formerOwnerFollowUp(missing, formerOwner, accessWith())).resolves.toBeNull();
+  });
+
+  it("produces a call the relay pays for when the new owner signs it, and refuses from anyone else", async () => {
+    const access = accessWith();
+    const followUp = await formerOwnerFollowUp(team, formerOwner, access);
+    expect(followUp).not.toBeNull();
+    await expect(authorizeRegistryWrite(followUp!, "u-new", access, true)).resolves.toBeUndefined();
+    // The former owner, an admin now, can't restore themselves; nor can an editor.
+    await expect(authorizeRegistryWrite(followUp!, "u-former", access, true)).rejects.toThrow(/Only a workspace owner/);
+    await expect(authorizeRegistryWrite(followUp!, "u-editor", access, true)).rejects.toThrow(/Only a workspace owner/);
+    // On the live registry there is no add_admin to call.
+    await expect(authorizeRegistryWrite(followUp!, "u-new", access, false)).rejects.toThrow(/aren't enabled/);
   });
 });

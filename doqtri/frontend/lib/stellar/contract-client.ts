@@ -547,6 +547,29 @@ export const DoqtriRegistry = {
   },
 
   /**
+   * Makes `admin` an admin of `workspaceId` on-chain. Only the workspace's
+   * owner (`source`) can sign it. After a transfer the former owner holds no
+   * role on-chain, and when the database kept them as an admin this is the
+   * follow-up that makes the chain agree (D-35; formerOwnerFollowUp() in
+   * ownership-transfer.ts says when). Only with REGISTRY_EDITORS.
+   */
+  async addAdmin(source: string, workspaceId: string, admin: string): Promise<WriteReceipt> {
+    if (!REGISTRY_EDITORS) {
+      throw new DoqtriError("NOT_ENABLED", "Workspace calls aren't enabled on this registry yet.");
+    }
+    try {
+      const { tx, balance } = await buildChecked(source, () =>
+        writeClient(source).add_admin({ workspace_id: workspaceId, owner: source, admin }),
+      );
+      unwrapResult(tx.result, "add_admin failed", simulationError(tx));
+      preflight(balance, tx);
+      return await send(source, tx, false);
+    } catch (e) {
+      mapInvokeError(e);
+    }
+  },
+
+  /**
    * The second step of creating a team document, and its repair: when the
    * chain does not have the document in `target`'s workspace, and `source`
    * is the document's on-chain owner, assigns it there and reads

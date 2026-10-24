@@ -26,6 +26,7 @@ const METHODS = [
   "get_doc_workspace",
   "get_workspace",
   "get_node",
+  "add_admin",
 ];
 
 vi.mock("@/lib/bindings/doqtri-registry", async (importOriginal) => {
@@ -249,5 +250,33 @@ describe("with NEXT_PUBLIC_REGISTRY_EDITORS on", () => {
       code: "NOT_EDITOR",
     });
     expect(state.relayed).toBe(0);
+  });
+});
+
+describe("addAdmin (the follow-up to a transfer, D-35)", () => {
+  const formerOwner = StrKey.encodeContract(hash(Buffer.from("former-owner")));
+
+  it("has the new owner sign add_admin for the former owner, through the relay", async () => {
+    const { DoqtriRegistry } = await load(true);
+    const receipt = await DoqtriRegistry.addAdmin(wallet, team.workspaceId, formerOwner);
+    expect(state.calls).toEqual([
+      { fn: "add_admin", args: { workspace_id: team.workspaceId, owner: wallet, admin: formerOwner } },
+    ]);
+    expect(receipt).toEqual({ txHash: "tx-1" });
+  });
+
+  it("names the contract's refusal before anything is signed", async () => {
+    const { DoqtriRegistry } = await load(true);
+    state.results.add_admin = [contractError("NotWorkspaceOwner")];
+    await expect(DoqtriRegistry.addAdmin(someoneElse, team.workspaceId, formerOwner)).rejects.toMatchObject({
+      code: "NOT_WORKSPACE_OWNER",
+    });
+    expect(state.relayed).toBe(0);
+  });
+
+  it("refuses while the registry has no workspace calls", async () => {
+    const { DoqtriRegistry } = await load(false);
+    await expect(DoqtriRegistry.addAdmin(wallet, team.workspaceId, formerOwner)).rejects.toThrow(/aren't enabled/);
+    expect(called()).toEqual([]);
   });
 });

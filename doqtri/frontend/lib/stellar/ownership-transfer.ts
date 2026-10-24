@@ -13,10 +13,17 @@
  * personal workspace's creator owns it) is the app's to hold: this builder
  * refuses a personal workspace outright (D-37).
  *
+ * After either call the former owner holds no role on-chain, whatever the
+ * database kept for them (D-35). formerOwnerFollowUp() says when the new
+ * owner must follow with `add_admin`.
+ *
  * TODO(WP-1.5): nothing transfers a workspace yet: there is no transfer
  * screen and no database function that moves the owner role. Whatever adds
- * them must build the on-chain call with buildOwnershipTransfer(), never by
- * hand, so a personal workspace is never handed on.
+ * them must (1) build the on-chain call with buildOwnershipTransfer(), never
+ * by hand, so a personal workspace is never handed on; (2) once it lands,
+ * call formerOwnerFollowUp() with the former owner's address and, when it
+ * returns a call, have the new owner sign it with DoqtriRegistry.addAdmin(),
+ * which the relay pays for and checks like any other membership write.
  */
 import { Address, xdr } from "@stellar/stellar-sdk";
 import { RelayRejection, type RegistryAccess } from "@/lib/stellar/relay-validation";
@@ -67,4 +74,31 @@ export async function buildOwnershipTransfer(
       args,
     }),
   );
+}
+
+/** The call that gives a former owner back on-chain the admin role the database kept for them. */
+export type FormerOwnerFollowUp = { fn: "add_admin"; workspaceId: string; subject: string };
+
+/**
+ * After a transfer has landed on-chain: when the database keeps the former
+ * owner (by the address that owned the workspace on-chain) as an admin, the
+ * `add_admin` that makes the chain agree (D-35); else null, as the chain
+ * already does: a former owner kept as an editor or viewer, or not kept,
+ * has no admin role to restore, and one the database still lists as owner
+ * means the database side of the transfer hasn't happened yet.
+ *
+ * `add_admin` is owner-only on-chain, so the new owner's wallet signs it and
+ * /api/chain/relay submits it; the relay's own check (signer an owner in the
+ * database, subject an admin there) is what this mirrors.
+ */
+export async function formerOwnerFollowUp(
+  workspaceId: string,
+  formerOwner: string,
+  access: Pick<RegistryAccess, "workspace" | "addressRole">,
+): Promise<FormerOwnerFollowUp | null> {
+  const workspace = await access.workspace(workspaceId);
+  // A personal workspace is never transferred (D-37), so there is nothing to follow.
+  if (!workspace || workspace.personal) return null;
+  const role = await access.addressRole(workspaceId, formerOwner);
+  return role === "admin" ? { fn: "add_admin", workspaceId, subject: formerOwner } : null;
 }
