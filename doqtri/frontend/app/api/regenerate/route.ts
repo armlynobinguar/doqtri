@@ -3,6 +3,7 @@ import { createSupabaseServerClient, createSupabaseAdminClient } from "@/lib/sup
 import { improveMarkdown } from "@/lib/openai";
 import { consumeAiQuota, quotaRefusal } from "@/lib/ai-quota";
 import { generateAndStoreMindmap } from "@/lib/mindmap-store";
+import { afterNoteSaved } from "@/lib/integrations/qdit-save-hook";
 import { loadMemberDocument, workspaceTitles } from "@/lib/workspace-docs";
 import {
   EDITING_ELSEWHERE,
@@ -138,6 +139,18 @@ export async function POST(request: Request) {
     const answer = lockErrorAnswer(saveError);
     return NextResponse.json({ error: answer.error, code: answer.code }, { status: answer.status });
   }
+
+  // Headings the model moved or renamed take their links along (WP-2.5).
+  // The text it replaced is the one it was given, at doc.version.
+  await afterNoteSaved({
+    userId: user.id,
+    docId: doc.id,
+    baseVersion: doc.version,
+    savedVersion: Number(version),
+    markdown,
+    before: { title: doc.title, markdown: doc.markdown, version: doc.version },
+    title: doc.title,
+  });
 
   // The markdown just changed underneath the stored mindmap, so rebuild it
   // rather than leave the note reporting itself stale the moment it reloads.

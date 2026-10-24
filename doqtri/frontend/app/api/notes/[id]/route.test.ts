@@ -49,6 +49,12 @@ vi.mock("@/lib/stellar/contract-client", () => ({
   DoqtriRegistry: { readDocument: (...args: unknown[]) => readDocument(...args) },
 }));
 
+const saveHook = vi.hoisted(() => ({
+  noteBeforeSave: vi.fn(async () => null as unknown),
+  afterNoteSaved: vi.fn(async () => undefined),
+}));
+vi.mock("@/lib/integrations/qdit-save-hook", () => saveHook);
+
 const { PUT, PATCH, DELETE } = await import("./route");
 
 function ctx(id = DOC) {
@@ -111,6 +117,28 @@ describe("PUT /api/notes/[id] (save)", () => {
     });
     // The service role never writes the text.
     expect(adminWrites).toEqual([]);
+  });
+
+  it("hands a successful save to the qdit link hook (WP-2.5), with the text it replaced", async () => {
+    const before = { title: "Roadmap", markdown: "# v3", version: 3 };
+    saveHook.noteBeforeSave.mockResolvedValueOnce(before);
+    session.rpc.mockResolvedValue({ data: 4, error: null });
+    await PUT(put({ markdown: "# v4", version: 3, session: TAB }), ctx());
+    expect(saveHook.afterNoteSaved).toHaveBeenCalledWith({
+      userId: ME,
+      docId: DOC,
+      baseVersion: 3,
+      savedVersion: 4,
+      markdown: "# v4",
+      before,
+    });
+  });
+
+  it("does not call the hook for a refused save", async () => {
+    saveHook.afterNoteSaved.mockClear();
+    session.rpc.mockResolvedValue({ data: null, error: { code: "DQVER", message: "stale", details: "5" } });
+    await PUT(put({ markdown: "# v4", version: 3, session: TAB }), ctx());
+    expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
   });
 
   it("answers 423 naming the holder when the caller does not hold the lock", async () => {

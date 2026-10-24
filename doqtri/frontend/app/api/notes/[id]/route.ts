@@ -12,6 +12,7 @@ import {
   parseEditSession,
 } from "@/lib/doc-lock";
 import { liveLockHolder } from "@/lib/doc-lock-server";
+import { afterNoteSaved, noteBeforeSave } from "@/lib/integrations/qdit-save-hook";
 import { isTitleTaken, MAX_TITLE_LENGTH } from "@/lib/title";
 import {
   loadMemberDocument,
@@ -117,6 +118,10 @@ export async function PUT(
     );
   }
 
+  // With the qdit integration on, the text being replaced, so the save can
+  // work out which linked headings moved (WP-2.5). Null otherwise.
+  const before = await noteBeforeSave(supabase, id);
+
   const { data, error } = await supabase.rpc("save_document", {
     p_document_id: id,
     p_markdown: markdown,
@@ -150,6 +155,7 @@ export async function PUT(
   if (!Number.isSafeInteger(saved)) {
     return NextResponse.json({ error: "Unexpected save result" }, { status: 500 });
   }
+  await afterNoteSaved({ userId: user.id, docId: id, baseVersion: version, savedVersion: saved, markdown, before });
   return NextResponse.json({ id, version: saved });
 }
 

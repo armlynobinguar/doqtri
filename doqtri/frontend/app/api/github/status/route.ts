@@ -15,6 +15,8 @@ const CONCURRENCY = 5;
  *
  * Uses the session client, not the service role: RLS limits the rows to links
  * on documents the caller can read, so any other docId simply returns nothing.
+ * Only GitHub links: a heading linked to a qdit milestone (WP-2.5) has no
+ * repo to ask about.
  */
 export async function POST(request: Request) {
   const supabase = await createSupabaseServerClient();
@@ -40,6 +42,7 @@ export async function POST(request: Request) {
     .from("node_links")
     .select("id, node_id, node_label, repo, number")
     .eq("document_id", docId)
+    .eq("provider", "github")
     .order("created_at")
     .limit(MAX_LINKS);
   if (error) {
