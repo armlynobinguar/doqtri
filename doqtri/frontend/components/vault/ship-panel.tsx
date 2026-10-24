@@ -24,10 +24,11 @@ import {
   type ChainNode,
   type WriteReceipt,
 } from "@/lib/stellar/contract-client";
-import { expertTxUrl } from "@/lib/stellar/config";
+import { expertTxUrl, REGISTRY_EDITORS } from "@/lib/stellar/config";
 import { sha256Hex } from "@/lib/stellar/hash";
 import { DoqtriError } from "@/lib/stellar/errors";
 import { getDocumentHistory, type DocumentHistory } from "@/lib/stellar/history";
+import { loadNoteSigner, NOTE_SIGNING_NOTICE, noteSigningRefusal, type NoteSigner } from "@/lib/stellar/note-signing";
 import { loadWriteTarget, reportWorkspaceAssignment } from "@/lib/stellar/write-target";
 import { NODE_STATUSES, type NodeStatus } from "@/lib/stellar/types";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -91,6 +92,9 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
   const [artifact, setArtifact] = useState("");
   // null until loaded; undefined when the column is unavailable.
   const [publishHeadings, setPublishHeadings] = useState<boolean | null | undefined>(null);
+  // The user's standing on a note, keyed by the note it was read for; null
+  // when it couldn't be read (the buttons stay and the relay decides).
+  const [loadedSigner, setLoadedSigner] = useState<{ docId: string; signer: NoteSigner | null } | null>(null);
 
   const wallet = useWallet();
   const [fundingError, setFundingError] = useState<string | null>(null);
@@ -148,6 +152,13 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
       setCreatingWallet(false);
     }
   }
+
+  // Undefined while this note's is loading. Writes the relay would refuse are
+  // hidden, not offered (D-43, D-44).
+  const signer = loadedSigner?.docId === docId ? loadedSigner.signer : undefined;
+  const signingRefusal = signer ? noteSigningRefusal(signer, REGISTRY_EDITORS) : null;
+  const canSign = signingRefusal === null;
+  const signerLoading = signer === undefined;
 
   const tree = buildMindmap(title, markdown);
   const flatNodes = flattenNodes(tree);
@@ -232,6 +243,18 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
         error || !data ? undefined : Boolean(data.publish_headings),
       );
     })();
+    return () => {
+      cancelled = true;
+    };
+  }, [docId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadNoteSigner(createSupabaseBrowserClient(), docId)
+      .catch(() => null)
+      .then((loaded) => {
+        if (!cancelled) setLoadedSigner({ docId, signer: loaded });
+      });
     return () => {
       cancelled = true;
     };
@@ -544,12 +567,12 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
             ) : null}
           </span>
         </div>
-      ) : (
+      ) : canSign ? (
         <Button
           type="button"
           size="sm"
           data-testid="mark-done"
-          disabled={busy || unfunded || noWallet || lowBalance || preparing}
+          disabled={busy || unfunded || noWallet || lowBalance || preparing || signerLoading}
           title="Save, anchor this version and record on Stellar that the mindmap is done"
           className="w-full max-lg:h-10"
           onClick={() => void markDone()}
@@ -565,33 +588,39 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
                     ? "Mark this version done"
                     : "Mark mindmap done"}
         </Button>
-      )}
+      ) : null}
 
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        disabled={busy || unfunded || noWallet || lowBalance || preparing || upToDate}
-        title={
-          upToDate
-            ? "This version of the note is already anchored"
-            : preparing
-              ? "Your wallet is almost ready"
-              : undefined
-        }
-        className="w-full max-lg:h-10"
-        onClick={() => void saveAndAnchor()}
-      >
-        {anchorStep || preparing ? <Loader2Icon className="animate-spin" /> : <AnchorIcon />}
-        {anchorStep === "saving"
-          ? "Saving…"
-          : anchorStep === "signing"
-            ? "Signing & confirming…"
-            : preparing
-              ? "Wallet getting ready…"
-              : "Save & anchor"}
-      </Button>
-      {paysOwnFees && !lowBalance ? (
+      {signingRefusal ? (
+        <p data-testid="signing-notice" className="glass text-muted-foreground rounded-xl px-2.5 py-2 text-[11px]">
+          {NOTE_SIGNING_NOTICE[signingRefusal]}
+        </p>
+      ) : (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={busy || unfunded || noWallet || lowBalance || preparing || upToDate || signerLoading}
+          title={
+            upToDate
+              ? "This version of the note is already anchored"
+              : preparing
+                ? "Your wallet is almost ready"
+                : undefined
+          }
+          className="w-full max-lg:h-10"
+          onClick={() => void saveAndAnchor()}
+        >
+          {anchorStep || preparing ? <Loader2Icon className="animate-spin" /> : <AnchorIcon />}
+          {anchorStep === "saving"
+            ? "Saving…"
+            : anchorStep === "signing"
+              ? "Signing & confirming…"
+              : preparing
+                ? "Wallet getting ready…"
+                : "Save & anchor"}
+        </Button>
+      )}
+      {canSign && paysOwnFees && !lowBalance ? (
         <p className="text-muted-foreground text-[11px]" data-testid="fee-note">
           Each write pays its network fee from your wallet, never more than {formatXlm(MAX_USER_FEE_STROOPS)} XLM.
         </p>
@@ -677,79 +706,84 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
         <VersionHistory history={history} />
       ) : null}
 
-      <label className="text-muted-foreground grid gap-1">
-        Node
-        <Select
-          value={nodeId}
-          onValueChange={(next) => next && setNodeId(next as string)}
-          items={Object.fromEntries(flatNodes.map((n) => [n.id, n.label]))}
-        >
-          <SelectTrigger aria-label="Node" className="h-8 text-[12px] max-lg:h-10 max-lg:text-base">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {flatNodes.map((n) => (
-              <SelectItem key={n.id} value={n.id}>
-                {n.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </label>
+      {canSign ? (
+        <>
+          <label className="text-muted-foreground grid gap-1">
+            Node
+            <Select
+              value={nodeId}
+              onValueChange={(next) => next && setNodeId(next as string)}
+              items={Object.fromEntries(flatNodes.map((n) => [n.id, n.label]))}
+            >
+              <SelectTrigger aria-label="Node" className="h-8 text-[12px] max-lg:h-10 max-lg:text-base">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {flatNodes.map((n) => (
+                  <SelectItem key={n.id} value={n.id}>
+                    {n.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
 
-      <label className="text-muted-foreground grid gap-1">
-        Status
-        <Select value={status} onValueChange={(next) => next && setStatus(next as NodeStatus)}>
-          <SelectTrigger aria-label="Status" className="h-8 text-[12px] max-lg:h-10 max-lg:text-base">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {NODE_STATUSES.map((s) => (
-              <SelectItem key={s} value={s}>
-                {s}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </label>
+          <label className="text-muted-foreground grid gap-1">
+            Status
+            <Select value={status} onValueChange={(next) => next && setStatus(next as NodeStatus)}>
+              <SelectTrigger aria-label="Status" className="h-8 text-[12px] max-lg:h-10 max-lg:text-base">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {NODE_STATUSES.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {s}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
 
-      <label className="text-muted-foreground grid gap-1">
-        Tool
-        <input
-          className="text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-[10px] border border-[var(--glass-lo)] bg-[var(--glass)] px-2.5 shadow-[inset_0_1px_0_0_var(--glass-hi)] outline-none focus-visible:ring-3"
-          placeholder="n8n / Make / Retool"
-          value={tool}
-          onChange={(e) => setTool(e.target.value)}
-        />
-      </label>
+          <label className="text-muted-foreground grid gap-1">
+            Tool
+            <input
+              className="text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-[10px] border border-[var(--glass-lo)] bg-[var(--glass)] px-2.5 shadow-[inset_0_1px_0_0_var(--glass-hi)] outline-none focus-visible:ring-3"
+              placeholder="n8n / Make / Retool"
+              value={tool}
+              onChange={(e) => setTool(e.target.value)}
+            />
+          </label>
 
-      <label className="text-muted-foreground grid gap-1">
-        Artifact
-        <input
-          className="text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-[10px] border border-[var(--glass-lo)] bg-[var(--glass)] px-2.5 shadow-[inset_0_1px_0_0_var(--glass-hi)] outline-none focus-visible:ring-3"
-          placeholder="wf_id or URL"
-          value={artifact}
-          onChange={(e) => setArtifact(e.target.value)}
-        />
-      </label>
+          <label className="text-muted-foreground grid gap-1">
+            Artifact
+            <input
+              className="text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 max-lg:h-10 max-lg:text-base rounded-[10px] border border-[var(--glass-lo)] bg-[var(--glass)] px-2.5 shadow-[inset_0_1px_0_0_var(--glass-hi)] outline-none focus-visible:ring-3"
+              placeholder="wf_id or URL"
+              value={artifact}
+              onChange={(e) => setArtifact(e.target.value)}
+            />
+          </label>
 
-      <Button
-        type="button"
-        size="sm"
-        variant="secondary"
-        disabled={busy || unfunded || noWallet || lowBalance}
-        className="w-full max-lg:h-10"
-        onClick={() => void syncNode()}
-      >
-        {busy && anchorStep === null ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
-        Sync node status
-      </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            disabled={busy || unfunded || noWallet || lowBalance || signerLoading}
+            className="w-full max-lg:h-10"
+            onClick={() => void syncNode()}
+          >
+            {busy && anchorStep === null ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
+            Sync node status
+          </Button>
+        </>
+      ) : null}
 
       <GitHubLinks
         key={docId}
         docId={docId}
         nodes={flatNodes}
         anchored={chainVersion != null}
+        canSign={canSign}
         onSynced={() => void refreshChain()}
       />
     </div>

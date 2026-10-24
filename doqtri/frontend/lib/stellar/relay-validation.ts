@@ -513,6 +513,9 @@ function isOwnerFunction(fn: RegistryFunction): fn is OwnerFunction {
  *   (or above) made an on-chain admin, so the chain never holds a role the
  *   database does not.
  *
+ * The panel hides what this would refuse with noteSigningRefusal()
+ * (note-signing.ts), whose tests hold it to these rules.
+ *
  * Throws RelayRejection when refused.
  */
 export async function authorizeRegistryWrite(

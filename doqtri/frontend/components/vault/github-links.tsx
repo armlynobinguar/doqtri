@@ -49,12 +49,15 @@ export function GitHubLinks({
   docId,
   nodes,
   anchored,
+  canSign = true,
   onSynced,
 }: {
   docId: string;
   nodes: Node[];
   /** Whether the note is registered on-chain; node statuses need that first. */
   anchored: boolean;
+  /** False hides Sync: the relay would refuse this user's signature (D-43, D-44). */
+  canSign?: boolean;
   onSynced: () => void;
 }) {
   const wallet = useWallet();
@@ -314,7 +317,7 @@ export function GitHubLinks({
         </div>
       ) : null}
 
-      {ready.length > 0 ? (
+      {canSign && ready.length > 0 ? (
         <Button
           type="button"
           size="sm"
@@ -331,7 +334,7 @@ export function GitHubLinks({
           {progress ?? `Sync ${ready.length} ready node${ready.length === 1 ? "" : "s"}`}
         </Button>
       ) : null}
-      {ready.length > 1 ? (
+      {canSign && ready.length > 1 ? (
         <p className="text-muted-foreground text-[11px]">Each node is a separate signature.</p>
       ) : null}
     </section>
