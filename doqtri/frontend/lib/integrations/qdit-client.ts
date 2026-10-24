@@ -448,13 +448,60 @@ export function createQditClient(userId: string, deps: QditClientDeps): QditClie
   return client;
 }
 
+export type QditServerSetup = { config: QditConfig; tokenKey: Buffer; store: ConnectionStore };
+
+/**
+ * This deployment's qdit configuration, its token key and the service-role
+ * connection store, or null when the integration is off, a value is missing,
+ * or INTEGRATION_TOKEN_KEY is not a valid key.
+ */
+export function qditServerSetup(): QditServerSetup | null {
+  const config = qditConfig();
+  if (!config) return null;
+  let tokenKey: Buffer;
+  try {
+    tokenKey = parseTokenKey(config.tokenKey);
+  } catch (error) {
+    console.error(`[qdit] ${(error as Error).message}`);
+    return null;
+  }
+  return { config, tokenKey, store: supabaseConnectionStore(createSupabaseAdminClient(), tokenKey) };
+}
+
 /**
  * The client for `userId` with this deployment's configuration and the
  * service-role store. `userId` must come from the verified session.
  */
 export function qditClientForUser(userId: string): QditClient {
-  const config = qditConfig();
-  if (!config) throw new QditError("not_configured", "qdit is not set up on this deployment.");
-  const store = supabaseConnectionStore(createSupabaseAdminClient(), parseTokenKey(config.tokenKey));
-  return createQditClient(userId, { config, store });
+  const setup = qditServerSetup();
+  if (!setup) throw new QditError("not_configured", "qdit is not set up on this deployment.");
+  return createQditClient(userId, { config: setup.config, store: setup.store });
+}
+
+/**
+ * GET /api/v1/me with a token that is not stored yet: the callback's check
+ * of whose tokens it just received, before it keeps them.
+ */
+export async function qditMeWithToken(
+  config: QditConfig,
+  accessToken: string,
+  deps: { fetch?: typeof fetch; timeoutMs?: number } = {},
+): Promise<QditMe> {
+  let res: Response;
+  try {
+    res = await (deps.fetch ?? fetch)(`${config.apiBaseUrl}/me`, {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+      cache: "no-store",
+      redirect: "error",
+      signal: AbortSignal.timeout(deps.timeoutMs ?? REQUEST_TIMEOUT_MS),
+    });
+  } catch {
+    throw new QditError("network", "qdit could not be reached. Try again.");
+  }
+  if (!res.ok) throw await errorFromResponse(res);
+  const body = (await res.json().catch(() => null)) as { data?: QditMe } | null;
+  if (!body?.data?.user || typeof body.data.user.id !== "string") {
+    throw new QditError("bad_response", "qdit sent an account doqtri could not read.");
+  }
+  return body.data;
 }

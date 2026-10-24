@@ -1,6 +1,6 @@
 /**
  * Where qdit lives and who doqtri is to it (WP-2.3, D-02). Server-only, except
- * QDIT_INTEGRATION_ENABLED, which the profile also reads to decide whether to
+ * qditIntegrationEnabled(), which the profile also reads to decide whether to
  * show Connected apps.
  *
  * Names follow docs/integration/CONTRACT.md section 1: QDIT_API_BASE_URL is
@@ -11,8 +11,10 @@
  * connected to any qdit, rather than to production by accident.
  */
 
-/** The integration's UI and routes are off unless this is "1" (live app unchanged). */
-export const QDIT_INTEGRATION_ENABLED = process.env.NEXT_PUBLIC_QDIT_INTEGRATION === "1";
+/** The integration's UI and routes are off unless NEXT_PUBLIC_QDIT_INTEGRATION is "1" (live app unchanged). */
+export function qditIntegrationEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_QDIT_INTEGRATION === "1";
+}
 
 /**
  * What doqtri asks qdit for. Supabase Auth's scopes are identity claims, not
