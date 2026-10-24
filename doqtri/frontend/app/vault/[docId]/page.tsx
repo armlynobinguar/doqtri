@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { loadVaultDocs } from "@/lib/load-docs";
 import { crossWorkspaceRedirect, getActiveWorkspace } from "@/lib/active-workspace";
+import { WorkspaceGuard } from "@/components/vault/workspace-guard";
 import { DocWorkspace } from "@/components/vault/doc-workspace";
 
 export default async function DocPage(props: PageProps<"/vault/[docId]">) {
@@ -34,5 +35,10 @@ export default async function DocPage(props: PageProps<"/vault/[docId]">) {
   }
 
   // Remount on note change instead of reconciling editor state across notes.
-  return <DocWorkspace key={active.id} docs={docs} active={active} />;
+  return (
+    <>
+      <WorkspaceGuard workspaceId={workspace.id} />
+      <DocWorkspace key={active.id} docs={docs} active={active} />
+    </>
+  );
 }

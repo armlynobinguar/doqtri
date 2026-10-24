@@ -3,6 +3,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { loadVaultDocs } from "@/lib/load-docs";
 import { getActiveWorkspace } from "@/lib/active-workspace";
 import { loadMindmapStyle } from "@/lib/load-mindmap-style";
+import { WorkspaceGuard } from "@/components/vault/workspace-guard";
 import { GlobalMindmap } from "@/components/vault/global-mindmap";
 
 /**
@@ -24,5 +25,10 @@ export default async function GlobalMindmapPage() {
     loadMindmapStyle(supabase, user.id, "global"),
   ]);
 
-  return <GlobalMindmap docs={docs} savedStyle={savedStyle} />;
+  return (
+    <>
+      <WorkspaceGuard workspaceId={workspace.id} />
+      <GlobalMindmap docs={docs} savedStyle={savedStyle} />
+    </>
+  );
 }

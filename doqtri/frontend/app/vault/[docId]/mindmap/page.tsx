@@ -3,6 +3,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { loadVaultDocs } from "@/lib/load-docs";
 import { crossWorkspaceRedirect, getActiveWorkspace } from "@/lib/active-workspace";
 import { loadMindmapStyle } from "@/lib/load-mindmap-style";
+import { WorkspaceGuard } from "@/components/vault/workspace-guard";
 import { DocumentMindmap } from "@/components/vault/document-mindmap";
 
 /**
@@ -37,14 +38,17 @@ export default async function DocMindmapPage(
   }
 
   return (
-    <DocumentMindmap
-      key={active.id}
-      docId={active.id}
-      title={active.title}
-      markdown={active.markdown}
-      mindmap={active.mindmap ?? null}
-      stale={active.mindmapStale ?? false}
-      savedStyle={savedStyle}
-    />
+    <>
+      <WorkspaceGuard workspaceId={workspace.id} />
+      <DocumentMindmap
+        key={active.id}
+        docId={active.id}
+        title={active.title}
+        markdown={active.markdown}
+        mindmap={active.mindmap ?? null}
+        stale={active.mindmapStale ?? false}
+        savedStyle={savedStyle}
+      />
+    </>
   );
 }
