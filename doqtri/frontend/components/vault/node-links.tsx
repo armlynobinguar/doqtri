@@ -19,6 +19,7 @@ export function NodeLinks({
   nodes,
   anchored,
   canSign,
+  signerLoading = false,
   onSynced,
   onSave,
 }: {
@@ -28,6 +29,8 @@ export function NodeLinks({
   nodes: LinkableNode[];
   anchored: boolean;
   canSign: boolean;
+  /** True while the user's standing on this note loads: GitHub Sync stays disabled. */
+  signerLoading?: boolean;
   onSynced: () => void;
   onSave: () => Promise<string>;
 }) {
@@ -45,6 +48,7 @@ export function NodeLinks({
         nodes={nodes}
         anchored={anchored}
         canSign={canSign}
+        signerLoading={signerLoading}
         onSynced={onSynced}
         taken={qdit ? linked.qdit : []}
         onLinkedChange={onGitHub}
