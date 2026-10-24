@@ -10,7 +10,12 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
 
-import { listMyWorkspaces, resolveActiveWorkspace, workspaceForCreate } from "./active-workspace";
+import {
+  crossWorkspaceRedirect,
+  listMyWorkspaces,
+  resolveActiveWorkspace,
+  workspaceForCreate,
+} from "./active-workspace";
 
 type Result = { data: unknown; error: { message: string } | null };
 
@@ -159,5 +164,28 @@ describe("workspaceForCreate", () => {
     const { client, calls } = fakeClient({ workspaces: [{ data: { id: PERSONAL }, error: null }] });
     expect(await workspaceForCreate(client, USER, { requested: "../x" })).toEqual({ ok: true, workspaceId: PERSONAL });
     expect(calls.map((c) => c.table)).toEqual(["workspaces"]);
+  });
+});
+
+describe("crossWorkspaceRedirect", () => {
+  const DOC = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+
+  it("switches to the workspace of a note the user can read elsewhere", async () => {
+    const { client } = fakeClient({ documents: [{ data: { workspace_id: TEAM }, error: null }] });
+    const url = await crossWorkspaceRedirect(client, { docId: DOC, activeId: PERSONAL, next: `/vault/${DOC}` });
+    expect(url).toBe(`/api/workspaces/active?ws=${TEAM}&next=%2Fvault%2F${DOC}`);
+  });
+
+  it("does nothing for a note RLS hides, or one already in the active workspace", async () => {
+    const hidden = fakeClient({ documents: [{ data: null, error: null }] });
+    expect(await crossWorkspaceRedirect(hidden.client, { docId: DOC, activeId: PERSONAL, next: "/vault" })).toBeNull();
+    const here = fakeClient({ documents: [{ data: { workspace_id: PERSONAL }, error: null }] });
+    expect(await crossWorkspaceRedirect(here.client, { docId: DOC, activeId: PERSONAL, next: "/vault" })).toBeNull();
+  });
+
+  it("does not query for a path segment that is not a note id", async () => {
+    const { client, calls } = fakeClient({});
+    expect(await crossWorkspaceRedirect(client, { docId: "graph", activeId: PERSONAL, next: "/vault" })).toBeNull();
+    expect(calls).toHaveLength(0);
   });
 });

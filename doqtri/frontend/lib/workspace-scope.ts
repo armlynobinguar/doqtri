@@ -156,3 +156,9 @@ export function pathAfterSwitch(pathname: string): string {
   if (segment === "profile" || segment === "earnings" || segment === "workspace") return pathname;
   return "/vault";
 }
+
+/** The link that switches to `workspaceId` and then opens `next` (GET /api/workspaces/active). */
+export function switchWorkspaceUrl(workspaceId: string, next: string): string {
+  const params = new URLSearchParams({ ws: workspaceId, next: vaultReturnPath(next) });
+  return `/api/workspaces/active?${params.toString()}`;
+}

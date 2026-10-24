@@ -10,6 +10,7 @@ import {
   parseActiveWorkspace,
   pickActiveWorkspace,
   sortWorkspaces,
+  switchWorkspaceUrl,
   type WorkspaceChoice,
 } from "@/lib/workspace-scope";
 
@@ -150,4 +151,25 @@ export async function workspaceForCreate(
   } catch (error) {
     return { ok: false, status: 500, error: (error as Error).message };
   }
+}
+
+/**
+ * For a note page asked for a note outside the active workspace: the link
+ * that switches to the note's workspace and comes back, when the user can
+ * read the note there; null when they cannot (the page is then a 404, as
+ * before). RLS decides "can read", through the session client.
+ */
+export async function crossWorkspaceRedirect(
+  supabase: SupabaseClient,
+  params: { docId: string; activeId: string; next: string },
+): Promise<string | null> {
+  if (!isWorkspaceId(params.docId)) return null;
+  const { data } = await supabase
+    .from("documents")
+    .select("workspace_id")
+    .eq("id", params.docId)
+    .maybeSingle();
+  const workspaceId = (data?.workspace_id as string | undefined) ?? null;
+  if (!workspaceId || workspaceId === params.activeId) return null;
+  return switchWorkspaceUrl(workspaceId, params.next);
 }

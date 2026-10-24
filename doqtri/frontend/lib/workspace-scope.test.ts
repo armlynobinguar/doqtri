@@ -7,6 +7,7 @@ import {
   pathAfterSwitch,
   pickActiveWorkspace,
   sortWorkspaces,
+  switchWorkspaceUrl,
   vaultReturnPath,
   workspaceLabel,
   workspaceSlug,
@@ -146,5 +147,15 @@ describe("pathAfterSwitch", () => {
     expect(pathAfterSwitch("/vault/0d3c/mindmap")).toBe("/vault");
     expect(pathAfterSwitch("/vault/0d3c")).toBe("/vault");
     expect(pathAfterSwitch("/vault")).toBe("/vault");
+  });
+});
+
+describe("switchWorkspaceUrl", () => {
+  it("encodes the workspace and a vault return path", () => {
+    expect(switchWorkspaceUrl(TEAM, "/vault/x/mindmap")).toBe(`/api/workspaces/active?ws=${TEAM}&next=%2Fvault%2Fx%2Fmindmap`);
+  });
+
+  it("never carries a path outside the vault", () => {
+    expect(switchWorkspaceUrl(TEAM, "https://evil.example")).toBe(`/api/workspaces/active?ws=${TEAM}&next=%2Fvault`);
   });
 });
