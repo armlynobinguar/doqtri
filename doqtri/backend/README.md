@@ -51,7 +51,9 @@ The remote records its own version stamps (e.g. `20260929114657` for
 These were applied through the Supabase MCP server, so the remote project is
 already in this state, except those marked "NOT yet applied". The workspace
 migrations (`20261024120000` through `20261025090000`) go out together with
-the on-chain editors rollout: follow
+the on-chain editors rollout, in the same release window as the
+`integration/suite` merge into `main` and never ahead of it (`main`'s code
+cannot create or save notes on them): follow
 [docs/runbooks/registry-editors-rollout.md](../docs/runbooks/registry-editors-rollout.md),
 which covers the branch dry-run, the registry v3 upgrade, the revoker key,
 the scheduler's Vault secrets and the `NEXT_PUBLIC_REGISTRY_EDITORS` flag. The files exist so the schema is reviewable in git and
@@ -125,7 +127,13 @@ Two supporting tables:
   Vault secrets); `chain_jobs_scheduler_health()` reports whether the
   minutely job can run. Deleting an account queues revocations for every
   role its wallets hold, deletes the invites to and from it, and then lets
-  its wallet records cascade (D-50, D-51).
+  its wallet records cascade (D-50, D-51). It refuses, with a hint, an
+  account whose personal workspace holds anchored notes or other people's
+  notes, the last owner of a team workspace with no admin (D-31), and, a
+  known limit until those rows can be anonymised, an account that has
+  published a community template or bought or claimed one
+  (`market_templates.creator_id`, `market_purchases.buyer_id` are
+  `on delete restrict`).
 - `public.workspace_member_removals` — when each member lost the right to
   sign in a workspace (removed, left, account deleted, or demoted to viewer),
   with the wallet addresses they had then, and when they got it back. Written

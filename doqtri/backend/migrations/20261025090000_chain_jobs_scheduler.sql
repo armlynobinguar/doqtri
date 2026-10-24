@@ -50,6 +50,9 @@
 --   and the members screen still work the queue.
 --
 -- The functions read Vault as their owner and none is callable by a client.
+-- The whole file is safe to run again (create or replace, idempotent
+-- grants, cron.schedule replacing a job of the same name), which is how an
+-- operator schedules the job after enabling pg_cron and pg_net later.
 -- See doqtri/docs/runbooks/registry-editors-rollout.md for the rollout.
 
 
@@ -61,7 +64,7 @@
 -- order. Empty when both are. Assumes Vault exists; callers check. PL/pgSQL
 -- rather than SQL so it can be created where Vault is absent: a SQL
 -- function's body is checked against the catalog when it is created.
-create function public.chain_jobs_scheduler_missing_secrets()
+create or replace function public.chain_jobs_scheduler_missing_secrets()
 returns text[]
 language plpgsql
 stable
@@ -90,7 +93,7 @@ comment on function public.chain_jobs_scheduler_missing_secrets() is
 -- sent. pg_net is asynchronous: the request runs after this returns, and
 -- times out after 60 s (the route may run longer; its jobs are leased, so
 -- the next minute's run does not repeat them).
-create function public.request_chain_jobs_run()
+create or replace function public.request_chain_jobs_run()
 returns bigint
 language plpgsql
 volatile
@@ -126,7 +129,7 @@ comment on function public.request_chain_jobs_run() is
 -- The health signal: `unavailable` when this database has no pg_cron,
 -- pg_net or Vault, `missing` when it has them but the job is not scheduled
 -- (or not active) or a secret is not stored, and `configured` otherwise.
-create function public.chain_jobs_scheduler_health()
+create or replace function public.chain_jobs_scheduler_health()
 returns jsonb
 language plpgsql
 stable

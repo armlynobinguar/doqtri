@@ -17,11 +17,13 @@
 --   f  a Freighter account   (G...): editor of Acme and of x's personal
 --                            workspace
 --   u  unconfirmed@example.com, never confirmed (D-49)
+--   m  market@example.com    editor of Acme, has a template draft and
+--                            has bought one of o's
 
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(41);
+select plan(45);
 
 insert into auth.users (id, email, email_confirmed_at) values
   ('00000000-0000-4000-8000-0000000000c1', 'owner@example.com', now()),
@@ -293,7 +295,39 @@ select throws_ok(
   $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c2' $$,
   '23001', null, 'the last owner of a team workspace with nobody to hand it to is refused');
 
--- Neither refusal is about the wallet any more: with its note's record
+-- m has published a template (a draft) and bought one (20261013000000:
+-- both rows are `on delete restrict` against the account).
+insert into auth.users (id, email, email_confirmed_at) values
+  ('00000000-0000-4000-8000-0000000000c7', 'market@example.com', now());
+insert into public.workspace_members (workspace_id, user_id, role) values
+  ((select acme from ws), '00000000-0000-4000-8000-0000000000c7', 'editor');
+insert into public.market_templates
+  (id, network, creator_id, creator_wallet, title, category, body, content_hash, token, price, status) values
+  ('aaaaaaaaaaaaaaaa', 'testnet', '00000000-0000-4000-8000-0000000000c1', 'G' || repeat('O', 55),
+   'Roadmap', 'Planning', 'body', repeat('e', 64), 'C' || repeat('T', 55), 0, 'listed'),
+  ('bbbbbbbbbbbbbbbb', 'testnet', '00000000-0000-4000-8000-0000000000c7', 'G' || repeat('M', 55),
+   'Draft', 'Work', 'body', repeat('f', 64), 'C' || repeat('T', 55), 0, 'pending');
+insert into public.market_purchases (network, template_id, buyer_id, buyer_wallet, amount) values
+  ('testnet', 'aaaaaaaaaaaaaaaa', '00000000-0000-4000-8000-0000000000c7', 'G' || repeat('M', 55), 0);
+truncate jobs_before;
+insert into jobs_before select count(*)::int from public.workspace_chain_jobs;
+
+select throws_ok(
+  $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c7' $$,
+  '23001', 'this account has published 1 community template(s) and bought or claimed 1 on record',
+  'an account with a template it published and one it bought is refused, saying why');
+select is((select count(*)::int from public.workspace_chain_jobs), (select n from jobs_before),
+  'and nothing is queued for it');
+delete from public.market_purchases where buyer_id = '00000000-0000-4000-8000-0000000000c7';
+select throws_ok(
+  $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c7' $$,
+  '23001', null, 'a template draft alone still refuses it (a known limit)');
+delete from public.market_templates where creator_id = '00000000-0000-4000-8000-0000000000c7';
+select lives_ok(
+  $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c7' $$,
+  'with neither left, the account deletes itself');
+
+-- None of these refusals is about the wallet any more: with its note's record
 -- gone, x deletes itself, wallet and all.
 delete from public.chain_writes where document_id = '32000000-0000-4000-8000-000000000002';
 select lives_ok(

@@ -894,6 +894,13 @@ $$;
 --   and with nothing to say why. Notes anchored straight from a Freighter
 --   wallet leave no chain_writes row, so the database cannot see them;
 --   the delete-account route has to ask the ledger, as the note route does.
+-- * So is an account that has published a community template (a pending
+--   draft included) or bought or claimed one: market_templates.creator_id
+--   and market_purchases.buyer_id are `on delete restrict`
+--   (20261013000000), which would refuse it further down with a bare
+--   foreign key error, after nothing had run. This says why instead. A
+--   known limit: such accounts cannot be deleted until those rows are
+--   anonymised or let go, which is a follow-up.
 -- * Before anything cascades, the account's editor and admin roles in every
 --   workspace, someone else's personal one included, are queued for
 --   revocation, while its wallets are still on record (wallet_accounts
@@ -953,6 +960,8 @@ declare
   v_admin    uuid;
   v_others   integer;
   v_anchored integer;
+  v_listed   integer;
+  v_bought   integer;
 begin
   select count(*) into v_others
     from public.documents d
@@ -976,6 +985,15 @@ begin
       v_anchored
       using errcode = 'restrict_violation',
             hint = 'An anchored note is kept with its on-chain record, which cannot be deleted, so the account stays too.';
+  end if;
+
+  select count(*) into v_listed from public.market_templates t where t.creator_id = old.id;
+  select count(*) into v_bought from public.market_purchases p where p.buyer_id = old.id;
+  if v_listed > 0 or v_bought > 0 then
+    raise exception 'this account has published % community template(s) and bought or claimed % on record',
+      v_listed, v_bought
+      using errcode = 'restrict_violation',
+            hint = 'Templates and purchases keep their account (market_templates.creator_id, market_purchases.buyer_id), so the account stays too, for now.';
   end if;
 
   perform public.enqueue_chain_revocation(m.workspace_id, old.id)

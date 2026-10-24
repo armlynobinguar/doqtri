@@ -12,10 +12,11 @@ What changes for users, and when:
 
 | Step | Visible to users |
 | --- | --- |
-| 1-2 Database migrations | Yes, even with the flag off: personal workspaces, team workspaces, invites, edit locking (a second tab of a note is read-only, D-54) |
+| 1 Dry-run on a Supabase branch | No. Production is not touched |
 | 3 Registry v3 upgrade | No. Old records load as before (G1.4) |
 | 4-5 Revoker key, cron | No |
-| 6 `NEXT_PUBLIC_REGISTRY_EDITORS=1` | Yes: team notes are signed by their editors, the members screen shows on-chain state |
+| 6.5 Release: `main` merge, production deploy, then the migrations, flag off | Yes: personal workspaces, team workspaces, invites, edit locking (a second tab of a note is read-only, D-54). Saves fail for the few minutes between the deploy and the migrations |
+| 6.6 `NEXT_PUBLIC_REGISTRY_EDITORS=1` on production | Yes: team notes are signed by their editors, the members screen shows on-chain state |
 
 Keep this page open while you go; each step ends with a check, and a
 failed check means stop.
@@ -68,7 +69,7 @@ Never on production first.
    pg_prove -d "$BRANCH_DATABASE_URL" doqtri/backend/tests/*.sql
    ```
 
-   Expect every file to pass: 620 tests in 8 files as of WP-1.9
+   Expect every file to pass: 624 tests in 8 files as of WP-1.9
    (`chain_jobs_scheduler.test.sql` needs pg_cron, pg_net and Vault, so it
    only runs where step 2 was done). Each file runs in a transaction it
    rolls back.
@@ -91,9 +92,26 @@ Never on production first.
    `accounts` must equal `personal`; the second and third queries return
    nothing and 0.
 
-Then apply the same migrations to production, in the same order, and run
-the step 5 checks there. The live app keeps working: with the flag unset it
-behaves as before, apart from the visible changes in the table above.
+Do **not** apply them to production now. Production gets them only in
+the release window of step 6.5, after the live G1 sign-off and right after
+`integration/suite` is merged into `main` and deployed, never ahead of
+`main`'s code. The live app runs `main`, and `main` writes notes in ways
+these migrations refuse, flag or no flag:
+
+- `20261024130000` makes `documents.workspace_id` required, with no
+  default, and its insert policy requires workspace membership. `main`'s
+  note route (`app/api/notes/route.ts`) and import pipeline
+  (`lib/ingest/pipeline.ts`) insert `{ user_id, title, markdown }`
+  without one, so every new note and every import would fail.
+- `20261024150000`'s `documents_before_save` trigger refuses a markdown
+  change from a signed-in browser (the new code saves through
+  `save_document()`, which checks the edit lock and version).
+  `main` saves from the browser (`components/vault/doc-workspace.tsx`), so
+  every save would be refused.
+
+The other way round fails too: the new code queries tables these
+migrations create. That is why step 6.5 deploys first and migrates at once
+after.
 
 ## 2. Supabase auth settings
 
@@ -231,12 +249,30 @@ needs a new deployment.
    of step 1 (its URL and keys in the Preview environment).
 2. Run the **two-person browser test** (below) on the preview.
 3. Run the **flag-off smoke test** (below) on a deployment without the flag.
-4. **Live G1 sign-off** (D-47). Only then does `integration/suite` go to
-   `main`, which deploys production.
-5. **Production.** Apply the migrations (step 1, last paragraph) if not
-   done, store the production Vault secrets (step 5), copy
-   `REVOKER_SECRET_KEY` and `CRON_SECRET` to Production, set
-   `NEXT_PUBLIC_REGISTRY_EDITORS=1` there and redeploy. Repeat the
+4. **Live G1 sign-off** (D-47). Nothing below happens before it.
+5. **Release window, flag off.** Code and schema change together here,
+   once. Pick a quiet hour and tell users that saving pauses for a few
+   minutes: between 1 and 3 below the new code runs on the old schema and
+   its workspace queries fail. Leave `NEXT_PUBLIC_REGISTRY_EDITORS` unset
+   in Production for now. Before the window, enable pg_cron and pg_net on
+   production (as in step 1.2) and take a database backup (or note the
+   point-in-time-recovery time) for Rollback.
+   1. Merge `integration/suite` into `main`. That deploys production.
+   2. Check production is serving the new build before touching the
+      database: in Vercel → Deployments, the current production
+      deployment is **Ready** and its commit is the merge commit, and the
+      live site's assigned domain points at it. Still the old build:
+      wait, or stop. Do not migrate under the old build (step 1).
+   3. Straight away, apply the seven migrations to production, in order,
+      as in step 1.3, and read the same NOTICEs and WARNING.
+   4. Run step 1.5's checks on production. A failed check: stop, and see
+      Rollback.
+   5. Run the flag-off smoke test's steps 1, 2 and 4 on production with a
+      test account: create, save and anchor a note, open a second tab.
+6. **Flag on, production.** Store the production Vault secrets (step 5,
+   the production URL), copy `REVOKER_SECRET_KEY` and `CRON_SECRET` to
+   Production, set `NEXT_PUBLIC_REGISTRY_EDITORS=1` there and redeploy.
+   `chain_jobs_scheduler_health()` must answer `configured`. Repeat the
    two-person test's removal step on production with two test accounts.
 
 ## The two-person browser test
@@ -301,5 +337,10 @@ On a deployment without `NEXT_PUBLIC_REGISTRY_EDITORS`, with prod-like data
 - **The scheduler**: `select cron.unschedule('doqtri-chain-jobs');` stops
   it; deleting the Vault secrets makes it send nothing (and warn).
 - **The migrations** are not reversed. They add workspaces around the
-  existing data without removing any; with the flag off the app runs on
-  them. A real restore means a database backup from before step 1.
+  existing data without removing any; with the flag off the new code runs
+  on them. The old code does not (step 1): once they are on production,
+  do not roll the deployment back to a build from before the merge
+  (Vercel Instant Rollback included), or note creation, imports and saves
+  stop. Roll forward with a fix on `main` instead. A real restore means a
+  database backup from before step 6.5 together with the pre-merge
+  deployment, losing what was written since.
