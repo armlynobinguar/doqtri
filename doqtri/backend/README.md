@@ -41,6 +41,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261024160000_workspace_member_removals.sql  # NOT yet applied (WP-1.8)
 20261025100000_integration_connections.sql    # NOT yet applied (WP-2.3)
 20261025110000_qdit_linking.sql               # NOT yet applied (WP-2.5)
+20261025120000_qdit_webhook_events.sql        # NOT yet applied (WP-2.8)
 ```
 
 The remote records its own version stamps (e.g. `20260929114657` for
@@ -152,6 +153,17 @@ Two supporting tables:
   the project, the admin can confirm forgetting the link in doqtri only
   (qdit may keep dangling links, which are logged); with the integration
   turned off, only SQL on the database removes the row.
+
+- `public.qdit_webhook_events` and `public.qdit_milestone_states` — qdit's
+  status webhook and what doqtri made of it (WP-2.8). Events are kept by id
+  for 30 days so a retried delivery is not acted on twice (R-09); service role
+  only. A milestone's state holds qdit's last word (a preview) and the last
+  read of its record on qdit's `milestone_proof` contract (D-04), which is
+  what the ship panel suggests a status from (D-19). Viewers of a note that
+  links the milestone read it; `record_qdit_milestone_state()` writes it,
+  keeping the newest event and the newest ledger whatever order they arrive
+  in (D-25), and unlinking forgets it. `doc_project_links` gained the
+  project's chain, so the webhook knows which contract to read.
 
 The notes table itself is still the only content store. There are deliberately **no** graph tables: nodes and
 edges are parsed from `markdown` at render time by `lib/wikilinks.ts`, so the
