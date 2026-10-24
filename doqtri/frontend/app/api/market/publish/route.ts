@@ -12,7 +12,7 @@ import {
   templateBodyFromNote,
 } from "@/lib/market";
 import { canReceive, consumeQuota, positiveEnv, userWallet } from "@/lib/market-server";
-import { loadMemberDocument } from "@/lib/workspace-docs";
+import { loadAuthoredDocument } from "@/lib/workspace-docs";
 
 /**
  * Step 1 of publishing a note as a community template (progress/004): freeze
@@ -74,14 +74,13 @@ export async function POST(request: Request) {
 
   // A template is listed in its creator's name and pays them, so only the
   // note's author may publish it, and only while still an editor of its
-  // workspace: a teammate's note is not theirs to sell.
-  const found = await loadMemberDocument<{ markdown: string; source_template_id: string | null }>(admin, {
+  // workspace (D-41): a teammate's note is not theirs to sell.
+  const found = await loadAuthoredDocument<{ markdown: string; source_template_id: string | null }>(admin, {
     userId: user.id,
     docId: noteId,
     columns: "markdown, source_template_id",
-    minRole: "editor",
   });
-  if (!found.ok || found.doc.user_id !== user.id) return fail("That note isn't in your vault.", 404);
+  if (!found.ok) return fail("That note isn't in your vault.", 404);
   const note = found.doc;
 
   const body = templateBodyFromNote(note.markdown ?? "");

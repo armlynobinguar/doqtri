@@ -8,6 +8,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   insertWorkspaceDocument,
+  loadAuthoredDocument,
   loadMemberDocument,
   personalWorkspaceId,
   roleAtLeast,
@@ -137,6 +138,45 @@ describe("loadMemberDocument", () => {
   it("reports a missing document as not found", async () => {
     const { client } = fakeClient({ documents: [{ data: null, error: null }] });
     expect(await loadMemberDocument(client, { userId: "u", docId: "nope", minRole: "viewer" })).toEqual({
+      ok: false,
+      reason: "not_found",
+    });
+  });
+});
+
+describe("loadAuthoredDocument (D-41)", () => {
+  const doc = { id: "doc-1", workspace_id: "ws-1", user_id: "author", markdown: "# Plan" };
+  const load = (role: string | null, userId = "author") => {
+    const { client } = fakeClient({
+      documents: [{ data: doc, error: null }],
+      workspace_members: [{ data: role && { role }, error: null }],
+    });
+    return loadAuthoredDocument(client, { userId, docId: "doc-1", columns: "markdown" });
+  };
+
+  it("returns the note to its author while they are an editor or above", async () => {
+    expect(await load("editor")).toEqual({ ok: true, doc, role: "editor" });
+    expect(await load("owner")).toEqual({ ok: true, doc, role: "owner" });
+  });
+
+  it("refuses a teammate who can edit it but did not write it", async () => {
+    expect(await load("admin", "teammate")).toEqual({ ok: false, reason: "not_found" });
+  });
+
+  it("refuses the author once demoted to viewer", async () => {
+    expect(await load("viewer")).toEqual({ ok: false, reason: "forbidden", role: "viewer" });
+  });
+
+  it("refuses the author once removed from the workspace", async () => {
+    expect(await load(null)).toEqual({ ok: false, reason: "not_found" });
+  });
+
+  it("refuses everyone on a note whose author deleted their account", async () => {
+    const { client } = fakeClient({
+      documents: [{ data: { ...doc, user_id: null }, error: null }],
+      workspace_members: [{ data: { role: "owner" }, error: null }],
+    });
+    expect(await loadAuthoredDocument(client, { userId: "author", docId: "doc-1" })).toEqual({
       ok: false,
       reason: "not_found",
     });

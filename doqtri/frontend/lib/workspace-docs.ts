@@ -98,6 +98,22 @@ export async function loadMemberDocument<T extends object = object>(
   return { ok: true, doc: row, role };
 }
 
+/**
+ * Loads a document only for its author, and only while the author is still
+ * an editor or above of its workspace: the rule for acting on a note in the
+ * author's own name, such as listing it on the market (D-41). Anyone else,
+ * a teammate who can edit the note included, gets `not_found`, as does an
+ * author who was removed; an author demoted to viewer gets `forbidden`.
+ */
+export async function loadAuthoredDocument<T extends object = object>(
+  admin: SupabaseClient,
+  params: { userId: string; docId: string; columns?: string },
+): Promise<MemberDocumentResult<T>> {
+  const found = await loadMemberDocument<T>(admin, { ...params, minRole: "editor" });
+  if (found.ok && found.doc.user_id !== params.userId) return { ok: false, reason: "not_found" };
+  return found;
+}
+
 /** Every title in one workspace, for uniqueTitle() and isTitleTaken(). */
 export async function workspaceTitles(
   admin: SupabaseClient,
