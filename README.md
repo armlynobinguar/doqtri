@@ -244,6 +244,15 @@ contract-wide server key, set by the contract admin, that may only remove member
 so a member removed in the app loses chain access at once. A document put in a workspace becomes the
 workspace owner's: its author then writes it as a member, and loses it when removed.
 
+**Who owns a workspace document.** For a document with a `DocWorkspace` entry, owner-level authority
+always comes from the workspace's *current* owner, read at call time; the stored `Document.owner` does
+not count. That covers the original owner-only calls too (`update_document`, `set_node_status`,
+`anchor`, `unassign_document`, moving it with `assign_document`). So a transfer moves every document in
+the workspace at once without rewriting any record (D-18, D-28): `get_document` reports the current
+owner straight away, and the stored record catches up the next time the document is written.
+`unassign_document` stores the current owner, since a document in no workspace is owned by its stored
+owner again. A former owner keeps no role; the new owner may `add_admin` them back.
+
 | Function | Auth | Description |
 | --- | --- | --- |
 | `create_workspace(workspace_id, owner)` | owner | Create a workspace; ids are first come, first served, so check `get_workspace` after |
@@ -251,6 +260,8 @@ workspace owner's: its author then writes it as a member, and loses it when remo
 | `remove_admin(workspace_id, caller, admin)` | workspace owner or revoker | Remove an admin from the workspace; `false` if there was none |
 | `add_editor(workspace_id, admin, editor)` | admin or owner | Add an editor; at most `MAX_MEMBERS` (100) members |
 | `remove_editor(workspace_id, caller, editor)` | admin, owner or revoker | Remove an editor (never an admin); `false` if there was none |
+| `transfer_workspace(workspace_id, owner, new_owner)` | owner **and** new owner | Hand the workspace and its documents on; a member who becomes owner leaves the member list |
+| `admin_reassign_owner(workspace_id, new_owner)` | contract admin | Recovery when the owner can no longer sign (D-29, D-31); the new owner does not co-sign |
 | `set_revoker(revoker)` | contract admin | Set or replace the revoke-only server key |
 | `assign_document(doc_id, workspace_id)` | document owner, a member | Let the workspace's members write the document; hands it to the workspace owner |
 | `unassign_document(doc_id)` | document owner | Take the document out of its workspace; `false` if it was in none |
@@ -260,6 +271,8 @@ workspace owner's: its author then writes it as a member, and loses it when remo
 **Events.** `(doqtri, register | update | node)` events always carry the `doc_id` as their value; the
 `*_as` calls add the signer as a third topic. Workspace events use their own first topic, `doqtri_ws`:
 `ws_create`, `admin_add`, `admin_rm`, `edit_add`, `edit_rm` carry `(workspace_id, subject, caller)`;
+`ws_xfer` (transfer) and `ws_recov` (contract-admin reassignment) carry `(workspace_id, new_owner,
+previous_owner)`, and a no-op to the current owner emits nothing;
 `assign` carries `(doc_id, workspace_id, new_owner)`, `unassign` `(doc_id, workspace_id)`, and
 `revoker` the new revoker's address.
 
