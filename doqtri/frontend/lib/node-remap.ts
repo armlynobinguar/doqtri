@@ -214,6 +214,18 @@ function effective(link: RemapLink, outcome: RemapOutcome): RemapOutcome {
   return { kind: "stale" };
 }
 
+/**
+ * A qdit link already flagged waits for the owner to relink it: its stored
+ * id may be a parking id, or a heading that has nothing to do with it any
+ * more, so "the label is gone but the id exists" says nothing about a
+ * rename. Its heading coming back (keep, or a unique move) still counts.
+ */
+function settled(link: RemapLink, outcome: RemapOutcome): RemapOutcome {
+  const flagged = link.qditState === "ambiguous" || link.qditState === "broken" || link.qditState === "conflict";
+  if (link.provider !== "qdit" || !flagged || outcome.kind !== "rename") return outcome;
+  return link.qditState === "broken" ? { kind: "deleted" } : { kind: "ambiguous" };
+}
+
 type Yielding = Extract<RemapOutcome, { kind: "ambiguous" | "deleted" | "stale" }>;
 
 /** A link whose own heading is gone or unclear: it gives way to one moving onto its id. */
@@ -248,7 +260,7 @@ export function planRemap(
       plan.set(link.id, { kind: "keep" });
       continue;
     }
-    plan.set(link.id, effective(link, decide(link, after, byId, idsByLabel, s)));
+    plan.set(link.id, effective(link, settled(link, decide(link, after, byId, idsByLabel, s))));
   }
 
   // A rename is only a rename if no other link moved onto that heading

@@ -226,6 +226,28 @@ describe("planRemap: two links never share a heading", () => {
   });
 });
 
+describe("planRemap: flagged links wait for a relink", () => {
+  it("a parked broken link is not renamed after a heading that later takes its id", () => {
+    const after = headingsOf("t", doc("# A", "# C", "# D", "# E", "# New"));
+    const plan = planRemap([qdit("b", "h4", "B", "broken")], after);
+    expect(plan.get("b")).toEqual({ kind: "deleted" });
+    expect(remapChanges([qdit("b", "h4", "B", "broken")], plan)).toEqual([]);
+  });
+
+  it("an ambiguous link is not renamed either", () => {
+    const after = headingsOf("t", doc("# A", "# Other"));
+    expect(planRemap([qdit("x", "h1", "Tests", "ambiguous")], after).get("x")).toEqual({ kind: "ambiguous" });
+  });
+
+  it("but a deleted heading that comes back takes its link back", () => {
+    const after = headingsOf("t", doc("# A", "# B", "# C"));
+    const links = [qdit("b", "h7", "B", "broken")];
+    const plan = planRemap(links, after);
+    expect(plan.get("b")).toEqual({ kind: "move", to: "h1" });
+    expect(remapChanges(links, plan)).toEqual([{ id: "b", node_id: "h1", qdit_state: "pending" }]);
+  });
+});
+
 describe("remapChanges", () => {
   it("writes only rows that change, with the qdit state they reach", () => {
     const after = headingsOf("t", doc("# New", "# A", "# C", "# Tests", "# Tests"));
