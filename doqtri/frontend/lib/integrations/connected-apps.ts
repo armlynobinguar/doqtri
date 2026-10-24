@@ -56,7 +56,8 @@ export function describeQditOutcome(
   if (outcome === "connected") return { tone: "success", text: "qdit is connected." };
   if (outcome === "denied") return { tone: "warning", text: "You didn't allow Doqtri in qdit, so nothing was connected." };
   if (outcome !== "error") return null;
-  const text = reason && reason in REASONS ? REASONS[reason as QditErrorReason] : REASONS.provider;
+  const text =
+    reason && Object.prototype.hasOwnProperty.call(REASONS, reason) ? REASONS[reason as QditErrorReason] : REASONS.provider;
   return { tone: "warning", text };
 }
 

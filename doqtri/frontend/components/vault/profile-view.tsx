@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { StatusTag } from "@/components/ui/status-tag";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PasskeysDialog } from "@/components/vault/passkeys-dialog";
+import { ConnectedApps, type ConnectedAppsData } from "@/components/vault/connected-apps";
 import { usePreferences } from "@/components/vault/preferences";
 import type { Preferences } from "@/lib/preferences";
 import { useWallet } from "@/components/vault/wallet-provider";
@@ -138,7 +139,7 @@ async function loadOnChainSince(address: string, createdTx: string | null): Prom
 /** The user's referral link and how many accounts signed up through it. */
 export type ReferralSummary = { url: string; referred: number };
 
-const PROFILE_TABS = ["account", "wallet", "preferences", "invite"] as const;
+const PROFILE_TABS = ["account", "wallet", "preferences", "apps", "invite"] as const;
 type ProfileTab = (typeof PROFILE_TABS)[number];
 const isProfileTab = (value: string | null): value is ProfileTab =>
   PROFILE_TABS.includes(value as ProfileTab);
@@ -154,11 +155,14 @@ export function ProfileView({
   joinedAt,
   referral,
   workspaceId,
+  connectedApps = null,
 }: {
   joinedAt: string;
   referral: ReferralSummary | null;
   /** The active workspace, whose notes the vault shows and this page counts (WP-1.7). */
   workspaceId: string;
+  /** Connected apps (WP-2.3); null hides the tab (NEXT_PUBLIC_QDIT_INTEGRATION unset). */
+  connectedApps?: ConnectedAppsData | null;
 }) {
   const wallet = useWallet();
   const { identity } = wallet;
@@ -178,7 +182,11 @@ export function ProfileView({
   const router = useRouter();
   const requestedTab = useSearchParams().get("tab");
   const tab: ProfileTab =
-    isProfileTab(requestedTab) && (requestedTab !== "invite" || referral) ? requestedTab : "account";
+    isProfileTab(requestedTab) &&
+    (requestedTab !== "invite" || referral) &&
+    (requestedTab !== "apps" || connectedApps)
+      ? requestedTab
+      : "account";
   function setTab(next: ProfileTab) {
     router.replace(next === "account" ? "/vault/profile" : `/vault/profile?tab=${next}`, { scroll: false });
   }
@@ -420,6 +428,15 @@ export function ProfileView({
               <Settings2Icon />
               Preferences
             </TabsTrigger>
+            {connectedApps ? (
+              <TabsTrigger value="apps" data-testid="profile-tab-apps">
+                <PlugIcon />
+                Apps
+                {connectedApps.qdit?.status === "needs_reconnect" ? (
+                  <span className="bg-warning size-1.5 rounded-full" aria-label="needs attention" />
+                ) : null}
+              </TabsTrigger>
+            ) : null}
             {referral ? (
               <TabsTrigger value="invite" data-testid="profile-tab-invite">
                 <GiftIcon />
@@ -713,6 +730,8 @@ export function ProfileView({
             </p>
           </Section>
         ) : null}
+
+        {tab === "apps" && connectedApps ? <ConnectedApps data={connectedApps} /> : null}
 
         {tab === "invite" && referral ? (
           <Section title="Invite friends" icon={GiftIcon}>
