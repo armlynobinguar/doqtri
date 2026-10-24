@@ -45,9 +45,10 @@ select ok((select relrowsecurity from pg_class where oid = 'public.workspaces'::
   'RLS is enabled on workspaces');
 select ok((select relrowsecurity from pg_class where oid = 'public.workspace_members'::regclass),
   'RLS is enabled on workspace_members');
--- WP-1.2 adds this column and replaces this assertion with its own tests.
-select hasnt_column('public', 'documents', 'workspace_id',
-  'documents are not moved to workspaces yet (WP-1.2)');
+-- WP-1.2 moved documents into workspaces; workspace_documents.test.sql
+-- covers that.
+select has_column('public', 'documents', 'workspace_id',
+  'documents belong to workspaces (WP-1.2)');
 
 select ok(
   (select bool_and(p.prosecdef and p.proconfig @> array['search_path=""'])
@@ -558,11 +559,10 @@ reset role;
 -- Backfill
 --
 -- z stands for an account that existed before this migration: their trigger-
--- made workspace is removed, and they own a document.
+-- made workspace is removed. Since WP-1.2 a document cannot exist without a
+-- workspace, so z's document is written once the backfill has given them one.
 -- ---------------------------------------------------------------------------
 
-insert into public.documents (user_id, title, markdown)
-values ('00000000-0000-4000-8000-000000000008', 'Legacy note', '# Legacy');
 delete from public.workspaces
  where is_personal and created_by = '00000000-0000-4000-8000-000000000008';
 
@@ -587,6 +587,11 @@ select is(
   (select name from public.workspaces
     where is_personal and created_by = '00000000-0000-4000-8000-000000000008'),
   'legacy', 'named after their email');
+insert into public.documents (user_id, workspace_id, title, markdown)
+values ('00000000-0000-4000-8000-000000000008',
+        (select id from public.workspaces
+          where is_personal and created_by = '00000000-0000-4000-8000-000000000008'),
+        'Legacy note', '# Legacy');
 select is(
   (select count(*)::int from public.documents d
     where not exists (select 1 from public.workspaces w
@@ -639,7 +644,7 @@ select is(
       and user_id = '00000000-0000-4000-8000-000000000008'),
   'owner', 'and restores their owner membership');
 
--- Their document is still theirs, under the unchanged policies.
+-- Their document is still theirs, through the workspace they own.
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000008","role":"authenticated"}';
 select is((select count(*)::int from public.documents), 1, 'the legacy account still reads its document');
@@ -675,9 +680,13 @@ insert into public.workspace_members (workspace_id, user_id, role, joined_at) va
   ('10000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-000000000006', 'admin',  now()),
   ('10000000-0000-4000-8000-000000000004', '00000000-0000-4000-8000-000000000003', 'editor', now()),
   ('10000000-0000-4000-8000-000000000004', '00000000-0000-4000-8000-000000000007', 'viewer', now());
-insert into public.documents (user_id, title, markdown) values
-  ('00000000-0000-4000-8000-000000000004', 'Viewer note', '# Mine'),
-  ('00000000-0000-4000-8000-000000000003', 'Editor note', '# Mine');
+insert into public.documents (user_id, workspace_id, title, markdown) values
+  ('00000000-0000-4000-8000-000000000004',
+   (select id from public.workspaces where is_personal and created_by = '00000000-0000-4000-8000-000000000004'),
+   'Viewer note', '# Mine'),
+  ('00000000-0000-4000-8000-000000000003',
+   (select id from public.workspaces where is_personal and created_by = '00000000-0000-4000-8000-000000000003'),
+   'Editor note', '# Mine');
 
 -- A member of no team workspace as owner: only their personal workspace goes.
 create temp table docs_before as select id, user_id, title, markdown from public.documents;
@@ -705,7 +714,7 @@ select is(
   1, 'team workspaces it belonged to are untouched');
 select is(
   (select count(*)::int from public.documents where user_id = '00000000-0000-4000-8000-000000000004'),
-  0, 'its own documents go with it through documents.user_id, as before');
+  0, 'its own documents go with its personal workspace');
 select set_eq(
   'select id, user_id, title, markdown from public.documents',
   'select * from docs_before where user_id <> ''00000000-0000-4000-8000-000000000004''',

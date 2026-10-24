@@ -3,11 +3,15 @@ import {
   createSupabaseServerClient,
   createSupabaseAdminClient,
 } from "@/lib/supabase/server";
-import { MAX_TITLE_LENGTH, uniqueTitle } from "@/lib/title";
+import { MAX_TITLE_LENGTH } from "@/lib/title";
+import { insertWorkspaceDocument, personalWorkspaceId } from "@/lib/workspace-docs";
 
 /**
  * Create an Obsidian-style note, blank or from a template body. Headings
  * become the mindmap live; [[wikilinks]] feed the graph. No upload / AI required.
+ *
+ * The note goes into the user's personal workspace, the only one the vault
+ * shows until WP-1.7 adds a workspace switcher.
  */
 /** Upper bound on a template body, in characters. */
 const MAX_TEMPLATE_BODY = 50_000;
@@ -40,43 +44,35 @@ export async function POST(request: Request) {
   }
 
   const admin = createSupabaseAdminClient();
-  const { data: existing, error: titlesError } = await admin
-    .from("documents")
-    .select("title")
-    .eq("user_id", user.id);
-
-  if (titlesError) {
-    return NextResponse.json({ error: titlesError.message }, { status: 500 });
+  let workspaceId: string;
+  try {
+    workspaceId = await personalWorkspaceId(admin, user.id);
+  } catch (error) {
+    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
   }
 
-  const title = uniqueTitle(
-    requestedTitle,
-    (existing ?? []).map((row: { title: string }) => row.title),
-  );
+  const created = await insertWorkspaceDocument(admin, {
+    userId: user.id,
+    workspaceId,
+    title: requestedTitle,
+    markdown: (title) =>
+      templateBody !== null
+        ? `# ${title}\n\n${templateBody}`
+        : [
+            `# ${title}`,
+            "",
+            "## Overview",
+            "",
+            "Write like Obsidian. Headings become the mindmap. Link ideas with [[wikilinks]].",
+            "",
+            "## Next",
+            "",
+          ].join("\n"),
+  });
 
-  const markdown =
-    templateBody !== null
-      ? `# ${title}\n\n${templateBody}`
-      : [
-          `# ${title}`,
-          "",
-          "## Overview",
-          "",
-          "Write like Obsidian. Headings become the mindmap. Link ideas with [[wikilinks]].",
-          "",
-          "## Next",
-          "",
-        ].join("\n");
-
-  const { data: inserted, error: insertError } = await admin
-    .from("documents")
-    .insert({ user_id: user.id, title, markdown })
-    .select("id")
-    .single();
-
-  if (insertError) {
-    return NextResponse.json({ error: insertError.message }, { status: 500 });
+  if ("error" in created) {
+    return NextResponse.json({ error: created.error }, { status: 500 });
   }
 
-  return NextResponse.json({ id: inserted.id, title });
+  return NextResponse.json({ id: created.id, title: created.title });
 }

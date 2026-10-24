@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { isMindmapStale } from "@/lib/mindmap-hash";
 import { parseDocMindmap } from "@/lib/mindmap-types";
 import type { Doc } from "@/lib/types";
+import { personalWorkspaceId } from "@/lib/workspace-docs";
 
 /**
  * Loads the caller's whole vault as `Doc`s, with stored mindmaps parsed and
@@ -12,12 +13,17 @@ import type { Doc } from "@/lib/types";
  * hash — a page that skipped the comparison would silently show a map of text
  * the note no longer contains.
  *
- * Pass a session-bound client: RLS is what scopes this to the caller.
+ * Pass a session-bound client: RLS is what limits this to documents the
+ * caller may read. Of those, only the caller's personal workspace is loaded:
+ * RLS also lets in every team workspace they belong to, and the vault shows
+ * one workspace at a time (WP-1.7 adds the switcher).
  */
-export async function loadVaultDocs(supabase: SupabaseClient): Promise<Doc[]> {
+export async function loadVaultDocs(supabase: SupabaseClient, userId: string): Promise<Doc[]> {
+  const workspaceId = await personalWorkspaceId(supabase, userId);
   const { data, error } = await supabase
     .from("documents")
     .select("id, title, markdown, mindmap, mindmap_hash")
+    .eq("workspace_id", workspaceId)
     .order("title", { ascending: true });
 
   if (error) throw new Error(`Failed to load vault: ${error.message}`);

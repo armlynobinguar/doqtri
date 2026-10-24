@@ -3,6 +3,7 @@ import { createSupabaseServerClient, createSupabaseAdminClient } from "@/lib/sup
 import { improveMarkdown } from "@/lib/openai";
 import { consumeAiQuota, quotaRefusal } from "@/lib/ai-quota";
 import { generateAndStoreMindmap } from "@/lib/mindmap-store";
+import { loadMemberDocument, workspaceTitles } from "@/lib/workspace-docs";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -34,43 +35,44 @@ export async function POST(request: Request) {
 
   const admin = createSupabaseAdminClient();
 
-  // Scoped by user_id as well as id: the service role ignores RLS, so
-  // ownership has to be enforced here.
-  const { data: doc, error: loadError } = await admin
-    .from("documents")
-    .select("id, title, markdown")
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (loadError) {
-    return NextResponse.json({ error: loadError.message }, { status: 500 });
-  }
-  if (!doc) {
+  // The service role ignores RLS, so the workspace role is enforced here:
+  // this writes the note, so editors and above only.
+  const found = await loadMemberDocument<{ title: string; markdown: string }>(admin, {
+    userId: user.id,
+    docId: id,
+    columns: "title, markdown",
+    minRole: "editor",
+  });
+  if (!found.ok) {
+    if (found.reason === "error") {
+      return NextResponse.json({ error: found.message }, { status: 500 });
+    }
+    if (found.reason === "forbidden") {
+      return NextResponse.json({ error: "You can read this note but not change it." }, { status: 403 });
+    }
     return NextResponse.json({ error: "Note not found" }, { status: 404 });
   }
+  const doc = found.doc;
 
   // Charged after the ownership check, so a bad id costs nothing.
   const quota = await consumeAiQuota(admin, user.id, "regenerate");
   if (!quota.ok) return quotaRefusal(quota);
 
-  // Give the model the user's real note titles so it links to notes that
-  // exist rather than inventing ghost targets.
-  const { data: others, error: titlesError } = await admin
-    .from("documents")
-    .select("title")
-    .eq("user_id", user.id)
-    .neq("id", id);
+  // Give the model the workspace's real note titles so it links to notes
+  // that exist rather than inventing ghost targets.
+  const { titles: others, error: titlesError } = await workspaceTitles(admin, doc.workspace_id, {
+    excludeId: id,
+  });
 
   if (titlesError) {
-    return NextResponse.json({ error: titlesError.message }, { status: 500 });
+    return NextResponse.json({ error: titlesError }, { status: 500 });
   }
 
   let markdown: string;
   try {
     markdown = await improveMarkdown({
       markdown: doc.markdown,
-      titles: (others ?? []).map((row: { title: string }) => row.title),
+      titles: others,
     });
   } catch (error) {
     const message =
@@ -83,7 +85,7 @@ export async function POST(request: Request) {
     .from("documents")
     .update({ markdown, updated_at: new Date().toISOString() })
     .eq("id", id)
-    .eq("user_id", user.id);
+    .eq("workspace_id", doc.workspace_id);
 
   if (updateError) {
     return NextResponse.json({ error: updateError.message }, { status: 500 });
@@ -95,7 +97,7 @@ export async function POST(request: Request) {
   try {
     await generateAndStoreMindmap(admin, {
       id: doc.id,
-      userId: user.id,
+      workspaceId: doc.workspace_id,
       title: doc.title,
       markdown,
     });

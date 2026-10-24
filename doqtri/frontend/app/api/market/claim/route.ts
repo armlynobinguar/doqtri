@@ -4,7 +4,7 @@ import { NETWORK } from "@/lib/stellar/smart-wallet-config";
 import { readChainTemplate, readHasPurchased } from "@/lib/stellar/market-reads";
 import { TEMPLATE_ID_PATTERN } from "@/lib/market";
 import { purchaseColumns, saleFor, userWallet } from "@/lib/market-server";
-import { uniqueTitle } from "@/lib/title";
+import { insertWorkspaceDocument, personalWorkspaceId } from "@/lib/workspace-docs";
 
 /**
  * "Use template" on a community template (progress/004): copies it into the
@@ -102,20 +102,25 @@ export async function POST(request: Request) {
     }
   }
 
-  const { data: existing, error: titlesError } = await admin.from("documents").select("title").eq("user_id", user.id);
-  if (titlesError) return fail(titlesError.message, 500);
-  const title = uniqueTitle(row.title, (existing ?? []).map((d: { title: string }) => d.title));
-
-  const { data: inserted, error } = await admin
-    .from("documents")
-    .insert({ user_id: user.id, title, markdown: `# ${title}\n\n${row.body}`, source_template_id: templateId })
-    .select("id")
-    .single();
-  if (error) return fail(error.message, 500);
+  // The copy goes into the user's personal workspace, like any new note.
+  let workspaceId: string;
+  try {
+    workspaceId = await personalWorkspaceId(admin, user.id);
+  } catch (error) {
+    return fail((error as Error).message, 500);
+  }
+  const inserted = await insertWorkspaceDocument(admin, {
+    userId: user.id,
+    workspaceId,
+    title: row.title,
+    markdown: (title) => `# ${title}\n\n${row.body}`,
+    extra: { source_template_id: templateId },
+  });
+  if ("error" in inserted) return fail(inserted.error, 500);
 
   if (!own) {
     const { error: useError } = await admin.rpc("market_record_use", { p_template_id: templateId });
     if (useError) console.error(`[market/claim] use of ${templateId} not counted: ${useError.message}`);
   }
-  return Response.json({ id: inserted.id, title });
+  return Response.json({ id: inserted.id, title: inserted.title });
 }

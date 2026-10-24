@@ -90,6 +90,9 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
   const [artifact, setArtifact] = useState("");
   // null until loaded; undefined when the column is unavailable.
   const [publishHeadings, setPublishHeadings] = useState<boolean | null | undefined>(null);
+  // Only admins and owners of the note's workspace may change it (D-40); the
+  // database enforces that, this only keeps the checkbox honest.
+  const [canPublishHeadings, setCanPublishHeadings] = useState(false);
 
   const wallet = useWallet();
   const [fundingError, setFundingError] = useState<string | null>(null);
@@ -223,13 +226,19 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
       const supabase = createSupabaseBrowserClient();
       const { data, error } = await supabase
         .from("documents")
-        .select("publish_headings")
+        .select("publish_headings, workspace_id")
         .eq("id", docId)
         .maybeSingle();
       if (cancelled) return;
       setPublishHeadings(
         error || !data ? undefined : Boolean(data.publish_headings),
       );
+      if (error || !data) return;
+      const { data: isAdmin } = await supabase.rpc("is_workspace_member", {
+        p_workspace_id: data.workspace_id,
+        p_min_role: "admin",
+      });
+      if (!cancelled) setCanPublishHeadings(isAdmin === true);
     })();
     return () => {
       cancelled = true;
@@ -398,7 +407,11 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
       .eq("id", docId);
     if (error) {
       setPublishHeadings(previous);
-      toast.error("Could not update public page setting");
+      toast.error(
+        error.code === "42501"
+          ? "Only an admin of this workspace can change this"
+          : "Could not update public page setting",
+      );
     }
   }
 
@@ -650,12 +663,15 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
       ) : null}
 
       {chainVersion != null && publishHeadings !== undefined ? (
-        <label className="text-muted-foreground flex items-center gap-2 text-[11px]">
+        <label
+          className="text-muted-foreground flex items-center gap-2 text-[11px]"
+          title={canPublishHeadings ? undefined : "Only an admin of this workspace can change this"}
+        >
           <input
             type="checkbox"
             className="accent-primary"
             checked={publishHeadings === true}
-            disabled={publishHeadings === null}
+            disabled={publishHeadings === null || !canPublishHeadings}
             onChange={(e) => void togglePublishHeadings(e.target.checked)}
           />
           Show headings on public page

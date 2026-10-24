@@ -144,7 +144,16 @@ type Attention = {
   action?: { label: string; icon: React.ComponentType; run: () => void; testId?: string };
 };
 
-export function ProfileView({ joinedAt, referral }: { joinedAt: string; referral: ReferralSummary | null }) {
+export function ProfileView({
+  joinedAt,
+  referral,
+  workspaceId,
+}: {
+  joinedAt: string;
+  referral: ReferralSummary | null;
+  /** The personal workspace, whose notes the vault shows (WP-1.7 adds others). */
+  workspaceId: string;
+}) {
   const wallet = useWallet();
   const { identity } = wallet;
   const smartWallet = identity.kind === "email" ? identity.smartWallet : null;
@@ -216,6 +225,7 @@ export function ProfileView({ joinedAt, referral }: { joinedAt: string; referral
       void createSupabaseBrowserClient()
         .from("documents")
         .select("id", { count: "exact", head: true })
+        .eq("workspace_id", workspaceId)
         .then(({ count }) => {
           if (!cancelled) setNoteCount(count ?? 0);
         });
@@ -225,7 +235,7 @@ export function ProfileView({ joinedAt, referral }: { joinedAt: string; referral
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [refreshActivity]);
+  }, [refreshActivity, workspaceId]);
 
   async function act(name: string, task: () => Promise<void>, done?: string) {
     setBusy(name);

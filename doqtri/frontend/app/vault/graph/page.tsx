@@ -16,7 +16,7 @@ export default async function GlobalGraphPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const docs = await loadVaultDocs(supabase);
+  const docs = await loadVaultDocs(supabase, user.id);
 
   return <GlobalGraph docs={docs} />;
 }

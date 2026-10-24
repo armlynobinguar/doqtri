@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { isAdmin } from "@/lib/admin";
+import { personalWorkspaceId } from "@/lib/workspace-docs";
 import { VaultShell } from "@/components/vault/vault-shell";
 import { PreferencesSync } from "@/components/vault/preferences";
 import { ReferralClaim } from "@/components/vault/referral-claim";
@@ -26,10 +27,13 @@ export default async function VaultLayout({
   // without a verified user.
   if (!user) redirect("/login");
 
-  // Anon key + RLS: this can only ever return the caller's own rows.
+  // Anon key + RLS: only documents the caller may read, and of those only
+  // their personal workspace's until WP-1.7 adds a workspace switcher.
+  const workspaceId = await personalWorkspaceId(supabase, user.id);
   const { data, error } = await supabase
     .from("documents")
     .select("id, title, updated_at")
+    .eq("workspace_id", workspaceId)
     .order("title", { ascending: true });
 
   if (error) throw new Error(`Failed to load vault: ${error.message}`);

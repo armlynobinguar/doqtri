@@ -3,7 +3,10 @@ import type { DocMindmap } from "@/lib/mindmap-types";
 /** A row of public.documents. */
 export type DocumentRow = {
   id: string;
-  user_id: string;
+  /** The author; null once their account is deleted. Does not decide access. */
+  user_id: string | null;
+  /** Who may read and change it: members of this workspace, by role. */
+  workspace_id: string;
   title: string;
   markdown: string;
   updated_at: string;
