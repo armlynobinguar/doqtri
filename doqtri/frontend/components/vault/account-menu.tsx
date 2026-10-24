@@ -13,6 +13,7 @@ import {
   RefreshCwIcon,
   StoreIcon,
   UserRoundIcon,
+  UsersIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -127,6 +128,7 @@ export function AccountMenu({ className }: { className?: string }) {
             <span className="text-muted-foreground ml-auto text-[11px]">copy</span>
           </DropdownMenuItem>
           <ProfileItem />
+          <MembersItem />
         </DropdownMenuGroup>
 
         <DropdownMenuGroup>
@@ -278,6 +280,7 @@ function EmailAccountMenu({
               {email}
             </div>
             <ProfileItem />
+            <MembersItem />
           </DropdownMenuGroup>
 
           <DropdownMenuGroup>
@@ -370,6 +373,17 @@ function EarningsItem() {
     <DropdownMenuItem data-testid="open-earnings" onClick={() => router.push("/vault/templates?tab=yours")}>
       <StoreIcon />
       Your templates
+    </DropdownMenuItem>
+  );
+}
+
+/** Who is in each workspace, invites and on-chain roles (WP-1.5). */
+function MembersItem() {
+  const router = useRouter();
+  return (
+    <DropdownMenuItem data-testid="open-members" onClick={() => router.push("/vault/workspace/members")}>
+      <UsersIcon />
+      Workspace members
     </DropdownMenuItem>
   );
 }
