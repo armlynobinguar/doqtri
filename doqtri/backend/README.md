@@ -38,6 +38,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261024000000_add_promo_submission_rating.sql
 20261024120000_create_workspaces.sql      # NOT yet applied: dry-run on a branch first
 20261024150000_doc_locks.sql              # NOT yet applied: dry-run on a branch first
+20261024160000_workspace_member_removals.sql  # NOT yet applied (WP-1.8)
 ```
 
 The remote records its own version stamps (e.g. `20260929114657` for
@@ -103,6 +104,12 @@ Two supporting tables:
   not belong to workspaces yet;
   WP-1.2 adds `documents.workspace_id` and moves the policies over to
   `is_workspace_member()`.
+- `public.workspace_member_removals` — when each member lost the right to
+  sign in a workspace (removed, left, account deleted, or demoted to viewer),
+  with the wallet addresses they had then, and when they got it back. Written
+  only by triggers; RLS on with no policies. The public audit page reads it
+  through `signer_removals_for_document()` (service role) to flag history
+  entries signed after the signer was removed (WP-1.8, risk R-05).
 
 - `public.doc_locks` — who is editing a document (D-17). One editor holds a
   document's lock at a time, from one edit session (one open tab: every call
