@@ -25,7 +25,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(117);
+select plan(120);
 
 -- A test-only lookup of a user's personal workspace that works under any
 -- role, so the tests can name it without being a member.
@@ -133,6 +133,9 @@ select is(
 select is(
   (select confdeltype::text from pg_constraint where conname = 'node_links_user_id_fkey'),
   'n', 'deleting an author clears node_links.user_id');
+select is(
+  (select confdeltype::text from pg_constraint where conname = 'ingests_document_id_fkey'),
+  'c', 'deleting a document deletes its import history (D-42)');
 select hasnt_index('public', 'documents', 'documents_user_title_idx', 'the per-user title index is gone');
 select ok(
   (select indisunique from pg_index where indexrelid = 'public.documents_workspace_title_idx'::regclass),
@@ -216,6 +219,18 @@ select lives_ok(
 select is((select count(*)::int from public.documents
             where workspace_id = '10000000-0000-4000-8000-000000000001'),
   2, 'an editor reads the workspace''s documents');
+reset role;
+-- Scratch's import history: the editor's upload, an admin's re-import, and
+-- an unrelated failed import of the editor's.
+insert into public.ingests (id, user_id, object_path, filename, kind, status, document_id) values
+  ('50000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000003',
+   'u3/scratch.pdf', 'scratch.pdf', 'pdf', 'succeeded', '30000000-0000-4000-8000-000000000011'),
+  ('50000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000002',
+   'u2/scratch.docx', 'scratch.docx', 'docx', 'succeeded', '30000000-0000-4000-8000-000000000011'),
+  ('50000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-000000000003',
+   'u3/broken.pdf', 'broken.pdf', 'pdf', 'failed', null);
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000003","role":"authenticated"}';
 select is((select count(*)::int from public.documents
             where id = '30000000-0000-4000-8000-000000000001'),
   0, 'but not a teammate''s personal ones');
@@ -235,6 +250,14 @@ select throws_ok(
 with d as (delete from public.documents
                where id = '30000000-0000-4000-8000-000000000011' returning 1)
 select is(count(*)::int, 1, 'an editor deletes a team document') from d;
+reset role;
+select is((select count(*)::int from public.ingests
+            where id in ('50000000-0000-4000-8000-000000000001', '50000000-0000-4000-8000-000000000002')),
+  0, 'and its import history goes with it, whoever uploaded it (D-42)');
+select is((select count(*)::int from public.ingests where id = '50000000-0000-4000-8000-000000000003'),
+  1, 'an import that made no note is kept');
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000003","role":"authenticated"}';
 
 -- node_links
 select lives_ok(

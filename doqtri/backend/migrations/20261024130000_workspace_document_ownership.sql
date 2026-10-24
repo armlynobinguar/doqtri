@@ -38,9 +38,12 @@
 --     node_links        viewer+ read, editor+ insert/update/delete. user_id
 --                       is who made the link, nullable like documents.user_id
 --
---   stays per user, unchanged
+--   stays per user
 --     ingests           an upload attempt is its uploader's record; written by
---                       the service role, read by the uploader
+--                       the service role, read by the uploader. Its
+--                       document_id becomes `on delete cascade` (was set
+--                       null): a note's import history goes with the note
+--                       (D-42), however the note is deleted
 --     mindmap_styles    one user's styling of a map; only the doc check in
 --                       its write policies changes, from "my document" to
 --                       "a document I can read"
@@ -161,6 +164,17 @@ alter table public.node_links drop constraint node_links_user_id_fkey;
 alter table public.node_links
   add constraint node_links_user_id_fkey
   foreign key (user_id) references auth.users(id) on delete set null;
+
+-- Import history (D-42). /api/notes/[id] already deletes a note's ingest
+-- rows, after purging the originals they archived in Storage; this makes the
+-- database do the same for any other delete (an editor's session client, an
+-- account deletion) instead of leaving rows that point at nothing. Storage
+-- objects are not the database's to remove: only the route purges those.
+
+alter table public.ingests drop constraint ingests_document_id_fkey;
+alter table public.ingests
+  add constraint ingests_document_id_fkey
+  foreign key (document_id) references public.documents(id) on delete cascade;
 
 -- A client can neither re-attribute a row nor move a document to another
 -- workspace: the update policies below let editors write whole rows, and
