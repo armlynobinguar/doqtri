@@ -15,7 +15,8 @@
 -- decides access. It becomes nullable, `on delete set null`, so that an
 -- author deleting their account leaves the documents they wrote in a team
 -- workspace with the team instead of taking them along. Documents in the
--- account's personal workspace still go with it: see
+-- account's personal workspace still go with it, unless someone else wrote
+-- one of them, which blocks the deletion (D-39): see
 -- handle_deleted_user_workspaces() below.
 --
 -- Backfill: each existing document moves to its author's personal workspace,
@@ -329,14 +330,25 @@ create policy "own mindmap styles - update" on public.mindmap_styles
 
 -- Deleting an account
 --
--- Same as WP-1.1's version, with one step added first: the documents in the
--- account's personal workspace are deleted, so the workspace can be (their
--- `workspace_id` is `on delete restrict`). Before this migration those
--- documents went with the account through documents.user_id; now they go
--- with its personal workspace, other members' documents in it included,
--- since the workspace itself is gone (D-30, D-31). An anchored one among them
--- still refuses the deletion through chain_writes, as before. Documents the
--- account wrote in team workspaces stay, with user_id cleared.
+-- Same as WP-1.1's version, with two steps added first.
+--
+-- 1. The deletion is refused while the account's personal workspace holds a
+--    document someone else wrote (D-39). A personal workspace takes members
+--    (D-30), and their notes would otherwise go with the workspace, silently
+--    and for good. The owner deletes those notes first, or their authors copy
+--    them out; then the account can go. Notes whose author has already
+--    deleted their own account (user_id null) have nobody left to lose them
+--    and do not block.
+-- 2. The documents in the personal workspace, all the account's own by then,
+--    are deleted, so the workspace can be (their `workspace_id` is
+--    `on delete restrict`). Before this migration they went with the account
+--    through documents.user_id; now they go with its personal workspace. An
+--    anchored one among them still refuses the deletion through chain_writes,
+--    as before.
+--
+-- Documents the account wrote in team workspaces stay, with user_id cleared,
+-- and team workspaces it last owned pass to their longest-standing admin, or
+-- block the deletion when there is none (D-31), as in WP-1.1.
 
 create or replace function public.handle_deleted_user_workspaces()
 returns trigger
@@ -345,9 +357,22 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_ws    record;
-  v_admin uuid;
+  v_ws     record;
+  v_admin  uuid;
+  v_others integer;
 begin
+  select count(*) into v_others
+    from public.documents d
+    join public.workspaces w on w.id = d.workspace_id
+   where w.is_personal and w.created_by = old.id
+     and d.user_id is not null and d.user_id <> old.id;
+  if v_others > 0 then
+    raise exception 'this account''s personal workspace holds % note(s) written by other people',
+      v_others
+      using errcode = 'restrict_violation',
+            hint = 'Delete those notes, or have their authors copy them out, then delete the account.';
+  end if;
+
   delete from public.documents d
    using public.workspaces w
    where d.workspace_id = w.id and w.is_personal and w.created_by = old.id;

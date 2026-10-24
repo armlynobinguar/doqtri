@@ -25,7 +25,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(100);
+select plan(106);
 
 -- A test-only lookup of a user's personal workspace that works under any
 -- role, so the tests can name it without being a member.
@@ -513,15 +513,50 @@ with u as (update public.documents set markdown = '# Roadmap v4'
 select is(count(*)::int, 1, 'and edit it') from u;
 reset role;
 
--- o's personal workspace holds o's note and x's guest note; deleting o (after
--- an admin can take acme over) removes both with the workspace.
-select lives_ok(
+-- o's personal workspace holds o's note and x's guest note (D-39): the guest's
+-- note blocks the deletion until it is gone.
+select throws_ok(
   $$ delete from auth.users where id = '00000000-0000-4000-8000-000000000001' $$,
-  'the owner of a personal workspace with a guest''s note can be deleted');
+  '23001', 'this account''s personal workspace holds 1 note(s) written by other people',
+  'an account whose personal workspace holds a guest''s note cannot be deleted');
 select is(
   (select count(*)::int from public.documents
     where id in ('30000000-0000-4000-8000-000000000001', '30000000-0000-4000-8000-000000000021')),
-  0, 'every document in their personal workspace goes with it, the guest''s included');
+  2, 'and nothing in that workspace was deleted');
+select is(
+  (select count(*)::int from auth.users where id = '00000000-0000-4000-8000-000000000001'),
+  1, 'nor the account');
+select is(
+  (select role::text from public.workspace_members
+    where workspace_id = '10000000-0000-4000-8000-000000000001'
+      and user_id = '00000000-0000-4000-8000-000000000002'),
+  'admin', 'nor was a team workspace handed over (D-31 waits for the deletion to go ahead)');
+
+-- A note whose author has since deleted their own account has nobody left
+-- to lose it, so it does not block.
+insert into public.documents (id, user_id, workspace_id, title) values
+  ('30000000-0000-4000-8000-000000000022', null,
+   wp12_test.personal('00000000-0000-4000-8000-000000000001'), 'Orphan note');
+
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
+with d as (delete from public.documents
+               where id = '30000000-0000-4000-8000-000000000021' returning 1)
+select is(count(*)::int, 1, 'the owner deletes the guest''s note') from d;
+reset role;
+
+select lives_ok(
+  $$ delete from auth.users where id = '00000000-0000-4000-8000-000000000001' $$,
+  'then the account can be deleted');
+select is(
+  (select count(*)::int from public.documents
+    where id in ('30000000-0000-4000-8000-000000000001', '30000000-0000-4000-8000-000000000022')),
+  0, 'every document left in their personal workspace goes with it, an orphaned one included');
+select is(
+  (select role::text from public.workspace_members
+    where workspace_id = '10000000-0000-4000-8000-000000000001'
+      and user_id = '00000000-0000-4000-8000-000000000002'),
+  'owner', 'and the team workspace they last owned passes to its admin (D-31)');
 select is(
   (select count(*)::int from public.documents where id = '30000000-0000-4000-8000-000000000014'),
   1, 'their note in the team workspace stays');
