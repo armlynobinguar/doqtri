@@ -4,6 +4,8 @@ import { improveMarkdown } from "@/lib/openai";
 import { consumeAiQuota, quotaRefusal } from "@/lib/ai-quota";
 import { generateAndStoreMindmap } from "@/lib/mindmap-store";
 import { loadMemberDocument, workspaceTitles } from "@/lib/workspace-docs";
+import { lockErrorAnswer } from "@/lib/doc-lock";
+import { liveLockHolder } from "@/lib/doc-lock-server";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -37,10 +39,10 @@ export async function POST(request: Request) {
 
   // The service role ignores RLS, so the workspace role is enforced here:
   // this writes the note, so editors and above only.
-  const found = await loadMemberDocument<{ title: string; markdown: string }>(admin, {
+  const found = await loadMemberDocument<{ title: string; markdown: string; version: number }>(admin, {
     userId: user.id,
     docId: id,
-    columns: "title, markdown",
+    columns: "title, markdown, version",
     minRole: "editor",
   });
   if (!found.ok) {
@@ -53,6 +55,25 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Note not found" }, { status: 404 });
   }
   const doc = found.doc;
+
+  // Regenerating rewrites the note, so it is an edit like any other (D-17):
+  // only whoever holds the edit lock may do it. Checked before the quota is
+  // charged and the model called; save_document() checks again at the end.
+  const { holder, error: lockError } = await liveLockHolder(admin, id);
+  if (lockError) {
+    return NextResponse.json({ error: lockError }, { status: 500 });
+  }
+  if (holder !== user.id) {
+    return NextResponse.json(
+      {
+        error: holder
+          ? "Someone else is editing this note, so it cannot be regenerated now."
+          : "Start editing the note before regenerating it.",
+        code: "NOT_LOCK_HOLDER",
+      },
+      { status: 423 },
+    );
+  }
 
   // Charged after the ownership check, so a bad id costs nothing.
   const quota = await consumeAiQuota(admin, user.id, "regenerate");
@@ -81,14 +102,17 @@ export async function POST(request: Request) {
   }
 
   // v1 regenerate is a full overwrite; the client has already confirmed.
-  const { error: updateError } = await admin
-    .from("documents")
-    .update({ markdown, updated_at: new Date().toISOString() })
-    .eq("id", id)
-    .eq("workspace_id", doc.workspace_id);
+  // Saved as the user, on the version the model was given: if the note was
+  // saved meanwhile, or the lock was lost to a takeover, nothing is written.
+  const { data: version, error: saveError } = await supabase.rpc("save_document", {
+    p_document_id: id,
+    p_markdown: markdown,
+    p_base_version: doc.version,
+  });
 
-  if (updateError) {
-    return NextResponse.json({ error: updateError.message }, { status: 500 });
+  if (saveError) {
+    const answer = lockErrorAnswer(saveError);
+    return NextResponse.json({ error: answer.error, code: answer.code }, { status: answer.status });
   }
 
   // The markdown just changed underneath the stored mindmap, so rebuild it
@@ -106,5 +130,5 @@ export async function POST(request: Request) {
     console.warn(`[regenerate] mindmap not rebuilt for ${doc.id}: ${message}`);
   }
 
-  return NextResponse.json({ markdown });
+  return NextResponse.json({ markdown, version: Number(version) });
 }
