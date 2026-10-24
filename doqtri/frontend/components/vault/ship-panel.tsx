@@ -797,6 +797,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
       <NodeLinks
         key={docId}
         docId={docId}
+        title={title}
         nodes={flatNodes}
         anchored={chainVersion != null}
         canSign={canSign}
