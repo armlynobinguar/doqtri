@@ -18,7 +18,7 @@ export default async function DocPage(props: PageProps<"/vault/[docId]">) {
    * own rows. If a vault ever grows past what is reasonable to ship to the
    * client, the fix is pagination — not a stored graph table.
    */
-  const docs = await loadVaultDocs(supabase);
+  const docs = await loadVaultDocs(supabase, user.id);
   const active = docs.find((doc) => doc.id === docId);
   if (!active) notFound();
 

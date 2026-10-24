@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
 import { ProfileView, type ReferralSummary } from "@/components/vault/profile-view";
 import { referralUrl } from "@/lib/referral";
+import { personalWorkspaceId } from "@/lib/workspace-docs";
 
 export const metadata: Metadata = {
   title: "Profile & wallet · Doqtri",
@@ -24,10 +25,13 @@ export default async function ProfilePage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const referral = await loadReferral(user.id);
+  const [referral, workspaceId] = await Promise.all([
+    loadReferral(user.id),
+    personalWorkspaceId(supabase, user.id),
+  ]);
   return (
     <Suspense>
-      <ProfileView joinedAt={user.created_at} referral={referral} />
+      <ProfileView joinedAt={user.created_at} referral={referral} workspaceId={workspaceId} />
     </Suspense>
   );
 }

@@ -18,7 +18,7 @@ export default async function GlobalMindmapPage() {
   if (!user) redirect("/login");
 
   const [docs, savedStyle] = await Promise.all([
-    loadVaultDocs(supabase),
+    loadVaultDocs(supabase, user.id),
     loadMindmapStyle(supabase, user.id, "global"),
   ]);
 

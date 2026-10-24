@@ -20,7 +20,7 @@ export default async function DocMindmapPage(
   if (!user) redirect("/login");
 
   const [docs, savedStyle] = await Promise.all([
-    loadVaultDocs(supabase),
+    loadVaultDocs(supabase, user.id),
     loadMindmapStyle(supabase, user.id, `doc:${docId}`),
   ]);
   const active = docs.find((doc) => doc.id === docId);

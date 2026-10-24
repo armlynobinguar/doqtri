@@ -63,7 +63,8 @@ export function DocWorkspace({
   const [saves] = useState(() =>
     createSaveQueue(active.markdown, async (text) => {
       const supabase = createSupabaseBrowserClient();
-      // Anon key + RLS: the update policy restricts this to the caller's row.
+      // Anon key + RLS: the update policy allows editors and above of the
+      // note's workspace.
       const { error } = await supabase
         .from("documents")
         .update({ markdown: text, updated_at: new Date().toISOString() })
