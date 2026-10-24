@@ -172,10 +172,13 @@ select results_eq(
 -- Restoring
 -- ---------------------------------------------------------------------------
 
+-- Membership is invite-only (WP-1.5): the owner invites, the editor accepts.
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
-insert into public.workspace_members (workspace_id, user_id, role)
-values ((select id from wp18_test.ids where name = 'acme'), '00000000-0000-4000-8000-000000000003', 'viewer');
+insert into wp18_test.ids select 'ed-invite',
+  public.invite_workspace_member((select id from wp18_test.ids where name = 'acme'), 'editor@example.com', 'viewer');
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000003","role":"authenticated"}';
+select public.accept_workspace_invite((select id from wp18_test.ids where name = 'ed-invite'));
 reset role;
 select is((select restored from wp18_test.rows('acme', '00000000-0000-4000-8000-000000000003')), false,
   'adding them back as a viewer does not restore signing');
