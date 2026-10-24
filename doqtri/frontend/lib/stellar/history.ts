@@ -18,9 +18,24 @@
  * A note in a workspace (registry v3, WP-1.4) is written by its members, not
  * only its owner, so its history is the owner's feed and the index together:
  * a `G…` owner's feed has none of the editors' passkey writes, and the index
- * none of the owner's own. Editors' Freighter writes are in neither until
- * history reads the registry's events (WP-1.8); the version count then marks
- * such a history incomplete rather than numbering it wrong.
+ * none of the owner's own. An editor's Freighter write is in neither; the
+ * registry's `*_as` events name their signer in a topic (WP-1.3), so the RPC's
+ * event window (about a week) says which transactions to read for those, and
+ * the feeds of signers the workspace removed (passed in by the caller, which
+ * reads them from doqtri's database) cover the writes the audit page most
+ * needs to show: ones made after a removal (WP-1.8). Older Freighter writes
+ * by current editors can still be missing; the version count then marks such
+ * a history incomplete rather than numbering it wrong. Every source only says
+ * where to look: each write is read from Horizon and decoded here.
+ *
+ * Every entry names the wallet that signed it (WP-1.8). The `*_as` calls,
+ * `register_document` and `anchor` carry their signer as their first
+ * argument, the same address the contract required auth from and the
+ * `*_as` events put in their topic. The owner-only `update_document` and
+ * `set_node_status` name nobody; the contract requires the document owner's
+ * signature for them, so they are attributed to the owner (`signerFrom:
+ * "owner"`). With REGISTRY_EDITORS off every write is owner-only and history
+ * is read exactly as before.
  */
 import { createClient } from "@supabase/supabase-js";
 import { Address, rpc, scValToNative, StrKey, xdr } from "@stellar/stellar-sdk";
@@ -30,11 +45,20 @@ import { docLedgerKey } from "@/lib/stellar/anchored";
 import { DoqtriRegistry } from "@/lib/stellar/contract-client";
 import { FEE_FORWARDER, NETWORK } from "@/lib/stellar/smart-wallet-config";
 
+/**
+ * Where an entry's signer comes from: the call itself names it ("call"), or
+ * the call is owner-only and names nobody, so it is the owner ("owner").
+ */
+export type SignerSource = "call" | "owner";
+
 export type ChainVersion = {
   version: number;
   contentHash: string;
   txHash: string;
   closedAt: string;
+  /** The wallet that signed this write. */
+  signer: string;
+  signerFrom: SignerSource;
 };
 
 export type ChainNodeEvent = {
@@ -46,6 +70,9 @@ export type ChainNodeEvent = {
   closedAt: string;
   /** The document version in effect when this status was recorded. */
   docVersion: number;
+  /** The wallet that signed this write. */
+  signer: string;
+  signerFrom: SignerSource;
 };
 
 export type DocumentHistory = {
@@ -75,7 +102,12 @@ export type HorizonOperation = {
   parameters?: { type: string; value: string }[];
 };
 
-type Invocation =
+/**
+ * One registry write. `signer` is set when the call names who signed it
+ * (its first argument); the owner-only update_document and set_node_status
+ * leave it out.
+ */
+type Invocation = (
   | { fn: "register_document"; docId: string; hash: string }
   | { fn: "update_document"; docId: string; hash: string }
   | {
@@ -91,7 +123,8 @@ type Invocation =
       docId: string;
       hash: string;
       nodes: { nodeId: string; status: string; tool: string; artifactRef: string }[];
-    };
+    }
+) & { signer?: string };
 
 function decode(value: string): xdr.ScVal {
   return xdr.ScVal.fromXDR(value, "base64");
@@ -144,7 +177,7 @@ export function decodeInvocation(
     switch (fn) {
       // register_document(owner, doc_id, content_hash)
       case "register_document":
-        return { fn, docId: String(args[1]), hash: toHex(args[2]) };
+        return { fn, docId: String(args[1]), hash: toHex(args[2]), signer: String(args[0]) };
       // update_document(doc_id, new_hash)
       case "update_document":
         return { fn, docId: String(args[0]), hash: toHex(args[1]) };
@@ -162,7 +195,7 @@ export function decodeInvocation(
       // signer first; history folds them in like the owner-only ones.
       // update_document_as(signer, doc_id, new_hash)
       case "update_document_as":
-        return { fn: "update_document", docId: String(args[1]), hash: toHex(args[2]) };
+        return { fn: "update_document", docId: String(args[1]), hash: toHex(args[2]), signer: String(args[0]) };
       // set_node_status_as(signer, doc_id, node_id, status, tool, artifact_ref)
       case "set_node_status_as":
         return {
@@ -172,6 +205,7 @@ export function decodeInvocation(
           status: enumTag(args[3]),
           tool: String(args[4] ?? ""),
           artifactRef: String(args[5] ?? ""),
+          signer: String(args[0]),
         };
       // anchor(owner, doc_id, content_hash, nodes); anchor_as(signer, …) alike
       case "anchor":
@@ -186,6 +220,7 @@ export function decodeInvocation(
             tool: String(n.tool ?? ""),
             artifactRef: String(n.artifact_ref ?? ""),
           })),
+          signer: String(args[0]),
         };
       default:
         return null;
@@ -212,6 +247,9 @@ export function buildHistory(
   for (const op of ops) {
     const call = decodeInvocation(op, contractId);
     if (!call || call.docId !== docId) continue;
+    const signed = call.signer
+      ? { signer: call.signer, signerFrom: "call" as const }
+      : { signer: owner, signerFrom: "owner" as const };
 
     if (call.fn === "anchor") {
       // Like the contract: a new document is v1, changed text a new version,
@@ -223,6 +261,7 @@ export function buildHistory(
           contentHash: call.hash,
           txHash: op.transaction_hash,
           closedAt: op.created_at,
+          ...signed,
         });
       }
       for (const node of call.nodes) {
@@ -231,6 +270,7 @@ export function buildHistory(
           txHash: op.transaction_hash,
           closedAt: op.created_at,
           docVersion: versions.length,
+          ...signed,
         });
       }
     } else if (call.fn === "register_document" || call.fn === "update_document") {
@@ -241,6 +281,7 @@ export function buildHistory(
         contentHash: call.hash,
         txHash: op.transaction_hash,
         closedAt: op.created_at,
+        ...signed,
       });
     } else {
       nodeEvents.push({
@@ -251,6 +292,7 @@ export function buildHistory(
         txHash: op.transaction_hash,
         closedAt: op.created_at,
         docVersion: versions.length,
+        ...signed,
       });
     }
   }
@@ -326,6 +368,25 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_INDEXED_WRITES = 200;
 const HORIZON_BATCH = 10;
 
+/** Each transaction's operations from Horizon, oldest first. Unknown hashes are skipped. */
+async function fetchTransactionOperations(hashes: readonly string[]): Promise<HorizonOperation[]> {
+  const ops: HorizonOperation[] = [];
+  for (let i = 0; i < hashes.length; i += HORIZON_BATCH) {
+    const batch = await Promise.all(
+      hashes.slice(i, i + HORIZON_BATCH).map(async (hash) => {
+        const res = await fetch(`${HORIZON_URL}/transactions/${hash}/operations?limit=10`);
+        // Not on this network's Horizon: not a write we can show.
+        if (res.status === 404) return [];
+        if (!res.ok) throw new Error(`Horizon error (${res.status})`);
+        const body = (await res.json()) as { _embedded?: { records?: HorizonOperation[] } };
+        return body._embedded?.records ?? [];
+      }),
+    );
+    ops.push(...batch.flat());
+  }
+  return inLedgerOrder(ops);
+}
+
 /** Relayed writes for a passkey-wallet document: index lookup, then Horizon. */
 async function fetchIndexedOperations(docId: string): Promise<HorizonOperation[]> {
   if (!UUID.test(docId)) return [];
@@ -345,22 +406,113 @@ async function fetchIndexedOperations(docId: string): Promise<HorizonOperation[]
     .limit(MAX_INDEXED_WRITES);
   if (error) throw new Error(`Write index unavailable: ${error.message}`);
 
-  const hashes = (data ?? []).map((row) => row.tx_hash as string);
+  return fetchTransactionOperations((data ?? []).map((row) => row.tx_hash as string));
+}
+
+/** The subset of an RPC contract event this module reads. */
+export type RegistryEvent = Pick<rpc.Api.EventResponse, "topic" | "value" | "txHash" | "inSuccessfulContractCall">;
+
+/**
+ * Transactions that wrote `docId` through a `*_as` call, from the registry's
+ * events. Those events have three topics, `("doqtri", action, signer)`, and
+ * the doc_id as their value; the owner-only calls' two-topic events, and the
+ * `doqtri_ws` membership events, are not theirs. Returns each transaction
+ * once, in event order, with the signer its event named.
+ */
+export function signedWriteTransactions(events: readonly RegistryEvent[], docId: string): { txHash: string; signer: string }[] {
+  const found = new Map<string, string>();
+  for (const event of events) {
+    if (event.inSuccessfulContractCall === false || event.topic.length !== 3) continue;
+    try {
+      if (scValToNative(event.topic[0]) !== "doqtri") continue;
+      if (String(scValToNative(event.value)) !== docId) continue;
+      const signer = Address.fromScVal(event.topic[2]).toString();
+      if (!found.has(event.txHash)) found.set(event.txHash, signer);
+    } catch {
+      // Not shaped like ours.
+    }
+  }
+  return [...found].map(([txHash, signer]) => ({ txHash, signer }));
+}
+
+/** Bounds one page view's event scan: RPC pages of up to 1000 events. */
+const EVENT_PAGE = 1000;
+const MAX_EVENT_PAGES = 10;
+
+/**
+ * The `*_as` writes of `docId` still inside the RPC's event window (about a
+ * week), wherever they were submitted from: this is how an editor's own
+ * Freighter writes, which no feed Doqtri reads contains, reach history.
+ * Events only say where to look; each transaction is read from Horizon.
+ */
+async function fetchEventOperations(docId: string): Promise<HorizonOperation[]> {
+  const server = new rpc.Server(RPC_URL);
+  const { oldestLedger } = await server.getHealth();
+  const filters: rpc.Api.EventFilter[] = [
+    {
+      type: "contract",
+      contractIds: [CONTRACT_ID],
+      topics: [[xdr.ScVal.scvSymbol("doqtri").toXDR("base64"), "*", "*"]],
+    },
+  ];
+  const events: RegistryEvent[] = [];
+  // The window's oldest ledger moves on as ledgers close; start a little
+  // inside it so the first request is not refused as out of range.
+  let page = await server.getEvents({ filters, startLedger: oldestLedger + 10, limit: EVENT_PAGE });
+  for (let n = 1; ; n++) {
+    events.push(...page.events);
+    if (page.events.length < EVENT_PAGE || n >= MAX_EVENT_PAGES) break;
+    page = await server.getEvents({ filters, cursor: page.cursor, limit: EVENT_PAGE });
+  }
+  return fetchTransactionOperations(signedWriteTransactions(events, docId).map((w) => w.txHash));
+}
+
+/** A removed member's `G…` feed is read back to their removal, at most this many pages. */
+const MAX_SINCE_PAGES = 5;
+
+/** An account's operations from `since` on, oldest first. */
+async function fetchAccountOperationsSince(account: string, since: string): Promise<HorizonOperation[]> {
   const ops: HorizonOperation[] = [];
-  for (let i = 0; i < hashes.length; i += HORIZON_BATCH) {
-    const batch = await Promise.all(
-      hashes.slice(i, i + HORIZON_BATCH).map(async (hash) => {
-        const res = await fetch(`${HORIZON_URL}/transactions/${hash}/operations?limit=10`);
-        // Not on this network's Horizon: not a write we can show.
-        if (res.status === 404) return [];
-        if (!res.ok) throw new Error(`Horizon error (${res.status})`);
-        const body = (await res.json()) as { _embedded?: { records?: HorizonOperation[] } };
-        return body._embedded?.records ?? [];
-      }),
-    );
-    ops.push(...batch.flat());
+  const from = Date.parse(since);
+  let url: string | undefined = `${HORIZON_URL}/accounts/${account}/operations?order=desc&limit=200`;
+  for (let page = 0; url && page < MAX_SINCE_PAGES; page++) {
+    const res: Response = await fetch(url);
+    // An account that was never funded has no feed.
+    if (res.status === 404) break;
+    if (!res.ok) throw new Error(`Horizon error (${res.status})`);
+    const body = (await res.json()) as {
+      _embedded?: { records?: HorizonOperation[] };
+      _links?: { next?: { href?: string } };
+    };
+    const records = body._embedded?.records ?? [];
+    const recent = records.filter((op) => Date.parse(op.created_at) >= from);
+    ops.push(...recent);
+    url = records.length > 0 && recent.length === records.length ? body._links?.next?.href : undefined;
   }
   return inLedgerOrder(ops);
+}
+
+/** A wallet the document's workspace removed, and since when; from doqtri's database. */
+export type RemovedSigner = { address: string; removedAt: string };
+
+export type HistoryOptions = {
+  /**
+   * Signers whose writes after their removal must not be missed. Their
+   * Freighter (`G…`) feeds are read back to the earliest removal; passkey
+   * wallets have no feed and rely on the index and the events.
+   */
+  removedSigners?: readonly RemovedSigner[];
+};
+
+/** Each `G…` address once, with its earliest removal. */
+function removedAccounts(signers: readonly RemovedSigner[]): RemovedSigner[] {
+  const earliest = new Map<string, string>();
+  for (const { address, removedAt } of signers) {
+    if (!StrKey.isValidEd25519PublicKey(address)) continue;
+    const seen = earliest.get(address);
+    if (!seen || Date.parse(removedAt) < Date.parse(seen)) earliest.set(address, removedAt);
+  }
+  return [...earliest].map(([address, removedAt]) => ({ address, removedAt }));
 }
 
 /**
@@ -369,21 +521,35 @@ async function fetchIndexedOperations(docId: string): Promise<HorizonOperation[]
  */
 export async function getDocumentHistory(
   docId: string,
+  options: HistoryOptions = {},
 ): Promise<DocumentHistory | null> {
   const doc = await DoqtriRegistry.readDocument(docId);
   if (!doc?.owner) return null;
-  if (StrKey.isValidContract(doc.owner)) {
-    const ops = await fetchIndexedOperations(docId);
-    return withCompleteness(buildHistory(ops, docId, REGISTRIES, doc.owner), doc.version);
-  }
+  const passkeyOwner = StrKey.isValidContract(doc.owner);
   // Only the v3 registry has workspaces; the live one has no get_doc_workspace.
   const workspace = REGISTRY_EDITORS ? await DoqtriRegistry.readDocWorkspace(docId).catch(() => null) : null;
   if (!workspace) {
+    if (passkeyOwner) {
+      const ops = await fetchIndexedOperations(docId);
+      return withCompleteness(buildHistory(ops, docId, REGISTRIES, doc.owner), doc.version);
+    }
     const ops = await fetchOwnerOperations(doc.owner);
     return buildHistory(ops, docId, REGISTRIES, doc.owner);
   }
-  const [ownerOps, indexed] = await Promise.all([fetchOwnerOperations(doc.owner), fetchIndexedOperations(docId)]);
-  return withCompleteness(buildHistory(mergeOperations(ownerOps, indexed), docId, REGISTRIES, doc.owner), doc.version);
+  // A workspace note: its owner's feed (a passkey owner has none), the
+  // index, and then the events and removed members' feeds, which only add
+  // writes; when those are unreachable history is what the first two hold,
+  // and the version count says if that is short.
+  const [ownerOps, indexed, evented, ...removed] = await Promise.all([
+    passkeyOwner ? [] : fetchOwnerOperations(doc.owner),
+    fetchIndexedOperations(docId),
+    fetchEventOperations(docId).catch(() => []),
+    ...removedAccounts(options.removedSigners ?? [])
+      .filter((r) => r.address !== doc.owner)
+      .map((r) => fetchAccountOperationsSince(r.address, r.removedAt).catch(() => [])),
+  ]);
+  const ops = mergeOperations(ownerOps, indexed, evented, ...removed);
+  return withCompleteness(buildHistory(ops, docId, REGISTRIES, doc.owner), doc.version);
 }
 
 export type DocumentTtl = {

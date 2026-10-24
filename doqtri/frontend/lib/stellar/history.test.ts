@@ -6,8 +6,10 @@ import {
   decodeInvocation,
   inLedgerOrder,
   mergeOperations,
+  signedWriteTransactions,
   withCompleteness,
   type HorizonOperation,
+  type RegistryEvent,
 } from "@/lib/stellar/history";
 
 const CONTRACT = "CCB5DFZRFFDCIBV5H5KWO6UCVN4ZXIPUSXONMBA6HVF433SPO7YEWMSB";
@@ -80,6 +82,7 @@ describe("anchor (registry v2)", () => {
       docId: DOC,
       hash: hashOf(1).toString("hex"),
       nodes: [{ nodeId: "root", status: "Verified", tool: "doqtri-done", artifactRef: "v1" }],
+      signer: OWNER,
     });
   });
 
@@ -121,21 +124,23 @@ describe("the *_as writes (registry v3)", () => {
     new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("tool"), val: str("doqtri-done") }),
   ]);
 
-  it("decodes them as the writes they stand for, skipping the signer", () => {
+  it("decodes them as the writes they stand for, with their signer", () => {
     expect(decodeInvocation(op("anchor_as", [signer, str(DOC), bytes(hashOf(1)), xdr.ScVal.scvVec([nodeUpdate])]), CONTRACT)).toEqual({
       fn: "anchor",
       docId: DOC,
       hash: hashOf(1).toString("hex"),
       nodes: [{ nodeId: "root", status: "Built", tool: "doqtri-done", artifactRef: "v1" }],
+      signer: SIGNER,
     });
     expect(decodeInvocation(op("update_document_as", [signer, str(DOC), bytes(hashOf(2))]), CONTRACT)).toEqual({
       fn: "update_document",
       docId: DOC,
       hash: hashOf(2).toString("hex"),
+      signer: SIGNER,
     });
     expect(
       decodeInvocation(op("set_node_status_as", [signer, str(DOC), str("h1"), status("Verified"), str("gh"), str("pr#2")]), CONTRACT),
-    ).toEqual({ fn: "set_node_status", docId: DOC, nodeId: "h1", status: "Verified", tool: "gh", artifactRef: "pr#2" });
+    ).toEqual({ fn: "set_node_status", docId: DOC, nodeId: "h1", status: "Verified", tool: "gh", artifactRef: "pr#2", signer: SIGNER });
   });
 
   it("numbers versions across owner-only and *_as writes", () => {
@@ -158,6 +163,7 @@ describe("decodeInvocation", () => {
       fn: "register_document",
       docId: DOC,
       hash: hashOf(1).toString("hex"),
+      signer: OWNER,
     });
     expect(decodeInvocation(update(), CONTRACT)).toEqual({
       fn: "update_document",
@@ -296,6 +302,7 @@ describe("user-paid writes (wrapped in the fee forwarder)", () => {
       fn: "register_document",
       docId: DOC,
       hash: hashOf(7).toString("hex"),
+      signer: WALLET,
     });
   });
 
@@ -344,5 +351,126 @@ describe("workspace-note history (owner feed and write index together)", () => {
     const ownerFeed = [token(register(DOC, 1, { tx: "owner-register" }), "100")];
     const history = withCompleteness(buildHistory(mergeOperations(ownerFeed, []), DOC, CONTRACT, OWNER), 2);
     expect(history.incomplete).toBe(true);
+  });
+});
+
+describe("signers (WP-1.8)", () => {
+  const EDITOR = Keypair.random().publicKey();
+  const PASSKEY = "CCNDHVHSKXUYRXOKJI4PFBCZFGZRL4X4ZYLHVJCU3CI63G63UJGZZITE";
+  const as = (who: string) => new Address(who).toScVal();
+  const token = (op: HorizonOperation, t: string): HorizonOperation => ({ ...op, paging_token: t });
+
+  it("names the signer a call carries, and the owner for owner-only calls", () => {
+    const ops = [
+      token(register(DOC, 1, { tx: "reg" }), "1"),
+      token(update(DOC, 2, { tx: "upd" }), "2"),
+      token(op("update_document_as", [as(EDITOR), str(DOC), bytes(hashOf(3))], { tx: "ed" }), "3"),
+      token(op("update_document_as", [as(PASSKEY), str(DOC), bytes(hashOf(4))], { tx: "pk" }), "4"),
+    ];
+    const history = buildHistory(ops, DOC, CONTRACT, OWNER);
+    expect(history.versions.map((v) => [v.txHash, v.signer, v.signerFrom])).toEqual([
+      ["reg", OWNER, "call"],
+      ["upd", OWNER, "owner"],
+      ["ed", EDITOR, "call"],
+      ["pk", PASSKEY, "call"],
+    ]);
+  });
+
+  it("names the signer of each node status, from set_node_status_as and anchor_as alike", () => {
+    const nodeUpdate = xdr.ScVal.scvMap([
+      new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("artifact_ref"), val: str("v1") }),
+      new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("node_id"), val: str("root") }),
+      new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("status"), val: status("Built") }),
+      new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("tool"), val: str("doqtri-done") }),
+    ]);
+    const ops = [
+      anchorOp(1, [["h0", "Planned"]]),
+      op("set_node_status_as", [as(EDITOR), str(DOC), str("h0"), status("Building"), str("gh"), str("pr#1")]),
+      node("h1", "Planned"),
+      op("anchor_as", [as(PASSKEY), str(DOC), bytes(hashOf(1)), xdr.ScVal.scvVec([nodeUpdate])]),
+    ];
+    const history = buildHistory(ops, DOC, CONTRACT, OWNER);
+    expect(history.nodeEvents.map((e) => [e.nodeId, e.status, e.signer, e.signerFrom])).toEqual([
+      ["h0", "Planned", OWNER, "call"],
+      ["h0", "Building", EDITOR, "call"],
+      ["h1", "Planned", OWNER, "owner"],
+      ["root", "Built", PASSKEY, "call"],
+    ]);
+    // anchor_as with unchanged text is no new version, so its signer is on the node only.
+    expect(history.versions.map((v) => v.signer)).toEqual([OWNER]);
+  });
+
+  it("names the wallet a forwarded (user-paid) write was signed by", () => {
+    const FORWARDER = "CCBBXJSS7DUT34QDJOMZLAYMYOT4Q73NUSY573G4STXFUBSYXDKUBUHV";
+    const XLM = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+    const forwarded = op(
+      "forward",
+      [
+        new Address(XLM).toScVal(),
+        nativeToScVal(BigInt(600000), { type: "i128" }),
+        nativeToScVal(BigInt(5000000), { type: "i128" }),
+        nativeToScVal(5000, { type: "u32" }),
+        new Address(CONTRACT).toScVal(),
+        xdr.ScVal.scvSymbol("update_document_as"),
+        xdr.ScVal.scvVec([as(PASSKEY), str(DOC), bytes(hashOf(5))]),
+        new Address(PASSKEY).toScVal(),
+        new Address(OWNER).toScVal(),
+      ],
+      { contract: FORWARDER },
+    );
+    expect(decodeInvocation(forwarded, CONTRACT, FORWARDER)).toEqual(expect.objectContaining({ signer: PASSKEY }));
+  });
+
+  describe("signedWriteTransactions (the *_as events)", () => {
+    const sym = (s: string) => xdr.ScVal.scvSymbol(s);
+    const event = (topic: xdr.ScVal[], value: xdr.ScVal, txHash: string, ok = true): RegistryEvent => ({
+      topic,
+      value,
+      txHash,
+      inSuccessfulContractCall: ok,
+    });
+
+    it("keeps this note's *_as writes with the signer from their topic", () => {
+      const events = [
+        event([sym("doqtri"), sym("update"), as(EDITOR)], str(DOC), "a"),
+        event([sym("doqtri"), sym("node"), as(EDITOR)], str(DOC), "a"),
+        event([sym("doqtri"), sym("node"), as(PASSKEY)], str(DOC), "b"),
+      ];
+      expect(signedWriteTransactions(events, DOC)).toEqual([
+        { txHash: "a", signer: EDITOR },
+        { txHash: "b", signer: PASSKEY },
+      ]);
+    });
+
+    it("skips other notes, owner-only events, membership events and failed calls", () => {
+      const events = [
+        event([sym("doqtri"), sym("update"), as(EDITOR)], str("another-doc"), "other"),
+        event([sym("doqtri"), sym("update")], str(DOC), "owner-only"),
+        event(
+          [sym("doqtri_ws"), sym("edit_rm"), as(EDITOR)],
+          xdr.ScVal.scvVec([str("ws"), as(EDITOR), as(OWNER)]),
+          "membership",
+        ),
+        event([sym("doqtri"), sym("update"), as(EDITOR)], str(DOC), "failed", false),
+        event([sym("doqtri"), sym("update"), str("not-an-address")], str(DOC), "garbled"),
+      ];
+      expect(signedWriteTransactions(events, DOC)).toEqual([]);
+    });
+  });
+
+  it("finds a removed editor's Freighter write in their own feed, and counts it once", () => {
+    // The owner's feed and the index miss an editor's Freighter write; the
+    // events and the removed signer's feed both carry it.
+    const ownerFeed = [token(register(DOC, 1, { tx: "reg" }), "100")];
+    const late = token(op("update_document_as", [as(EDITOR), str(DOC), bytes(hashOf(2))], { tx: "late" }), "200");
+    const history = withCompleteness(
+      buildHistory(mergeOperations(ownerFeed, [], [late], [late]), DOC, CONTRACT, OWNER),
+      2,
+    );
+    expect(history.incomplete).toBeUndefined();
+    expect(history.versions.map((v) => [v.version, v.txHash, v.signer])).toEqual([
+      [1, "reg", OWNER],
+      [2, "late", EDITOR],
+    ]);
   });
 });
