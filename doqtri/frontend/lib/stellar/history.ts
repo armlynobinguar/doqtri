@@ -459,10 +459,18 @@ async function fetchEventOperations(docId: string): Promise<HorizonOperation[]> 
   // The window's oldest ledger moves on as ledgers close; start a little
   // inside it so the first request is not refused as out of range.
   let page = await server.getEvents({ filters, startLedger: oldestLedger + 10, limit: EVENT_PAGE });
+  // A short page is not taken as the end: an RPC may cap how many ledgers
+  // one request scans, so paging stops at an empty page or a cursor that
+  // no longer moves.
   for (let n = 1; ; n++) {
     events.push(...page.events);
-    if (page.events.length < EVENT_PAGE || n >= MAX_EVENT_PAGES) break;
-    page = await server.getEvents({ filters, cursor: page.cursor, limit: EVENT_PAGE });
+    if (page.events.length === 0 || !page.cursor || n >= MAX_EVENT_PAGES) break;
+    const cursor = page.cursor;
+    page = await server.getEvents({ filters, cursor, limit: EVENT_PAGE });
+    if (page.cursor === cursor) {
+      events.push(...page.events);
+      break;
+    }
   }
   return fetchTransactionOperations(signedWriteTransactions(events, docId).map((w) => w.txHash));
 }
