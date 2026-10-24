@@ -894,6 +894,13 @@ $$;
 --   and with nothing to say why. Notes anchored straight from a Freighter
 --   wallet leave no chain_writes row, so the database cannot see them;
 --   the delete-account route has to ask the ledger, as the note route does.
+-- * So is an account that has published a community template (a pending
+--   draft included) or bought or claimed one: market_templates.creator_id
+--   and market_purchases.buyer_id are `on delete restrict`
+--   (20261013000000), which would refuse it further down with a bare
+--   foreign key error, after nothing had run. This says why instead. A
+--   known limit: such accounts cannot be deleted until those rows are
+--   anonymised or let go, which is a follow-up.
 -- * Before anything cascades, the account's editor and admin roles in every
 --   workspace, someone else's personal one included, are queued for
 --   revocation, while its wallets are still on record (wallet_accounts
@@ -904,20 +911,43 @@ $$;
 --   email, its Stellar account, its passkey wallets) are deleted (D-50).
 --   They name an address, not the account, so nothing would cascade them.
 --   An unconfirmed email was never the account's, so an invite to it stays
---   for whoever owns the inbox.
--- * The passkey wallet is retired (D-51): once its revocations are queued,
---   which is what needs its C address, its passkeys and its record go.
---   smart_wallets keeps `on delete restrict` against auth.users, so no path
---   but this one drops a wallet record. The ledger keeps the wallet's
---   history, and chain_writes, which does not reference the record, keeps
---   the index of its writes. Most passkey holders have anchored a personal
---   note, though, and are refused by the first point: the wallet is
---   retired only for those who have not.
+--   for whoever owns the inbox. The invites the account sent are withdrawn
+--   too, as for an admin who is removed (workspace_members_chain_sync):
+--   `invited_by` is `on delete set null`, and that cascade can run before
+--   the membership rows' does, which would leave the members trigger
+--   nothing to match, and the invite open at its role.
+-- * The passkey wallet is retired (D-51): its revocations are queued here,
+--   which is what needs its C address, and only then, once this trigger
+--   (and every other BEFORE DELETE trigger on auth.users) has run, does the
+--   delete itself cascade to the wallet record and its passkeys (the foreign
+--   keys relaxed just below). The ledger keeps the wallet's history, and
+--   chain_writes, which does not reference the record, keeps the index of
+--   its writes. Most passkey holders have anchored a personal note, though,
+--   and are refused by the first point: the wallet is retired only for
+--   those who have not.
 -- * Each team workspace handed to its longest-standing admin also queues
 --   the on-chain `admin_reassign_owner` (D-36) to that admin's wallet. A
 --   handover still open from an earlier one (the heir is now deleting their
 --   own account before the chain caught up) is re-pointed to the new heir
 --   and tried afresh, so the chain ends with the owner the database has.
+
+-- smart_wallets was `on delete restrict` against auth.users (20261008000000),
+-- so that deleting an account could not silently erase the record of a
+-- wallet that still owned documents on-chain. That made every passkey
+-- account undeletable: the delete failed, and with it D-31's handover and
+-- the revocations above. What restrict protected is now done first, by the
+-- trigger: an account with anchored personal notes is refused, and every
+-- role the wallet holds is queued for revocation by its address. Both run
+-- BEFORE DELETE, and a foreign key's cascade only after the row is gone, so
+-- the order holds for every path that deletes an account (D-51).
+alter table public.smart_wallets
+  drop constraint smart_wallets_user_id_fkey,
+  add constraint smart_wallets_user_id_fkey
+    foreign key (user_id) references auth.users (id) on delete cascade;
+alter table public.wallet_passkeys
+  drop constraint wallet_passkeys_user_id_network_fkey,
+  add constraint wallet_passkeys_user_id_network_fkey
+    foreign key (user_id, network) references public.smart_wallets (user_id, network) on delete cascade;
 
 create or replace function public.handle_deleted_user_workspaces()
 returns trigger
@@ -930,6 +960,8 @@ declare
   v_admin    uuid;
   v_others   integer;
   v_anchored integer;
+  v_listed   integer;
+  v_bought   integer;
 begin
   select count(*) into v_others
     from public.documents d
@@ -955,15 +987,22 @@ begin
             hint = 'An anchored note is kept with its on-chain record, which cannot be deleted, so the account stays too.';
   end if;
 
+  select count(*) into v_listed from public.market_templates t where t.creator_id = old.id;
+  select count(*) into v_bought from public.market_purchases p where p.buyer_id = old.id;
+  if v_listed > 0 or v_bought > 0 then
+    raise exception 'this account has published % community template(s) and bought or claimed % on record',
+      v_listed, v_bought
+      using errcode = 'restrict_violation',
+            hint = 'Templates and purchases keep their account (market_templates.creator_id, market_purchases.buyer_id), so the account stays too, for now.';
+  end if;
+
   perform public.enqueue_chain_revocation(m.workspace_id, old.id)
      from public.workspace_members m
     where m.user_id = old.id and m.role in ('editor', 'admin');
 
   delete from public.workspace_invites i
-   where i.invitee = any (public.invite_identifiers_of(old.id));
-
-  delete from public.wallet_passkeys p where p.user_id = old.id;
-  delete from public.smart_wallets s where s.user_id = old.id;
+   where i.invitee = any (public.invite_identifiers_of(old.id))
+      or i.invited_by = old.id;
 
   delete from public.documents d
    using public.workspaces w

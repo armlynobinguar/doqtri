@@ -581,7 +581,20 @@ describe("registry write authorization (workspace roles)", () => {
       await expect(authorize(homeCall(fn), users.owner)).resolves.toBeUndefined();
     }
     await expect(authorize(homeCall("remove_admin"), users.owner)).resolves.toBeUndefined();
-    await expect(authorize({ fn: "create_workspace", workspaceId: home, subject: null }, users.owner)).resolves.toBeUndefined();
+  });
+
+  it("never pays to create a personal workspace on-chain, not even for its owner (D-52)", async () => {
+    for (const userId of [users.owner, users.admin, users.editor]) {
+      await expect(authorize({ fn: "create_workspace", workspaceId: home, subject: null }, userId)).rejects.toThrow(
+        userId === users.owner ? /personal workspace isn't created on-chain/ : /Only/,
+      );
+    }
+    // With the v3 calls off it is refused before anything is looked up, as before.
+    await expect(authorize({ fn: "create_workspace", workspaceId: home, subject: null }, users.owner, false)).rejects.toThrow(
+      /aren't enabled on this registry yet/,
+    );
+    // A team workspace is still created by its owner.
+    await expect(authorize({ fn: "create_workspace", workspaceId: team, subject: null }, users.owner)).resolves.toBeUndefined();
   });
 
   it("lets only the owner manage admins and create the workspace on-chain", async () => {

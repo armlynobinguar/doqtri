@@ -132,6 +132,11 @@ export function workspaceSlug(name: string, random: () => number = Math.random):
   return `${base || "workspace"}-${tail}`;
 }
 
+/** The members screen for a workspace (WP-1.5): invites, roles, removal and transfer. */
+export function membersPath(workspaceId: string): string {
+  return `/vault/workspace/members?ws=${encodeURIComponent(workspaceId)}`;
+}
+
 /**
  * Where to go after switching workspaces from a link: a vault path, or the
  * vault itself. Never another origin or a non-vault page, so the switch

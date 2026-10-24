@@ -37,15 +37,26 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261021000000_create_mindmap_styles.sql
 20261024000000_add_promo_submission_rating.sql
 20261024120000_create_workspaces.sql      # NOT yet applied: dry-run on a branch first
+20261024130000_workspace_document_ownership.sql  # NOT yet applied (WP-1.2)
+20261024140000_chain_writes_editor_calls.sql     # NOT yet applied (WP-1.4)
 20261024150000_doc_locks.sql              # NOT yet applied: dry-run on a branch first
+20261024150500_workspace_members_management.sql  # NOT yet applied (WP-1.5)
 20261024160000_workspace_member_removals.sql  # NOT yet applied (WP-1.8)
+20261025090000_chain_jobs_scheduler.sql   # NOT yet applied (WP-1.9)
 ```
 
 The remote records its own version stamps (e.g. `20260929114657` for
 `create_ingests`); match on the name, not the number.
 
 These were applied through the Supabase MCP server, so the remote project is
-already in this state. The files exist so the schema is reviewable in git and
+already in this state, except those marked "NOT yet applied". The workspace
+migrations (`20261024120000` through `20261025090000`) go out together with
+the on-chain editors rollout, in the same release window as the
+`integration/suite` merge into `main` and never ahead of it (`main`'s code
+cannot create or save notes on them): follow
+[docs/runbooks/registry-editors-rollout.md](../docs/runbooks/registry-editors-rollout.md),
+which covers the branch dry-run, the registry v3 upgrade, the revoker key,
+the scheduler's Vault secrets and the `NEXT_PUBLIC_REGISTRY_EDITORS` flag. The files exist so the schema is reviewable in git and
 replayable into a fresh project.
 
 ## Data model
@@ -104,6 +115,25 @@ Two supporting tables:
   not belong to workspaces yet;
   WP-1.2 adds `documents.workspace_id` and moves the policies over to
   `is_workspace_member()`.
+- `public.workspace_invites`, `public.workspace_transfers`,
+  `public.workspace_chain_jobs` — invites the invitee accepts (by wallet
+  address, or by confirmed email once switched on), ownership transfers the
+  new owner accepts, and the work the server owes the chain after a
+  membership change (revocations by the revoke-only key, D-16, and D-31
+  handovers). Written only through their RPCs and the service role. The
+  queue is worked at once by the app, every minute by the `doqtri-chain-jobs`
+  pg_cron job and daily by Vercel Cron
+  (`20261025090000_chain_jobs_scheduler.sql`, which says how to store its
+  Vault secrets); `chain_jobs_scheduler_health()` reports whether the
+  minutely job can run. Deleting an account queues revocations for every
+  role its wallets hold, deletes the invites to and from it, and then lets
+  its wallet records cascade (D-50, D-51). It refuses, with a hint, an
+  account whose personal workspace holds anchored notes or other people's
+  notes, the last owner of a team workspace with no admin (D-31), and, a
+  known limit until those rows can be anonymised, an account that has
+  published a community template or bought or claimed one
+  (`market_templates.creator_id`, `market_purchases.buyer_id` are
+  `on delete restrict`).
 - `public.workspace_member_removals` — when each member lost the right to
   sign in a workspace (removed, left, account deleted, or demoted to viewer),
   with the wallet addresses they had then, and when they got it back. Written

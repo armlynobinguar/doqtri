@@ -800,6 +800,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
         nodes={flatNodes}
         anchored={chainVersion != null}
         canSign={canSign}
+        signerLoading={signerLoading}
         onSynced={() => void refreshChain()}
       />
     </div>

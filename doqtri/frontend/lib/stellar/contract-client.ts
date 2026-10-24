@@ -675,18 +675,27 @@ export const DoqtriRegistry = {
    * already landed, so a failure here is reported, not raised.
    */
   async reconcileWorkspace(source: string, docId: string, target: WriteTarget): Promise<WorkspaceAssignment> {
+    const unreachable: WorkspaceAssignment = {
+      status: "unassigned",
+      reason: "The ledger couldn't be reached to check this note's workspace.",
+    };
     const current = await DoqtriRegistry.readDocWorkspace(docId).catch(() => undefined);
     if (current === target.workspaceId) return { status: "assigned" };
-    if (current === undefined) {
-      return { status: "unassigned", reason: "The ledger couldn't be reached to check this note's workspace." };
-    }
+    if (current === undefined) return unreachable;
     // Who assign_document makes sign: for a note in no workspace, its stored
     // owner; for one already in another workspace (moved in the app), that
     // workspace's CURRENT owner, which the stored owner can lag behind after
-    // transfer_workspace or admin_reassign_owner.
-    const signer = current
-      ? await DoqtriRegistry.readWorkspaceOwner(current).catch(() => undefined)
-      : (await DoqtriRegistry.getDocument(docId))?.owner;
+    // transfer_workspace or admin_reassign_owner. A read that fails is the
+    // ledger being out of reach, not a different owner: strict reads, so
+    // the two are told apart.
+    let signer: string | null;
+    try {
+      signer = current
+        ? await DoqtriRegistry.readWorkspaceOwner(current)
+        : ((await DoqtriRegistry.readDocument(docId))?.owner ?? null);
+    } catch {
+      return unreachable;
+    }
     if (signer !== source) {
       return {
         status: "unassigned",

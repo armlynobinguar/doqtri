@@ -441,7 +441,11 @@ export function validateRegistryCall(fnName: string, args: xdr.ScVal[], wallet: 
 /** Where a note sits in doqtri's database, for the relay's checks. */
 export type NoteWorkspace = {
   workspaceId: string;
-  /** A personal workspace: only its creator owns it (D-30), and its notes stay off the `*_as` calls. */
+  /**
+   * A personal workspace: only its creator owns it (D-30) and signs its
+   * notes, through the owner-only calls or, with REGISTRY_EDITORS on, the
+   * `*_as` calls; its notes are never assigned to a workspace on-chain.
+   */
   personal: boolean;
   /** The note's creator (documents.user_id); null once their account is deleted. */
   creatorId: string | null;
@@ -502,19 +506,23 @@ function isOwnerFunction(fn: RegistryFunction): fn is OwnerFunction {
  *   read, D-14); taking a note out of its workspace needs an owner, and a
  *   note can only be assigned to the workspace it belongs to.
  * - A personal workspace's note is written by that workspace's owner only,
- *   whatever role its other members hold (D-30): its writes stay on the
- *   owner-only calls and it is never assigned, so whichever wallet anchored
- *   it first would own it on-chain for good.
+ *   whatever role its other members hold (D-30), through whichever calls
+ *   the registry has (the owner-only ones, or the `*_as` ones with `editors`
+ *   on; the signer is the owner either way). It is never assigned to a
+ *   workspace on-chain.
  * - A team note's owner-only writes (`register_document`, `anchor`, …) would
  *   leave the note owned on-chain by whoever signed first. With `editors`
  *   on they are refused: team notes go through `anchor_as` and then
  *   `assign_document` (D-28). With it off they are the only calls there are,
  *   and only the note's creator or the workspace's owner may make them, as
  *   before workspaces had editors.
- * - Creating the on-chain workspace needs an owner; adding or removing an
- *   editor an admin or above; adding or removing an admin an owner. In a
- *   personal workspace every one of them needs its owner, since only the
- *   owner signs there (D-44). Only an
+ * - Creating the on-chain workspace needs an owner, and is refused for a
+ *   personal workspace (D-52): it stays off-chain, its notes owned by its
+ *   owner's wallet. (A Freighter owner can still call the contract
+ *   directly, paying their own fee; that is a known limit.) Adding or
+ *   removing an editor needs an admin or above; adding or removing an admin
+ *   an owner. In a personal workspace every one of them needs its owner,
+ *   since only the owner signs there (D-44). Only an
  *   editor (or above) may be given chain write access, and only an admin
  *   (or above) made an on-chain admin, so the chain never holds a role the
  *   database does not.
@@ -576,6 +584,9 @@ export async function authorizeRegistryWrite(
   if (!workspace) throw new RelayRejection("You aren't a member of that workspace.");
   if (workspace.personal && role !== "owner") {
     throw new RelayRejection("Only the owner of a personal workspace can sign changes to it.");
+  }
+  if (write.fn === "create_workspace" && workspace.personal) {
+    throw new RelayRejection("A personal workspace isn't created on-chain. Create a team workspace to share signing.");
   }
   if (write.fn === "add_editor" || write.fn === "add_admin") {
     const needed: WorkspaceRole = write.fn === "add_admin" ? "admin" : "editor";

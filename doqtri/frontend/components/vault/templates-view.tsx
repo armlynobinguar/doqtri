@@ -190,8 +190,9 @@ export function TemplatesView() {
   const tab: PageTab = isTab(requested) ? requested : "starter";
   const [category, setCategory] = useState<TemplateCategory | "All">("All");
   const [creating, setCreating] = useState(false);
-  // Template copies go into the workspace on screen (WP-1.7).
-  const { active: workspace } = useActiveWorkspace();
+  // Template copies go into the workspace on screen (WP-1.7); a viewer
+  // there can browse but not copy (D-14).
+  const { active: workspace, canCreate } = useActiveWorkspace();
 
   function setTab(next: PageTab) {
     router.replace(next === "starter" ? "/vault/templates" : `/vault/templates?tab=${next}`, { scroll: false });
@@ -206,7 +207,7 @@ export function TemplatesView() {
   }
 
   async function startFromTemplate(template: NoteTemplate) {
-    if (creating) return;
+    if (creating || !canCreate) return;
     setCreating(true);
     try {
       opened(await createBlankNote(template.title, template.body, workspace.id));
@@ -281,7 +282,12 @@ export function TemplatesView() {
               {tab === "community" ? (
                 <CommunityGallery category={category} active onCreated={opened} />
               ) : (
-                <StarterGallery category={category} creating={creating} onUse={(t) => void startFromTemplate(t)} />
+                <StarterGallery
+                  category={category}
+                  creating={creating}
+                  viewerIn={canCreate ? null : workspace.name}
+                  onUse={(t) => void startFromTemplate(t)}
+                />
               )}
             </div>
           </>
@@ -291,14 +297,31 @@ export function TemplatesView() {
   );
 }
 
+/**
+ * Why "Use template" is disabled for a viewer: the copy would go into the
+ * workspace on screen, where they cannot add notes (D-14). Worded as the buy
+ * dialog words it.
+ */
+function ViewerCopyNote({ workspaceName }: { workspaceName: string }) {
+  return (
+    <p className="text-muted-foreground text-[12px]" data-testid="template-viewer">
+      You&apos;re a viewer in {workspaceName}, so a copy can&apos;t be added to it. Switch to a workspace you edit
+      first.
+    </p>
+  );
+}
+
 /** Doqtri's own starter templates: pick on the left, preview on the right. */
 function StarterGallery({
   category,
   creating,
+  viewerIn,
   onUse,
 }: {
   category: TemplateCategory | "All";
   creating: boolean;
+  /** The workspace's name when the user is a viewer there: copying is then disabled. */
+  viewerIn: string | null;
   onUse: (template: NoteTemplate) => void;
 }) {
   const [selectedId, setSelectedId] = useState(TEMPLATES[0].id);
@@ -354,7 +377,7 @@ function StarterGallery({
           </div>
           <Button
             size="sm"
-            disabled={creating}
+            disabled={creating || viewerIn !== null}
             onClick={() => onUse(selected)}
             data-testid="use-template"
             className="shrink-0 rounded-full"
@@ -363,6 +386,7 @@ function StarterGallery({
             {creating ? "Creating…" : "Use template"}
           </Button>
         </div>
+        {viewerIn !== null ? <ViewerCopyNote workspaceName={viewerIn} /> : null}
         <div className="bg-background relative h-56 shrink-0 overflow-hidden rounded-lg border border-[var(--glass-lo)] p-2 md:h-64">
           <TemplateMapPreview tree={tree} />
         </div>
@@ -396,7 +420,7 @@ function CommunityGallery({
   onCreated: (note: { id: string; title: string }) => void;
 }) {
   const [sort, setSort] = useState<Sort>("popular");
-  const { active: workspace } = useActiveWorkspace();
+  const { active: workspace, canCreate } = useActiveWorkspace();
   // Results remember the query they answer; a newer query reads as loading
   // until its own response lands, without resetting state inside the effect.
   const query = `${sort}|${category}`;
@@ -446,6 +470,7 @@ function CommunityGallery({
   const selected = templates.find((t) => t.id === selectedId) ?? templates[0] ?? null;
 
   async function claim(template: CommunityTemplate) {
+    if (!canCreate) return;
     setClaiming(true);
     try {
       const res = await fetch("/api/market/claim", {
@@ -582,6 +607,7 @@ function CommunityGallery({
               template={selected}
               candidates={templates}
               claiming={claiming}
+              viewerIn={canCreate ? null : workspace.name}
               onClaim={() => void claim(selected)}
               onCreated={onCreated}
             />
@@ -596,6 +622,7 @@ function CommunityPreview({
   template,
   candidates,
   claiming,
+  viewerIn,
   onClaim,
   onCreated,
 }: {
@@ -603,6 +630,8 @@ function CommunityPreview({
   /** The loaded gallery, to pick an original from when reporting a copy. */
   candidates: CommunityTemplate[];
   claiming: boolean;
+  /** The workspace's name when the user is a viewer there: copying is then disabled. */
+  viewerIn: string | null;
   onClaim: () => void;
   onCreated: (note: { id: string; title: string }) => void;
 }) {
@@ -643,7 +672,7 @@ function CommunityPreview({
         ) : (
           <Button
             size="sm"
-            disabled={claiming}
+            disabled={claiming || viewerIn !== null}
             onClick={onClaim}
             data-testid="use-community-template"
             className="shrink-0 rounded-full"
@@ -653,6 +682,7 @@ function CommunityPreview({
           </Button>
         )}
       </div>
+      {viewerIn !== null && !mustBuy ? <ViewerCopyNote workspaceName={viewerIn} /> : null}
       <div className="bg-background relative h-56 shrink-0 overflow-hidden rounded-lg border border-[var(--glass-lo)] p-2 md:h-64">
         <TemplateMapPreview tree={tree} />
       </div>

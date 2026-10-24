@@ -226,6 +226,9 @@ the first draft of this section:
   `(user_id, network)` and `(network, tx_hash)`.
 - `smart_wallets` (owner select): `address` `C…`, `created_tx`. `on delete restrict`
   to `auth.users`: a user that owns an on-chain wallet is not silently deleted.
+  (Since WP-1.5/WP-1.9, D-51: `on delete cascade`. The account-deletion trigger
+  first refuses an account with anchored personal notes and queues every
+  on-chain role the wallet holds for revocation; then the record cascades.)
 - `wallet_passkeys` (owner select): credential id, 65-byte uncompressed P-256
   key (checked), `rp_id`, `label`; FK to the wallet on the same network.
 - `chain_writes` (**public select**, no `user_id` column): what the audit page
@@ -315,7 +318,8 @@ authenticated cannot execute the function, RLS on all four tables.
   charged before simulation, to protect RPC as well as Channels).
 - Test data: 9 `e2e-passkey…@doqtri.test` users, 6 testnet wallets, 7 notes in
   the production project. `on delete restrict` means removing them needs the
-  wallet rows (testnet) deleted first.
+  wallet rows (testnet) deleted first. (No longer once WP-1.5's migration is
+  applied: the rows cascade, D-51.)
 
 ### 5. History for contract-account owners — **Done 2026-10-08 (testnet verified)**
 

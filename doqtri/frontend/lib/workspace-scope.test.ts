@@ -11,6 +11,7 @@ import {
   vaultReturnPath,
   workspaceLabel,
   workspaceSlug,
+  membersPath,
   type WorkspaceChoice,
 } from "./workspace-scope";
 
@@ -121,6 +122,13 @@ describe("workspaceSlug", () => {
   it("is the name plus a random tail", () => {
     expect(workspaceSlug("Acme Labs", () => 0)).toBe("acme-labs-00000");
     expect(workspaceSlug("!!!", () => 0)).toBe("workspace-00000");
+    expect(workspaceSlug("  Acme Research & Dev! ", () => 0.5).startsWith("acme-research-dev-")).toBe(true);
+  });
+});
+
+describe("membersPath", () => {
+  it("opens the members screen on a workspace", () => {
+    expect(membersPath(TEAM)).toBe(`/vault/workspace/members?ws=${TEAM}`);
   });
 });
 
