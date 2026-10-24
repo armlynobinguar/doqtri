@@ -33,7 +33,7 @@ import { loadWriteTarget, reportWorkspaceAssignment } from "@/lib/stellar/write-
 import { NODE_STATUSES, type NodeStatus } from "@/lib/stellar/types";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useWallet } from "@/components/vault/wallet-provider";
-import { GitHubLinks } from "@/components/vault/github-links";
+import { NodeLinks } from "@/components/vault/node-links";
 import { IS_MAINNET, MARKET_CONTRACT_ID } from "@/lib/stellar/config";
 import { PublishTemplateDialog } from "@/components/vault/publish-template-dialog";
 import { buildMindmap } from "@/lib/mindmap";
@@ -794,13 +794,14 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
         </>
       ) : null}
 
-      <GitHubLinks
+      <NodeLinks
         key={docId}
         docId={docId}
         nodes={flatNodes}
         anchored={chainVersion != null}
         canSign={canSign}
         onSynced={() => void refreshChain()}
+        onSave={onSave}
       />
     </div>
   );
