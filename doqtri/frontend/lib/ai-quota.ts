@@ -14,7 +14,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  */
 
 /** Routes that draw on the budget; stored per row for usage breakdowns. */
-export type AiRoute = "ingest" | "ingest-retry" | "regenerate" | "mindmap";
+export type AiRoute = "ingest" | "ingest-retry" | "regenerate" | "mindmap" | "promo-rating";
 
 export const DEFAULT_AI_DAILY_LIMIT = 30;
 

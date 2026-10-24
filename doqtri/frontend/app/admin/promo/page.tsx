@@ -8,6 +8,7 @@ import {
 } from "@/components/admin/promo-review-list";
 import { isAdmin } from "@/lib/admin";
 import { MINDMAP_PROMO, PROMO_BUCKET, isPromoStatus } from "@/lib/promo";
+import { parseRating, type StoredRating } from "@/lib/promo-rating";
 import {
   createSupabaseAdminClient,
   createSupabaseServerClient,
@@ -28,7 +29,18 @@ type Row = {
   status: string;
   created_at: string;
   updated_at: string;
+  ai_score: number | null;
+  ai_rating: unknown;
+  ai_rated_at: string | null;
+  ai_rating_error: string | null;
 };
+
+function storedRating(row: Row): StoredRating | null {
+  if (row.ai_score === null || !row.ai_rated_at) return null;
+  const model = (row.ai_rating as { model?: unknown } | null)?.model;
+  const rating = parseRating(row.ai_rating, typeof model === "string" ? model : "");
+  return rating && { score: row.ai_score, rating, ratedAt: row.ai_rated_at };
+}
 
 /**
  * Review screen for the mindmap showcase. Admins only (DOQTRI_ADMINS); anyone
@@ -45,7 +57,9 @@ export default async function PromoAdminPage() {
   const admin = createSupabaseAdminClient();
   const { data, error } = await admin
     .from("promo_submissions")
-    .select("id, user_id, image_paths, caption, contact, status, created_at, updated_at")
+    .select(
+      "id, user_id, image_paths, caption, contact, status, created_at, updated_at, ai_score, ai_rating, ai_rated_at, ai_rating_error",
+    )
     .eq("promo", MINDMAP_PROMO.id)
     .order("created_at", { ascending: false });
   if (error) throw new Error(`Failed to load entries: ${error.message}`);
@@ -85,6 +99,8 @@ export default async function PromoAdminPage() {
     status: isPromoStatus(row.status) ? row.status : "pending",
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    ai: storedRating(row),
+    aiError: row.ai_rating_error,
   }));
 
   return (
