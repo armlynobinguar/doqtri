@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { BriefcaseIcon, CheckIcon, ChevronsUpDownIcon, Loader2Icon, PlusIcon, UserRoundIcon } from "lucide-react";
+import { BriefcaseIcon, CheckIcon, ChevronsUpDownIcon, Loader2Icon, PlusIcon, UserRoundIcon, UsersIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -21,12 +21,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useNavigate } from "@/components/vault/navigation";
 import { useActiveWorkspace } from "@/components/vault/workspace-context";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import {
   checkWorkspaceName,
   MAX_WORKSPACE_NAME,
+  membersPath,
   workspaceLabel,
   workspaceSlug,
   type WorkspaceChoice,
@@ -40,13 +42,15 @@ const ROLE_LABEL: Record<WorkspaceChoice["role"], string> = {
 };
 
 /**
- * Picks the workspace the vault shows (WP-1.7), and creates a new one. Sits
+ * Picks the workspace the vault shows (WP-1.7), opens its members screen,
+ * and creates a new one. Sits
  * at the top of the file explorer, so it is in the docked explorer on a
  * desktop and in the notes drawer on a phone.
  */
 export function WorkspaceSwitcher({ className }: { className?: string }) {
   const { active, workspaces, switchingTo, switchTo } = useActiveWorkspace();
   const [creating, setCreating] = useState(false);
+  const navigate = useNavigate();
   const busy = switchingTo !== null;
 
   return (
@@ -87,6 +91,11 @@ export function WorkspaceSwitcher({ className }: { className?: string }) {
             ))}
           </DropdownMenuGroup>
           <DropdownMenuSeparator />
+          {/* Every member may open it: viewers see the roster and may leave. */}
+          <DropdownMenuItem data-testid="manage-members" disabled={busy} onClick={() => navigate(membersPath(active.id))}>
+            <UsersIcon />
+            Manage members
+          </DropdownMenuItem>
           <DropdownMenuItem data-testid="new-workspace" disabled={busy} onClick={() => setCreating(true)}>
             <PlusIcon />
             New workspace

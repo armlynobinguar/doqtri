@@ -31,6 +31,7 @@ import type { ChainWorkspace } from "@/lib/stellar/workspace-chain";
 import { shortenAddress } from "@/lib/wallet";
 import { cn } from "@/lib/utils";
 import type { WorkspaceRole } from "@/lib/workspace-roles";
+import { workspaceSlug } from "@/lib/workspace-scope";
 import {
   assignableRoles,
   canChangeRole,
@@ -45,7 +46,6 @@ import {
   ROLE_HELP,
   ROLE_LABELS,
   transferCandidates,
-  workspaceSlug,
   type ChainJobRow,
   type MemberChainState,
   type RosterMember,

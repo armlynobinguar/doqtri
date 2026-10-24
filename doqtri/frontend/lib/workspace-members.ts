@@ -170,18 +170,3 @@ export function pendingRemovals(jobs: ChainJobRow[], roster: RosterMember[]): Ch
 export function handoverNeedingProductOwner(jobs: ChainJobRow[]): ChainJobRow | null {
   return jobs.find((j) => j.kind === "reassign_owner" && j.status === "needs_product_owner") ?? null;
 }
-
-/** A URL-safe slug for a new team workspace: its name, plus a short random tail so it is free. */
-export function workspaceSlug(name: string, random: () => number = Math.random): string {
-  const base = name
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48)
-    .replace(/-+$/g, "");
-  const tail = Math.floor(random() * 36 ** 5)
-    .toString(36)
-    .padStart(5, "0");
-  return `${base || "workspace"}-${tail}`;
-}

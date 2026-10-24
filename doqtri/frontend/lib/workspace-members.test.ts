@@ -11,7 +11,6 @@ import {
   parseInviteIdentifier,
   pendingRemovals,
   transferCandidates,
-  workspaceSlug,
   type ChainJobRow,
   type RosterMember,
 } from "@/lib/workspace-members";
@@ -156,15 +155,5 @@ describe("pending removals and handovers", () => {
     const handover = job({ kind: "reassign_owner", address: null, status: "needs_product_owner" });
     expect(handoverNeedingProductOwner([job({}), handover])).toBe(handover);
     expect(handoverNeedingProductOwner([job({ kind: "reassign_owner", status: "pending" })])).toBeNull();
-  });
-});
-
-describe("workspaceSlug", () => {
-  it("matches the database's slug format", () => {
-    const slug = workspaceSlug("  Acme Research & Dev! ", () => 0.5);
-    expect(slug).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
-    expect(slug.startsWith("acme-research-dev-")).toBe(true);
-    expect(workspaceSlug("¡¡¡", () => 0)).toBe("workspace-00000");
-    expect(workspaceSlug("x".repeat(80)).length).toBeLessThanOrEqual(64);
   });
 });
