@@ -23,6 +23,7 @@ import {
   type LinkableNode,
   type QditLinkRow,
 } from "@/lib/node-links";
+import { QditStatusLine, useQditStatusSync } from "@/components/vault/qdit-status";
 
 /**
  * The qdit provider of the ship panel's link list (WP-2.5). Shown only with
@@ -68,13 +69,18 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 
 export function QditLinks({
   docId,
+  title,
   nodes,
   nodesKey,
   taken,
   onLinkedChange,
   onSave,
+  canSign = false,
+  onSynced,
 }: {
   docId: string;
+  /** The note's title: the mindmap's root, for roll-ups (WP-2.8). */
+  title: string;
   nodes: LinkableNode[];
   /** Changes when the note's headings change: links are re-read after the save. */
   nodesKey: string;
@@ -83,6 +89,10 @@ export function QditLinks({
   onLinkedChange: (nodeIds: string[]) => void;
   /** Saves the note, so a milestone is made from the heading as stored. */
   onSave: () => Promise<string>;
+  /** Whether the user may sign this note's writes (D-43, D-44): shows Mark <status>. */
+  canSign?: boolean;
+  /** After a signature, so the panel re-reads the chain. */
+  onSynced?: () => void;
 }) {
   const [connection, setConnection] = useState<Connection>("loading");
   const [project, setProject] = useState<DocProjectLinkRow | null>(null);
@@ -101,7 +111,7 @@ export function QditLinks({
   const [showExisting, setShowExisting] = useState(false);
   const [relinkChoice, setRelinkChoice] = useState<Record<string, string>>({});
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<QditLinkRow[]> => {
     const supabase = createSupabaseBrowserClient();
     const [projectRes, linksRes] = await Promise.all([
       supabase.from("doc_project_links").select(DOC_PROJECT_LINK_COLUMNS).eq("document_id", docId).maybeSingle(),
@@ -114,12 +124,13 @@ export function QditLinks({
     ]);
     if (projectRes.error || linksRes.error) {
       toast.error("Could not load qdit links");
-      return;
+      return [];
     }
     setProject((projectRes.data as DocProjectLinkRow | null) ?? null);
     const rows = (linksRes.data ?? []) as QditLinkRow[];
     setLinks(rows);
     onLinkedChange(rows.map((r) => r.node_id));
+    return rows;
   }, [docId, onLinkedChange]);
 
   useEffect(() => {
@@ -171,6 +182,17 @@ export function QditLinks({
   }
 
   const connected = connection === "connected";
+  const status = useQditStatusSync({
+    docId,
+    title,
+    links,
+    otherLinked: taken,
+    canSign,
+    onSave,
+    reloadLinks: load,
+    onSynced: () => onSynced?.(),
+  });
+  const signDisabled = busy != null || status.signing || status.checking || !status.walletReady;
   const canEdit = role.editor && connected;
   const unlinked = linkableNodes(nodes, "qdit", [...links.map((l) => l.node_id), ...taken]);
   const selectedNode = unlinked.some((n) => n.id === nodeChoice) ? nodeChoice : unlinked[0]?.id ?? "";
@@ -272,6 +294,19 @@ export function QditLinks({
           >
             {busy === "sync" ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
             Retry
+          </Button>
+        ) : links.length > 0 ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-6 px-1.5 text-[11px] max-lg:h-9 max-lg:px-2.5"
+            disabled={status.checking || status.signing}
+            title="Read the milestones again from Stellar and qdit"
+            onClick={() => void status.check()}
+          >
+            {status.checking ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
+            Check
           </Button>
         ) : null
       }
@@ -430,6 +465,14 @@ export function QditLinks({
                     {text.note}
                   </p>
                 ) : null}
+                <QditStatusLine
+                  suggestion={status.suggestions[link.id]}
+                  record={status.records[link.node_id]}
+                  canSign={canSign}
+                  disabled={signDisabled}
+                  busy={status.signingIds.includes(link.id)}
+                  onSign={() => void status.sign([link.id])}
+                />
                 {problem && canEdit && choices.length > 0 ? (
                   <div className="flex gap-1.5">
                     <div className="min-w-0 flex-1">
@@ -457,6 +500,28 @@ export function QditLinks({
             );
           })}
         </LinkList>
+      ) : null}
+
+      {canSign && status.ready.length > 1 ? (
+        <Button
+          type="button"
+          size="sm"
+          className="w-full max-lg:h-10"
+          disabled={signDisabled}
+          onClick={() => void status.sign(status.ready)}
+        >
+          {status.signing ? <Loader2Icon className="animate-spin" /> : null}
+          {status.progress ?? `Sign ${status.ready.length} status updates`}
+        </Button>
+      ) : status.progress ? (
+        <p className="text-muted-foreground text-[11px]" role="status">
+          {status.progress}
+        </p>
+      ) : null}
+      {canSign && status.ready.length > 0 ? (
+        <p className="text-muted-foreground text-[11px]">
+          Parent headings that roll up from these are signed in the same transaction.
+        </p>
       ) : null}
 
       {project && canEdit && unlinked.length > 0 ? (

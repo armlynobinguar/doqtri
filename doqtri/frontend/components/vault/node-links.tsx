@@ -15,6 +15,7 @@ import type { LinkableNode, LinkProvider } from "@/lib/node-links";
  */
 export function NodeLinks({
   docId,
+  title,
   nodes,
   anchored,
   canSign,
@@ -22,6 +23,8 @@ export function NodeLinks({
   onSave,
 }: {
   docId: string;
+  /** The note's title (the mindmap's root), for qdit roll-ups. */
+  title: string;
   nodes: LinkableNode[];
   anchored: boolean;
   canSign: boolean;
@@ -50,11 +53,14 @@ export function NodeLinks({
         <QditLinks
           key={`qdit-${docId}`}
           docId={docId}
+          title={title}
           nodes={nodes}
           nodesKey={nodesKey}
           taken={linked.github}
           onLinkedChange={onQdit}
           onSave={onSave}
+          canSign={canSign}
+          onSynced={onSynced}
         />
       ) : null}
     </>
