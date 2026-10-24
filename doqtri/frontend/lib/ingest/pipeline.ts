@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { extractDocumentText, formatWithModel, type UploadKind } from "@/lib/openai";
 import { generateAndStoreMindmap } from "@/lib/mindmap-store";
 import { deriveTitle } from "@/lib/title";
-import { insertWorkspaceDocument, personalWorkspaceId } from "@/lib/workspace-docs";
+import { insertWorkspaceDocument } from "@/lib/workspace-docs";
 import { IngestFailure, INGEST_ERRORS } from "@/lib/ingest/errors";
 import type { IngestEvent, IngestStage } from "@/lib/ingest/events";
 
@@ -12,8 +12,9 @@ import type { IngestEvent, IngestStage } from "@/lib/ingest/events";
  * runs and failing with a typed code instead of hanging.
  *
  * Server-only, and runs with the service role: `userId` must come from the
- * verified session, never from the request body. The note goes into the
- * user's personal workspace (WP-1.2); the ingest row stays the uploader's.
+ * verified session, never from the request body. The note goes into
+ * `workspaceId`, which the route settled with workspaceForCreate() before
+ * accepting the upload (WP-1.7); the ingest row stays the uploader's.
  */
 
 function ms(name: string, fallback: number): number {
@@ -42,12 +43,14 @@ type Emit = (event: IngestEvent) => void;
 export async function runIngest(params: {
   admin: SupabaseClient;
   userId: string;
+  /** Where the note goes; the caller has checked the user may add notes there. */
+  workspaceId: string;
   source: IngestSource;
   /** Skip the AI formatting pass and keep the extracted text as the note. */
   raw?: boolean;
   emit: Emit;
 }): Promise<void> {
-  const { admin, userId, source, emit } = params;
+  const { admin, userId, workspaceId, source, emit } = params;
   const startedAt = Date.now();
   let stage: IngestStage = "upload";
   let ingestId: string | null = source.ingestId ?? null;
@@ -126,9 +129,6 @@ export async function runIngest(params: {
 
     // 5. Vault.
     begin("vault");
-    const workspaceId = await personalWorkspaceId(admin, userId).catch((error: Error) => {
-      throw new IngestFailure("SAVE_FAILED", error.message);
-    });
     const inserted = await insertWorkspaceDocument(admin, {
       userId,
       workspaceId,
