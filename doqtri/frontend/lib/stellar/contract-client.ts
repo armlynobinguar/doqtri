@@ -29,10 +29,11 @@ import {
 } from "@/lib/bindings/doqtri-registry";
 import { CONTRACT_ID, NETWORK_PASSPHRASE, REGISTRY_EDITORS, RPC_URL } from "@/lib/stellar/config";
 import { hexToBytes32 } from "@/lib/stellar/hash";
-import { signSorobanTx } from "@/lib/wallet";
-import { passkeyWalletFor, payAndRelay, signAndRelay } from "@/lib/passkey-wallet";
+import { signSorobanTx, signWalletAuthEntry } from "@/lib/wallet";
+import { passkeyWalletFor, payAndRelay, signAndRelay, signPasskeyAuthEntry } from "@/lib/passkey-wallet";
 import { USER_PAYS_FEES } from "@/lib/stellar/smart-wallet-config";
-import { rpc, scValToNative, StrKey, type contract } from "@stellar/stellar-sdk";
+import { Address, authorizeEntry, rpc, scValToNative, StrKey, type contract, type xdr } from "@stellar/stellar-sdk";
+import { parseChainWorkspace, type ChainWorkspace } from "@/lib/stellar/workspace-chain";
 import { assertBalanceCovers, getAccountBalance, type AccountBalance } from "@/lib/stellar/horizon";
 import { DoqtriError, mapWalletError, workspaceContractError } from "@/lib/stellar/errors";
 
@@ -564,6 +565,103 @@ export const DoqtriRegistry = {
       unwrapResult(tx.result, "add_admin failed", simulationError(tx));
       preflight(balance, tx);
       return await send(source, tx, false);
+    } catch (e) {
+      mapInvokeError(e);
+    }
+  },
+
+  /**
+   * Makes `editor` an editor of `workspaceId` on-chain: the grant that
+   * follows promoting a member to editor in the app. A workspace admin or
+   * its owner (`source`) signs; in a personal workspace only its owner
+   * (D-44), which the relay enforces. Only with REGISTRY_EDITORS.
+   */
+  async addEditor(source: string, workspaceId: string, editor: string): Promise<WriteReceipt> {
+    if (!REGISTRY_EDITORS) {
+      throw new DoqtriError("NOT_ENABLED", "Workspace calls aren't enabled on this registry yet.");
+    }
+    try {
+      const { tx, balance } = await buildChecked(source, () =>
+        writeClient(source).add_editor({ workspace_id: workspaceId, admin: source, editor }),
+      );
+      unwrapResult(tx.result, "add_editor failed", simulationError(tx));
+      preflight(balance, tx);
+      return await send(source, tx, false);
+    } catch (e) {
+      mapInvokeError(e);
+    }
+  },
+
+  /**
+   * Puts the workspace on-chain, owned by `source`, so its members can be
+   * given roles there. Its id is the app's workspace id. Owner only.
+   */
+  async createWorkspace(source: string, workspaceId: string): Promise<WriteReceipt> {
+    if (!REGISTRY_EDITORS) {
+      throw new DoqtriError("NOT_ENABLED", "Workspace calls aren't enabled on this registry yet.");
+    }
+    try {
+      const { tx, balance } = await buildChecked(source, () =>
+        writeClient(source).create_workspace({ workspace_id: workspaceId, owner: source }),
+      );
+      unwrapResult(tx.result, "create_workspace failed", simulationError(tx));
+      preflight(balance, tx);
+      return await send(source, tx, false);
+    } catch (e) {
+      mapInvokeError(e);
+    }
+  },
+
+  /** The workspace as the registry holds it, or null when it is not on-chain. Throws on transport errors. */
+  async readWorkspace(workspaceId: string): Promise<ChainWorkspace | null> {
+    const tx = await readClient().get_workspace({ workspace_id: workspaceId });
+    try {
+      return parseChainWorkspace(unwrapResult(tx.result, "get_workspace failed", simulationError(tx)));
+    } catch (e) {
+      if (e instanceof DoqtriError && e.code === "WORKSPACE_NOT_FOUND") return null;
+      throw e;
+    }
+  },
+
+  /**
+   * `source`'s signed approval of `transfer_workspace(workspaceId, owner,
+   * newOwner)`, valid for `ledgers` ledgers, as base64 XDR (D-29). Both
+   * owners sign one each: the owner when proposing, the new owner when
+   * accepting; the server submits the pair (transfer-approval.ts). Nothing is
+   * sent from here.
+   */
+  async signTransferApproval(
+    source: string,
+    workspaceId: string,
+    owner: string,
+    newOwner: string,
+    ledgers: number,
+  ): Promise<string> {
+    if (!REGISTRY_EDITORS) {
+      throw new DoqtriError("NOT_ENABLED", "Workspace calls aren't enabled on this registry yet.");
+    }
+    try {
+      const tx = await readClient().transfer_workspace({ workspace_id: workspaceId, owner, new_owner: newOwner });
+      unwrapResult(tx.result, "transfer_workspace failed", simulationError(tx));
+      const entry = tx.simulationData.result.auth.find((candidate: xdr.SorobanAuthorizationEntry) => {
+        const credentials = candidate.credentials();
+        return (
+          credentials.switch().name === "sorobanCredentialsAddress" &&
+          Address.fromScAddress(credentials.address().address()).toString() === source
+        );
+      });
+      if (!entry) throw new DoqtriError("NOT_SIGNER", "This wallet isn't one of the two owners of this transfer.");
+      const { sequence } = await new rpc.Server(RPC_URL).getLatestLedger();
+      const validUntil = sequence + ledgers;
+      const signed = isSmartWallet(source)
+        ? await signPasskeyAuthEntry(passkeyWalletFor(source), entry, validUntil)
+        : await authorizeEntry(
+            entry,
+            async (preimage) => Buffer.from(await signWalletAuthEntry(preimage.toXDR("base64"), source), "base64"),
+            validUntil,
+            NETWORK_PASSPHRASE,
+          );
+      return signed.toXDR("base64");
     } catch (e) {
       mapInvokeError(e);
     }

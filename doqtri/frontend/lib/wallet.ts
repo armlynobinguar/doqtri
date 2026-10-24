@@ -125,3 +125,17 @@ export async function getWalletAddress(): Promise<string | null> {
     return null;
   }
 }
+
+/**
+ * Signs a Soroban authorization preimage (base64 HashIdPreimage) with the
+ * connected wallet, for calls another party submits, such as a workspace
+ * transfer (D-29). Returns the base64 signature.
+ */
+export async function signWalletAuthEntry(preimageXdr: string, address: string): Promise<string> {
+  const wallets = await kit();
+  if (!wallets) throw new Error("Wallet signing needs a browser.");
+  const { NETWORK_PASSPHRASE } = await import("@/lib/stellar/config");
+  const { signedAuthEntry } = await wallets.signAuthEntry(preimageXdr, { networkPassphrase: NETWORK_PASSPHRASE, address });
+  if (!signedAuthEntry) throw new Error("The wallet didn't sign the approval.");
+  return signedAuthEntry;
+}
