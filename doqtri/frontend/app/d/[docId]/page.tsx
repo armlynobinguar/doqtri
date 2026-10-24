@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { HashCheck } from "@/components/audit/hash-check";
+import { SignerAddress } from "@/components/audit/signer-address";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { StatusTag } from "@/components/ui/status-tag";
 import { DoqtriRegistry, type ChainDocument } from "@/lib/stellar/contract-client";
@@ -19,14 +20,17 @@ import {
   type DocumentTtl,
 } from "@/lib/stellar/history";
 import { sha256Hex } from "@/lib/stellar/hash";
+import { parseSignerRemovals, removalInEffect, type SignerRemoval } from "@/lib/stellar/signers";
 import { buildMindmap, type MindmapNode } from "@/lib/mindmap";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 
 /*
  * Public, read-only audit page. Everything shown comes from the ledger through
- * a signer-less client; the one exception is heading labels, which the owner
- * must opt into and which are withheld unless the private note still hashes to
- * the anchored hash.
+ * a signer-less client, with two exceptions from doqtri's database: heading
+ * labels, which the owner must opt into and which are withheld unless the
+ * private note still hashes to the anchored hash; and when a signer was
+ * removed from the note's workspace, to flag entries signed after that
+ * (WP-1.8). Signers are shown by wallet address only, never by name.
  */
 export const revalidate = 30;
 
@@ -51,6 +55,7 @@ type Audit =
       history: DocumentHistory | null;
       ttl: DocumentTtl | null;
       labels: Map<string, string> | null;
+      removals: SignerRemoval[];
     };
 
 async function loadAudit(docId: string): Promise<Audit> {
@@ -65,13 +70,32 @@ async function loadAudit(docId: string): Promise<Audit> {
   if (!doc) return { state: "not-anchored" };
 
   // History and TTL are enrichments: the page stands on get_document alone.
-  const [history, ttl, labels] = await Promise.all([
-    getDocumentHistory(docId).catch(() => null),
+  // History also reads removed signers' own feeds, so it waits for them.
+  const removalsLoaded = loadSignerRemovals(docId).catch(() => []);
+  const [history, ttl, labels, removals] = await Promise.all([
+    removalsLoaded.then((removals) =>
+      getDocumentHistory(docId, {
+        removedSigners: removals.map(({ address, removedAt }) => ({ address, removedAt })),
+      }).catch(() => null),
+    ),
     getDocumentTtl(docId).catch(() => null),
     loadPublicHeadings(docId, doc.contentHash).catch(() => null),
+    removalsLoaded,
   ]);
 
-  return { state: "anchored", doc, history, ttl, labels };
+  return { state: "anchored", doc, history, ttl, labels, removals };
+}
+
+/**
+ * When each wallet that has signed for the note's workspace lost the right
+ * to (workspace_member_removals). Only app notes have a workspace.
+ */
+async function loadSignerRemovals(docId: string): Promise<SignerRemoval[]> {
+  if (!UUID.test(docId)) return [];
+  const admin = createSupabaseAdminClient();
+  const { data, error } = await admin.rpc("signer_removals_for_document", { p_document_id: docId });
+  if (error) throw new Error(`signer removals unavailable: ${error.message}`);
+  return parseSignerRemovals(data);
 }
 
 /**
@@ -206,12 +230,14 @@ function Anchored({
   history,
   ttl,
   labels,
+  removals,
 }: {
   docId: string;
   doc: ChainDocument;
   history: DocumentHistory | null;
   ttl: DocumentTtl | null;
   labels: Map<string, string> | null;
+  removals: SignerRemoval[];
 }) {
   // An incomplete history (passkey-wallet owners only) numbers versions by
   // what was found, which can be wrong, so it labels nothing here.
@@ -223,6 +249,9 @@ function Anchored({
     ...numbered.filter((v) => v.version !== doc.version),
     { version: doc.version, contentHash: doc.contentHash },
   ];
+  const signedAfterRemoval =
+    history != null &&
+    [...history.versions, ...history.nodes].some((e) => removalInEffect(e.signer, e.closedAt, removals));
 
   return (
     <>
@@ -302,6 +331,13 @@ function Anchored({
             above is read directly from the contract.
           </p>
         ) : null}
+        {signedAfterRemoval ? (
+          <p data-testid="signed-after-removal" className="text-warning text-[13px]">
+            Some entries on this page were signed by a wallet after Doqtri had removed it from
+            this note&apos;s workspace: the ledger accepted them before the removal reached the
+            chain. They are marked &quot;Signed after removal&quot;.
+          </p>
+        ) : null}
         {history && history.versions.length > 0 ? (
           <ol className="glass divide-y divide-[var(--glass-lo)] rounded-2xl text-[13px]">
             {[...history.versions].reverse().map((v) => (
@@ -310,8 +346,11 @@ function Anchored({
                 className="grid gap-1 px-4 py-2.5 sm:grid-cols-[3rem_1fr_auto] sm:items-center sm:gap-4"
               >
                 <span className="font-mono">{history.incomplete ? "·" : `v${v.version}`}</span>
-                <span className="text-muted-foreground font-mono break-all" title={v.contentHash}>
-                  {shortHash(v.contentHash)} · {formatDate(v.closedAt)}
+                <span className="grid min-w-0 gap-0.5">
+                  <span className="text-muted-foreground font-mono break-all" title={v.contentHash}>
+                    {shortHash(v.contentHash)} · {formatDate(v.closedAt)}
+                  </span>
+                  <Signer signer={v.signer} fromOwner={v.signerFrom === "owner"} closedAt={v.closedAt} removals={removals} />
                 </span>
                 <a
                   className="text-primary underline-offset-2 hover:underline"
@@ -352,6 +391,12 @@ function Anchored({
                       {node.tool || "—"}
                       {node.artifactRef ? ` · ${node.artifactRef}` : ""}
                     </span>
+                    <Signer
+                      signer={node.signer}
+                      fromOwner={node.signerFrom === "owner"}
+                      closedAt={node.closedAt}
+                      removals={removals}
+                    />
                   </span>
                   <span className="text-muted-foreground inline-flex items-center gap-2 text-[12px]">
                     <StatusTag tone={statusTone(node.status)}>{node.status}</StatusTag>
@@ -387,9 +432,9 @@ function Anchored({
         <div className="grid content-start gap-1.5">
           <h2 className="eyebrow text-foreground/80">What this proves</h2>
           <ul className="text-muted-foreground list-disc space-y-1 pl-4">
-            <li>The owner&apos;s wallet signed this exact hash at the time shown.</li>
+            <li>The wallet shown signed this exact hash at the time shown.</li>
             <li>A copy that matches has not changed by a single byte since.</li>
-            <li>Each build status was recorded by the owner, in order.</li>
+            <li>Each build status was recorded by the wallet shown, in order.</li>
           </ul>
         </div>
         <div className="grid content-start gap-1.5">
@@ -404,10 +449,49 @@ function Anchored({
               ledger attests to what the owner anchored, not that it is correct.
             </li>
             <li>That a &quot;Built&quot; status was independently checked.</li>
+            <li>
+              Who is behind a wallet: signers are shown by address only. Whether one
+              had been removed from the workspace comes from Doqtri&apos;s records,
+              not the ledger.
+            </li>
           </ul>
         </div>
       </section>
     </>
+  );
+}
+
+/**
+ * Who signed an entry, and a flag when Doqtri had removed that wallet from
+ * the note's workspace before the entry's ledger closed.
+ */
+function Signer({
+  signer,
+  fromOwner,
+  closedAt,
+  removals,
+}: {
+  signer: string;
+  fromOwner: boolean;
+  closedAt: string;
+  removals: SignerRemoval[];
+}) {
+  const removal = removalInEffect(signer, closedAt, removals);
+  return (
+    <span className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]">
+      <span className="inline-flex items-center gap-1">
+        signed by <SignerAddress address={signer} owner={fromOwner} />
+      </span>
+      {removal ? (
+        <StatusTag
+          tone="danger"
+          data-testid="signed-after-removal-entry"
+          title={`Removed from the workspace ${formatDate(removal.removedAt)}, before this entry was signed`}
+        >
+          Signed after removal
+        </StatusTag>
+      ) : null}
+    </span>
   );
 }
 
