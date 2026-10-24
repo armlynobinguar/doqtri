@@ -32,12 +32,18 @@
 -- demoted or be removed, by anyone (workspace_members_keep_owner). WP-1.2
 -- moves each user's documents into it on that guarantee.
 --
+-- Deleting an account deletes its personal workspace with it, and never
+-- leaves a team workspace without an owner (D-31): where the account is the
+-- last owner, the longest-standing admin becomes owner, and where there is
+-- no admin the deletion is refused (on_auth_user_deleted_workspaces).
+--
 -- Adding a member needs no consent from the person added. Admins and owners
 -- may add anyone as viewer, editor or admin, and in a team workspace an owner
--- may then promote them to owner and leave. That is acceptable while nothing but names lives
--- here, but WP-1.5 must replace direct inserts into workspace_members with an
--- invite the invitee accepts before documents arrive in team workspaces;
--- otherwise a user can be made responsible for a workspace they never joined.
+-- may then promote them to owner and leave. That is acceptable while
+-- nothing but names lives here, but WP-1.5 must replace direct inserts into
+-- workspace_members with an invite the invitee accepts before documents
+-- arrive in team workspaces; otherwise a user can be made responsible for a
+-- workspace they never joined.
 
 create type public.workspace_role as enum ('viewer', 'editor', 'admin', 'owner');
 
@@ -49,7 +55,8 @@ create table public.workspaces (
     char_length(slug) <= 64 and slug ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$'
   ),
   -- `on delete set null`: deleting an account must not take a team's
-  -- workspace (and, after WP-1.2, its documents) with it.
+  -- workspace (and, after WP-1.2, its documents) with it. Its personal
+  -- workspace is deleted first, by on_auth_user_deleted_workspaces.
   created_by  uuid references auth.users(id) on delete set null default auth.uid(),
   -- The one workspace created for each user automatically. Only
   -- ensure_personal_workspace() creates these.
@@ -272,10 +279,13 @@ create trigger workspaces_before_update
 --
 -- Runs after the statement's row change, so it sees the roster as the change
 -- leaves it, and locks the workspace row first so two owners demoting each
--- other at once cannot both succeed. Two removals are let through: the
--- workspace itself being deleted (its rows cascade), and the member's account
--- being deleted (auth.users cascades). The second can leave a team workspace
--- with no owner; that is WP-1.5's to resolve along with member management.
+-- other at once cannot both succeed. One removal is let through: the
+-- workspace itself being deleted (its rows cascade). An account being
+-- deleted gets no exemption: on_auth_user_deleted_workspaces has already
+-- deleted its personal workspace and handed every team workspace it was the
+-- last owner of to an admin (D-31), so the roster the cascade leaves passes
+-- these checks, and should anything slip past that, the deletion fails here
+-- rather than leave a workspace with no owner.
 --
 -- Security definer so the check sees every row of the roster and can lock the
 -- workspace row whatever the caller's own rights are.
@@ -307,9 +317,6 @@ begin
     return null;
   end if;
   if not exists (select 1 from public.workspaces w where w.id = old.workspace_id) then
-    return null;
-  end if;
-  if tg_op = 'DELETE' and not exists (select 1 from auth.users u where u.id = old.user_id) then
     return null;
   end if;
 
@@ -487,12 +494,92 @@ create trigger on_auth_user_created_workspace
   after insert on auth.users
   for each row execute function public.handle_new_user_workspace();
 
+-- Settles an account's workspaces before the account is deleted (D-31).
+--
+-- Its personal workspace is deleted, with its memberships. Nobody else owns
+-- it (D-30) and `on delete set null` would otherwise leave it behind with no
+-- owner and its members still in it. No document references a workspace
+-- yet: documents still belong to their user and go with the account through
+-- documents.user_id, exactly as before this migration. WP-1.2 must decide
+-- what deleting a personal workspace does to the documents in it when it
+-- adds documents.workspace_id, since this trigger will then reach them.
+--
+-- In every team workspace where the account is the last owner, the admin
+-- who joined earliest becomes owner, so the workspace and (after WP-1.2) its
+-- documents keep someone in charge. Where there is no admin, the deletion is
+-- refused with restrict_violation, as a foreign key `on delete restrict`
+-- would refuse it, naming the workspace: the account must first make another
+-- member an owner or admin. Editors and viewers are never promoted.
+--
+-- A before trigger, so it runs while the account's rows are still in place
+-- and before any cascade. Each workspace row is locked first, as
+-- workspace_members_keep_owner does, so a concurrent change of owners waits.
+-- Should the promotion be lost to a concurrent write anyway, the cascade
+-- that removes the account's memberships trips workspace_members_keep_owner
+-- and the deletion fails instead of leaving the workspace ownerless.
+--
+-- Security definer because it changes other users' memberships, deletes a
+-- workspace no client may delete, and runs as whichever role deletes the
+-- account (Supabase's auth admin).
+create function public.handle_deleted_user_workspaces()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_ws    record;
+  v_admin uuid;
+begin
+  delete from public.workspaces w
+   where w.is_personal and w.created_by = old.id;
+
+  for v_ws in
+    select w.id, w.name
+      from public.workspaces w
+      join public.workspace_members m on m.workspace_id = w.id
+     where m.user_id = old.id and m.role = 'owner' and not w.is_personal
+     order by w.id
+       for update of w
+  loop
+    continue when exists (
+      select 1 from public.workspace_members m
+       where m.workspace_id = v_ws.id and m.role = 'owner' and m.user_id <> old.id
+    );
+
+    select m.user_id into v_admin
+      from public.workspace_members m
+     where m.workspace_id = v_ws.id and m.role = 'admin'
+     order by m.joined_at, m.user_id
+     limit 1
+       for update;
+    if v_admin is null then
+      raise exception 'this account is the last owner of workspace "%" (%), which has no admin to take it over',
+        v_ws.name, v_ws.id
+        using errcode = 'restrict_violation',
+              hint = 'Make another member of that workspace an owner or an admin, then delete the account.';
+    end if;
+
+    update public.workspace_members m
+       set role = 'owner'
+     where m.workspace_id = v_ws.id and m.user_id = v_admin;
+  end loop;
+
+  return old;
+end;
+$$;
+
+create trigger on_auth_user_deleted_workspaces
+  before delete on auth.users
+  for each row execute function public.handle_deleted_user_workspaces();
+
 -- Trigger functions and the internal helpers are called by Postgres or by
 -- other functions here, never by a client.
 revoke execute on function public.handle_new_workspace() from public, anon, authenticated;
 revoke execute on function public.workspaces_before_update() from public, anon, authenticated;
 revoke execute on function public.workspace_members_keep_owner() from public, anon, authenticated;
 revoke execute on function public.handle_new_user_workspace() from public, anon, authenticated;
+revoke execute on function public.handle_deleted_user_workspaces() from public, anon, authenticated;
 revoke execute on function public.restore_personal_owner(uuid, uuid) from public, anon, authenticated;
 revoke execute on function public.ensure_personal_workspace(uuid) from public, anon, authenticated;
 grant execute on function public.ensure_personal_workspace(uuid) to service_role;

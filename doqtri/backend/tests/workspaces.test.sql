@@ -24,7 +24,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(121);
+select plan(139);
 
 insert into auth.users (id, email) values
   ('00000000-0000-4000-8000-000000000001', 'owner@example.com'),
@@ -56,7 +56,8 @@ select ok(
       and p.proname in ('is_workspace_member', 'handle_new_workspace',
                         'workspaces_before_update', 'workspace_members_keep_owner',
                         'create_workspace', 'restore_personal_owner',
-                        'ensure_personal_workspace', 'handle_new_user_workspace')),
+                        'ensure_personal_workspace', 'handle_new_user_workspace',
+                        'handle_deleted_user_workspaces')),
   'every security definer function pins search_path to empty');
 
 select ok(not has_function_privilege('anon',
@@ -83,6 +84,9 @@ select ok(has_function_privilege('service_role',
 select ok(not has_function_privilege('authenticated',
   'public.handle_new_workspace()', 'execute'),
   'authenticated cannot call the owner bootstrap trigger function');
+select ok(not has_function_privilege('authenticated',
+  'public.handle_deleted_user_workspaces()', 'execute'),
+  'authenticated cannot call the account deletion trigger function');
 
 select is(public.workspace_role_rank('viewer'), 1, 'viewer ranks 1');
 select is(public.workspace_role_rank('owner'), 4, 'owner ranks 4');
@@ -619,25 +623,141 @@ reset role;
 
 
 -- ---------------------------------------------------------------------------
--- Deleting an account
+-- Deleting an account (D-31)
+--
+-- The roster here is set up by the migration role with explicit joined_at so
+-- "longest-standing" is deterministic:
+--   acme   owner ad, editor ed, viewer vw (from the sections above)
+--   vw's   personal workspace, with ed added as editor
+--   beta   owner x; editor ed (earliest), admin n, admin w (latest)
+--   gamma  owners o and x; admin w
+--   solo   owner z; editor ed, viewer n
 -- ---------------------------------------------------------------------------
 
+insert into public.workspaces (id, name, slug, created_by) values
+  ('10000000-0000-4000-8000-000000000002', 'Beta', 'beta', '00000000-0000-4000-8000-000000000005'),
+  ('10000000-0000-4000-8000-000000000003', 'Gamma', 'gamma', '00000000-0000-4000-8000-000000000001'),
+  ('10000000-0000-4000-8000-000000000004', 'Solo', 'solo', '00000000-0000-4000-8000-000000000008');
+insert into public.workspace_members (workspace_id, user_id, role, joined_at) values
+  ((select id from public.workspaces where is_personal and created_by = '00000000-0000-4000-8000-000000000004'),
+   '00000000-0000-4000-8000-000000000003', 'editor', now()),
+  ('10000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000003', 'editor', '2025-01-01'),
+  ('10000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000007', 'admin',  '2026-01-01'),
+  ('10000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000006', 'admin',  '2026-02-01'),
+  ('10000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-000000000005', 'owner',  now()),
+  ('10000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-000000000006', 'admin',  now()),
+  ('10000000-0000-4000-8000-000000000004', '00000000-0000-4000-8000-000000000003', 'editor', now()),
+  ('10000000-0000-4000-8000-000000000004', '00000000-0000-4000-8000-000000000007', 'viewer', now());
+insert into public.documents (user_id, title, markdown) values
+  ('00000000-0000-4000-8000-000000000004', 'Viewer note', '# Mine'),
+  ('00000000-0000-4000-8000-000000000003', 'Editor note', '# Mine');
+
+-- A member of no team workspace as owner: only their personal workspace goes.
+create temp table docs_before as select id, user_id, title, markdown from public.documents;
 create temp table vw_personal as
   select id from public.workspaces
    where is_personal and created_by = '00000000-0000-4000-8000-000000000004';
 
 select lives_ok(
   $$ delete from auth.users where id = '00000000-0000-4000-8000-000000000004' $$,
-  'an account that is the last owner of its personal workspace can be deleted');
+  'an account that owns only its personal workspace can be deleted');
+select is(
+  (select count(*)::int from public.workspaces where id = (select id from vw_personal)),
+  0, 'its personal workspace is deleted with it');
+select is(
+  (select count(*)::int from public.workspace_members where workspace_id = (select id from vw_personal)),
+  0, 'along with that workspace''s other members');
 select is(
   (select count(*)::int from public.workspace_members where user_id = '00000000-0000-4000-8000-000000000004'),
   0, 'its memberships go with it');
 select is(
-  (select created_by from public.workspaces where id = (select id from vw_personal)),
-  null, 'its personal workspace stays, with created_by cleared');
+  (select count(*)::int from public.workspace_members where user_id = '00000000-0000-4000-8000-000000000003'),
+  4, 'the personal workspace''s other member keeps every other membership, their own personal one included');
 select is(
   (select count(*)::int from public.workspaces where id = '10000000-0000-4000-8000-000000000001'),
   1, 'team workspaces it belonged to are untouched');
+select is(
+  (select count(*)::int from public.documents where user_id = '00000000-0000-4000-8000-000000000004'),
+  0, 'its own documents go with it through documents.user_id, as before');
+select set_eq(
+  'select id, user_id, title, markdown from public.documents',
+  'select * from docs_before where user_id <> ''00000000-0000-4000-8000-000000000004''',
+  'every other account''s documents are untouched, the other member''s included');
+
+-- The last owner of a team workspace: the earliest admin takes over.
+select lives_ok(
+  $$ delete from auth.users where id = '00000000-0000-4000-8000-000000000005' $$,
+  'the last owner of a team workspace with an admin can be deleted');
+select results_eq(
+  $$ select user_id, role::text from public.workspace_members
+      where workspace_id = '10000000-0000-4000-8000-000000000002' order by user_id $$,
+  $$ values ('00000000-0000-4000-8000-000000000003'::uuid, 'editor'),
+            ('00000000-0000-4000-8000-000000000006'::uuid, 'admin'),
+            ('00000000-0000-4000-8000-000000000007'::uuid, 'owner') $$,
+  'the longest-standing admin becomes owner; a longer-standing editor and a later admin do not');
+select results_eq(
+  $$ select name, created_by from public.workspaces where id = '10000000-0000-4000-8000-000000000002' $$,
+  $$ values ('Beta'::text, null::uuid) $$,
+  'the team workspace stays, with created_by cleared');
+select results_eq(
+  $$ select user_id, role::text from public.workspace_members
+      where workspace_id = '10000000-0000-4000-8000-000000000003' order by user_id $$,
+  $$ values ('00000000-0000-4000-8000-000000000001'::uuid, 'owner'),
+            ('00000000-0000-4000-8000-000000000006'::uuid, 'admin') $$,
+  'where another owner remains, nobody is promoted');
+
+-- The last owner of a team workspace with no admin: the deletion is refused.
+select throws_ok(
+  $$ delete from auth.users where id = '00000000-0000-4000-8000-000000000008' $$,
+  '23001',
+  'this account is the last owner of workspace "Solo" (10000000-0000-4000-8000-000000000004), which has no admin to take it over',
+  'the last owner of a team workspace without an admin cannot be deleted');
+select is(
+  (select count(*)::int from auth.users where id = '00000000-0000-4000-8000-000000000008'),
+  1, 'the account is still there');
+select results_eq(
+  $$ select user_id, role::text from public.workspace_members
+      where workspace_id = '10000000-0000-4000-8000-000000000004' order by user_id $$,
+  $$ values ('00000000-0000-4000-8000-000000000003'::uuid, 'editor'),
+            ('00000000-0000-4000-8000-000000000007'::uuid, 'viewer'),
+            ('00000000-0000-4000-8000-000000000008'::uuid, 'owner') $$,
+  'and the workspace''s roster is unchanged; editors and viewers are never promoted');
+select is(
+  (select count(*)::int from public.workspaces
+    where is_personal and created_by = '00000000-0000-4000-8000-000000000008'),
+  1, 'its personal workspace is still there');
+select is(
+  (select count(*)::int from public.documents where user_id = '00000000-0000-4000-8000-000000000008'),
+  1, 'and so is its document');
+
+-- Two accounts in one statement: n is beta's owner and w its only admin.
+-- Whichever row goes first, n's trigger promotes w, and then either w's
+-- trigger finds no admin left (23001) or, had w's row gone first, the
+-- cascade removing w's new owner row trips workspace_members_keep_owner
+-- (23514). Either way the whole statement is refused.
+select throws_ok(
+  $$ delete from auth.users
+      where id in ('00000000-0000-4000-8000-000000000007', '00000000-0000-4000-8000-000000000006') $$,
+  null, null,
+  'deleting an owner and the admin who would take over at once is refused');
+select is(
+  (select role::text from public.workspace_members
+    where workspace_id = '10000000-0000-4000-8000-000000000002'
+      and user_id = '00000000-0000-4000-8000-000000000006'),
+  'admin', 'and leaves no half-made promotion behind');
+
+-- Once z hands over, the deletion goes through.
+update public.workspace_members set role = 'admin'
+ where workspace_id = '10000000-0000-4000-8000-000000000004'
+   and user_id = '00000000-0000-4000-8000-000000000003';
+select lives_ok(
+  $$ delete from auth.users where id = '00000000-0000-4000-8000-000000000008' $$,
+  'after an admin is appointed, the last owner can be deleted');
+select is(
+  (select role::text from public.workspace_members
+    where workspace_id = '10000000-0000-4000-8000-000000000004'
+      and user_id = '00000000-0000-4000-8000-000000000003'),
+  'owner', 'and that admin owns the workspace');
 
 
 select * from finish();
