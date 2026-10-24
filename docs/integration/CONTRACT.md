@@ -1,7 +1,8 @@
 # doqtri x qdit integration contract
 
-Status: v1, WP-2.0. This file is byte-identical in both repos
-(`qdit/docs/integration/CONTRACT.md`, `doqtri/docs/integration/CONTRACT.md`).
+Status: v1.0.1, WP-2.0 (history in section 12, Changelog). This file is
+byte-identical in both repos (`qdit/docs/integration/CONTRACT.md`,
+`doqtri/docs/integration/CONTRACT.md`).
 Change it in both repos in the same phase, through the masterplan's decision
 process. The masterplan (https://claude.ai/artifact/FnsDQiVqnwBqToZjXHFCWf)
 wins over this file if the two ever disagree; a disagreement is a bug.
@@ -51,11 +52,16 @@ Rules that follow from the decisions:
 - doqtri wins on titles (D-12). A linked milestone's title is read-only in
   qdit's UI and changes only through `PATCH /milestones/{id}`. Unlinking makes
   it editable in qdit again.
-- An OAuth token may read projects and milestones, create milestones, rename
-  linked milestones and write link rows. Nothing else (D-03): no status
-  changes, approvals, rejections, deletes of projects or milestones, members or
-  proofs. qdit enforces this with RESTRICTIVE RLS on the `client_id` claim, so
-  it holds even if the token is used against PostgREST directly.
+- An OAuth token may read projects and milestones, including the milestones'
+  `milestone_anchors` records (D-32: they mirror public chain data), create
+  milestones, rename linked milestones and write link rows. Nothing else
+  (D-03): no status changes, approvals, rejections, deletes of projects or
+  milestones, members or proofs, and no writes to anchors. qdit enforces this
+  with RESTRICTIVE RLS on the `client_id` claim, so it holds even if the token
+  is used against PostgREST directly.
+- Within that, the caller's qdit project role decides (D-23): admins and
+  owners link and unlink docs, members and above create and rename milestones
+  and write links, viewers only read. Section 8 lists the role per endpoint.
 
 ## 3. Versioning
 
@@ -111,12 +117,16 @@ Rules that follow from the decisions:
 `details` is an object or `null`. Clients branch on `code` and
 `details.reason`, never on `message`.
 
+qdit never answers `405`. A method that a known `/api/v1` path does not
+support (for example `PUT /milestones/{id}`) is `404 not_found` with no
+`Allow` header, the same as an unknown path (D-27).
+
 | HTTP | `code` | When |
 | --- | --- | --- |
 | 400 | `invalid_request` | Malformed JSON, wrong content type, unknown or invalid field. `details.fields` maps field name to problem. |
 | 401 | `unauthorized` | Missing, malformed, expired or non-OAuth token. Response has `WWW-Authenticate: Bearer error="invalid_token"`. |
 | 403 | `forbidden` | Valid token, but the user's qdit role or the D-03 guard does not allow the action on a resource the user can see. |
-| 404 | `not_found` | Unknown path or id, or a resource the user cannot see. Never reveals existence. |
+| 404 | `not_found` | Unknown path or id, a resource the user cannot see, or a method a known path does not support (D-27). Never reveals existence. |
 | 409 | `conflict` | State conflict. `details.reason` is one of the reasons listed per endpoint. |
 | 429 | `rate_limited` | Over the rate limit. `Retry-After` gives seconds. |
 | 500 | `internal_error` | Bug on qdit's side. Safe to retry with backoff. |
@@ -192,10 +202,14 @@ Milestone:
 - `link` is the `milestone_external_links` row, or `null` when unlinked.
   `doc_version` is the doc's `DoqtriRegistry` `Document.version` the link was
   last written against, or `null` if the doc was not anchored then.
-- `anchor` summarises `milestone_anchors` and is `null` if never anchored:
+- `anchor` summarises `milestone_anchors` and is `null` if never anchored.
+  OAuth tokens may read these rows (D-32), so every milestone response,
+  `GET /milestones/{id}` included, carries it. `network`, `contract_id`,
   `version`, `last_action` (`submit | approve | reject`), `last_tx_hash` and
-  `anchored_at` come from the newest row; `proof_hash` from the newest
-  `submit` row. It is a convenience pointer, not proof (D-04).
+  `anchored_at` come from the newest row (by `created_at`, then `version`).
+  `proof_hash` comes from the newest `submit` row, because only `submit`
+  carries a hash: approve and reject attest to the hash already on chain. It
+  is a convenience pointer, not proof (D-04).
 
 Doc link:
 
@@ -213,11 +227,16 @@ Doc link:
 
 ## 8. Endpoints
 
-Minimum qdit role is the caller's role in the milestone's or doc link's project.
+Minimum qdit role (D-23) is the caller's `member_role` in the project the
+request names: `{id}` for `/projects/{id}/...`, `project_id` for
+`POST /milestones`, and the milestone's or link's project otherwise. Roles
+are ordered `viewer < member < admin < owner`; a higher role may do what a
+lower one may. A caller below the minimum gets `403 forbidden` on a project
+they can see and `404 not_found` on one they cannot.
 
-| Method and path | Min role | Success |
+| Method and path | Min role (D-23) | Success |
 | --- | --- | --- |
-| `GET /me` | any user | 200 |
+| `GET /me` | any authenticated user | 200 |
 | `GET /projects` | viewer (lists only member projects) | 200 |
 | `POST /projects/{id}/docs` | admin | 201 created, 200 already linked here |
 | `DELETE /projects/{id}/docs/{doc_id}` | admin | 200 |
@@ -226,6 +245,9 @@ Minimum qdit role is the caller's role in the milestone's or doc link's project.
 | `PATCH /milestones/{id}` | member | 200 |
 | `PATCH /links/{id}` | member | 200 |
 | `DELETE /links/{id}` | member | 204 |
+
+These are the only method and path pairs in v1. Any other method on one of
+these paths is `404 not_found` (D-27, section 6).
 
 ### GET /api/v1/me
 
@@ -265,14 +287,20 @@ is linked to another project; unlink it there first).
 ### DELETE /api/v1/projects/{id}/docs/{doc_id}
 
 Unlinks the doc and, in the same transaction, deletes every
-`milestone_external_links` row for that doc in that project. Milestones stay.
-Response lists what was removed so doqtri can clear its `node_links`:
+`milestone_external_links` row for that doc in that project (D-22). Either
+all of it happens or none of it does. Milestones stay, and their titles
+become editable in qdit again. Response lists the ids of the link rows that
+were removed so doqtri can clear its `node_links`:
 
 ```json
 { "data": { "removed_link_ids": ["0e9d4c3b-2a1f-4e5d-8c7b-6a5f4e3d2c1b"] } }
 ```
 
-404 if the doc is not linked to this project.
+`removed_link_ids` is an array of link ids (the `link.id` values from
+section 7), `[]` when the doc had no milestone links. doqtri MUST clear the
+`node_links` row for every id in it. 404 if the doc is not linked to this
+project; doqtri treats that as already done and clears its own qdit
+`node_links` for that doc.
 
 ### POST /api/v1/milestones
 
@@ -312,14 +340,25 @@ link's `node_label` to the new value. Response `200 {"data": Milestone}`.
 
 ### PATCH /api/v1/links/{id}
 
-Updates qdit's copy of where a link points after a heading moved (section 11).
+Updates qdit's copy of where a link points, in place, after a heading moved
+or the doc was re-anchored (D-21, section 11). `{id}` is the link id
+(`link.id`), not the milestone id.
 
 ```json
-{ "node_id": "h5", "doc_version": 8 }
+{ "node_id": "h5", "node_label": "Escrow contract", "doc_version": 8 }
 ```
 
-Both fields optional, at least one required; nothing else accepted. Response
-`200 {"data": Milestone}`. 409 reasons: `node_already_linked`.
+- `node_id`: optional, a doqtri node id (section 4).
+- `node_label`: optional, 1 to 300 characters after trim. It corrects qdit's
+  stored copy of the heading text only and never renames the milestone; a
+  rename is `PATCH /milestones/{id}`, which sets both.
+- `doc_version`: optional, integer >= 1, or `null`.
+
+At least one field is required; any other field is `400 invalid_request`.
+Fields left out keep their value. Response `200 {"data": Milestone}`.
+409 reasons: `node_already_linked` (the new `(doc_id, node_id)` already has
+another milestone; `details.milestone_id` names it when the caller can see
+it).
 
 ### DELETE /api/v1/links/{id}
 
@@ -346,11 +385,19 @@ Body fields: `id` (event uuid, the idempotency key), `event`, `project_id`,
 `milestone_id`, `status` (`milestone_status`), `occurred_at`. Ids only: no
 titles or other content.
 
-When qdit emits: for a milestone that has a `milestone_external_links` row,
-whenever `milestones.status` changes, and whenever a `milestone_anchors` row is
-recorded (then `status` is the status that contract call produced:
-`submit -> submitted`, `approve -> approved`, `reject -> rejected`). One
-outbox row (`integration_events`) per emission.
+When qdit emits, for a milestone that has a `milestone_external_links` row:
+
+- whenever `milestones.status` changes;
+- whenever a `milestone_anchors` row is recorded, even if `milestones.status`
+  does not change (D-26). The event type and body are the same
+  `milestone.status_changed` shape; `status` is the status that contract call
+  produced (`submit -> submitted`, `approve -> approved`,
+  `reject -> rejected`).
+
+One outbox row (`integration_events`) per emission, each with its own `id`.
+When one transaction both records an anchor and changes the status, qdit MAY
+emit two events; doqtri handles each the same way (re-read the chain), so a
+second one costs one extra read.
 
 Signing:
 
@@ -402,9 +449,16 @@ Delivery and retries (qdit):
   8th failure the event is marked dead and kept for inspection.
 - A retry resends the same `id` and the same body bytes with a fresh timestamp
   and signature.
-- qdit delivers events for one milestone in `occurred_at` order on a best
-  effort basis, but retries and dead events can break that. Consumers MUST NOT
-  rely on order or on `status` in the body: the chain is read every time.
+- Order is best effort (D-25). qdit (WP-2.7) MUST NOT attempt an event for a
+  milestone while an earlier event for the same milestone (by `occurred_at`,
+  then outbox insertion order) is still undelivered: the later event waits
+  until the earlier one is delivered or dead. Its own 8 attempts and backoff
+  start when it is released, so waiting never uses them up. Events for
+  different milestones do not wait on each other.
+- Because a dead event releases the next one, and because a delivered event
+  can still be processed late on doqtri's side, consumers can see gaps and
+  stale `status` values. Consumers MUST NOT rely on order or on `status` in
+  the body: the chain is read every time (D-04).
 
 ## 10. On-chain node records
 
@@ -444,15 +498,18 @@ A verifier splits on the first three `:`, then on `/` and `@v`, and calls
 `get_milestone_status(project_id, milestone_id)` on `contract-id` over Stellar
 RPC on `network`. No qdit token is needed.
 
-Rolled-up parent nodes (section 11) are signed with `tool = "rollup"` and:
+Rolled-up parent nodes (section 11) are signed with `tool = "rollup"` and an
+`artifact_ref` of this form (D-24):
 
 ```abnf
 rollup-ref    = %s"children:" node-id *("," node-id)
 node-id       = 1*64(ALPHA / DIGIT / "_" / "-")   ; doqtri positional id, e.g. h3
 ```
 
-listing the direct children the status was computed from, so a third party
-can recompute it from those children's own records.
+listing the direct children the status was computed from, in document order,
+so a third party can recompute it from those children's own records. Example:
+`children:h3,h4,h7`. A node with its own qdit link is never signed with
+`tool = "rollup"`; it is signed with `tool = "qdit"` as above.
 
 ### Status mapping (D-19)
 
@@ -469,8 +526,9 @@ doqtri suggests a status only from the chain column. If the project's
 
 ## 11. Rules doqtri applies
 
-Roll-up. A node with no link of its own that has at least one child node takes
-its status from its direct children's statuses, evaluated in this order:
+Roll-up (D-24). A node with no link of its own that has at least one child
+node takes its status from its direct children's statuses, evaluated in this
+order:
 
 1. all children `Verified` -> `Verified`;
 2. else all children `Built` or `Verified` -> `Built`;
@@ -488,7 +546,8 @@ case-sensitive, moves handled before renames:
 1. The heading at `N` still reads `L`: nothing to do.
 2. `L` appears at exactly one other id `N'`: the heading moved. Update
    doqtri's `node_links.node_id` to `N'` and call `PATCH /links/{id}` with
-   `node_id = N'`.
+   `node_id = N'` (D-21), plus `doc_version` when the doc has been anchored
+   since the link was last written.
 3. `L` appears at more than one other id: ambiguous; ask the owner to relink.
 4. `L` appears nowhere and `N` still exists: the heading was renamed. Call
    `PATCH /milestones/{id}` with the heading text at `N` as the new title, and
@@ -499,3 +558,23 @@ case-sensitive, moves handled before renames:
 
 On-chain records stay keyed by positional id, so after a move the next
 signature writes the record at the new id (R-03).
+
+## 12. Changelog
+
+Every change here is additive within v1 (section 3).
+
+- v1.0.1 (2026-10-24): applies D-21 to D-27 and D-32.
+  - D-21: `PATCH /links/{id}` takes `{node_id?, node_label?, doc_version?}`
+    and updates the link in place.
+  - D-22: `DELETE /projects/{id}/docs/{doc_id}` removes the doc's milestone
+    links in the same transaction and returns `removed_link_ids`.
+  - D-23: minimum project role per endpoint spelled out (section 8).
+  - D-24: roll-up `artifact_ref` (`children:h3,h4,...`) confirmed; a linked
+    node never rolls up.
+  - D-25: webhook order is best effort; a later event for a milestone waits
+    until the earlier one is delivered or dead.
+  - D-26: recording a `milestone_anchors` row emits the same webhook body.
+  - D-27: an unsupported method on a known path is `404 not_found`.
+  - D-32: OAuth tokens may read anchor records; milestone responses carry
+    the latest anchor's proof hash and transaction hash.
+- v1.0.0 (2026-10-24): initial contract (WP-2.0).
