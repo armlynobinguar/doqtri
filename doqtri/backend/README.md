@@ -37,6 +37,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261021000000_create_mindmap_styles.sql
 20261024000000_add_promo_submission_rating.sql
 20261024120000_create_workspaces.sql      # NOT yet applied: dry-run on a branch first
+20261024150000_doc_locks.sql              # NOT yet applied: dry-run on a branch first
 ```
 
 The remote records its own version stamps (e.g. `20260929114657` for
@@ -103,6 +104,15 @@ Two supporting tables:
   WP-1.2 adds `documents.workspace_id` and moves the policies over to
   `is_workspace_member()`.
 
+- `public.doc_locks` — who is editing a document (D-17). One editor holds a
+  document's lock at a time; it frees after ten minutes without a heartbeat,
+  and an admin or owner may take it over. Written only by `take_doc_lock()`,
+  `release_doc_lock()` and `save_document()`; workspace members read it.
+  `documents.version` counts saves, and the browser saves text only through
+  `save_document(id, markdown, base_version)`, which refuses a caller without
+  the lock (`DQLCK`) or with a stale version (`DQVER`). A plain client UPDATE
+  of `markdown` is refused. Removing or demoting a member drops their locks.
+
 The notes table itself is still the only content store. There are deliberately **no** graph tables: nodes and
 edges are parsed from `markdown` at render time by `lib/wikilinks.ts`, so the
 graph cannot drift from the text.
@@ -110,8 +120,9 @@ graph cannot drift from the text.
 ## Trust boundary
 
 - The **browser** uses the anon key and is always subject to RLS. It reads the
-  vault and writes editor changes directly, which is safe because the policies
-  scope both to the caller's own rows.
+  vault directly, scoped by the policies. Note text is saved through
+  `/api/notes/[id]` (PUT), which calls `save_document()` as the user, so the
+  edit lock and version are checked in the database.
 - The **API routes** (`/api/ingest`, `/api/regenerate`) use the service role,
   which bypasses RLS. They therefore resolve the user from the verified session
   first and scope every statement by that `user_id`. A `user_id` from a request
