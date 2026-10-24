@@ -50,6 +50,7 @@ export function GitHubLinks({
   nodes,
   anchored,
   canSign = true,
+  signerLoading = false,
   onSynced,
 }: {
   docId: string;
@@ -58,6 +59,12 @@ export function GitHubLinks({
   anchored: boolean;
   /** False hides Sync: the relay would refuse this user's signature (D-43, D-44). */
   canSign?: boolean;
+  /**
+   * True while the user's standing on this note is still loading: Sync is
+   * shown but disabled, as the panel's other signing buttons are, so it
+   * cannot be clicked before canSign is known.
+   */
+  signerLoading?: boolean;
   onSynced: () => void;
 }) {
   const wallet = useWallet();
@@ -324,6 +331,7 @@ export function GitHubLinks({
           className="w-full max-lg:h-10"
           disabled={
             !anchored ||
+            signerLoading ||
             busy != null ||
             (wallet.sessionAddress === null && !(wallet.identity.kind === "email" && wallet.identity.smartWallet)) ||
             wallet.balance?.funded === false
