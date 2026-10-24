@@ -1,6 +1,6 @@
 # doqtri x qdit integration contract
 
-Status: v1.0.1, WP-2.0 (history in section 12, Changelog). This file is
+Status: v1.0.2, WP-2.0 (history in section 12, Changelog). This file is
 byte-identical in both repos (`qdit/docs/integration/CONTRACT.md`,
 `doqtri/docs/integration/CONTRACT.md`).
 Change it in both repos in the same phase, through the masterplan's decision
@@ -26,11 +26,14 @@ Keywords MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 | qdit API | `https://qdit.atalusan.com/api/v1` |
 | qdit OAuth server | `https://bsxnjoviwtkbuvaqpfng.supabase.co/auth/v1` |
 | doqtri webhook | `https://www.doqtri.xyz/api/integrations/qdit/webhook` |
+| doqtri origin (doc URLs) | `https://www.doqtri.xyz` |
 
 Preview and local deployments configure their own base URLs through env vars
 (doqtri: `QDIT_API_BASE_URL`, `QDIT_OAUTH_ISSUER`, `QDIT_OAUTH_CLIENT_ID`,
 `QDIT_CLIENT_SECRET`, `QDIT_WEBHOOK_SECRET`; qdit stores the webhook URL and
-secret per row in `integration_webhooks`). Paths never change.
+secret per row in `integration_webhooks`, and sets the doqtri origin it
+accepts in `doc_url` per environment, for example `DOQTRI_ORIGIN`; D-45,
+section 8). Paths never change.
 
 ## 2. Data ownership
 
@@ -52,6 +55,10 @@ Rules that follow from the decisions:
 - doqtri wins on titles (D-12). A linked milestone's title is read-only in
   qdit's UI and changes only through `PATCH /milestones/{id}`. Unlinking makes
   it editable in qdit again.
+- A linked milestone cannot change project (D-46): qdit refuses to move a
+  milestone that has a `milestone_external_links` row to another project, so
+  it always stays in the project its doc is linked to. An unlinked milestone
+  is not locked and may move as qdit allows.
 - An OAuth token may read projects and milestones, including the milestones'
   `milestone_anchors` records (D-32: they mirror public chain data), create
   milestones, rename linked milestones and write link rows. Nothing else
@@ -123,7 +130,13 @@ support (for example `PUT /milestones/{id}`) is `404 not_found` with no
 `OPTIONS`: they are not exceptions, so qdit MUST answer them with
 `404 not_found` too rather than let the framework answer them (no implicit
 `HEAD` from `GET`, no `204` with `Allow` for `OPTIONS`). `/api/v1` is
-server-to-server only and sends no CORS headers, so no preflight is needed.
+server-to-server only and sends no CORS headers, so no preflight is needed.[^1]
+
+[^1]: `TRACE`, `TRACK` and `CONNECT` are the exception (D-38). The hosting
+    platform or framework may answer them before qdit's routes run, so a
+    client may get the platform's own error (for example a `500` or `405`
+    without the JSON error body) instead of `404 not_found`. Clients MUST NOT
+    send them; nothing in v1 uses them.
 
 | HTTP | `code` | When |
 | --- | --- | --- |
@@ -288,7 +301,13 @@ refreshes `doc_title` and `doc_url`.
 { "doc_id": "c2d1e0f9-8a7b-4c6d-9e5f-4a3b2c1d0e9f", "doc_title": "Payroll v1 plan", "doc_url": "https://www.doqtri.xyz/d/c2d1e0f9-8a7b-4c6d-9e5f-4a3b2c1d0e9f" }
 ```
 
-`doc_title` 1 to 300 characters after trim; `doc_url` an `https` URL.
+`doc_title` 1 to 300 characters after trim. `doc_url` MUST start with
+doqtri's origin followed by `/` (D-45): `https://www.doqtri.xyz/` in
+production. qdit sets the allowed origin per environment (for example
+`DOQTRI_ORIGIN`), so preview and local deployments accept their own doqtri
+origin and nothing else. The trailing `/` is part of the check, so
+`https://www.doqtri.xyz.example.com/...` does not pass. Any other value is
+`400 invalid_request` with `doc_url` in `details.fields`.
 Response: `{"data": DocLink}`. 409 reasons: `doc_linked_elsewhere` (the doc
 is linked to another project; unlink it there first).
 
@@ -580,8 +599,18 @@ signature writes the record at the new id (R-03).
 
 ## 12. Changelog
 
-Every change here is additive within v1 (section 3).
+Every change here is additive within v1 (section 3), except that v1.0.2
+narrows what `doc_url` accepts (D-45); doqtri only ever sent its own URLs.
 
+- v1.0.2 (2026-10-24): applies D-38, D-45 and D-46.
+  - D-38: `TRACE`, `TRACK` and `CONNECT` may get the platform's own error
+    instead of `404 not_found` (footnote in section 6).
+  - D-45: `doc_url` in `POST /projects/{id}/docs` MUST start with doqtri's
+    origin (`https://www.doqtri.xyz` in production, set per environment in
+    qdit, for example `DOQTRI_ORIGIN`); anything else is
+    `400 invalid_request`.
+  - D-46: a linked milestone cannot change project; only linked milestones
+    are locked (section 2).
 - v1.0.1 (2026-10-24): applies D-21 to D-27 and D-32.
   - D-21: `PATCH /links/{id}` takes `{node_id?, doc_version?}` and updates
     the link in place. `node_label` changes only with the title, through
