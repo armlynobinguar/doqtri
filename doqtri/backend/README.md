@@ -31,7 +31,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261006000000_create_node_links.sql      # NOT yet applied: apply before deploying
 20261009000000_create_promo_submissions.sql
 20261009000100_add_promo_submission_status.sql
-20261018000000_create_referrals.sql       # NOT yet applied: apply before deploying
+20261018000000_create_referrals.sql
 20261019000000_chain_writes_anchor.sql    # NOT yet applied: apply before deploying
 20261021000000_create_mindmap_styles.sql
 20261024000000_add_promo_submission_rating.sql
@@ -72,13 +72,16 @@ Two supporting tables:
   service role; owners can read their own row. `status` (pending, shortlisted,
   winner, rejected) is set from `/admin/promo` and resets on resubmission.
 - `public.referral_codes` / `public.referrals` — each user's referral code
-  (their link is `/r/<code>`, created on first visit to the profile page by
-  `referral_code_for()`) and who referred whom (one referrer per account).
-  `/r/<code>` stores the code in a signed cookie; after sign-up the vault calls
+  (created on first visit to the profile page by `referral_code_for()`) and
+  who referred whom (one referrer per account) and how: `source` is `link`
+  (`/r/<code>`), `qr` (the profile's QR code, `/r/<code>?via=qr`) or `code`
+  (typed into the sign-up form, checked by `/api/referrals/code`). Each stores
+  the code in a signed cookie; after sign-up the vault calls
   `/api/referrals/claim`, which records it through `claim_referral()` only for
-  an account created after the link was opened, never for the user's own code.
+  an account created after the code was seen, never for the user's own code.
   Both functions are service role only. Owners can read their own code;
-  referrals are exposed only as a count on the profile page.
+  referrals are exposed only as counts, total and by source, on the profile
+  page.
 - `public.mindmap_styles` — each user's mindmap studio style, one row per map
   (`global`, or `doc:<id>` with a cascading `document_id`), so a look follows
   the user across devices. The browser upserts its own rows under RLS a moment
