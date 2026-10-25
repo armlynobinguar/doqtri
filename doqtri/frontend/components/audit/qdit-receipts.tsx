@@ -10,15 +10,35 @@ import { expertTxUrl } from "@/lib/stellar/config";
  * its states are in lib/integrations/qdit-receipts.ts; nothing here comes
  * from qdit's own database. The page renders this only when the loader
  * returned receipts, which it does only with NEXT_PUBLIC_QDIT_INTEGRATION=1.
+ *
+ * The wording follows CONTRACT.md section 12: the chain's record is compared
+ * with the version `vV` the heading was signed against. A newer record is a
+ * resubmission and is shown as such; an older or missing one is an explicit
+ * unverified state naming the mismatch; and a Verified heading is shown as
+ * approved only when the chain says Approved at `vV` itself.
  */
 
 const LINK = "text-primary underline-offset-2 hover:underline";
 const NETWORK_LABEL = { testnet: "Testnet", mainnet: "Mainnet" } as const;
 
+/** How the chain's record stands to the version the heading was signed against. */
+function relation(receipt: QditReceipt): "same" | "newer" | "older" | "missing" | null {
+  const { check, ref } = receipt;
+  if (check.state === "unreachable" || !ref) return null;
+  if (!check.chain) return "missing";
+  if (check.chain.version === ref.version) return "same";
+  return check.chain.version > ref.version ? "newer" : "older";
+}
+
 function stateTag(receipt: QditReceipt) {
   const { check } = receipt;
   if (check.state === "unreachable") return <StatusTag tone="planned">Not checked</StatusTag>;
-  if (check.state === "differs") return <StatusTag tone="warning">Differs from the chain</StatusTag>;
+  if (check.state === "differs") {
+    const rel = relation(receipt);
+    if (rel === "older" || rel === "missing") return <StatusTag tone="warning">Unverified</StatusTag>;
+    if (rel === "newer") return <StatusTag tone="warning">Newer submission</StatusTag>;
+    return <StatusTag tone="warning">Differs from the chain</StatusTag>;
+  }
   return check.chain?.status === "Approved" ? (
     <StatusTag tone="onchain">Approved on chain</StatusTag>
   ) : (
@@ -38,23 +58,54 @@ function ChainLine({ receipt }: { receipt: QditReceipt }) {
     }[check.reason];
     return <span data-testid="receipt-unreachable">{text}</span>;
   }
+  const verified = record.status === "Verified";
+  const ledger = check.ledger.toLocaleString("en-US");
+  const signedAt = ref ? `v${ref.version}` : "the version it names";
   if (!check.chain) {
     return (
-      <span>
-        qdit&apos;s contract on {network} has no record of this milestone.
-        {record.status === "Verified" ? " This heading is not shown as approved." : null}
+      <span data-testid="receipt-mismatch">
+        Unverified: qdit&apos;s contract on {network} has no record of this milestone (as of ledger {ledger}), though
+        this heading was signed against {signedAt}, so it cannot be checked.
+        {verified ? " This heading is not shown as approved." : null}
       </span>
     );
   }
-  const later = ref && check.chain.version > ref.version ? ` (signed against v${ref.version})` : "";
+  const says = (
+    <>
+      <strong className="text-foreground">{check.chain.status}</strong> at v{check.chain.version}
+    </>
+  );
+  const rel = relation(receipt);
+  if (rel === "older") {
+    return (
+      <span data-testid="receipt-mismatch">
+        Unverified: qdit&apos;s contract on {network} holds v{check.chain.version} ({check.chain.status}) as of ledger{" "}
+        {ledger}, older than {signedAt}, the version this heading was signed against, so it cannot be checked.
+        {verified ? " This heading is not shown as approved." : null}
+      </span>
+    );
+  }
+  if (rel === "newer") {
+    return (
+      <span data-testid="receipt-newer">
+        {verified ? "Signed as Verified; the chain now says " : "qdit's contract now says "}
+        {says} on {network}, as of ledger {ledger}: a newer submission than {signedAt}, the version this heading&apos;s
+        signature refers to. What happened to {signedAt} is only in the contract&apos;s history.
+        {verified ? " This heading is not shown as approved." : null}
+      </span>
+    );
+  }
+  if (check.state === "differs" && verified) {
+    return (
+      <span>
+        Signed as Verified; the chain now says {says} on {network}, as of ledger {ledger}, so this heading is not shown
+        as approved.
+      </span>
+    );
+  }
   return (
     <span>
-      qdit&apos;s contract on {network} says <strong className="text-foreground">{check.chain.status}</strong> at v
-      {check.chain.version}
-      {later}, as of ledger {check.ledger.toLocaleString("en-US")}.
-      {check.state === "differs" && record.status === "Verified" && check.chain.status !== "Approved"
-        ? " It does not say Approved, so this heading is not shown as approved."
-        : null}
+      qdit&apos;s contract on {network} says {says}, as of ledger {ledger}.
     </span>
   );
 }
@@ -62,19 +113,21 @@ function ChainLine({ receipt }: { receipt: QditReceipt }) {
 function ApprovalLine({ receipt }: { receipt: QditReceipt }) {
   const { check, ref, approvalTxHash } = receipt;
   if (!ref || check.state === "unreachable" || check.chain?.status !== "Approved") return null;
+  // An approval of another version than the signed one is named as such.
+  const of = check.chain.version === ref.version ? "" : ` of v${check.chain.version}`;
   if (approvalTxHash) {
     return (
       <span>
         <a className={LINK} href={qditExplorerUrl(ref.network, "tx", approvalTxHash)} target="_blank" rel="noreferrer">
-          Approval transaction →
+          Approval transaction{of} →
         </a>
       </span>
     );
   }
   return (
     <span data-testid="approval-unrecorded">
-      Doqtri has no record of the approval transaction: it may be older than Stellar RPC&apos;s event window (about a
-      week), or Doqtri did not see it in time. The{" "}
+      Doqtri has no record of the approval transaction{of}: it may be older than Stellar RPC&apos;s event window (about
+      a week), or Doqtri did not see it in time. The{" "}
       <a className={LINK} href={qditExplorerUrl(ref.network, "contract", ref.contractId)} target="_blank" rel="noreferrer">
         contract&apos;s history on Stellar Expert
       </a>{" "}
@@ -119,6 +172,14 @@ function Receipt({ receipt, label }: { receipt: QditReceipt; label: string | und
               {" · "}
               <a className={LINK} href={qditExplorerUrl(ref.network, "contract", ref.contractId)} target="_blank" rel="noreferrer">
                 contract →
+              </a>
+            </>
+          ) : null}
+          {receipt.qditPageUrl ? (
+            <>
+              {" · "}
+              <a className={LINK} href={receipt.qditPageUrl} target="_blank" rel="noreferrer" data-testid="qdit-page">
+                milestone on qdit →
               </a>
             </>
           ) : null}

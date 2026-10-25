@@ -33,6 +33,13 @@ const CONFIRMED: QditReceipt = {
   },
   check: { state: "confirmed", chain: { status: "Approved", version: 2 }, ledger: 1234567 },
   approvalTxHash: APPROVAL_TX,
+  qditPageUrl: null,
+};
+
+/** CONFIRMED, re-signed against another version of the same milestone. */
+const signedAt = (version: number): Pick<QditReceipt, "record" | "ref"> => {
+  const ref = REF.replace("@v2", `@v${version}`);
+  return { record: { ...CONFIRMED.record, artifactRef: ref }, ref: parseQditArtifactRef(ref) };
 };
 
 const render = (receipts: QditReceipt[], more = 0, labels: Map<string, string> | null = null) =>
@@ -81,10 +88,35 @@ describe("QditReceiptsSection", () => {
     expect(html).not.toContain("Approval transaction →");
   });
 
-  it("names a later approval's version beside the version that was signed", () => {
-    const ref = REF.replace("@v2", "@v1");
-    const html = render([{ ...CONFIRMED, record: { ...CONFIRMED.record, artifactRef: ref }, ref: parseQditArtifactRef(ref) }]);
-    expect(html).toContain("at v2 (signed against v1)");
+  it("chain ahead of a Verified record: a newer submission, never shown as approved", () => {
+    // Signed Verified against v1; v1 was rejected and v2 approved since.
+    const html = render([
+      { ...CONFIRMED, ...signedAt(1), check: { state: "differs", chain: { status: "Approved", version: 2 }, ledger: 10 } },
+    ]);
+    expect(html).toContain('data-state="differs"');
+    expect(html).toContain("Newer submission");
+    expect(html).toContain('data-testid="receipt-newer"');
+    expect(html).toContain("Signed as Verified; the chain now says <strong");
+    expect(html).toContain("Approved</strong> at v2");
+    expect(html).toContain("a newer submission than v1, the version this heading&#x27;s signature refers to");
+    expect(html).toContain("This heading is not shown as approved.");
+    expect(html).not.toContain("Approved on chain");
+    expect(html).not.toContain("Matches the chain");
+    // The approval link is v2's, and says so.
+    expect(html).toContain("Approval transaction of v2 →");
+    expect(html).not.toContain("Approval transaction →");
+  });
+
+  it("chain ahead with no approval on record: the fallback names the version too", () => {
+    const html = render([
+      {
+        ...CONFIRMED,
+        ...signedAt(1),
+        check: { state: "differs", chain: { status: "Approved", version: 2 }, ledger: 10 },
+        approvalTxHash: null,
+      },
+    ]);
+    expect(html).toContain("Doqtri has no record of the approval transaction of v2");
   });
 
   it("confirmed short of approval: matches the chain, and claims no approval", () => {
@@ -104,22 +136,77 @@ describe("QditReceiptsSection", () => {
 
   it("differs: shows both sides and never claims approval", () => {
     const html = render([
-      { ...CONFIRMED, check: { state: "differs", chain: { status: "Submitted", version: 3 }, ledger: 10 }, approvalTxHash: null },
+      { ...CONFIRMED, check: { state: "differs", chain: { status: "Submitted", version: 2 }, ledger: 10 }, approvalTxHash: null },
     ]);
     expect(html).toContain('data-state="differs"');
     expect(html).toContain("Differs from the chain");
-    expect(html).toContain("Submitted</strong> at v3");
+    expect(html).toContain("Submitted</strong> at v2");
     expect(html).toContain("Verified");
     expect(html).toContain("this heading is not shown as approved");
     expect(html).not.toContain("Approved on chain");
     expect(html).not.toContain("Approval transaction");
   });
 
-  it("differs: no record on chain at all", () => {
-    const html = render([{ ...CONFIRMED, check: { state: "differs", chain: null, ledger: 10 }, approvalTxHash: null }]);
-    expect(html).toContain("has no record of this milestone");
+  it("differs at the signed version: signed as Verified, the chain now says otherwise", () => {
+    const html = render([
+      { ...CONFIRMED, check: { state: "differs", chain: { status: "Rejected", version: 2 }, ledger: 10 }, approvalTxHash: null },
+    ]);
+    expect(html).toContain("Differs from the chain");
+    expect(html).toContain("Signed as Verified; the chain now says <strong");
+    expect(html).toContain("Rejected</strong> at v2");
+  });
+
+  it("chain behind the signed version: unverified, naming the mismatch", () => {
+    const html = render([
+      { ...CONFIRMED, ...signedAt(3), check: { state: "differs", chain: { status: "Submitted", version: 1 }, ledger: 10 }, approvalTxHash: null },
+    ]);
+    expect(html).toContain("Unverified</span>");
+    expect(html).toContain('data-testid="receipt-mismatch"');
+    expect(html).toContain("holds v1 (Submitted)");
+    expect(html).toContain("older than v3, the version this heading was signed against, so it cannot be checked");
     expect(html).toContain("This heading is not shown as approved.");
-    expect(html).not.toContain("Approved on chain");
+    expect(html).not.toContain("Differs from the chain");
+
+    const built = render([
+      {
+        ...CONFIRMED,
+        ...signedAt(3),
+        record: { ...signedAt(3).record, status: "Built" },
+        check: { state: "differs", chain: { status: "Submitted", version: 1 }, ledger: 10 },
+        approvalTxHash: null,
+      },
+    ]);
+    expect(built).toContain("older than v3, the version this heading was signed against");
+    expect(built).not.toContain("not shown as approved");
+  });
+
+  it("no record on chain at all: unverified whatever the record's status", () => {
+    const verified = render([{ ...CONFIRMED, check: { state: "differs", chain: null, ledger: 10 }, approvalTxHash: null }]);
+    expect(verified).toContain("Unverified</span>");
+    expect(verified).toContain("has no record of this milestone");
+    expect(verified).toContain("though this heading was signed against v2, so it cannot be checked");
+    expect(verified).toContain("This heading is not shown as approved.");
+    expect(verified).not.toContain("Approved on chain");
+
+    const building = render([
+      {
+        ...CONFIRMED,
+        record: { ...CONFIRMED.record, status: "Building" },
+        check: { state: "differs", chain: null, ledger: 10 },
+        approvalTxHash: null,
+      },
+    ]);
+    expect(building).toContain("Unverified</span>");
+    expect(building).toContain('data-testid="receipt-mismatch"');
+    expect(building).toContain("though this heading was signed against v2, so it cannot be checked");
+  });
+
+  it("links qdit's milestone page only when the loader confirmed qdit publishes it", () => {
+    expect(render([CONFIRMED])).not.toContain('data-testid="qdit-page"');
+    const url = "https://qdit.example/p/soroban-payroll/c92f5018-7b3d-4ea4-9f60-1d8b0c4e3f72";
+    const html = render([{ ...CONFIRMED, qditPageUrl: url }]);
+    expect(html).toContain(`href="${url}"`);
+    expect(html).toContain("milestone on qdit →");
   });
 
   it("unreachable: says it could not check, for each reason", () => {

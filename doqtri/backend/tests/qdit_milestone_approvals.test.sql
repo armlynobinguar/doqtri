@@ -1,4 +1,5 @@
--- pgTAP tests for 20261025131000_qdit_milestone_approvals.sql (WP-3.1).
+-- pgTAP tests for 20261025131000_qdit_milestone_approvals.sql (WP-3.1):
+-- qdit_milestone_approvals and qdit_milestone_approval_misses.
 --
 -- Run against a database that has every migration applied and the pgtap
 -- extension available, e.g. a Supabase branch or a local stack:
@@ -11,7 +12,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(19);
+select plan(29);
 
 -- ---------------------------------------------------------------------------
 -- Schema and privileges
@@ -41,6 +42,23 @@ select ok(not has_table_privilege('service_role', 'public.qdit_milestone_approva
   'nor delete one');
 select has_index('public', 'qdit_milestone_approvals', 'qdit_milestone_approvals_milestone_idx',
   'approvals are looked up by milestone');
+
+select has_table('public', 'qdit_milestone_approval_misses', 'qdit_milestone_approval_misses exists');
+select col_is_pk('public', 'qdit_milestone_approval_misses',
+  array['network', 'contract_id', 'project_id', 'milestone_id', 'version'],
+  'one miss per approval key');
+select is((select relrowsecurity from pg_class where oid = 'public.qdit_milestone_approval_misses'::regclass),
+  true, 'RLS is on for qdit_milestone_approval_misses');
+select ok(not has_table_privilege('anon', 'public.qdit_milestone_approval_misses', 'select')
+          and not has_table_privilege('authenticated', 'public.qdit_milestone_approval_misses', 'select')
+          and not has_table_privilege('authenticated', 'public.qdit_milestone_approval_misses', 'insert'),
+  'browsers can neither read nor write misses');
+select ok(has_table_privilege('service_role', 'public.qdit_milestone_approval_misses', 'insert')
+          and has_table_privilege('service_role', 'public.qdit_milestone_approval_misses', 'select'),
+  'the service role records and reads them');
+select ok(not has_table_privilege('service_role', 'public.qdit_milestone_approval_misses', 'update')
+          and not has_table_privilege('service_role', 'public.qdit_milestone_approval_misses', 'delete'),
+  'but cannot move or drop the first miss');
 
 
 -- ---------------------------------------------------------------------------
@@ -105,6 +123,30 @@ $$, '23514', null, 'versions start at 1 (MilestoneRecord.version)');
 select throws_ok($$
   update public.qdit_milestone_approvals set tx_hash = repeat('d', 64)
 $$, '42501', null, 'the service role cannot rewrite an approval');
+
+-- Misses: the first one stands.
+insert into public.qdit_milestone_approval_misses (network, contract_id, project_id, milestone_id, version, first_missed_at)
+values ('testnet', 'CBP3NKXCRUSOJLLUXDF5AIRNPAC6IL7TFJ2KCNL5A2GTKC2MB7M4OHVG',
+        '3f6c2a1e-8b4d-4c7e-9a10-2d5b7e9f1c34', 'd0a36129-8c4e-4fb5-8a71-2e9c1d5f4083', 1,
+        '2026-10-01 00:00:00+00');
+insert into public.qdit_milestone_approval_misses (network, contract_id, project_id, milestone_id, version)
+values ('testnet', 'CBP3NKXCRUSOJLLUXDF5AIRNPAC6IL7TFJ2KCNL5A2GTKC2MB7M4OHVG',
+        '3f6c2a1e-8b4d-4c7e-9a10-2d5b7e9f1c34', 'd0a36129-8c4e-4fb5-8a71-2e9c1d5f4083', 1)
+on conflict do nothing;
+select is((select first_missed_at from public.qdit_milestone_approval_misses
+            where milestone_id = 'd0a36129-8c4e-4fb5-8a71-2e9c1d5f4083' and version = 1),
+  '2026-10-01 00:00:00+00'::timestamptz, 'a later empty lookup keeps the first miss');
+select isnt((select first_missed_at from public.qdit_milestone_approval_misses
+              where milestone_id = 'd0a36129-8c4e-4fb5-8a71-2e9c1d5f4083' and version = 1), null,
+  'first_missed_at is set');
+select throws_ok($$
+  insert into public.qdit_milestone_approval_misses (network, contract_id, project_id, milestone_id, version)
+  values ('testnet', 'not-a-contract', '3f6c2a1e-8b4d-4c7e-9a10-2d5b7e9f1c34',
+          'd0a36129-8c4e-4fb5-8a71-2e9c1d5f4083', 2)
+$$, '23514', null, 'misses take the same key checks');
+select throws_ok($$
+  update public.qdit_milestone_approval_misses set first_missed_at = now()
+$$, '42501', null, 'the service role cannot reset a miss');
 
 reset role;
 select * from finish();

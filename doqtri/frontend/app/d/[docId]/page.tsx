@@ -27,7 +27,7 @@ import { buildMindmap, type MindmapNode } from "@/lib/mindmap";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { supabaseApprovalStore } from "@/lib/integrations/qdit-approvals";
 import { readMilestoneRecord } from "@/lib/integrations/qdit-chain";
-import { qditIntegrationEnabled } from "@/lib/integrations/qdit-config";
+import { qditIntegrationEnabled, qditPublicOrigin } from "@/lib/integrations/qdit-config";
 import { loadQditReceipts, type QditReceipts } from "@/lib/integrations/qdit-receipts";
 
 /*
@@ -40,8 +40,11 @@ import { loadQditReceipts, type QditReceipts } from "@/lib/integrations/qdit-rec
  *
  * With NEXT_PUBLIC_QDIT_INTEGRATION=1, headings signed from a qdit milestone
  * also get a receipt (WP-3.1): qdit's milestone_proof contract read on the
- * record's own network, and the approving transaction when doqtri recorded
- * it. Without the flag, or with no such heading, the page is unchanged.
+ * record's own network, the approving transaction when doqtri recorded it,
+ * and qdit's public milestone page once qdit answers it anonymously (the
+ * slug comes from the note's doc_project_links row, and is shown only as
+ * part of a URL qdit itself publishes). Without the flag, or with no such
+ * heading, the page is unchanged.
  */
 export const revalidate = 30;
 
@@ -99,15 +102,31 @@ async function loadAudit(docId: string): Promise<Audit> {
   return { state: "anchored", doc, history, ttl, labels, removals, receipts };
 }
 
-/** The qdit receipts (WP-3.1): chain reads, plus approvals doqtri recorded. */
-function loadReceipts(docId: string, history: DocumentHistory | null): Promise<QditReceipts | null> {
-  const approvals = supabaseApprovalStore(createSupabaseAdminClient());
+/**
+ * The qdit receipts (WP-3.1): chain reads, plus approvals doqtri recorded
+ * and the qdit page link. The service-role client is made only when a
+ * receipt needs it, so a deployment without it still shows the chain's side.
+ */
+async function loadReceipts(docId: string, history: DocumentHistory | null): Promise<QditReceipts | null> {
+  const origin = qditPublicOrigin();
   return loadQditReceipts(docId, history, {
     enabled: true,
     readNode: (id, nodeId) => DoqtriRegistry.readNode(id, nodeId),
     readMilestone: (chain, projectId, milestoneId) => readMilestoneRecord(chain, projectId, milestoneId),
-    approvals: (milestoneIds) => approvals.forMilestones(milestoneIds),
+    approvals: (milestoneIds) => supabaseApprovalStore(createSupabaseAdminClient()).forMilestones(milestoneIds),
+    qditPage: origin && UUID.test(docId) ? { origin, project: () => loadLinkedProject(docId) } : undefined,
   });
+}
+
+/** The qdit project the note is linked to (D-09), as doqtri stored it. */
+async function loadLinkedProject(docId: string): Promise<{ projectId: string; slug: string } | null> {
+  const { data, error } = await createSupabaseAdminClient()
+    .from("doc_project_links")
+    .select("project_id, project_slug")
+    .eq("document_id", docId)
+    .maybeSingle();
+  if (error) throw new Error(`doc project link unavailable: ${error.message}`);
+  return data ? { projectId: String(data.project_id), slug: String(data.project_slug) } : null;
 }
 
 /**

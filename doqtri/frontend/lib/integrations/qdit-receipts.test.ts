@@ -2,10 +2,14 @@ import { scValToNative, xdr } from "@stellar/stellar-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApprovalRow } from "@/lib/integrations/qdit-approvals";
 import { readMilestoneRecord, type SimulateCall } from "@/lib/integrations/qdit-chain";
+import { qditPublicOrigin } from "@/lib/integrations/qdit-config";
 import {
   createReadCache,
+  isQditPagePublished,
   loadQditReceipts,
+  PUBLIC_PAGE_TTL_MS,
   qditExplorerUrl,
+  qditMilestonePageUrl,
   type ReceiptDeps,
 } from "@/lib/integrations/qdit-receipts";
 import type { ChainNode } from "@/lib/stellar/contract-client";
@@ -25,6 +29,8 @@ const RECORDS = {
     "AAAAEQAAAAEAAAAHAAAADwAAAAxtaWxlc3RvbmVfaWQAAAAOAAAAJGI4MWU0ZjA3LTZhMmMtNGQ5My04ZTVmLTBjN2E5YjNkMmU2MQAAAA8AAAAKcHJvamVjdF9pZAAAAAAADgAAACQzZjZjMmExZS04YjRkLTRjN2UtOWExMC0yZDViN2U5ZjFjMzQAAAAPAAAACnByb29mX2hhc2gAAAAAAA0AAAAgq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6sAAAAPAAAABnN0YXR1cwAAAAAAEAAAAAEAAAABAAAADwAAAAlTdWJtaXR0ZWQAAAAAAAAPAAAACXN1Ym1pdHRlcgAAAAAAABIAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAAAAPAAAACXRpbWVzdGFtcAAAAAAAAAUAAAAAAAAAAAAAAA8AAAAHdmVyc2lvbgAAAAADAAAAAQ==",
   m1_approved_v1:
     "AAAAEQAAAAEAAAAHAAAADwAAAAxtaWxlc3RvbmVfaWQAAAAOAAAAJGI4MWU0ZjA3LTZhMmMtNGQ5My04ZTVmLTBjN2E5YjNkMmU2MQAAAA8AAAAKcHJvamVjdF9pZAAAAAAADgAAACQzZjZjMmExZS04YjRkLTRjN2UtOWExMC0yZDViN2U5ZjFjMzQAAAAPAAAACnByb29mX2hhc2gAAAAAAA0AAAAgq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6sAAAAPAAAABnN0YXR1cwAAAAAAEAAAAAEAAAABAAAADwAAAAhBcHByb3ZlZAAAAA8AAAAJc3VibWl0dGVyAAAAAAAAEgAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAAAA8AAAAJdGltZXN0YW1wAAAAAAAABQAAAAAAAAAAAAAADwAAAAd2ZXJzaW9uAAAAAAMAAAAB",
+  m2_submitted_v2:
+    "AAAAEQAAAAEAAAAHAAAADwAAAAxtaWxlc3RvbmVfaWQAAAAOAAAAJGM5MmY1MDE4LTdiM2QtNGVhNC05ZjYwLTFkOGIwYzRlM2Y3MgAAAA8AAAAKcHJvamVjdF9pZAAAAAAADgAAACQzZjZjMmExZS04YjRkLTRjN2UtOWExMC0yZDViN2U5ZjFjMzQAAAAPAAAACnByb29mX2hhc2gAAAAAAA0AAAAgAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAAAAPAAAABnN0YXR1cwAAAAAAEAAAAAEAAAABAAAADwAAAAlTdWJtaXR0ZWQAAAAAAAAPAAAACXN1Ym1pdHRlcgAAAAAAABIAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAAAAPAAAACXRpbWVzdGFtcAAAAAAAAAUAAAAAAAAAAAAAAA8AAAAHdmVyc2lvbgAAAAADAAAAAg==",
   m2_approved_v2:
     "AAAAEQAAAAEAAAAHAAAADwAAAAxtaWxlc3RvbmVfaWQAAAAOAAAAJGM5MmY1MDE4LTdiM2QtNGVhNC05ZjYwLTFkOGIwYzRlM2Y3MgAAAA8AAAAKcHJvamVjdF9pZAAAAAAADgAAACQzZjZjMmExZS04YjRkLTRjN2UtOWExMC0yZDViN2U5ZjFjMzQAAAAPAAAACnByb29mX2hhc2gAAAAAAA0AAAAgAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAAAAPAAAABnN0YXR1cwAAAAAAEAAAAAEAAAABAAAADwAAAAhBcHByb3ZlZAAAAA8AAAAJc3VibWl0dGVyAAAAAAAAEgAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAAAA8AAAAJdGltZXN0YW1wAAAAAAAABQAAAAAAAAAAAAAADwAAAAd2ZXJzaW9uAAAAAAMAAAAC",
   m3_rejected_v1:
@@ -161,10 +167,25 @@ describe("loadQditReceipts: states", () => {
     expect(call.args.map((a) => scValToNative(a))).toEqual([PROJECT, M2]);
   });
 
-  it("confirmed at a later version: approved again after a resubmission still backs the record", async () => {
+  it("differs when the chain is at a later version: v1 was resubmitted, so v2's approval does not back it", async () => {
+    // Approved is terminal in milestone_proof, so Approved at v2 means the v1
+    // this heading was signed against was rejected and resubmitted.
+    approvalRows = [
+      { network: "testnet", contract_id: CONTRACT, project_id: PROJECT, milestone_id: M2, version: 2, tx_hash: APPROVAL_TX },
+    ];
     const h = setup([event("h1", "Verified", ref(M2, 1), 1)]);
     const [r] = (await loadQditReceipts(DOC, h, deps()))!.receipts;
-    expect(r.check).toMatchObject({ state: "confirmed", chain: { status: "Approved", version: 2 } });
+    expect(r.check).toEqual({ state: "differs", chain: { status: "Approved", version: 2 }, ledger: 5000 });
+    // The approval shown is v2's, which the component labels as such.
+    expect(r.approvalTxHash).toBe(APPROVAL_TX);
+  });
+
+  it("differs for any status when the chain is ahead of the ref, even one the newer record would match", async () => {
+    // A Built record against v1; the chain holds a newer submission, v2.
+    answers[M2] = "m2_submitted_v2";
+    const h = setup([event("h1", "Built", ref(M2, 1), 1)]);
+    const [r] = (await loadQditReceipts(DOC, h, deps()))!.receipts;
+    expect(r.check).toEqual({ state: "differs", chain: { status: "Submitted", version: 2 }, ledger: 5000 });
   });
 
   it("confirmed for a status other than Verified when the chain backs it (Built and Submitted)", async () => {
@@ -318,6 +339,112 @@ describe("loadQditReceipts: bounded", () => {
     now = 30_000;
     await loadQditReceipts(DOC, h, deps({ cache }));
     expect(simulate).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("loadQditReceipts: qdit's public milestone page (section 12)", () => {
+  const ORIGIN = "https://qdit.example";
+  const SLUG = "soroban payroll/ü";
+  const pageUrl = (milestone: string) => `${ORIGIN}/p/${encodeURIComponent(SLUG)}/${milestone}`;
+
+  function withPage(overrides: Partial<NonNullable<ReceiptDeps["qditPage"]>> = {}) {
+    const isPublished = vi.fn(async () => true);
+    const project = vi.fn(async () => ({ projectId: PROJECT, slug: SLUG }));
+    return { origin: ORIGIN, project, isPublished, cache: createReadCache<boolean>({ ttlMs: PUBLIC_PAGE_TTL_MS }), ...overrides };
+  }
+
+  it("links the page once qdit answers it anonymously, one check per page", async () => {
+    const page = withPage();
+    const h = setup([event("h1", "Verified", ref(M2, 2), 1), event("h2", "Verified", ref(M2, 2), 2), event("h3", "Built", ref(M1, 1), 3)]);
+    const { receipts } = (await loadQditReceipts(DOC, h, deps({ qditPage: page })))!;
+    expect(receipts.map((r) => r.qditPageUrl)).toEqual([pageUrl(M2), pageUrl(M2), pageUrl(M1)]);
+    expect(page.project).toHaveBeenCalledTimes(1);
+    expect(page.isPublished).toHaveBeenCalledTimes(2);
+    expect(page.isPublished).toHaveBeenCalledWith(pageUrl(M2));
+  });
+
+  it("no link when qdit does not publish the page, or the ref names another project", async () => {
+    const h = setup([event("h1", "Verified", ref(M2, 2), 1)]);
+    const unpublished = (await loadQditReceipts(DOC, h, deps({ qditPage: withPage({ isPublished: async () => false }) })))!;
+    expect(unpublished.receipts[0].qditPageUrl).toBeNull();
+
+    const other = withPage({ project: async () => ({ projectId: "4a7d3b2f-9c5e-4d8f-8b21-3e6c8f0a2d45", slug: SLUG }) });
+    const result = (await loadQditReceipts(DOC, h, deps({ qditPage: other })))!;
+    expect(result.receipts[0].qditPageUrl).toBeNull();
+    expect(other.isPublished).not.toHaveBeenCalled();
+  });
+
+  it("no link without a linked project, or when the link can't be read; the receipt stands", async () => {
+    const h = setup([event("h1", "Verified", ref(M2, 2), 1)]);
+    for (const project of [async () => null, async () => Promise.reject(new Error("db down"))]) {
+      const page = withPage({ project });
+      const [r] = (await loadQditReceipts(DOC, h, deps({ qditPage: page })))!.receipts;
+      expect(r.check.state).toBe("confirmed");
+      expect(r.qditPageUrl).toBeNull();
+      expect(page.isPublished).not.toHaveBeenCalled();
+    }
+  });
+
+  it("no qdit page config (no qdit origin): no link and no check", async () => {
+    const h = setup([event("h1", "Verified", ref(M2, 2), 1)]);
+    const [r] = (await loadQditReceipts(DOC, h, deps()))!.receipts;
+    expect(r.qditPageUrl).toBeNull();
+  });
+
+  it("keeps qdit's answer for 10 minutes", async () => {
+    let now = 0;
+    const cache = createReadCache<boolean>({ ttlMs: PUBLIC_PAGE_TTL_MS, now: () => now });
+    const page = withPage({ cache });
+    const h = setup([event("h1", "Verified", ref(M2, 2), 1)]);
+    await loadQditReceipts(DOC, h, deps({ qditPage: page }));
+    now = PUBLIC_PAGE_TTL_MS - 1;
+    await loadQditReceipts(DOC, h, deps({ qditPage: page }));
+    expect(page.isPublished).toHaveBeenCalledTimes(1);
+    now = PUBLIC_PAGE_TTL_MS;
+    await loadQditReceipts(DOC, h, deps({ qditPage: page }));
+    expect(page.isPublished).toHaveBeenCalledTimes(2);
+  });
+
+  it("builds the URL as section 12 does", () => {
+    expect(qditMilestonePageUrl("https://qdit.example/", "a b/c", M2)).toBe(`https://qdit.example/p/a%20b%2Fc/${M2}`);
+  });
+});
+
+describe("isQditPagePublished", () => {
+  const URL_ = `https://qdit.example/p/soroban-payroll/${M2}`;
+
+  it("asks anonymously with redirects off, and counts only a direct 200", async () => {
+    const fetchMock = vi.fn(async () => new Response("ok", { status: 200 }));
+    expect(await isQditPagePublished(URL_, { fetch: fetchMock })).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(URL_);
+    expect(init).toMatchObject({ method: "GET", redirect: "manual", credentials: "omit" });
+    expect(new Headers(init.headers).has("authorization")).toBe(false);
+    expect(new Headers(init.headers).has("cookie")).toBe(false);
+  });
+
+  it("a redirect, a 404, a network error or a timeout all count as not published", async () => {
+    for (const status of [301, 302, 307, 404, 500]) {
+      const answer = new Response(null, { status, headers: status < 400 ? { location: "https://qdit.example/login" } : {} });
+      expect(await isQditPagePublished(URL_, { fetch: async () => answer })).toBe(false);
+    }
+    expect(await isQditPagePublished(URL_, { fetch: async () => Promise.reject(new TypeError("fetch failed")) })).toBe(false);
+    const hang = (_: unknown, init?: RequestInit) =>
+      new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason)));
+    expect(await isQditPagePublished(URL_, { fetch: hang as typeof fetch, timeoutMs: 10 })).toBe(false);
+  });
+});
+
+describe("qditPublicOrigin", () => {
+  it("is the origin of QDIT_API_BASE_URL, only with the integration on", () => {
+    const env = (vars: Record<string, string>) => vars as unknown as NodeJS.ProcessEnv;
+    const on = { NEXT_PUBLIC_QDIT_INTEGRATION: "1" };
+    expect(qditPublicOrigin(env({ ...on, QDIT_API_BASE_URL: "https://qdit.atalusan.com/api/v1" }))).toBe("https://qdit.atalusan.com");
+    expect(qditPublicOrigin(env({ ...on, QDIT_API_BASE_URL: "http://localhost:3001/api/v1/" }))).toBe("http://localhost:3001");
+    expect(qditPublicOrigin(env(on))).toBeNull();
+    expect(qditPublicOrigin(env({ ...on, QDIT_API_BASE_URL: "not a url" }))).toBeNull();
+    expect(qditPublicOrigin(env({ ...on, QDIT_API_BASE_URL: "ftp://qdit.example/api/v1" }))).toBeNull();
+    expect(qditPublicOrigin(env({ QDIT_API_BASE_URL: "https://qdit.atalusan.com/api/v1" }))).toBeNull();
   });
 });
 

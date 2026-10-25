@@ -34,10 +34,11 @@ import { QDIT_MILESTONE_STATE_COLUMNS, type QditMilestoneStateRow } from "@/lib/
  * Neither signs anything or touches the chain beyond reading it (D-04, D-05):
  * an editor signs in the browser, with their own wallet (D-14).
  *
- * When a read finds a milestone newly Approved, both also hand it to
+ * When a read finds a milestone Approved, both also hand it to
  * `recordApproval` (WP-3.1, lib/integrations/qdit-approvals.ts), which looks
  * the approving transaction up in RPC's event window for the public
- * receipts. That is best effort and never changes either one's answer.
+ * receipts unless it has it already (or has missed it for longer than the
+ * window). That is best effort and never changes either one's answer.
  */
 
 export const QDIT_WEBHOOK_EVENT = "milestone.status_changed";
@@ -459,7 +460,7 @@ export async function recheckDocStatuses(params: {
   readChain: ReadChain;
   force?: boolean;
   now?: () => number;
-  /** WP-3.1: called when a read first shows a milestone Approved at its version. */
+  /** WP-3.1: called whenever a read shows a milestone Approved. */
   recordApproval?: RecordApproval;
 }): Promise<RecheckResult> {
   const { store, docId, readChain, force = false } = params;
@@ -523,13 +524,11 @@ export async function recheckDocStatuses(params: {
     if (force || age(state?.chain_checked_at, now()) > CHAIN_RECHECK_MS) {
       try {
         const read = await chainStateFor(chain, link.projectId, link.milestoneId, readChain);
-        // Only on the read that saw the approval first (the webhook usually
-        // got there already), so opening the panel does not scan RPC's
-        // events again for an approval older than its window.
-        const approval = approvalKeyOf(read, link.projectId, link.milestoneId);
-        const seen = state?.chain_status === "Approved" && Number(state.chain_version) === approval?.version;
         await store.record({ ...link, chain: read });
-        if (!seen) await noteApproval(params.recordApproval, approval);
+        // On every read, not just the first that saw it: the webhook's own
+        // lookup may have failed. recordApproval skips an approval it has,
+        // or has missed for longer than RPC's window.
+        await noteApproval(params.recordApproval, approvalKeyOf(read, link.projectId, link.milestoneId));
       } catch (error) {
         unread.add(link.milestoneId);
         errors.add(

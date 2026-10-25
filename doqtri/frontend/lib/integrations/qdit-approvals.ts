@@ -19,8 +19,12 @@ import { scanRegistryEvents, type EventSource, type LedgerEvent } from "@/lib/st
  * section 7), but that is a pointer, not proof (D-04), and a public receipt
  * must not repeat it as fact.
  *
- * Everything here is best effort. A lookup that fails or finds nothing
- * records nothing, and the receipt falls back to the contract's page.
+ * Everything here is best effort. A lookup that fails records nothing and
+ * the next sighting of the approval tries again; one that finds nothing
+ * keeps the time it first missed (qdit_milestone_approval_misses), and
+ * lookups stop once that is GIVE_UP_AFTER_MS old: the approval already
+ * existed then, so its event has left RPC's window. The receipt then falls
+ * back to the contract's page.
  */
 
 /** The key an approval is recorded under: one approved version on one contract. */
@@ -42,6 +46,12 @@ const LOOKUP_SLICES = 2;
  * may already have used up to 5 of them; a lookup gets part of the rest.
  */
 export const LOOKUP_TIMEOUT_MS = 3_000;
+
+/**
+ * How long after its first empty lookup an approval is looked for again:
+ * RPC's event window (about 7 days) plus a day's margin.
+ */
+export const GIVE_UP_AFTER_MS = 8 * 24 * 60 * 60_000;
 
 const TX_HASH = /^[0-9a-f]{64}$/;
 
@@ -131,6 +141,10 @@ export type ApprovalStore = {
   has(key: ApprovalKey): Promise<boolean>;
   /** Insert-only: an approval already recorded stays as it is. */
   record(key: ApprovalKey, tx: ApprovalTx): Promise<void>;
+  /** When a lookup of `key` first found nothing (epoch ms), or null. */
+  firstMiss(key: ApprovalKey): Promise<number | null>;
+  /** Insert-only: the first miss stands. */
+  recordMiss(key: ApprovalKey): Promise<void>;
   /** The recorded approvals of these milestones, any version. */
   forMilestones(milestoneIds: string[]): Promise<ApprovalRow[]>;
 };
@@ -138,33 +152,34 @@ export type ApprovalStore = {
 /** The store over the service-role client. */
 export function supabaseApprovalStore(admin: SupabaseClient): ApprovalStore {
   const table = () => admin.from("qdit_milestone_approvals");
+  const misses = () => admin.from("qdit_milestone_approval_misses");
+  const columns = (key: ApprovalKey) => ({
+    network: key.network,
+    contract_id: key.contractId,
+    project_id: key.projectId,
+    milestone_id: key.milestoneId,
+    version: key.version,
+  });
+  const ON_KEY = { onConflict: "network,contract_id,project_id,milestone_id,version", ignoreDuplicates: true };
   return {
     async has(key) {
-      const { data, error } = await table()
-        .select("tx_hash")
-        .eq("network", key.network)
-        .eq("contract_id", key.contractId)
-        .eq("project_id", key.projectId)
-        .eq("milestone_id", key.milestoneId)
-        .eq("version", key.version)
-        .maybeSingle();
+      const { data, error } = await table().select("tx_hash").match(columns(key)).maybeSingle();
       if (error) throw new Error(`Could not read the milestone's approval: ${error.message}`);
       return data != null;
     },
     async record(key, tx) {
-      const { error } = await table().upsert(
-        {
-          network: key.network,
-          contract_id: key.contractId,
-          project_id: key.projectId,
-          milestone_id: key.milestoneId,
-          version: key.version,
-          tx_hash: tx.txHash,
-          ledger: tx.ledger,
-        },
-        { onConflict: "network,contract_id,project_id,milestone_id,version", ignoreDuplicates: true },
-      );
+      const { error } = await table().upsert({ ...columns(key), tx_hash: tx.txHash, ledger: tx.ledger }, ON_KEY);
       if (error) throw new Error(`Could not record the milestone's approval: ${error.message}`);
+    },
+    async firstMiss(key) {
+      const { data, error } = await misses().select("first_missed_at").match(columns(key)).maybeSingle();
+      if (error) throw new Error(`Could not read the approval's lookups: ${error.message}`);
+      const at = data ? Date.parse(String(data.first_missed_at)) : NaN;
+      return Number.isFinite(at) ? at : null;
+    },
+    async recordMiss(key) {
+      const { error } = await misses().upsert(columns(key), ON_KEY);
+      if (error) throw new Error(`Could not record the approval's lookup: ${error.message}`);
     },
     async forMilestones(milestoneIds) {
       if (milestoneIds.length === 0) return [];
@@ -178,18 +193,28 @@ export function supabaseApprovalStore(admin: SupabaseClient): ApprovalStore {
 }
 
 /**
- * Records the approval of `key` unless it already is: what the webhook and
- * the re-check call when the chain says Approved. Never throws; a failure
- * only means the receipt links to the contract instead.
+ * Records the approval of `key` unless it already is, or has been missed for
+ * longer than RPC keeps events: what the webhook and the re-check call
+ * whenever the chain says Approved. A recorded approval costs one indexed
+ * read. Never throws; a failure only means the receipt links to the
+ * contract instead, until a later sighting finds it.
  */
 export type RecordApproval = (key: ApprovalKey) => Promise<void>;
 
-export function approvalRecorder(store: ApprovalStore, find = findApprovalTx): RecordApproval {
+export function approvalRecorder(
+  store: ApprovalStore,
+  find = findApprovalTx,
+  now: () => number = Date.now,
+): RecordApproval {
   return async (key) => {
     try {
       if (await store.has(key)) return;
+      const missed = await store.firstMiss(key);
+      if (missed !== null && now() - missed > GIVE_UP_AFTER_MS) return;
+      // A failed lookup throws past this, so only a real "not there" counts as a miss.
       const tx = await find(key);
       if (tx) await store.record(key, tx);
+      else await store.recordMiss(key);
     } catch (error) {
       console.error(`[qdit-approvals] ${key.milestoneId}@v${key.version}: ${error instanceof Error ? error.message : String(error)}`);
     }

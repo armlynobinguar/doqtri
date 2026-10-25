@@ -16,11 +16,16 @@ const REF = `qdit:testnet:${CONTRACT}:3f6c2a1e-8b4d-4c7e-9a10-2d5b7e9f1c34/c92f5
 const SIGNER = "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H";
 const HASH = "ab".repeat(32);
 
+const PROJECT = "3f6c2a1e-8b4d-4c7e-9a10-2d5b7e9f1c34";
+const MILESTONE = "c92f5018-7b3d-4ea4-9f60-1d8b0c4e3f72";
+
 const mocks = vi.hoisted(() => ({
   readNode: vi.fn(),
   readMilestoneRecord: vi.fn(),
   from: vi.fn(),
   history: null as unknown,
+  /** The note's doc_project_links row, or null. */
+  projectLink: null as { project_id: string; project_slug: string } | null,
 }));
 
 vi.mock("@/lib/stellar/contract-client", () => ({
@@ -35,11 +40,12 @@ vi.mock("@/lib/stellar/history", () => ({
   getDocumentTtl: async () => null,
 }));
 
+// Like the real one: throws when the service-role key is missing.
 vi.mock("@/lib/supabase/server", () => ({
-  createSupabaseAdminClient: () => ({
-    rpc: async () => ({ data: [], error: null }),
-    from: mocks.from,
-  }),
+  createSupabaseAdminClient: () => {
+    if (!process.env.SUPABASE_SERVICE_ROLE_KEY) throw new Error("SUPABASE_SERVICE_ROLE_KEY is not set.");
+    return { rpc: async () => ({ data: [], error: null }), from: mocks.from };
+  },
 }));
 
 vi.mock("@/lib/integrations/qdit-chain", async (importOriginal) => ({
@@ -70,9 +76,9 @@ function historyWith(nodes: ChainNodeEvent[]): DocumentHistory {
   };
 }
 
-/** A documents query (publish_headings off) and the approvals query. */
+/** A documents query (publish_headings off), the approvals query and the note's project link. */
 function table(name: string) {
-  const rows = name === "qdit_milestone_approvals" ? [] : null;
+  const rows = name === "qdit_milestone_approvals" ? [] : name === "doc_project_links" ? mocks.projectLink : null;
   const query = {
     select: () => query,
     eq: () => query,
@@ -91,6 +97,9 @@ async function render(): Promise<string> {
 const RECEIPTS_SECTION = /<section class="grid gap-3" data-testid="qdit-receipts">[\s\S]*?<\/section>/;
 
 beforeEach(() => {
+  vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key");
+  vi.stubEnv("QDIT_API_BASE_URL", "");
+  mocks.projectLink = null;
   mocks.history = historyWith([nodeEvent("h1", "github", "github:acme/app#4", 1), nodeEvent("h2", "qdit", REF, 2)]);
   mocks.readNode.mockReset().mockImplementation(async (_doc: string, nodeId: string) => {
     const e = (mocks.history as DocumentHistory).nodes.find((n) => n.nodeId === nodeId);
@@ -105,6 +114,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 describe("/d/[docId] and NEXT_PUBLIC_QDIT_INTEGRATION", () => {
@@ -117,6 +127,19 @@ describe("/d/[docId] and NEXT_PUBLIC_QDIT_INTEGRATION", () => {
     expect(mocks.readNode).not.toHaveBeenCalled();
     expect(mocks.readMilestoneRecord).not.toHaveBeenCalled();
     expect(mocks.from.mock.calls.map(([name]) => name)).not.toContain("qdit_milestone_approvals");
+  });
+
+  it("unset, with qdit configured and the note linked: still nothing read, no qdit page asked for", async () => {
+    vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "");
+    vi.stubEnv("QDIT_API_BASE_URL", "https://qdit.example/api/v1");
+    mocks.projectLink = { project_id: PROJECT, project_slug: "soroban-payroll" };
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const html = await render();
+    expect(html).not.toContain('data-testid="qdit-receipts"');
+    expect(html).not.toContain("qdit.example");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mocks.from.mock.calls.map(([name]) => name)).not.toContain("doc_project_links");
   });
 
   it("on: the receipts section is the only change to the page", async () => {
@@ -151,5 +174,29 @@ describe("/d/[docId] and NEXT_PUBLIC_QDIT_INTEGRATION", () => {
     const on = await render();
     expect(on).toContain('data-testid="approval-unrecorded"');
     expect(on.replace(RECEIPTS_SECTION, "")).toBe(off);
+  });
+
+  it("on, without the service-role key: the page still renders, with the chain's side of the receipt", async () => {
+    vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "1");
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "");
+    const html = await render();
+    expect(html).toContain("Build status");
+    expect(html).toMatch(RECEIPTS_SECTION);
+    expect(html).toContain("Approved on chain");
+    expect(html).toContain('data-testid="approval-unrecorded"');
+  });
+
+  it("on, with qdit's origin known: links qdit's milestone page once qdit answers it anonymously", async () => {
+    vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "1");
+    vi.stubEnv("QDIT_API_BASE_URL", "https://qdit.example/api/v1");
+    mocks.projectLink = { project_id: PROJECT, project_slug: "soroban-payroll" };
+    const url = `https://qdit.example/p/soroban-payroll/${MILESTONE}`;
+    const fetchMock = vi.fn(async () => new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const html = await render();
+    expect(fetchMock).toHaveBeenCalledWith(url, expect.objectContaining({ redirect: "manual", credentials: "omit" }));
+    expect(html).toContain(`href="${url}"`);
+    // The slug appears only inside the URL qdit itself serves.
+    expect(html.replaceAll(url, "")).not.toContain("soroban-payroll");
   });
 });

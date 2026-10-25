@@ -32,21 +32,35 @@ import type { ChainNodeEvent, DocumentHistory } from "@/lib/stellar/history";
  *     event while it was still in RPC's window (qdit_milestone_approvals,
  *     lib/integrations/qdit-approvals.ts).
  *
- * States: `confirmed` when the chain backs the record (the D-19 status of
- * what the chain says is the record's status, at a version at least the
- * ref's; for Verified that is Approved), `differs` when it says anything
- * else (both are shown, and a Verified record is not shown as approved),
- * and `unreachable` when it could not be checked.
+ * States (section 12): `confirmed` when the chain backs the record: the
+ * milestone's current record is at the ref's own version `V` and its D-19
+ * status is the record's (for Verified that is Approved at `V`: fact 4 holds
+ * only with fact 3 at the same `V`). `differs` when it says anything else,
+ * including a record newer than `V` (the milestone was resubmitted after the
+ * heading was signed, so the current record does not speak for `V`), older
+ * than `V`, or missing; both sides are shown, and a Verified record is never
+ * shown as approved. `unreachable` when it could not be checked.
+ *
+ * Optionally (section 12, a MAY) the receipt links qdit's public milestone
+ * page, `<qdit origin>/p/<slug>/<milestone id>`, built from the slug doqtri
+ * stored from qdit's API (doc_project_links). That slug came from a private
+ * answer, so the link is shown only once an anonymous GET of the URL, with
+ * redirects off, answered a direct 200: qdit then publishes it itself.
+ * Answers are kept for PUBLIC_PAGE_TTL_MS.
  *
  * Bounded: at most MAX_RECEIPTS headings are checked per page view, each
  * with one get_node and one get_milestone_status simulation, a few at a
  * time; the rest are counted. Milestone reads are kept for CACHE_TTL_MS
- * per server instance, the same window the page itself revalidates in.
+ * per server instance, the same window the page itself revalidates in, and
+ * there is at most one qdit page check per checked milestone.
  * Off, and nothing is read, unless NEXT_PUBLIC_QDIT_INTEGRATION=1.
  */
 
 export const MAX_RECEIPTS = 10;
 export const CACHE_TTL_MS = 30_000;
+/** Section 12: a qdit page check is kept for at most 10 minutes. */
+export const PUBLIC_PAGE_TTL_MS = 10 * 60_000;
+export const PUBLIC_PAGE_TIMEOUT_MS = 2_000;
 const CONCURRENCY = 4;
 const MAX_CACHE_ENTRIES = 500;
 
@@ -74,6 +88,8 @@ export type QditReceipt = {
   check: ReceiptCheck;
   /** The approval of the version the chain holds, when the chain says Approved and doqtri recorded it. */
   approvalTxHash: string | null;
+  /** qdit's public page for the milestone, only once qdit was seen publishing it. */
+  qditPageUrl: string | null;
 };
 
 export type QditReceipts = {
@@ -86,10 +102,16 @@ export type QditReceipts = {
 // The check
 // ---------------------------------------------------------------------------
 
-/** Whether the chain's word backs a record signed against `ref` (see the states above). */
+/**
+ * Whether the chain's word backs a record signed against `ref` (see the
+ * states above). Only a record at `ref.version` itself can: Approved is
+ * terminal in milestone_proof (submit_milestone_proof refuses an approved
+ * milestone), so a record Approved at a later version means `ref.version`
+ * was rejected and resubmitted, not approved.
+ */
 export function checkReceipt(record: { status: string }, ref: QditArtifactRef, read: MilestoneChainRead): ReceiptCheck {
   const chain = read.record ? { status: read.record.status, version: read.record.version } : null;
-  const backs = chain != null && chain.version >= ref.version && nodeStatusForMilestone(chain.status) === record.status;
+  const backs = chain != null && chain.version === ref.version && nodeStatusForMilestone(chain.status) === record.status;
   return { state: backs ? "confirmed" : "differs", chain, ledger: read.ledger };
 }
 
@@ -113,16 +135,18 @@ function signingEvent(history: DocumentHistory, nodeId: string, record: ChainNod
 // The milestone read cache
 // ---------------------------------------------------------------------------
 
-export type ReadCache = {
-  get(key: string, load: () => Promise<MilestoneChainRead>): Promise<MilestoneChainRead>;
+export type ReadCache<T = MilestoneChainRead> = {
+  get(key: string, load: () => Promise<T>): Promise<T>;
 };
 
 /** Reads kept for `ttlMs`; a failed read is not kept, so the next view asks again. */
-export function createReadCache(options: { ttlMs?: number; maxEntries?: number; now?: () => number } = {}): ReadCache {
+export function createReadCache<T = MilestoneChainRead>(
+  options: { ttlMs?: number; maxEntries?: number; now?: () => number } = {},
+): ReadCache<T> {
   const ttl = options.ttlMs ?? CACHE_TTL_MS;
   const max = options.maxEntries ?? MAX_CACHE_ENTRIES;
   const now = options.now ?? Date.now;
-  const entries = new Map<string, { at: number; value: Promise<MilestoneChainRead> }>();
+  const entries = new Map<string, { at: number; value: Promise<T> }>();
   return {
     get(key, load) {
       const hit = entries.get(key);
@@ -139,8 +163,44 @@ export function createReadCache(options: { ttlMs?: number; maxEntries?: number; 
   };
 }
 
-/** This server instance's cache. */
+/** This server instance's caches. */
 export const receiptReadCache = createReadCache();
+export const qditPageCache = createReadCache<boolean>({ ttlMs: PUBLIC_PAGE_TTL_MS });
+
+// ---------------------------------------------------------------------------
+// qdit's public milestone page (section 12)
+// ---------------------------------------------------------------------------
+
+/** `<qdit origin>/p/<slug>/<milestone id>`, exactly as section 12 builds it. */
+export function qditMilestonePageUrl(origin: string, slug: string, milestoneId: string): string {
+  return `${origin.replace(/\/+$/, "")}/p/${encodeURIComponent(slug)}/${milestoneId}`;
+}
+
+/**
+ * Whether qdit publishes `url`: an anonymous GET (no token, no cookies),
+ * redirects off, answered with a direct 200. A redirect, any other status,
+ * a network error or a timeout all count as not published. Never throws.
+ */
+export async function isQditPagePublished(
+  url: string,
+  options: { fetch?: typeof fetch; timeoutMs?: number } = {},
+): Promise<boolean> {
+  const fetchImpl = options.fetch ?? fetch;
+  try {
+    const response = await fetchImpl(url, {
+      method: "GET",
+      redirect: "manual",
+      credentials: "omit",
+      headers: { accept: "text/html" },
+      signal: AbortSignal.timeout(options.timeoutMs ?? PUBLIC_PAGE_TIMEOUT_MS),
+    });
+    // Only the status matters; don't hold the connection for the body.
+    response.body?.cancel().catch(() => {});
+    return response.status === 200 && response.type !== "opaqueredirect" && !response.redirected;
+  } catch {
+    return false;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Loading
@@ -155,6 +215,19 @@ export type ReceiptDeps = {
   readMilestone: (chain: ProjectChain, projectId: string, milestoneId: string) => Promise<MilestoneChainRead>;
   /** Recorded approvals of these milestones (qdit_milestone_approvals). */
   approvals: (milestoneIds: string[]) => Promise<ApprovalRow[]>;
+  /**
+   * The optional link to qdit's public milestone page. Leave it out (no
+   * qdit origin configured) and no receipt links qdit.
+   */
+  qditPage?: {
+    /** The qdit origin (section 1), e.g. https://qdit.atalusan.com. */
+    origin: string;
+    /** The project the note is linked to, as doqtri stored it (doc_project_links); null when none. */
+    project: () => Promise<{ projectId: string; slug: string } | null>;
+    /** Defaults to isQditPagePublished. */
+    isPublished?: (url: string) => Promise<boolean>;
+    cache?: ReadCache<boolean>;
+  };
   cache?: ReadCache;
   max?: number;
 };
@@ -200,6 +273,7 @@ export async function loadQditReceipts(
       record: { status: record.status, artifactRef: record.artifactRef },
       signing: signingEvent(history, latest.nodeId, record),
       approvalTxHash: null,
+      qditPageUrl: null,
     };
     const ref = parseQditArtifactRef(record.artifactRef);
     if (!ref) return { ...base, ref: null, check: { state: "unreachable", reason: "invalid_ref" } };
@@ -222,7 +296,14 @@ export async function loadQditReceipts(
     }
   }
 
-  // One query for every approval the chain now shows.
+  await Promise.all([attachApprovals(receipts, deps), attachQditPages(receipts, deps)]);
+
+  if (receipts.length === 0 && candidates.length <= max) return null;
+  return { receipts, more: candidates.length - checked.length };
+}
+
+/** One query for every approval the chain now shows. */
+async function attachApprovals(receipts: QditReceipt[], deps: ReceiptDeps): Promise<void> {
   const approved = receipts.filter((r) => r.ref && r.check.state !== "unreachable" && r.check.chain?.status === "Approved");
   if (approved.length > 0) {
     let rows: ApprovalRow[] = [];
@@ -245,9 +326,35 @@ export async function loadQditReceipts(
       receipt.approvalTxHash = row?.tx_hash ?? null;
     }
   }
+}
 
-  if (receipts.length === 0 && candidates.length <= max) return null;
-  return { receipts, more: candidates.length - checked.length };
+/**
+ * qdit's public page for each receipt's milestone, when the note's linked
+ * project is the one the ref names and qdit answers that page anonymously.
+ * One check per distinct page (at most one per checked milestone), cached.
+ */
+async function attachQditPages(receipts: QditReceipt[], deps: ReceiptDeps): Promise<void> {
+  const page = deps.qditPage;
+  if (!page || receipts.every((r) => !r.ref)) return;
+  let project: { projectId: string; slug: string } | null = null;
+  try {
+    project = await page.project();
+  } catch {
+    // No link, then.
+  }
+  if (!project) return;
+  const isPublished = page.isPublished ?? ((url: string) => isQditPagePublished(url));
+  const cache = page.cache ?? qditPageCache;
+  const { projectId, slug } = project;
+  const checks = new Map<string, Promise<boolean>>();
+  await Promise.all(
+    receipts.map(async (receipt) => {
+      if (receipt.ref?.projectId !== projectId) return;
+      const url = qditMilestonePageUrl(page.origin, slug, receipt.ref.milestoneId);
+      if (!checks.has(url)) checks.set(url, cache.get(url, () => isPublished(url)).catch(() => false));
+      if (await checks.get(url)) receipt.qditPageUrl = url;
+    }),
+  );
 }
 
 /** stellar.expert's page for a transaction or contract on a qdit network (`public` is its mainnet slug). */

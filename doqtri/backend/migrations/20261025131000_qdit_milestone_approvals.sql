@@ -23,6 +23,15 @@
 --                             webhook and re-check write it, the audit page
 --                             reads it server-side. Every column is public
 --                             chain data, but nothing here needs a browser.
+--   qdit_milestone_approval_misses
+--                             when a lookup of an approval first came back
+--                             empty. The approval already existed then, so
+--                             once that is older than RPC's window (about a
+--                             week; the app waits 8 days) the event is gone
+--                             and doqtri stops scanning for it. A lookup that
+--                             failed (RPC down, timeout) records no miss, so
+--                             a later sighting tries again. Service role
+--                             only, insert-only like the approvals.
 
 create table public.qdit_milestone_approvals (
   network      text not null check (network in ('testnet', 'mainnet')),
@@ -51,3 +60,26 @@ alter table public.qdit_milestone_approvals enable row level security;
 -- missing row (insert ... on conflict do nothing) but never change one.
 revoke all on table public.qdit_milestone_approvals from public, anon, authenticated, service_role;
 grant select, insert on table public.qdit_milestone_approvals to service_role;
+
+-- ---------------------------------------------------------------------------
+-- qdit_milestone_approval_misses
+-- ---------------------------------------------------------------------------
+
+create table public.qdit_milestone_approval_misses (
+  network         text not null check (network in ('testnet', 'mainnet')),
+  contract_id     text not null check (contract_id ~ '^C[A-Z2-7]{55}$'),
+  project_id      uuid not null,
+  milestone_id    uuid not null,
+  version         bigint not null check (version between 1 and 4294967295),
+  -- The first empty lookup; later ones change nothing (on conflict do nothing).
+  first_missed_at timestamptz not null default now(),
+  primary key (network, contract_id, project_id, milestone_id, version)
+);
+
+comment on table public.qdit_milestone_approval_misses is
+  'When a lookup of a qdit approval transaction in Stellar RPC''s event window first found nothing (WP-3.1). Service role only; insert-only.';
+
+alter table public.qdit_milestone_approval_misses enable row level security;
+
+revoke all on table public.qdit_milestone_approval_misses from public, anon, authenticated, service_role;
+grant select, insert on table public.qdit_milestone_approval_misses to service_role;

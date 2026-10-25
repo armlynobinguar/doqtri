@@ -5,6 +5,7 @@ import {
   approvalFromEvents,
   approvalRecorder,
   findApprovalTx,
+  GIVE_UP_AFTER_MS,
   type ApprovalKey,
   type ApprovalStore,
 } from "@/lib/integrations/qdit-approvals";
@@ -136,8 +137,17 @@ describe("findApprovalTx", () => {
 });
 
 describe("approvalRecorder", () => {
-  function store(has = false): ApprovalStore & { record: ReturnType<typeof vi.fn> } {
-    return { has: vi.fn(async () => has), record: vi.fn(async () => {}), forMilestones: async () => [] };
+  function store(
+    has = false,
+    firstMiss: number | null = null,
+  ): ApprovalStore & { record: ReturnType<typeof vi.fn>; recordMiss: ReturnType<typeof vi.fn> } {
+    return {
+      has: vi.fn(async () => has),
+      record: vi.fn(async () => {}),
+      firstMiss: vi.fn(async () => firstMiss),
+      recordMiss: vi.fn(async () => {}),
+      forMilestones: async () => [],
+    };
   }
 
   it("looks the approval up and records it", async () => {
@@ -154,10 +164,36 @@ describe("approvalRecorder", () => {
     expect(s.record).not.toHaveBeenCalled();
   });
 
-  it("records nothing when the event is not in the window", async () => {
+  it("records a miss, not an approval, when the event is not in the window", async () => {
     const s = store();
     await approvalRecorder(s, async () => null)(KEY);
     expect(s.record).not.toHaveBeenCalled();
+    expect(s.recordMiss).toHaveBeenCalledWith(KEY);
+  });
+
+  it("keeps looking within RPC's window of the first miss, and stops after it", async () => {
+    const NOW = 1_800_000_000_000;
+    const find = vi.fn(async () => null);
+    const recent = store(false, NOW - GIVE_UP_AFTER_MS);
+    await approvalRecorder(recent, find, () => NOW)(KEY);
+    expect(find).toHaveBeenCalledTimes(1);
+
+    const old = store(false, NOW - GIVE_UP_AFTER_MS - 1);
+    await approvalRecorder(old, find, () => NOW)(KEY);
+    expect(find).toHaveBeenCalledTimes(1);
+    expect(old.recordMiss).not.toHaveBeenCalled();
+    expect(GIVE_UP_AFTER_MS).toBeGreaterThan(7 * 24 * 60 * 60_000);
+  });
+
+  it("a lookup that fails is not a miss: the next sighting tries again", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    const s = store();
+    await approvalRecorder(s, async () => {
+      throw new Error("Stellar RPC did not answer in time.");
+    })(KEY);
+    expect(s.recordMiss).not.toHaveBeenCalled();
+    expect(s.record).not.toHaveBeenCalled();
+    quiet.mockRestore();
   });
 
   it("never throws: RPC or the database failing only costs the link", async () => {

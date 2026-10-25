@@ -1,5 +1,6 @@
 import { createHmac } from "crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { approvalRecorder, type ApprovalKey, type ApprovalStore, type ApprovalTx } from "@/lib/integrations/qdit-approvals";
 import { QditChainError, readMilestoneRecord, type MilestoneChainRead, type ProjectChain } from "@/lib/integrations/qdit-chain";
 import { QditError, QditNotConnectedError, type QditClient, type QditMilestone } from "@/lib/integrations/qdit-client";
 import type { QditMilestoneStateRow } from "@/lib/integrations/qdit-status";
@@ -423,22 +424,58 @@ describe("recheckDocStatuses (R-09)", () => {
     expect(client.listAllProjects).toHaveBeenCalledTimes(1);
   });
 
-  it("hands a milestone newly read as Approved to recordApproval, once (WP-3.1)", async () => {
+  it("hands every chain read that shows Approved to recordApproval (WP-3.1)", async () => {
     const recordApproval = vi.fn(async () => {});
     await recheckDocStatuses({ store, client: null, docId: DOC, readChain, now: () => NOW_MS, recordApproval });
     expect(recordApproval).toHaveBeenCalledTimes(2);
     expect(recordApproval).toHaveBeenCalledWith({
       network: CHAIN.network, contractId: CHAIN.contractId, projectId: PROJECT, milestoneId: MILESTONE, version: 2,
     });
-    // Approved at the same version again: already seen, not scanned again.
+    // Approved at the same version again: handed over again, since an
+    // earlier lookup may have failed. recordApproval decides whether to scan.
     await recheckDocStatuses({ store, client: null, docId: DOC, readChain, now: () => NOW_MS + 20_000, recordApproval });
     expect(readChain).toHaveBeenCalledTimes(4);
-    expect(recordApproval).toHaveBeenCalledTimes(2);
-    // A later approval (resubmitted and approved again) is new.
-    readChain.mockImplementation(async () => approvedRead(950, 3));
-    await recheckDocStatuses({ store, client: null, docId: DOC, readChain, now: () => NOW_MS + 40_000, recordApproval });
     expect(recordApproval).toHaveBeenCalledTimes(4);
-    expect(recordApproval).toHaveBeenLastCalledWith(expect.objectContaining({ version: 3 }));
+    // A fresh read the re-check skips hands nothing over.
+    await recheckDocStatuses({ store, client: null, docId: DOC, readChain, now: () => NOW_MS + 5_000, recordApproval });
+    expect(recordApproval).toHaveBeenCalledTimes(4);
+  });
+
+  it("records the approval on a later re-check when the webhook's lookup failed (WP-3.1)", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    const approvals = new Map<string, ApprovalTx>();
+    const keyOf = (k: ApprovalKey) => `${k.network}|${k.contractId}|${k.projectId}|${k.milestoneId}|${k.version}`;
+    const approvalStore: ApprovalStore = {
+      has: async (k) => approvals.has(keyOf(k)),
+      record: async (k, tx) => void approvals.set(keyOf(k), tx),
+      firstMiss: async () => null,
+      recordMiss: async () => {},
+      forMilestones: async () => [],
+    };
+    const TX = "5e1f0c3a9b7d2e4f6a8c0b1d3e5f7a9c2b4d6e8f0a1c3e5b7d9f1a3c5e7b9d0f";
+    const find = vi
+      .fn<(k: ApprovalKey) => Promise<ApprovalTx | null>>()
+      .mockRejectedValueOnce(new Error("Stellar RPC did not answer in time."))
+      .mockResolvedValue({ txHash: TX, ledger: 880 });
+    const recordApproval = approvalRecorder(approvalStore, find);
+
+    store.linked.delete(MILESTONE_2);
+    const result = await handleQditWebhook({
+      rawBody: bytes(BODY), timestamp: TIMESTAMP, signature: SIGNATURE, secret: SECRET, nowMs: NOW_MS,
+      store, readChain, recordApproval,
+    });
+    expect(result).toEqual({ status: 200, body: { ok: true } });
+    expect(store.states.get(MILESTONE)).toMatchObject({ chain_status: "Approved", chain_version: 2 });
+    expect(approvals.size).toBe(0);
+
+    // The state already says Approved at v2; the re-check still looks again.
+    await recheckDocStatuses({ store, client: null, docId: DOC, readChain, now: () => NOW_MS + 20_000, recordApproval });
+    expect(find).toHaveBeenCalledTimes(2);
+    expect([...approvals.values()]).toEqual([{ txHash: TX, ledger: 880 }]);
+    // Recorded now: later re-checks cost one store read and no scan.
+    await recheckDocStatuses({ store, client: null, docId: DOC, readChain, now: () => NOW_MS + 40_000, recordApproval });
+    expect(find).toHaveBeenCalledTimes(2);
+    quiet.mockRestore();
   });
 
   it("puts a duplicated or out-of-order webhook right: the chain read now wins", async () => {
