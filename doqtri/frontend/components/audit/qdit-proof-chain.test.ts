@@ -290,7 +290,7 @@ describe("ProofChainView: step 4, verified", () => {
   });
 
   it("flags a signature made after Doqtri removed the wallet (D-16), as the version history does", () => {
-    const removed: SignerRemoval = { address: SIGNER, removedAt: "2026-10-23T08:00:00Z", restoredAt: null };
+    const removed: SignerRemoval = { address: SIGNER, removedAt: "2026-10-23T08:00:00Z", restoredAt: null, revokedAt: null };
     const li = step(render(receipt(), PLAN, [removed]), "verified");
     expect(li).toContain('data-testid="chain-signed-after-removal"');
     expect(li).toContain("Signed after removal");
