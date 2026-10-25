@@ -52,6 +52,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261026100001_signer_removals_owner_handover.sql # NOT yet applied (WP-1.11)
 20261026110000_qdit_approval_incomplete_scans.sql # NOT yet applied (WP-2.13)
 20261026120000_account_deletion_market_templates.sql # NOT yet applied (WP-1.12)
+20261026120001_qdit_approval_incomplete_first_at.sql # NOT yet applied (WP-1.12)
 ```
 
 The remote records its own version stamps (e.g. `20260929114657` for
