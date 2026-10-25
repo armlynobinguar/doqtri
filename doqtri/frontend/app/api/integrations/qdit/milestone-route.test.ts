@@ -153,6 +153,56 @@ describe("GET /api/integrations/qdit/milestones/[id]", () => {
     expect(await res.json()).toMatchObject({ code: "QDIT_NOT_CONNECTED", connection: "needs_reconnect" });
   });
 
+  it("a second 401 after the refresh marks the connection, so the next card fails fast (WP-2.6d)", async () => {
+    const actual = await vi.importActual<typeof import("@/lib/integrations/qdit-client")>("@/lib/integrations/qdit-client");
+    const refused = () =>
+      new Response(JSON.stringify({ error: { code: "unauthorized", message: "no", details: null } }), { status: 401 });
+    const fetch = vi.fn(async (input: RequestInfo | URL) =>
+      String(input).endsWith("/oauth/token")
+        ? new Response(JSON.stringify({ access_token: "at2", token_type: "bearer", expires_in: 3600, refresh_token: "rt2" }), {
+            status: 200,
+          })
+        : refused(),
+    );
+    const marks: string[] = [];
+    const memory = {
+      load: async () => (connection ? { ...connection } : null),
+      saveConnected: async () => {},
+      saveRefreshed: async (_u: string, generation: number, tokens: { accessToken: string }) => {
+        connection = { ...connection!, generation: generation + 1, accessToken: tokens.accessToken };
+        return true;
+      },
+      markStatus: async (_u: string, generation: number, status: "needs_reconnect" | "revoked") => {
+        marks.push(`${generation}:${status}`);
+        connection = { ...connection!, status, generation: generation + 1, accessToken: null, refreshToken: null };
+        return true;
+      },
+    };
+    createQditClient.mockImplementation(
+      (userId) =>
+        actual.createQditClient(userId, {
+        config: { apiBaseUrl: "https://qdit.test/api/v1", issuer: "https://auth.qdit.test/auth/v1", clientId: "c", clientSecret: "s", redirectUri: null, tokenKey: "", tokenKeyPrevious: null },
+        store: memory,
+        fetch,
+      }) as unknown as { getMilestone: typeof getMilestone },
+    );
+    try {
+      let res = await get();
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ code: "QDIT_NOT_CONNECTED", connection: "needs_reconnect" });
+      expect(marks).toEqual(["2:needs_reconnect"]);
+      expect(connection).toMatchObject({ status: "needs_reconnect", accessToken: null });
+      // Request, refresh, retry: then nothing more.
+      expect(fetch).toHaveBeenCalledTimes(3);
+
+      res = await get();
+      expect(await res.json()).toMatchObject({ code: "QDIT_NOT_CONNECTED", connection: "needs_reconnect" });
+      expect(fetch).toHaveBeenCalledTimes(3);
+    } finally {
+      createQditClient.mockImplementation(() => ({ getMilestone }));
+    }
+  });
+
   it("passes a rate limit on with Retry-After, and does not keep it", async () => {
     getMilestone.mockRejectedValueOnce(new QditError("rate_limited", "x", { status: 429, retryAfterSeconds: 7 }));
     const res = await get();

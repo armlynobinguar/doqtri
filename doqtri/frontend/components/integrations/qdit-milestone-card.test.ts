@@ -7,7 +7,8 @@ import type { MilestoneCardState, MilestonePreview } from "@/lib/integrations/qd
 /*
  * What each of the milestone card's states renders (WP-2.6). Rendered to
  * static markup, since the unit tests run in Node without a DOM; the
- * fetching wrapper is checked only for its first render.
+ * fetching wrapper is checked for its first render here, and when it
+ * fetches in lib/integrations/qdit-milestone-card.test.ts (cardFetchKey).
  */
 
 const MILESTONE: MilestonePreview = {
@@ -34,12 +35,12 @@ const view = (state: MilestoneCardState, extra: { showTitle?: boolean; fallbackU
   renderToStaticMarkup(createElement(QditMilestoneCardView, { state, ...extra }));
 
 describe("QditMilestoneCardView", () => {
-  it("loaded: title, qdit status and its node status, project, due date, anchor and Open in qdit", () => {
+  it("loaded: title, qdit status and the node status it maps to, project, due date, anchor and Open in qdit", () => {
     const html = view({ state: "loaded", milestone: MILESTONE });
     expect(html).toContain('data-state="loaded"');
     expect(html).toContain("Escrow contract");
     expect(html).toContain("Submitted");
-    expect(html).toContain("Node: Built");
+    expect(html).toContain("qdit status maps to Built");
     expect(html).toContain("Soroban payroll");
     expect(html).toContain("Due ");
     expect(html).toContain("Submitted on chain, v2");
@@ -51,10 +52,10 @@ describe("QditMilestoneCardView", () => {
 
   it("loaded: each status maps per D-19", () => {
     const cases = [
-      ["proposed", "Proposed", "Node: Planned"],
-      ["submitted", "Submitted", "Node: Built"],
-      ["approved", "Approved", "Node: Verified"],
-      ["rejected", "Rejected", "Node: Building"],
+      ["proposed", "Proposed", "qdit status maps to Planned"],
+      ["submitted", "Submitted", "qdit status maps to Built"],
+      ["approved", "Approved", "qdit status maps to Verified"],
+      ["rejected", "Rejected", "qdit status maps to Building"],
     ] as const;
     for (const [status, label, node] of cases) {
       const html = view({ state: "loaded", milestone: { ...MILESTONE, status } });
@@ -66,10 +67,18 @@ describe("QditMilestoneCardView", () => {
   it("loaded: an unknown status, no anchor, no due date and no URL", () => {
     const html = view({ state: "loaded", milestone: { ...MILESTONE, status: null, anchor: null, due_date: null, url: null } });
     expect(html).toContain("Unknown status");
-    expect(html).not.toContain("Node:");
+    expect(html).not.toContain("maps to");
     expect(html).toContain("Not on chain yet");
     expect(html).not.toContain("Due ");
     expect(html).not.toContain("Open in qdit");
+  });
+
+  it("loaded: a submitted milestone that was never anchored shows no node status (section 10)", () => {
+    const html = view({ state: "loaded", milestone: { ...MILESTONE, status: "submitted", anchor: null } });
+    expect(html).toContain("Submitted");
+    expect(html).not.toContain("Built");
+    expect(html).not.toContain("Node:");
+    expect(html).toContain("Not on chain yet");
   });
 
   it("loaded: the title can be left to the heading above it", () => {

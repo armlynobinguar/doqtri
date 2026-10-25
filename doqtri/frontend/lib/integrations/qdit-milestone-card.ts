@@ -23,8 +23,11 @@ import type { QditMilestoneStatus, QditNetwork } from "@/lib/integrations/qdit-c
  *
  * Status is qdit's off-chain `milestone_status`, a preview: it can differ
  * from the chain (section 7), and doqtri suggests a node status only from
- * `milestone_proof` (D-04, D-19). The card says which node status it maps to
- * so the two vocabularies line up, and nothing signs from it.
+ * `milestone_proof` (D-04, D-19). Once the milestone is on chain, the card
+ * says which node status qdit's status maps to, worded as a mapping so the
+ * two vocabularies line up; it is not the node's status, and nothing signs
+ * from it. Before any anchor there is no chain record to suggest from
+ * (section 10), so the card shows no mapping at all.
  */
 
 /** The fields the card shows: a subset of the contract's Milestone, nothing else forwarded. */
@@ -51,6 +54,9 @@ export type MilestonePreview = {
 
 export type QditConnectionProblem = "none" | "needs_reconnect";
 
+/** The user's connection as the ship panel knows it; undefined lets the route find out. */
+export type CardConnection = "loading" | "connected" | "needs_reconnect" | "none";
+
 export type MilestoneCardState =
   | { state: "loading" }
   | { state: "loaded"; milestone: MilestonePreview }
@@ -63,6 +69,9 @@ export const MILESTONE_CODES = {
   noAccess: "QDIT_NO_ACCESS",
   notConnected: "QDIT_NOT_CONNECTED",
 } as const;
+
+/** The card's route (app/api/integrations/qdit/milestones/[id]). */
+export const MILESTONE_API = "/api/integrations/qdit/milestones";
 
 export const NO_ACCESS_TEXT = "You don't have access to this milestone in qdit";
 
@@ -194,4 +203,57 @@ export function formatDueDate(date: string, locale?: string): string {
   return Number.isNaN(at.getTime())
     ? date
     : at.toLocaleDateString(locale, { dateStyle: "medium", timeZone: "UTC" });
+}
+
+/**
+ * "qdit status maps to Built" (D-19), or null when there is nothing to map
+ * or the milestone was never anchored: then the node stays Planned whatever
+ * qdit's column says (section 10), and a mapping would read as its status.
+ */
+export function nodeMappingText(milestone: Pick<MilestonePreview, "status" | "anchor">): string | null {
+  if (!milestone.status || !milestone.anchor) return null;
+  return `qdit status maps to ${NODE_STATUS_FOR[milestone.status]}`;
+}
+
+/**
+ * The card's fetch, decided as one value. The card fetches once per
+ * distinct non-null key, and only then: nothing until it is visible, nothing
+ * while the panel's connection is loading, missing or needs a reconnect,
+ * and a new key (so a new fetch) for each Retry. Null means no fetch.
+ */
+export function cardFetchKey(params: {
+  milestoneId: string;
+  attempt: number;
+  visible: boolean;
+  connection?: CardConnection;
+}): string | null {
+  const asks = params.visible && (params.connection === undefined || params.connection === "connected");
+  return asks ? `${params.milestoneId}#${params.attempt}` : null;
+}
+
+/** What the card shows: the connection the panel knows first, then the answer for this key. */
+export function shownCardState(params: {
+  connection?: CardConnection;
+  key: string;
+  fetched: { key: string; state: MilestoneCardState } | null;
+}): MilestoneCardState {
+  if (params.connection === "none" || params.connection === "needs_reconnect") {
+    return { state: "not_connected", connection: params.connection };
+  }
+  return params.fetched?.key === params.key ? params.fetched.state : { state: "loading" };
+}
+
+/** One read of the card's route, as a state; null when it was aborted (the card went away). */
+export async function loadCardState(
+  milestoneId: string,
+  deps: { fetch?: typeof fetch; signal?: AbortSignal } = {},
+): Promise<MilestoneCardState | null> {
+  try {
+    const res = await (deps.fetch ?? fetch)(`${MILESTONE_API}/${encodeURIComponent(milestoneId)}`, { signal: deps.signal });
+    const body: unknown = await res.json().catch(() => null);
+    return deps.signal?.aborted ? null : cardStateFromResponse(res.status, body, res.headers.get("retry-after"));
+  } catch {
+    if (deps.signal?.aborted) return null;
+    return { state: "error", message: "Doqtri couldn't reach the server. Try again.", retryAfterSeconds: null };
+  }
 }

@@ -1,12 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   anchorLabel,
   anchorTxUrl,
+  cardFetchKey,
   cardStateFromResponse,
   formatDueDate,
+  loadCardState,
   NODE_STATUS_FOR,
+  nodeMappingText,
   safeHttpUrl,
+  shownCardState,
   toMilestonePreview,
+  type CardConnection,
 } from "@/lib/integrations/qdit-milestone-card";
 
 /*
@@ -169,5 +174,107 @@ describe("D-19 and the labels", () => {
   it("shows a due date on its own day, whatever the timezone", () => {
     expect(formatDueDate("2026-11-15", "en-US")).toBe("Nov 15, 2026");
     expect(formatDueDate("not-a-date")).toBe("not-a-date");
+  });
+});
+
+describe("nodeMappingText (D-19, section 10)", () => {
+  const anchor = { network: "testnet", version: 1, last_action: "submit", last_tx_hash: "a".repeat(64), anchored_at: "x" } as const;
+
+  it("words the mapping as a mapping, once the milestone is on chain", () => {
+    expect(nodeMappingText({ status: "submitted", anchor })).toBe("qdit status maps to Built");
+    expect(nodeMappingText({ status: "approved", anchor })).toBe("qdit status maps to Verified");
+  });
+
+  it("says nothing for a milestone never anchored, or a status doqtri does not know", () => {
+    expect(nodeMappingText({ status: "submitted", anchor: null })).toBeNull();
+    expect(nodeMappingText({ status: null, anchor })).toBeNull();
+  });
+});
+
+describe("when the card fetches (cardFetchKey)", () => {
+  type Step = { visible: boolean; connection?: CardConnection; attempt: number };
+
+  /**
+   * Runs the card's inputs through cardFetchKey the way its effect does:
+   * React re-runs the effect when the key changes, and it fetches when the
+   * new key is not null. Returns the keys fetched, in order.
+   */
+  function fetchesFor(steps: Step[]): string[] {
+    const fetched: string[] = [];
+    let last: string | null = null;
+    for (const step of steps) {
+      const key = cardFetchKey({ milestoneId: "m1", ...step });
+      if (key !== last && key !== null) fetched.push(key);
+      last = key;
+    }
+    return fetched;
+  }
+
+  it("does not fetch until the card is visible", () => {
+    expect(fetchesFor([{ visible: false, connection: "connected", attempt: 0 }])).toEqual([]);
+    expect(
+      fetchesFor([
+        { visible: false, connection: "connected", attempt: 0 },
+        { visible: true, connection: "connected", attempt: 0 },
+      ]),
+    ).toEqual(["m1#0"]);
+  });
+
+  it("does not fetch while the connection is loading, missing or needs a reconnect", () => {
+    for (const connection of ["loading", "none", "needs_reconnect"] as const) {
+      expect(fetchesFor([{ visible: true, connection, attempt: 0 }])).toEqual([]);
+    }
+  });
+
+  it("fetches once when the panel's connection turns connected, and again only after Retry", () => {
+    expect(
+      fetchesFor([
+        { visible: true, connection: "loading", attempt: 0 },
+        { visible: true, connection: "connected", attempt: 0 },
+        // A re-render with nothing changed fetches nothing.
+        { visible: true, connection: "connected", attempt: 0 },
+        { visible: true, connection: "connected", attempt: 1 },
+      ]),
+    ).toEqual(["m1#0", "m1#1"]);
+  });
+
+  it("lets the route decide when the caller knows no connection", () => {
+    expect(fetchesFor([{ visible: true, attempt: 0 }])).toEqual(["m1#0"]);
+  });
+});
+
+describe("shownCardState", () => {
+  const loaded = { state: "error", message: "x", retryAfterSeconds: null } as const;
+
+  it("shows the panel's not-connected state before any answer", () => {
+    expect(shownCardState({ connection: "needs_reconnect", key: "m1#0", fetched: { key: "m1#0", state: loaded } })).toEqual({
+      state: "not_connected",
+      connection: "needs_reconnect",
+    });
+  });
+
+  it("shows the answer for this key only: a Retry is loading until its own answer", () => {
+    expect(shownCardState({ connection: "connected", key: "m1#0", fetched: { key: "m1#0", state: loaded } })).toBe(loaded);
+    expect(shownCardState({ connection: "connected", key: "m1#1", fetched: { key: "m1#0", state: loaded } })).toEqual({
+      state: "loading",
+    });
+  });
+});
+
+describe("loadCardState", () => {
+  it("reads the card's route for the milestone and turns the answer into a state", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ code: "QDIT_NO_ACCESS" }), { status: 403 }));
+    expect(await loadCardState("m/1", { fetch })).toEqual({ state: "no_access" });
+    expect(fetch).toHaveBeenCalledWith("/api/integrations/qdit/milestones/m%2F1", { signal: undefined });
+  });
+
+  it("reports a failed request as a retryable error, and an aborted one as nothing", async () => {
+    const down = vi.fn(async () => {
+      throw new TypeError("fetch failed");
+    });
+    expect(await loadCardState("m1", { fetch: down })).toMatchObject({ state: "error" });
+    const controller = new AbortController();
+    controller.abort();
+    expect(await loadCardState("m1", { fetch: down, signal: controller.signal })).toBeNull();
   });
 });
