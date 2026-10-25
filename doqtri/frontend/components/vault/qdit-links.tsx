@@ -367,7 +367,8 @@ export function QditLinks({
             <div className="flex w-full flex-wrap items-center justify-between gap-1.5">
               <span className="text-muted-foreground min-w-0 flex-1 text-[11px]">
                 qdit no longer shows you this project. Forgetting removes the link from Doqtri only; qdit may
-                still list this note and its milestone links.
+                still list this note and its milestone links, and linking the note to another project stays
+                blocked until qdit removes them.
               </span>
               <Button
                 type="button"

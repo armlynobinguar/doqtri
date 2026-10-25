@@ -46,6 +46,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261025100000_integration_connections.sql    # NOT yet applied (WP-2.3)
 20261025110000_qdit_linking.sql               # NOT yet applied (WP-2.5)
 20261025120000_qdit_webhook_events.sql        # NOT yet applied (WP-2.8)
+20261025140000_integration_connections_previous_account.sql  # NOT yet applied (WP-2.11)
 ```
 
 The remote records its own version stamps (e.g. `20260929114657` for
@@ -166,7 +167,15 @@ Two supporting tables:
   The browser reads its own connection's status, never a token, through
   `my_integration_connections()`. `generation` goes up on every token write,
   so concurrent refreshes on different server instances cannot overwrite each
-  other's rotated refresh token.
+  other's rotated refresh token. A key rotation keeps the old key in
+  `INTEGRATION_TOKEN_KEY_PREVIOUS` until refreshes have resealed the tokens
+  (D-67). A reconnect to another qdit account is allowed and the row keeps
+  the replaced one in `previous_subject`/`previous_account_label`, so the
+  profile can say "Now connected as X (was Y)" (D-66).
+  Disconnect is best effort on qdit's side (D-65): doqtri always drops its
+  tokens, but the grant in qdit is revoked only where qdit's OAuth server
+  advertises a revocation endpoint, so users may still need to revoke Doqtri
+  under Authorized apps in qdit.
 
 - `public.doc_project_links` — the qdit project a note is linked to (WP-2.5,
   D-09: one per note), with qdit's name, slug and link id cached. Viewers of
@@ -181,8 +190,11 @@ Two supporting tables:
   (its owner's account deletion included), until an admin unlinks it: qdit
   would keep links to it that nothing could remove. If qdit no longer shows
   the project, the admin can confirm forgetting the link in doqtri only
-  (qdit may keep dangling links, which are logged); with the integration
-  turned off, only SQL on the database removes the row.
+  (D-68; qdit may keep its doc link, milestone links and title locks, which
+  are logged, and relinking that note to another project stays blocked until
+  qdit cleans up). Known limit: with the integration turned off, a
+  qdit-linked note can only be deleted after SQL on the database removes its
+  `doc_project_links` row.
 
 - `public.qdit_webhook_events` and `public.qdit_milestone_states` — qdit's
   status webhook and what doqtri made of it (WP-2.8). Events are kept by id

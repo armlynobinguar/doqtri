@@ -176,7 +176,8 @@ export function ConnectedApps({ data }: { data: ConnectedAppsData }) {
         </div>
         {confirming ? (
           <p className="text-muted-foreground text-[12px]">
-            Doqtri stops acting in qdit for you. Projects and milestones in qdit stay as they are.
+            Doqtri stops acting in qdit for you. Projects and milestones in qdit stay as they are. Removing
+            Doqtri&apos;s access in qdit too is best effort: to be sure, revoke it under Authorized apps in qdit.
           </p>
         ) : null}
       </div>
