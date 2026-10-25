@@ -278,11 +278,13 @@ select results_eq(
   'and its own purchase stays on record, by its wallet, for the seller''s earnings');
 
 -- The gallery's read (app/api/market/templates/route.ts): a template whose
--- creator_id is null is shown as by "Former user", with its wallet.
+-- creator_id is null is shown as by "Former user", with its wallet. Scoped
+-- to this file's templates, so it passes on a database with production data.
 select results_eq(
   $$ select t.id, t.creator_id is null as former, t.creator_wallet
        from public.market_templates t
-      where t.network = 'testnet' and t.status = 'listed' and not t.hidden
+      where t.id in ('cccccccccccccccc', 'dddddddddddddddd')
+        and t.network = 'testnet' and t.status = 'listed' and not t.hidden
       order by t.id $$,
   $$ values ('cccccccccccccccc'::text, true, 'C' || repeat('A', 55)),
             ('dddddddddddddddd'::text, false, 'G' || repeat('O', 55)) $$,
