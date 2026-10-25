@@ -831,11 +831,12 @@ export const MAX_REMOVED_FEEDS = 10;
  * A removed member's own writes of `docId` from their feed. When their
  * removal's window has lapsed, `onChain` (the workspace as the registry holds
  * it now; undefined when it could not be read) decides: a member the chain
- * still lists, or one restored since, is read on past the window, within the
- * same page budget; one it no longer lists is read on to when their
- * revocation was done, if that was after the window, or to now when doqtri
- * has no record of it being done (it reached the chain some other way, or
- * its job gave up), since the list cannot say when they left it. When the
+ * still lists is read on past the window, within the same page budget; one
+ * it no longer lists, or one restored since, is read on to when their
+ * revocation was done, if that was after the window, or to now (or the
+ * restoration) when doqtri has no record of it being done (it reached the
+ * chain some other way, or its job gave up), since the list cannot say when
+ * they left it. When the
  * chain could not be read the result is marked incomplete, so the page says
  * history may be partial.
  */
@@ -848,24 +849,28 @@ async function removedSignerWrites(
   let readOn = false;
   let until = signer.restoredAt ?? null;
   let unknown = false;
+  // Off the chain by when doqtri's revocation was done: within the day, the
+  // day's cut stands; later, the feed is read on to then; with no record of
+  // it, to the feed's natural end.
+  const byRevocation = () => {
+    const revokedAt = signer.revokedAt ?? null;
+    const revoked = revokedAt ? Date.parse(revokedAt) : Number.NaN;
+    if (Number.isNaN(revoked)) readOn = true;
+    else if (revoked > Date.parse(signer.removedAt) + REMOVAL_WINDOW_MS) {
+      readOn = true;
+      until = revokedAt;
+    }
+  };
   if (removalWindowLapsed(signer, now)) {
     if (signer.restoredAt) {
-      // Listed again now, rightly; whether the removal ever reached the
-      // chain is not something the list can say, so read to the restoration.
-      readOn = true;
+      // Listed again now, rightly, so the list cannot say whether the
+      // removal ever reached the chain; the revocation's record can.
+      byRevocation();
     } else {
       const workspace = await onChain();
       if (workspace === undefined) unknown = true;
       else if (workspace != null && chainRoleOf(workspace, signer.address) != null) readOn = true;
-      else {
-        const revokedAt = signer.revokedAt ?? null;
-        const revoked = revokedAt ? Date.parse(revokedAt) : Number.NaN;
-        if (Number.isNaN(revoked)) readOn = true;
-        else if (revoked > Date.parse(signer.removedAt) + REMOVAL_WINDOW_MS) {
-          readOn = true;
-          until = revokedAt;
-        }
-      }
+      else byRevocation();
     }
   }
   const { ops, complete } = await fetchAccountOperationsSince(signer.address, signer.removedAt, until, { readOn });

@@ -329,5 +329,43 @@ describe("getDocumentHistory for a workspace note", () => {
       expect(state.readWorkspaceCalls).toBe(0);
       expect(history?.nodeEvents.map((e) => e.txHash)).toEqual(["late-status"]);
     });
+
+    describe("a member restored long after a revocation that was done (rereview)", () => {
+      // Removed three days ago, restored just now. Their feed is busy after
+      // the removal's day: more than the page budget of unrelated operations.
+      const restoredAt = closedAt(LATEST - 10);
+      const busy = Array.from({ length: 10 * 200 + 1 }, (_, i) =>
+        call("update_document", [str(`other-${i}`), bytes(3)], removedLedger + 17_280 + 10 + i, `busy-${i}`),
+      );
+
+      it("reads only the day when the revocation was done within it, and is not partial", async () => {
+        const revokedAt = closedAt(removedLedger + 120);
+        horizon({ [OWNER]: [register], [REMOVED]: [...removedFeed(removedLedger), ...busy, lateStatus] });
+
+        const history = await getDocumentHistory(DOC, { removedSigners: [{ ...removal, restoredAt, revokedAt }] });
+        expect(state.readWorkspaceCalls).toBe(0);
+        expect(history?.nodeEvents).toEqual([]);
+        expect(history?.versions.map((v) => v.txHash)).toEqual(["reg", "own-late"]);
+        expect(history?.partial).toBeUndefined();
+      });
+
+      it("reads on to the revocation when it was done after the day", async () => {
+        const revokedAt = closedAt(lateLedger + 10);
+        horizon({ [OWNER]: [register], [REMOVED]: [...removedFeed(removedLedger), lateStatus] });
+
+        const history = await getDocumentHistory(DOC, { removedSigners: [{ ...removal, restoredAt, revokedAt }] });
+        expect(history?.nodeEvents.map((e) => e.txHash)).toEqual(["late-status"]);
+        expect(history?.partial).toBeUndefined();
+      });
+
+      it("stops at the revocation, not the restoration", async () => {
+        const revokedAt = closedAt(lateLedger - 10);
+        horizon({ [OWNER]: [register], [REMOVED]: [...removedFeed(removedLedger), lateStatus] });
+
+        const history = await getDocumentHistory(DOC, { removedSigners: [{ ...removal, restoredAt, revokedAt }] });
+        expect(history?.nodeEvents).toEqual([]);
+        expect(history?.partial).toBeUndefined();
+      });
+    });
   });
 });
