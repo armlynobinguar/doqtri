@@ -249,6 +249,34 @@ describe("handleQditWebhook", () => {
     expect(store.events.get("7d0f8a52-3c1e-4b6a-9f21-5e8c0d4b2a10")).toEqual({ processed: true, attempts: 1 });
   });
 
+  it("hands an approval to recordApproval, keyed as the chain read it (WP-3.1)", async () => {
+    const recordApproval = vi.fn(async () => {});
+    const result = await handleQditWebhook({
+      rawBody: bytes(BODY), timestamp: TIMESTAMP, signature: SIGNATURE, secret: SECRET, nowMs: NOW_MS,
+      store, readChain, recordApproval,
+    });
+    expect(result).toEqual({ status: 200, body: { ok: true } });
+    expect(recordApproval).toHaveBeenCalledWith({
+      network: CHAIN.network, contractId: CHAIN.contractId, projectId: PROJECT, milestoneId: MILESTONE, version: 2,
+    });
+  });
+
+  it("does not look an approval up for any other status, and a failing lookup changes nothing", async () => {
+    const recordApproval = vi.fn(async () => {});
+    readChain.mockResolvedValueOnce({ ledger: 900, record: { ...approvedRead().record!, status: "Submitted" } });
+    const params = { rawBody: bytes(BODY), timestamp: TIMESTAMP, signature: SIGNATURE, secret: SECRET, nowMs: NOW_MS, store, readChain };
+    await handleQditWebhook({ ...params, recordApproval });
+    expect(recordApproval).not.toHaveBeenCalled();
+
+    const failing = vi.fn(async () => {
+      throw new Error("RPC down");
+    });
+    const again = eventBody({ id: "8d0f8a52-3c1e-4b6a-9f21-5e8c0d4b2a10" });
+    const result = await handleQditWebhook({ ...params, rawBody: bytes(again), signature: sign(again, TIMESTAMP), recordApproval: failing });
+    expect(failing).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ status: 200, body: { ok: true } });
+  });
+
   it("refuses bad signatures and stale timestamps with 401, before reading anything", async () => {
     expect((await deliver({ signature: sign(BODY, TIMESTAMP, "whsec_wrong") })).status).toBe(401);
     expect((await deliver({ nowMs: NOW_MS + 301_000 })).status).toBe(401);
@@ -393,6 +421,24 @@ describe("recheckDocStatuses (R-09)", () => {
     expect(readChain).toHaveBeenCalledTimes(6);
     expect(client.getMilestone).toHaveBeenCalledTimes(4);
     expect(client.listAllProjects).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands a milestone newly read as Approved to recordApproval, once (WP-3.1)", async () => {
+    const recordApproval = vi.fn(async () => {});
+    await recheckDocStatuses({ store, client: null, docId: DOC, readChain, now: () => NOW_MS, recordApproval });
+    expect(recordApproval).toHaveBeenCalledTimes(2);
+    expect(recordApproval).toHaveBeenCalledWith({
+      network: CHAIN.network, contractId: CHAIN.contractId, projectId: PROJECT, milestoneId: MILESTONE, version: 2,
+    });
+    // Approved at the same version again: already seen, not scanned again.
+    await recheckDocStatuses({ store, client: null, docId: DOC, readChain, now: () => NOW_MS + 20_000, recordApproval });
+    expect(readChain).toHaveBeenCalledTimes(4);
+    expect(recordApproval).toHaveBeenCalledTimes(2);
+    // A later approval (resubmitted and approved again) is new.
+    readChain.mockImplementation(async () => approvedRead(950, 3));
+    await recheckDocStatuses({ store, client: null, docId: DOC, readChain, now: () => NOW_MS + 40_000, recordApproval });
+    expect(recordApproval).toHaveBeenCalledTimes(4);
+    expect(recordApproval).toHaveBeenLastCalledWith(expect.objectContaining({ version: 3 }));
   });
 
   it("puts a duplicated or out-of-order webhook right: the chain read now wins", async () => {

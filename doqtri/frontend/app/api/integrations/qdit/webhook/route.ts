@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { approvalRecorder, supabaseApprovalStore } from "@/lib/integrations/qdit-approvals";
 import { qditWebhookSecret } from "@/lib/integrations/qdit-config";
 import {
   handleQditWebhook,
@@ -14,6 +15,8 @@ import {
  * credential, checked before anything else is read. A linked milestone's
  * event makes doqtri read the milestone's record on chain and record it
  * (lib/integrations/qdit-status-sync.ts); nothing is signed here (D-04).
+ * An approval also has its transaction looked up in RPC's event window and
+ * kept for the public receipts (WP-3.1).
  *
  * Off (404) unless NEXT_PUBLIC_QDIT_INTEGRATION=1, so the live app has no
  * such endpoint; 503 while QDIT_WEBHOOK_SECRET is missing, so qdit keeps
@@ -32,14 +35,16 @@ export async function POST(request: Request) {
   // The raw bytes, exactly as sent: the signature covers them, not a re-encoding.
   const rawBody = new Uint8Array(await request.arrayBuffer());
 
+  const admin = createSupabaseAdminClient();
   const result = await handleQditWebhook({
     rawBody,
     timestamp: request.headers.get("x-qdit-timestamp"),
     signature: request.headers.get("x-qdit-signature"),
     secret,
     nowMs: Date.now(),
-    store: supabaseStatusStore(createSupabaseAdminClient()),
+    store: supabaseStatusStore(admin),
     readChain: readChainOverRpc,
+    recordApproval: approvalRecorder(supabaseApprovalStore(admin)),
   });
   return reply(result.status, result.body);
 }

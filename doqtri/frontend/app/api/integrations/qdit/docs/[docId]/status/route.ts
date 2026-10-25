@@ -1,4 +1,5 @@
 import { roleAtLeast } from "@/lib/workspace-roles";
+import { approvalRecorder, supabaseApprovalStore } from "@/lib/integrations/qdit-approvals";
 import {
   readChainOverRpc,
   recheckDocStatuses,
@@ -32,6 +33,7 @@ export async function POST(request: Request, context: RouteContext<"/api/integra
       docId: doc.id,
       readChain: readChainOverRpc,
       force,
+      recordApproval: approvalRecorder(supabaseApprovalStore(admin)),
     });
     return noStoreJson(200, result);
   } catch (error) {
