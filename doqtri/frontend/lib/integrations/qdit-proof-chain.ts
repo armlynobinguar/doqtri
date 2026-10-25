@@ -28,8 +28,11 @@ import type { ChainNodeEvent, DocumentHistory } from "@/lib/stellar/history";
  * not yet), `mismatch` ("Does not match": checked, and the records
  * contradict each other, for example a heading signed Verified that the
  * chain does not back), or `unchecked` ("Could not check": Stellar did not
- * answer, the ref does not parse, or the ref is not the note's linked
- * project's so its contract was not read). Everything comes from the
+ * answer, the ref does not parse, or doqtri could not read its own link
+ * rows to check it). A ref that is not the note's linked project's is not
+ * read on purpose (D-79); that is no failed read but a contradiction with
+ * the link, so steps 1 to 3 say "Does not match" (and step 4, for a
+ * Verified heading), not "Could not check" (D-93). Everything comes from the
  * receipt WP-3.1 built (lib/integrations/qdit-receipts.ts) and the history
  * and Document the page already read: no further reads, and nothing from
  * qdit's API or doqtri's link rows, so the anonymous rules of section 12
@@ -63,28 +66,37 @@ export type UncheckedReason =
   /** The record's artifact_ref does not follow section 10. */
   | "invalid_ref"
   /** doqtri could not read its own records to check the ref against. */
-  | "link"
-  /**
-   * The ref does not name the note's linked project and its contract, so
-   * that contract was not read (D-79). One reason whatever the mismatch, so
-   * nothing about the link row shows.
-   */
-  | "link_mismatch";
+  | "link";
 
-/** How the chain, read, contradicts the version `V` the heading names. */
+/**
+ * The ref does not name the note's linked project and its contract, so that
+ * contract was deliberately not read (D-79): "Does not match" on steps 1 to
+ * 3 (D-93). One reason whatever the mismatch, so nothing about the link row
+ * shows.
+ */
+export type LinkConflict = "link";
+
+/** How the chain, read, contradicts the version `V` the heading names, or the ref the link. */
 export type ChainConflict =
   /** The chain holds an older version than `V`. */
   | "older"
   /** The chain has no record of the milestone. */
-  | "missing";
+  | "missing"
+  | LinkConflict;
 
 export type PlanStep = {
   key: "plan";
-  /** `unchecked` when the version in effect at signing is not in the history read. */
-  state: "done" | "unchecked";
+  /**
+   * `unchecked` when the version in effect at signing is not in the history
+   * read; `mismatch` when the heading's ref is not the note's linked
+   * project's (D-93), whatever the history says.
+   */
+  state: "done" | "unchecked" | "mismatch";
   current: PlanVersion;
   /** The version in effect when doqtri's write set the record; null when unknown. */
   signedAt: PlanVersion | null;
+  /** Set when the state is `mismatch`. */
+  conflict?: LinkConflict;
 };
 
 export type SubmittedStep = {
@@ -100,7 +112,7 @@ export type SubmittedStep = {
   newer: boolean;
   /** Set when the state is `unchecked`. */
   reason?: UncheckedReason;
-  /** Set when the state is `mismatch`: the chain has no submission at `V`. */
+  /** Set when the state is `mismatch`: the chain has no submission at `V`, or the ref is not the link's. */
   conflict?: ChainConflict;
 };
 
@@ -121,6 +133,8 @@ export type ApprovedStep = {
   txHash: string | null;
   txLedger: number | null;
   reason?: UncheckedReason;
+  /** Set when the state is `mismatch`: the ref is not the link's, so nothing was read. */
+  conflict?: LinkConflict;
 };
 
 export type VerifiedStep = {
@@ -168,6 +182,7 @@ function versionEntry(history: DocumentHistory | null, version: number): PlanVer
 }
 
 export function planStep(receipt: QditReceipt, { doc, history }: PlanContext): PlanStep {
+  const linkConflict = receipt.check.state === "differs" && receipt.check.mismatch != null;
   const found = versionEntry(history, doc.version);
   // The chain's value wins for the current version, as on the rest of the page.
   const current: PlanVersion = {
@@ -178,17 +193,20 @@ export function planStep(receipt: QditReceipt, { doc, history }: PlanContext): P
   };
   const at = receipt.signing?.docVersion;
   const signedAt = at && at >= 1 && at <= doc.version ? versionEntry(history, at) : null;
+  // The versions are still shown: they are DoqtriRegistry's own and true.
+  if (linkConflict) return { key: "plan", state: "mismatch", current, signedAt, conflict: "link" };
   return { key: "plan", state: signedAt ? "done" : "unchecked", current, signedAt };
 }
 
-/** Why the chain could not be asked about `V`, or null when it was read. */
+/** Why the chain could not be asked about `V`, or null when it was read or deliberately not asked. */
 function uncheckedReason({ check }: QditReceipt): UncheckedReason | null {
-  if (check.state === "unreachable") return check.reason === "rpc" || check.reason === "contract" ? "unreachable" : check.reason;
-  return check.mismatch ? "link_mismatch" : null;
+  if (check.state !== "unreachable") return null;
+  return check.reason === "rpc" || check.reason === "contract" ? "unreachable" : check.reason;
 }
 
-/** How the record that was read contradicts `V`, or null when it does not. */
-function chainConflict({ ref }: QditReceipt, chain: MilestoneChainRecord | null): ChainConflict | null {
+/** How the record that was read contradicts `V`, or the ref the link; null when neither. */
+function chainConflict({ ref, check }: QditReceipt, chain: MilestoneChainRecord | null): ChainConflict | null {
+  if (check.state === "differs" && check.mismatch) return "link";
   if (!ref || !chain) return "missing";
   return chain.version < ref.version ? "older" : null;
 }
@@ -199,6 +217,8 @@ export function proofChain(receipt: QditReceipt, context: PlanContext): ProofCha
   const chain = read?.chain ?? null;
   const reason = uncheckedReason(receipt);
   const conflict = reason ? null : chainConflict(receipt, chain);
+  // D-79: the ref is not the link's, so its contract was not read (D-93: "Does not match").
+  const linkConflict = conflict === "link";
   const newer = !reason && chain != null && version != null && chain.version > version;
   const atV = !reason && chain != null && chain.version === version;
 
@@ -220,7 +240,7 @@ export function proofChain(receipt: QditReceipt, context: PlanContext): ProofCha
   // it is Approved, with the heading's own version named when it differs.
   const approved: ApprovedStep = {
     key: "approved",
-    state: reason ? "unchecked" : chain?.status === "Approved" ? "done" : "pending",
+    state: reason ? "unchecked" : linkConflict ? "mismatch" : chain?.status === "Approved" ? "done" : "pending",
     version,
     chain,
     newer,
@@ -229,6 +249,7 @@ export function proofChain(receipt: QditReceipt, context: PlanContext): ProofCha
     txHash: !reason && chain?.status === "Approved" ? receipt.approvalTxHash : null,
     txLedger: !reason && chain?.status === "Approved" ? receipt.approvalLedger : null,
     ...(reason ? { reason } : {}),
+    ...(linkConflict ? { conflict: "link" as const } : {}),
   };
 
   // Step 4. Never verified without the record Approved at the same V.
@@ -239,13 +260,7 @@ export function proofChain(receipt: QditReceipt, context: PlanContext): ProofCha
   const backed = atV && chain!.status === "Approved";
   const verified: VerifiedStep = {
     key: "verified",
-    state: !isVerified
-      ? "pending"
-      : backed
-        ? "done"
-        : reason && reason !== "link_mismatch"
-          ? "unchecked"
-          : "mismatch",
+    state: !isVerified ? "pending" : backed ? "done" : reason ? "unchecked" : "mismatch",
     status: receipt.record.status,
     signing: receipt.signing,
     updatedAt: receipt.record.updatedAt,
