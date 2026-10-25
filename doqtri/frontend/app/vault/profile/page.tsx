@@ -71,6 +71,9 @@ type ConnectionRow = {
   account_label: string | null;
   status: "connected" | "needs_reconnect" | "revoked";
   connected_at: string;
+  /** Since 20261025140000 (D-66); undefined on a database without it. */
+  previous_subject?: string | null;
+  previous_account_label?: string | null;
 };
 
 /**
@@ -86,7 +89,15 @@ async function loadConnectedApps(supabase: SupabaseClient): Promise<ConnectedApp
   const row = ((data ?? []) as ConnectionRow[]).find((r) => r.provider === "qdit");
   return {
     qdit: row
-      ? { status: row.status, subject: row.subject, accountLabel: row.account_label, connectedAt: row.connected_at }
+      ? {
+          status: row.status,
+          subject: row.subject,
+          accountLabel: row.account_label,
+          connectedAt: row.connected_at,
+          previous: row.previous_subject
+            ? { subject: row.previous_subject, accountLabel: row.previous_account_label ?? null }
+            : null,
+        }
       : null,
   };
 }

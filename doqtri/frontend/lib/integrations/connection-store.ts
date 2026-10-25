@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { decryptSecret, encryptSecret } from "@/lib/integrations/token-crypto";
+import { asKeyRing, encryptSecret, openSecret, type TokenKeyRing } from "@/lib/integrations/token-crypto";
 import type { TokenSet } from "@/lib/integrations/qdit-oauth";
 
 /**
@@ -8,6 +8,9 @@ import type { TokenSet } from "@/lib/integrations/qdit-oauth";
  * Tokens are encrypted on the way in and decrypted on the way out, each bound
  * to its user and its column (see token-crypto.ts), so the database and
  * everything above this file deal in plaintext only inside the server.
+ * Writes always use the current key; reads also try the previous one while
+ * a key rotation is under way (D-67), so a refresh moves a token onto the
+ * current key.
  *
  * Every token write names the `generation` it read and bumps it; a write
  * whose generation is no longer current changes nothing and reports false.
@@ -29,17 +32,37 @@ export type StoredConnection = {
   generation: number;
   /** Epoch ms, or null if unknown. */
   expiresAt: number | null;
-  /** Null when not connected, or when the stored value no longer decrypts (key changed). */
+  /** Null when not connected, or when the stored value no longer decrypts under either key (key changed). */
   accessToken: string | null;
   refreshToken: string | null;
 };
 
 export type ConnectedAccount = { subject: string; accountLabel: string | null };
 
+/** account_label's limit in the database (20261025100000_integration_connections.sql). */
+export const ACCOUNT_LABEL_MAX = 200;
+
+/**
+ * A label that fits account_label: trimmed, cut to ACCOUNT_LABEL_MAX
+ * characters (code points, as Postgres counts them), or null when empty.
+ * qdit limits usernames but not display names, and a label too long for
+ * the column would make the connect fail with the wrong reason (WP-2.3).
+ */
+export function fitAccountLabel(label: string | null | undefined): string | null {
+  const trimmed = label?.trim() ?? "";
+  if (!trimmed) return null;
+  const chars = Array.from(trimmed);
+  return chars.length <= ACCOUNT_LABEL_MAX ? trimmed : chars.slice(0, ACCOUNT_LABEL_MAX).join("").trimEnd();
+}
+
 export interface ConnectionStore {
   load(userId: string): Promise<StoredConnection | null>;
-  /** After a successful callback: stores the tokens and marks the row connected. */
-  saveConnected(userId: string, account: ConnectedAccount, tokens: TokenSet): Promise<void>;
+  /**
+   * After a successful callback: stores the tokens and marks the row
+   * connected. `replaced` is the qdit account the row belonged to before,
+   * when this connect landed on another one (D-66), else null.
+   */
+  saveConnected(userId: string, account: ConnectedAccount, tokens: TokenSet): Promise<{ replaced: ConnectedAccount | null }>;
   /** After a refresh; false if another write got there first. */
   saveRefreshed(userId: string, generation: number, tokens: TokenSet): Promise<boolean>;
   /** Drops the tokens; false if another write got there first. */
@@ -68,7 +91,9 @@ function iso(ms: number | null): string | null {
   return ms === null ? null : new Date(ms).toISOString();
 }
 
-export function supabaseConnectionStore(admin: SupabaseClient, tokenKey: Buffer): ConnectionStore {
+export function supabaseConnectionStore(admin: SupabaseClient, keys: Buffer | TokenKeyRing): ConnectionStore {
+  const ring = asKeyRing(keys);
+  const tokenKey = ring.current;
   function tokenColumns(userId: string, tokens: TokenSet) {
     return {
       access_token_ciphertext: encryptSecret(tokens.accessToken, tokenKey, accessContext(userId)),
@@ -112,8 +137,8 @@ export function supabaseConnectionStore(admin: SupabaseClient, tokenKey: Buffer)
         status: data.status,
         generation: Number(data.generation),
         expiresAt: data.expires_at ? Date.parse(data.expires_at) : null,
-        accessToken: decryptSecret(data.access_token_ciphertext, tokenKey, accessContext(userId)),
-        refreshToken: decryptSecret(data.refresh_token_ciphertext, tokenKey, refreshContext(userId)),
+        accessToken: openSecret(data.access_token_ciphertext, ring, accessContext(userId))?.plaintext ?? null,
+        refreshToken: openSecret(data.refresh_token_ciphertext, ring, refreshContext(userId))?.plaintext ?? null,
       };
     },
 
@@ -121,7 +146,7 @@ export function supabaseConnectionStore(admin: SupabaseClient, tokenKey: Buffer)
       const values = {
         ...tokenColumns(userId, tokens),
         subject: account.subject,
-        account_label: account.accountLabel,
+        account_label: fitAccountLabel(account.accountLabel),
         status: "connected" as const,
         connected_at: new Date().toISOString(),
         refreshed_at: null,
@@ -132,11 +157,21 @@ export function supabaseConnectionStore(admin: SupabaseClient, tokenKey: Buffer)
         const existing = await store.load(userId);
         if (!existing) {
           const { error } = await admin.from(TABLE).insert({ user_id: userId, provider: PROVIDER, ...values });
-          if (!error) return;
+          if (!error) return { replaced: null };
           if (error.code !== "23505") throw new Error(`integration_connections insert failed: ${error.message}`);
           continue;
         }
-        if (await casUpdate(userId, existing.generation, values)) return;
+        // Reconnecting as another qdit account is allowed (D-66); the row
+        // remembers which one it replaced, for the profile to say so.
+        const replaced =
+          existing.subject !== account.subject
+            ? { subject: existing.subject, accountLabel: existing.accountLabel }
+            : null;
+        const previous = {
+          previous_subject: replaced?.subject ?? null,
+          previous_account_label: fitAccountLabel(replaced?.accountLabel),
+        };
+        if (await casUpdate(userId, existing.generation, { ...values, ...previous })) return { replaced };
       }
       throw new Error("integration_connections changed while connecting; try again");
     },

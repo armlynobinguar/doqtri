@@ -7,19 +7,24 @@ import { StatusTag } from "@/components/ui/status-tag";
 import {
   anchorLabel,
   anchorTxUrl,
-  cardStateFromResponse,
+  cardFetchKey,
   formatDueDate,
+  loadCardState,
   NO_ACCESS_TEXT,
-  NODE_STATUS_FOR,
+  nodeMappingText,
   QDIT_STATUS_LABEL,
   QDIT_STATUS_TONE,
   safeHttpUrl,
+  shownCardState,
+  type CardConnection,
   type MilestoneCardState,
 } from "@/lib/integrations/qdit-milestone-card";
 
+export type { CardConnection } from "@/lib/integrations/qdit-milestone-card";
+
 /**
- * A linked heading's qdit milestone (WP-2.6): title, qdit's status and the
- * node status it maps to (D-19), project, due date, the newest anchor
+ * A linked heading's qdit milestone (WP-2.6): title, qdit's status and, once
+ * it is on chain, the node status that maps to (D-19), project, due date, the newest anchor
  * record and a link out to qdit. Shown only with NEXT_PUBLIC_QDIT_INTEGRATION=1
  * (its callers decide). The states and what each shows are in
  * lib/integrations/qdit-milestone-card.ts.
@@ -28,13 +33,10 @@ import {
  * the user, once the card scrolls into view: each card is a request to qdit,
  * and a note can link many headings. A caller that already knows the user's
  * connection passes it, and a card without a usable one asks nothing.
+ * When it fetches is cardFetchKey(), tested on its own.
  */
 
-const API = "/api/integrations/qdit/milestones";
 const CONNECT_URL = "/api/integrations/qdit/connect";
-
-/** As the ship panel knows it; undefined lets the route find out. */
-export type CardConnection = "loading" | "connected" | "needs_reconnect" | "none";
 
 const LINK_CLASS = "text-muted-foreground inline-flex items-center gap-1 text-[11px] hover:underline";
 
@@ -56,7 +58,7 @@ export function QditMilestoneCard({
   const [attempt, setAttempt] = useState(0);
   const [fetched, setFetched] = useState<{ key: string; state: MilestoneCardState } | null>(null);
   const key = `${milestoneId}#${attempt}`;
-  const asks = visible && (connection === undefined || connection === "connected");
+  const fetchKey = cardFetchKey({ milestoneId, attempt, visible, connection });
 
   useEffect(() => {
     const el = ref.current;
@@ -74,30 +76,17 @@ export function QditMilestoneCard({
     return () => observer.disconnect();
   }, []);
 
+  // One fetch per key: see cardFetchKey().
   useEffect(() => {
-    if (!asks) return;
+    if (!fetchKey) return;
     const controller = new AbortController();
-    void (async () => {
-      let state: MilestoneCardState;
-      try {
-        const res = await fetch(`${API}/${encodeURIComponent(milestoneId)}`, { signal: controller.signal });
-        const body: unknown = await res.json().catch(() => null);
-        state = cardStateFromResponse(res.status, body, res.headers.get("retry-after"));
-      } catch {
-        if (controller.signal.aborted) return;
-        state = { state: "error", message: "Doqtri couldn't reach the server. Try again.", retryAfterSeconds: null };
-      }
-      if (!controller.signal.aborted) setFetched({ key, state });
-    })();
+    void loadCardState(milestoneId, { signal: controller.signal }).then((state) => {
+      if (state && !controller.signal.aborted) setFetched({ key: fetchKey, state });
+    });
     return () => controller.abort();
-  }, [asks, milestoneId, key]);
+  }, [fetchKey, milestoneId]);
 
-  const state: MilestoneCardState =
-    connection === "none" || connection === "needs_reconnect"
-      ? { state: "not_connected", connection }
-      : fetched?.key === key
-        ? fetched.state
-        : { state: "loading" };
+  const state = shownCardState({ connection, key, fetched });
 
   return (
     <div ref={ref}>
@@ -196,6 +185,7 @@ function Loaded({
   showTitle: boolean;
 }) {
   const { status, anchor } = milestone;
+  const mapping = nodeMappingText(milestone);
   return (
     <>
       {showTitle ? (
@@ -207,12 +197,12 @@ function Loaded({
         <StatusTag tone={status ? QDIT_STATUS_TONE[status] : "planned"} title="The milestone's status in qdit">
           {status ? QDIT_STATUS_LABEL[status] : "Unknown status"}
         </StatusTag>
-        {status ? (
+        {mapping ? (
           <span
             className="text-muted-foreground"
-            title="The node status this maps to. Doqtri reads the chain before it suggests or signs one."
+            title="Not the node's status: Doqtri reads the chain before it suggests or signs one."
           >
-            Node: {NODE_STATUS_FOR[status]}
+            {mapping}
           </span>
         ) : null}
       </div>

@@ -3,6 +3,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { qditIntegrationEnabled } from "@/lib/integrations/qdit-config";
 import { QditError, qditMeWithToken, qditServerSetup } from "@/lib/integrations/qdit-client";
 import { connectedAppsPath, type QditErrorReason, type QditOutcome } from "@/lib/integrations/connected-apps";
+import { fitAccountLabel } from "@/lib/integrations/connection-store";
 import {
   checkOAuthState,
   exchangeCode,
@@ -20,6 +21,9 @@ import {
  * is exchanged as a confidential client with the cookie's verifier, the
  * token's owner is read from GET /api/v1/me (and the token must be doqtri's,
  * by client_id), and the tokens are stored encrypted.
+ *
+ * Reconnecting as another qdit account is allowed (D-66) and answers
+ * `switched` instead of `connected`.
  *
  * Every answer is a redirect to Connected apps with a fixed outcome code
  * (lib/integrations/connected-apps.ts), and every answer clears the state
@@ -54,7 +58,7 @@ export async function GET(request: NextRequest) {
     request.cookies.get(OAUTH_STATE_COOKIE)?.value,
     params.get("state"),
     user.id,
-    setup.tokenKey,
+    setup.tokenKeys,
   );
   if (!checked.ok) {
     return back("error", checked.reason === "expired" ? "expired" : checked.reason === "other_user" ? "other_user" : "state");
@@ -90,15 +94,19 @@ export async function GET(request: NextRequest) {
     return back("error", "account");
   }
 
+  let replaced;
   try {
-    await setup.store.saveConnected(
+    ({ replaced } = await setup.store.saveConnected(
       user.id,
-      { subject: me.user.id, accountLabel: me.user.username ?? me.user.display_name ?? null },
+      // qdit limits usernames but not display names: cut to what the column holds.
+      { subject: me.user.id, accountLabel: fitAccountLabel(me.user.username) ?? fitAccountLabel(me.user.display_name) },
       tokens,
-    );
+    ));
   } catch (error) {
     console.error(`[qdit] storing the connection failed: ${(error as Error).message}`);
     return back("error", "unavailable");
   }
-  return back("connected");
+  // Another qdit account than before (D-66): the profile says which, from
+  // the connection itself, never from the URL.
+  return back(replaced ? "switched" : "connected");
 }

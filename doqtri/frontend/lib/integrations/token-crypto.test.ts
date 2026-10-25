@@ -1,8 +1,34 @@
 import { randomBytes } from "crypto";
 import { describe, expect, it } from "vitest";
-import { decryptSecret, deriveKey, encryptSecret, parseTokenKey, TokenKeyError } from "./token-crypto";
+import { decryptSecret, deriveKey, encryptSecret, openSecret, parseTokenKey, TokenKeyError } from "./token-crypto";
 
 const key = randomBytes(32);
+
+describe("openSecret (D-67 key ring)", () => {
+  const current = randomBytes(32);
+  const previous = randomBytes(32);
+
+  it("opens with the current key, then the previous one, and says which", () => {
+    const fresh = encryptSecret("rt", current, "qdit:refresh:u");
+    const old = encryptSecret("rt-old", previous, "qdit:refresh:u");
+    expect(openSecret(fresh, { current, previous }, "qdit:refresh:u")).toEqual({ plaintext: "rt", previousKey: false });
+    expect(openSecret(old, { current, previous }, "qdit:refresh:u")).toEqual({ plaintext: "rt-old", previousKey: true });
+    // A lone key is a ring with no previous key.
+    expect(openSecret(fresh, current, "qdit:refresh:u")?.plaintext).toBe("rt");
+    expect(openSecret(old, current, "qdit:refresh:u")).toBeNull();
+  });
+
+  it("still binds the context, and opens nothing sealed under a third key", () => {
+    const old = encryptSecret("rt", previous, "qdit:refresh:u");
+    expect(openSecret(old, { current, previous }, "qdit:access:u")).toBeNull();
+    expect(openSecret(encryptSecret("x", randomBytes(32), "c"), { current, previous }, "c")).toBeNull();
+    expect(openSecret(null, { current, previous }, "c")).toBeNull();
+  });
+
+  it("names the variable a bad key came from", () => {
+    expect(() => parseTokenKey("short", "INTEGRATION_TOKEN_KEY_PREVIOUS")).toThrow(/INTEGRATION_TOKEN_KEY_PREVIOUS/);
+  });
+});
 
 describe("parseTokenKey", () => {
   it("takes 32 bytes as base64 or hex", () => {

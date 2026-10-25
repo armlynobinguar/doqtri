@@ -23,7 +23,7 @@ import {
   type LinkableNode,
   type QditLinkRow,
 } from "@/lib/node-links";
-import { QditStatusLine, useQditStatusSync } from "@/components/vault/qdit-status";
+import { QDIT_LINKS_LOAD_TOAST, QditStatusLine, useQditStatusSync } from "@/components/vault/qdit-status";
 
 /**
  * The qdit provider of the ship panel's link list (WP-2.5). Shown only with
@@ -111,7 +111,9 @@ export function QditLinks({
   const [showExisting, setShowExisting] = useState(false);
   const [relinkChoice, setRelinkChoice] = useState<Record<string, string>>({});
 
-  const load = useCallback(async (): Promise<QditLinkRow[]> => {
+  // Null when the links could not be loaded, so a signature can tell that
+  // apart from a note with nothing left to sign (WP-2.8).
+  const load = useCallback(async (): Promise<QditLinkRow[] | null> => {
     const supabase = createSupabaseBrowserClient();
     const [projectRes, linksRes] = await Promise.all([
       supabase.from("doc_project_links").select(DOC_PROJECT_LINK_COLUMNS).eq("document_id", docId).maybeSingle(),
@@ -123,8 +125,8 @@ export function QditLinks({
         .order("created_at"),
     ]);
     if (projectRes.error || linksRes.error) {
-      toast.error("Could not load qdit links");
-      return [];
+      toast.error("Could not load qdit links", { id: QDIT_LINKS_LOAD_TOAST });
+      return null;
     }
     setProject((projectRes.data as DocProjectLinkRow | null) ?? null);
     const rows = (linksRes.data ?? []) as QditLinkRow[];
@@ -365,7 +367,8 @@ export function QditLinks({
             <div className="flex w-full flex-wrap items-center justify-between gap-1.5">
               <span className="text-muted-foreground min-w-0 flex-1 text-[11px]">
                 qdit no longer shows you this project. Forgetting removes the link from Doqtri only; qdit may
-                still list this note and its milestone links.
+                still list this note and its milestone links, and linking the note to another project stays
+                blocked until qdit removes them.
               </span>
               <Button
                 type="button"

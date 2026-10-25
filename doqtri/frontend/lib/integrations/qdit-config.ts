@@ -37,6 +37,11 @@ export type QditConfig = {
   redirectUri: string | null;
   /** INTEGRATION_TOKEN_KEY, still encoded; token-crypto.ts parses it. */
   tokenKey: string;
+  /**
+   * INTEGRATION_TOKEN_KEY_PREVIOUS, still encoded, or null: the key the
+   * current one replaced, kept only to read what it sealed (D-67).
+   */
+  tokenKeyPrevious: string | null;
 };
 
 function trimSlash(value: string): string {
@@ -62,6 +67,7 @@ export function qditConfig(env: NodeJS.ProcessEnv = process.env): QditConfig | n
     clientSecret,
     redirectUri: env.QDIT_OAUTH_REDIRECT_URI?.trim() || null,
     tokenKey,
+    tokenKeyPrevious: env.INTEGRATION_TOKEN_KEY_PREVIOUS?.trim() || null,
   };
 }
 

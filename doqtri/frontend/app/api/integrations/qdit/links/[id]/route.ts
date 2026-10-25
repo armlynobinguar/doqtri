@@ -62,12 +62,15 @@ export async function DELETE(_request: Request, context: RouteContext<"/api/inte
 
 export async function PATCH(request: Request, context: RouteContext<"/api/integrations/qdit/links/[id]">) {
   const { id } = await context.params;
+  // The flag, the session and the caller's role come before the body, as in
+  // every other qdit route: with the integration off this route is a 404
+  // whatever is sent to it.
+  const loaded = await load(id);
+  if (!loaded.row) return loaded.response;
   const body = await readBody(request);
   const nodeId = typeof body?.nodeId === "string" ? body.nodeId : null;
   if (!nodeId) return noStoreJson(400, { error: "Pick a heading." });
   const nodeLabel = typeof body?.nodeLabel === "string" ? body.nodeLabel : undefined;
-  const loaded = await load(id);
-  if (!loaded.row) return loaded.response;
   const { admin, client, doc, chainVersion } = loaded.ctx;
   try {
     const link = await relinkMilestone({ admin, doc, row: loaded.row, nodeId, nodeLabel });

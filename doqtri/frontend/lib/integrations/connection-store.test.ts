@@ -1,7 +1,8 @@
 import { randomBytes } from "crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { describe, expect, it } from "vitest";
-import { supabaseConnectionStore } from "./connection-store";
+import { describe, expect, it, vi } from "vitest";
+import { fitAccountLabel, supabaseConnectionStore } from "./connection-store";
+import { createQditClient, QditNotConnectedError } from "./qdit-client";
 
 const ANA = "11111111-1111-4111-8111-111111111111";
 const BEN = "22222222-2222-4222-8222-222222222222";
@@ -99,5 +100,91 @@ describe("supabaseConnectionStore", () => {
 
     await store.saveConnected(ANA, { subject: "qdit-ana", accountLabel: "ana" }, { ...tokens, accessToken: "at3" });
     expect(await store.load(ANA)).toMatchObject({ status: "connected", generation: 3, accessToken: "at3" });
+  });
+
+  it("reads tokens sealed under the previous key, and a refresh reseals them under the current one (D-67)", async () => {
+    const rows: Row[] = [];
+    const previous = randomBytes(32);
+    await supabaseConnectionStore(fakeAdmin(rows), previous).saveConnected(ANA, { subject: "qdit-ana", accountLabel: null }, tokens);
+    const sealedBefore = rows[0].refresh_token_ciphertext;
+
+    // The key rotated: INTEGRATION_TOKEN_KEY is new, the old one is INTEGRATION_TOKEN_KEY_PREVIOUS.
+    const store = supabaseConnectionStore(fakeAdmin(rows), { current: key, previous });
+    const conn = await store.load(ANA);
+    expect(conn).toMatchObject({ accessToken: "at-secret", refreshToken: "rt-secret" });
+
+    // qdit did not rotate the refresh token; the client hands the old one back.
+    expect(await store.saveRefreshed(ANA, conn!.generation, { ...tokens, accessToken: "at2" })).toBe(true);
+    expect(rows[0].refresh_token_ciphertext).not.toBe(sealedBefore);
+    // Readable with the current key alone: the previous key can now go.
+    expect(await supabaseConnectionStore(fakeAdmin(rows), key).load(ANA)).toMatchObject({
+      accessToken: "at2",
+      refreshToken: "rt-secret",
+    });
+  });
+
+  it("reads a row sealed under a key that is neither current nor previous as tokenless", async () => {
+    const rows: Row[] = [];
+    await supabaseConnectionStore(fakeAdmin(rows), randomBytes(32)).saveConnected(ANA, { subject: "qdit-ana", accountLabel: null }, tokens);
+    const store = supabaseConnectionStore(fakeAdmin(rows), { current: key, previous: randomBytes(32) });
+    expect(await store.load(ANA)).toMatchObject({ status: "connected", accessToken: null, refreshToken: null });
+  });
+
+  it("remembers the qdit account a reconnect replaced, and forgets it on a reconnect to the same one (D-66)", async () => {
+    const rows: Row[] = [];
+    const store = supabaseConnectionStore(fakeAdmin(rows), key);
+    expect(await store.saveConnected(ANA, { subject: "qdit-ana-old", accountLabel: "ana-old" }, tokens)).toEqual({ replaced: null });
+
+    expect(await store.saveConnected(ANA, { subject: "qdit-ana", accountLabel: "ana" }, tokens)).toEqual({
+      replaced: { subject: "qdit-ana-old", accountLabel: "ana-old" },
+    });
+    expect(rows[0]).toMatchObject({ subject: "qdit-ana", previous_subject: "qdit-ana-old", previous_account_label: "ana-old" });
+
+    expect(await store.saveConnected(ANA, { subject: "qdit-ana", accountLabel: "ana" }, tokens)).toEqual({ replaced: null });
+    expect(rows[0]).toMatchObject({ previous_subject: null, previous_account_label: null });
+  });
+
+  it("never writes a label longer than the column holds (WP-2.3)", async () => {
+    const rows: Row[] = [];
+    const store = supabaseConnectionStore(fakeAdmin(rows), key);
+    await store.saveConnected(ANA, { subject: "qdit-ana", accountLabel: "x".repeat(500) }, tokens);
+    expect(rows[0].account_label).toBe("x".repeat(200));
+  });
+});
+
+describe("a connected row sealed under another key (WP-2.3)", () => {
+  it("is marked needs_reconnect on its next use, before the call fails, and asks qdit nothing", async () => {
+    const rows: Row[] = [];
+    await supabaseConnectionStore(fakeAdmin(rows), randomBytes(32)).saveConnected(ANA, { subject: "qdit-ana", accountLabel: "ana" }, tokens);
+    const store = supabaseConnectionStore(fakeAdmin(rows), key);
+    const fetch = vi.fn(async () => new Response("{}", { status: 200 }));
+    const config = {
+      apiBaseUrl: "https://qdit.test/api/v1",
+      issuer: "https://auth.qdit.test/auth/v1",
+      clientId: "c",
+      clientSecret: "s",
+      redirectUri: null,
+      tokenKey: "",
+      tokenKeyPrevious: null,
+    };
+    const error = await createQditClient(ANA, { config, store, fetch }).me().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(QditNotConnectedError);
+    expect((error as QditNotConnectedError).connection).toBe("needs_reconnect");
+    expect(rows[0]).toMatchObject({ status: "needs_reconnect", access_token_ciphertext: null, refresh_token_ciphertext: null });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("fitAccountLabel", () => {
+  it("trims, cuts to 200 characters by code point, and turns blank into null", () => {
+    expect(fitAccountLabel("  ana  ")).toBe("ana");
+    expect(fitAccountLabel("   ")).toBeNull();
+    expect(fitAccountLabel(null)).toBeNull();
+    expect(fitAccountLabel(undefined)).toBeNull();
+    const emoji = fitAccountLabel("😀".repeat(250))!;
+    expect(Array.from(emoji)).toHaveLength(200);
+    // Never half a surrogate pair.
+    expect(emoji).toBe("😀".repeat(200));
+    expect(fitAccountLabel("a".repeat(199) + " b")).toBe("a".repeat(199));
   });
 });

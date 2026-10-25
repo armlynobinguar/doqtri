@@ -9,7 +9,8 @@
 
 export const CONNECTED_APPS_TAB = "apps";
 
-export type QditOutcome = "connected" | "denied" | "error";
+/** `switched`: connected, to another qdit account than before (D-66). */
+export type QditOutcome = "connected" | "switched" | "denied" | "error";
 
 export type QditErrorReason =
   /** The integration is on but this deployment has no qdit configured. */
@@ -48,12 +49,29 @@ export function connectedAppsPath(outcome?: QditOutcome, reason?: QditErrorReaso
   return `/vault/profile?${query}`;
 }
 
-/** The sentence for an outcome in the URL, or null for none or an unknown one. */
+/** How the profile names a qdit account: its label, else its id. */
+export function qditAccountName(account: { accountLabel: string | null; subject: string }): string {
+  return account.accountLabel ?? account.subject;
+}
+
+/**
+ * The sentence for an outcome in the URL, or null for none or an unknown
+ * one. Names come from `connection` (what the database says), never from
+ * the URL, so a crafted link cannot put words in the notice: a `switched`
+ * with no replaced account on record reads as a plain connect.
+ */
 export function describeQditOutcome(
   outcome: string | null,
   reason: string | null,
+  connection: QditConnectionSummary | null = null,
 ): { tone: "success" | "warning"; text: string } | null {
-  if (outcome === "connected") return { tone: "success", text: "qdit is connected." };
+  if (outcome === "switched" && connection?.status === "connected" && connection.previous) {
+    return {
+      tone: "success",
+      text: `Now connected as ${qditAccountName(connection)} (was ${qditAccountName(connection.previous)}).`,
+    };
+  }
+  if (outcome === "connected" || outcome === "switched") return { tone: "success", text: "qdit is connected." };
   if (outcome === "denied") return { tone: "warning", text: "You didn't allow Doqtri in qdit, so nothing was connected." };
   if (outcome !== "error") return null;
   const text =
@@ -68,4 +86,6 @@ export type QditConnectionSummary = {
   accountLabel: string | null;
   subject: string;
   connectedAt: string;
+  /** The qdit account the last connect replaced, when it was another one (D-66). */
+  previous: { subject: string; accountLabel: string | null } | null;
 };

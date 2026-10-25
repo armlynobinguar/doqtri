@@ -131,7 +131,7 @@ export function suggestQditStatus(params: {
 
 export type QditSignPlan =
   | { ok: true; updates: NodeUpdate[]; rollups: NodeUpdate[]; batches: NodeUpdate[][] }
-  | { ok: false; reason: "unread" | "nothing"; message: string };
+  | { ok: false; reason: "unread" | "links_unread" | "links_gone" | "nothing"; message: string };
 
 /**
  * What one "Mark <status>" signs, from reads made just before (D-04): the
@@ -140,12 +140,15 @@ export type QditSignPlan =
  * read it rests on failed, whether a heading's record (`unreadNodes`: a
  * failed read is not "no record", and would let a roll-up overwrite a
  * signed heading or downgrade a parent) or a picked milestone's chain read
- * (`unreadMilestones`: the stored state could be out of date).
+ * (`unreadMilestones`: the stored state could be out of date). Refuses as
+ * well when the note's links could not be reloaded (`rows` null), or none
+ * of the picked links is on the note any more: neither means "Stellar
+ * already says this".
  */
 export function planQditSignature(params: {
   tree: MindmapNode;
-  /** The note's qdit links as the save left them. */
-  rows: QditLinkRow[];
+  /** The note's qdit links as the save left them, or null when they could not be loaded. */
+  rows: QditLinkRow[] | null;
   linkIds: string[];
   states: Record<string, QditMilestoneStateRow>;
   records: Record<string, RecordLike | null>;
@@ -154,7 +157,22 @@ export function planQditSignature(params: {
   /** Headings linked by another provider. */
   otherLinked: string[];
 }): QditSignPlan {
-  const picked = params.rows.filter((r) => params.linkIds.includes(r.id));
+  if (!params.rows) {
+    return {
+      ok: false,
+      reason: "links_unread",
+      message: "Could not load qdit links, so nothing was signed. Try again in a moment.",
+    };
+  }
+  const rows = params.rows;
+  const picked = rows.filter((r) => params.linkIds.includes(r.id));
+  if (picked.length === 0) {
+    return {
+      ok: false,
+      reason: "links_gone",
+      message: "That qdit link is no longer on this note, so nothing was signed.",
+    };
+  }
   if (params.unreadNodes.length > 0 || picked.some((r) => params.unreadMilestones.includes(r.qdit_milestone_id))) {
     return {
       ok: false,
@@ -171,7 +189,7 @@ export function planQditSignature(params: {
   const rollups = planRollups({
     tree: params.tree,
     records: params.records,
-    linked: [...params.rows.map((r) => r.node_id), ...params.otherLinked],
+    linked: [...rows.map((r) => r.node_id), ...params.otherLinked],
     pending: updates,
   }).updates;
   return { ok: true, updates, rollups, batches: anchorBatches([...updates, ...rollups]) };

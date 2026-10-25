@@ -13,6 +13,7 @@ const config: QditConfig = {
   clientSecret: "secret",
   redirectUri: null,
   tokenKey: "unused",
+  tokenKeyPrevious: null,
 };
 const TOKEN_URL = "https://auth.qdit.test/auth/v1/oauth/token";
 
@@ -44,7 +45,7 @@ function memoryStore(initial: Partial<StoredConnection> | null) {
       row = { ...row!, ...r };
     },
     load: vi.fn(async () => (row ? { ...row } : null)),
-    saveConnected: vi.fn(async () => {}),
+    saveConnected: vi.fn(async () => ({ replaced: null })),
     saveRefreshed: vi.fn(async (_userId: string, generation: number, tokens: TokenSet) => {
       if (!row || row.generation !== generation) return false;
       row = {
@@ -135,13 +136,87 @@ describe("refresh", () => {
     expect(fetch).toHaveBeenCalledTimes(3);
   });
 
-  it("reports a second 401 as unauthorized without touching the connection", async () => {
+  it("marks the connection needs_reconnect when qdit refuses the freshly refreshed token too", async () => {
     const store = memoryStore({});
     const fetch = mockFetch((url) => (url === TOKEN_URL ? tokenResponse(2) : json(401, { error: { code: "unauthorized", message: "no", details: null } })));
+    const client = createQditClient(ANA, { config, store, fetch, now: () => NOW });
+    const error = await client.me().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(QditNotConnectedError);
+    expect((error as QditNotConnectedError).connection).toBe("needs_reconnect");
+    expect(store.row()).toMatchObject({ status: "needs_reconnect", accessToken: null, refreshToken: null });
+    expect(fetch).toHaveBeenCalledTimes(3);
+
+    // Later reads fail fast, without a refresh or a request to qdit.
+    const again = await client.me().catch((e: unknown) => e);
+    expect(again).toBeInstanceOf(QditNotConnectedError);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("reports a second 401 as is when another write replaced the token meanwhile", async () => {
+    const store = memoryStore({});
+    const fetch = mockFetch((url) => {
+      if (url === TOKEN_URL) return tokenResponse(2);
+      // Another instance stored newer tokens after this call's refresh.
+      if (store.row()?.accessToken === "at2") store.set({ generation: 9, accessToken: "at9" });
+      return json(401, { error: { code: "unauthorized", message: "no", details: null } });
+    });
     const error = await createQditClient(ANA, { config, store, fetch, now: () => NOW }).me().catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(QditError);
     expect((error as QditError).kind).toBe("unauthorized");
-    expect(store.row()?.status).toBe("connected");
+    expect(error).not.toBeInstanceOf(QditNotConnectedError);
+    expect(store.row()).toMatchObject({ status: "connected", accessToken: "at9" });
+  });
+
+  it("marks a connected row whose tokens no longer decrypt needs_reconnect before refusing (WP-2.3)", async () => {
+    const store = memoryStore({ accessToken: null, refreshToken: null });
+    const fetch = mockFetch(() => json(200, { data: ME }));
+    const error = await createQditClient(ANA, { config, store, fetch, now: () => NOW }).me().catch((e: unknown) => e);
+    expect((error as QditNotConnectedError).connection).toBe("needs_reconnect");
+    expect(store.markStatus).toHaveBeenCalledWith(ANA, 1, "needs_reconnect");
+    expect(store.row()?.status).toBe("needs_reconnect");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("uses a usable row another write stored while marking an unreadable one", async () => {
+    const store = memoryStore({ accessToken: null });
+    store.markStatus = vi.fn(async () => {
+      store.set({ generation: 2, accessToken: "at7" });
+      return false;
+    });
+    const fetch = mockFetch((_url, init) => {
+      expect(bearer(init)).toBe("Bearer at7");
+      return json(200, { data: ME });
+    });
+    expect(await createQditClient(ANA, { config, store, fetch, now: () => NOW }).me()).toEqual(ME);
+  });
+
+  it("still answers when storing the refreshed tokens fails, after one retry (WP-2.3)", async () => {
+    const store = memoryStore({ expiresAt: NOW - 1 });
+    store.saveRefreshed = vi.fn(async () => {
+      throw new Error("integration_connections update failed: connection reset");
+    });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetch = mockFetch((url, init) => {
+      if (url === TOKEN_URL) return tokenResponse(2);
+      expect(bearer(init)).toBe("Bearer at2");
+      return json(200, { data: ME });
+    });
+    expect(await createQditClient(ANA, { config, store, fetch, now: () => NOW }).me()).toEqual(ME);
+    expect(store.saveRefreshed).toHaveBeenCalledTimes(2);
+    expect(logged).toHaveBeenCalledTimes(2);
+    expect(logged.mock.calls.flat().join(" ")).not.toContain("at2");
+    expect(logged.mock.calls.flat().join(" ")).not.toContain("rt2");
+    logged.mockRestore();
+  });
+
+  it("writes the refresh token back when qdit does not rotate it, so it is sealed under the current key (D-67)", async () => {
+    const store = memoryStore({ expiresAt: NOW - 1 });
+    const fetch = mockFetch((url) =>
+      url === TOKEN_URL
+        ? json(200, { access_token: "at2", token_type: "bearer", expires_in: 3600 })
+        : json(200, { data: ME }),
+    );
+    await createQditClient(ANA, { config, store, fetch, now: () => NOW }).me();
+    expect(store.saveRefreshed).toHaveBeenCalledWith(ANA, 1, expect.objectContaining({ accessToken: "at2", refreshToken: "rt1" }));
   });
 
   it("is single-flight: concurrent calls share one refresh", async () => {

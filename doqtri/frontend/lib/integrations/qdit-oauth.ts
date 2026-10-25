@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "crypto";
 import { QDIT_SCOPES, type QditConfig } from "@/lib/integrations/qdit-config";
-import { decryptSecret, deriveKey, encryptSecret } from "@/lib/integrations/token-crypto";
+import { asKeyRing, decryptSecret, deriveKey, encryptSecret, type TokenKeyRing } from "@/lib/integrations/token-crypto";
 
 /**
  * The OAuth 2.1 side of connecting qdit (WP-2.3, D-02; server-only).
@@ -98,7 +98,8 @@ function sameString(a: string, b: string): boolean {
 
 /**
  * Checks a callback against the cookie the connect route set: it must open
- * with this deployment's key, be unexpired, carry the `state` qdit sent back,
+ * with this deployment's key (or, during a key rotation, the previous one:
+ * a flow started just before the switch still finishes), be unexpired, carry the `state` qdit sent back,
  * and belong to `userId`, the doqtri user signed in now. A cookie from
  * another user's flow (a shared browser, or a planted cookie) is refused, so
  * a code can never be stored against the wrong account.
@@ -107,11 +108,14 @@ export function checkOAuthState(
   cookie: string | null | undefined,
   returnedState: string | null | undefined,
   userId: string,
-  tokenKey: Buffer,
+  keys: Buffer | TokenKeyRing,
   now = Date.now(),
 ): StateCheck {
   if (!cookie) return { ok: false, reason: "missing" };
-  const opened = decryptSecret(cookie, stateKey(tokenKey), STATE_CONTEXT);
+  const ring = asKeyRing(keys);
+  const opened =
+    decryptSecret(cookie, stateKey(ring.current), STATE_CONTEXT) ??
+    (ring.previous ? decryptSecret(cookie, stateKey(ring.previous), STATE_CONTEXT) : null);
   if (!opened) return { ok: false, reason: "invalid" };
   let sealed: SealedState;
   try {
