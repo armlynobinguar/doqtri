@@ -327,6 +327,23 @@ describe("QditReceiptsSection", () => {
     expect(html).not.toContain("signing transaction →");
   });
 
+  it("says when history could not be read, so other headings may be missing (D-85)", () => {
+    const html = renderToStaticMarkup(
+      createElement(QditReceiptsSection, {
+        receipts: { receipts: [{ ...CONFIRMED, signing: null }], more: 0, historyUnread: true },
+        labels: null,
+      }),
+    );
+    expect(html).toContain('data-testid="receipts-history-unread"');
+    expect(html).toContain("history could not be read from Horizon just now");
+    expect(html).toContain("other headings signed from qdit may not be listed");
+    // Never names where the headings were chosen from.
+    expect(html).not.toMatch(/link/i);
+    // The receipt itself stands: the chain's record is read in full.
+    expect(html).toContain("Approved on chain");
+    expect(render([CONFIRMED])).not.toContain("receipts-history-unread");
+  });
+
   it("counts headings beyond the cap", () => {
     expect(render([CONFIRMED], 3)).toContain("3 more headings were signed from qdit and are not checked here");
     expect(render([CONFIRMED], 1)).toContain("1 more heading was signed from qdit and is not checked here");

@@ -73,6 +73,16 @@ import type { ChainNodeEvent, DocumentHistory } from "@/lib/stellar/history";
  * redirects off, answered a direct 200: qdit then publishes it itself.
  * Answers are kept for PUBLIC_PAGE_TTL_MS.
  *
+ * The chain cannot list a document's nodes, so the headings to check come
+ * from the history the page read. When Horizon could not be read (D-85),
+ * they come instead from the note's own qdit-linked headings (node_links,
+ * provider 'qdit'): those ids only choose which records to read with
+ * get_node, and a receipt is shown only where that record has
+ * `tool = "qdit"`, exactly as it would be from history. Nothing else is
+ * taken from those rows, not even how many there are; the section then
+ * says history could not be read and other headings may be missing, and
+ * no receipt names its signing transaction.
+ *
  * Bounded: at most MAX_RECEIPTS headings are checked per page view, each
  * with one get_node and one get_milestone_status simulation, a few at a
  * time; the rest are counted. Milestone reads are kept for CACHE_TTL_MS
@@ -163,6 +173,12 @@ export type QditReceipts = {
   receipts: QditReceipt[];
   /** Headings signed from qdit beyond MAX_RECEIPTS, not checked on this view. */
   more: number;
+  /**
+   * The history could not be read, so the headings were chosen from the
+   * note's qdit-linked ones (D-85): others signed from qdit may be missing.
+   * `more` is then 0, since counting the rest would count link rows.
+   */
+  historyUnread?: true;
 };
 
 // ---------------------------------------------------------------------------
@@ -292,6 +308,13 @@ export type ReceiptDeps = {
    */
   linkedProject: () => Promise<LinkedProject | null>;
   /**
+   * The note's headings linked to a qdit milestone (node_links, provider
+   * 'qdit'), asked only when the history could not be read (D-85). Used
+   * only to choose which records to read; leave it out and such a view
+   * shows no receipts.
+   */
+  linkedNodeIds?: () => Promise<string[]>;
+  /**
    * The optional link to qdit's public milestone page. Leave it out (no
    * qdit origin configured) and no receipt links qdit.
    */
@@ -309,11 +332,35 @@ export type ReceiptDeps = {
 const cacheKey = (network: QditChainNetwork, ref: QditArtifactRef) =>
   `${network}|${ref.contractId}|${ref.projectId}|${ref.milestoneId}`;
 
+/** Positional ids in plan order: root, h0, h1, ..., h10. */
+const byPosition = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });
+
+/** A heading to check: its id, and its latest write when the history has it. */
+type Candidate = { nodeId: string; latest: ChainNodeEvent | null };
+
+/**
+ * The headings to check: the history's qdit-signed ones, or, when the
+ * history could not be read, the note's qdit-linked ones (D-85). Null when
+ * there are none to ask about.
+ */
+async function candidatesFor(history: DocumentHistory | null, deps: ReceiptDeps): Promise<Candidate[] | null> {
+  if (history) {
+    // The chain cannot list a document's nodes; its history can.
+    const nodes = history.nodes.filter((node) => node.tool === QDIT_TOOL);
+    return nodes.length > 0 ? nodes.map((node) => ({ nodeId: node.nodeId, latest: node })) : null;
+  }
+  if (!deps.linkedNodeIds) return null;
+  const ids = await deps.linkedNodeIds().catch(() => [] as string[]);
+  const unique = [...new Set(ids)].sort(byPosition);
+  return unique.length > 0 ? unique.map((nodeId) => ({ nodeId, latest: null })) : null;
+}
+
 /**
  * The receipts for `docId`, or null when there are none to show: the
- * integration is off, history could not be read, or no heading's latest
- * record names qdit. Null renders nothing, so the page is then exactly
- * what it was without the integration.
+ * integration is off, or no heading's current record names qdit (found
+ * from history, or from the note's qdit-linked headings when history could
+ * not be read). Null renders nothing, so the page is then exactly what it
+ * was without the integration.
  */
 export async function loadQditReceipts(
   docId: string,
@@ -321,9 +368,8 @@ export async function loadQditReceipts(
   deps: ReceiptDeps,
 ): Promise<QditReceipts | null> {
   if (!(deps.enabled ?? process.env.NEXT_PUBLIC_QDIT_INTEGRATION === "1")) return null;
-  // The chain cannot list a document's nodes; its history can.
-  const candidates = (history?.nodes ?? []).filter((node) => node.tool === QDIT_TOOL);
-  if (!history || candidates.length === 0) return null;
+  const candidates = await candidatesFor(history, deps);
+  if (!candidates) return null;
 
   const max = deps.max ?? MAX_RECEIPTS;
   const checked = candidates.slice(0, max);
@@ -331,25 +377,26 @@ export async function loadQditReceipts(
   // Undefined when it could not be read: nothing is then checked against it.
   const linked: Promise<LinkedProject | null | undefined> = deps.linkedProject().catch(() => undefined);
 
-  const one = async (latest: ChainNodeEvent): Promise<QditReceipt | null> => {
+  const one = async ({ nodeId, latest }: Candidate): Promise<QditReceipt | null> => {
     // The record as the contract holds it now; the history's latest write
-    // stands in for it when the contract can't be asked.
-    let record: ChainNode | ChainNodeEvent = latest;
+    // stands in for it when the contract can't be asked. Without history
+    // there is nothing to stand in, so no receipt.
+    let record: ChainNode | ChainNodeEvent | null = latest;
     let updatedAt: number | null = null;
     try {
-      const current = await deps.readNode(docId, latest.nodeId);
+      const current = await deps.readNode(docId, nodeId);
       if (!current) return null;
       record = current;
       updatedAt = current.updatedAt;
     } catch {
       // Keep the history's.
     }
-    if (record.tool !== QDIT_TOOL) return null;
+    if (!record || record.tool !== QDIT_TOOL) return null;
 
     const base = {
-      nodeId: latest.nodeId,
+      nodeId,
       record: { status: record.status, artifactRef: record.artifactRef, updatedAt },
-      signing: signingEvent(history, latest.nodeId, record),
+      signing: history ? signingEvent(history, nodeId, record) : null,
       approvalTxHash: null,
       approvalLedger: null,
       qditPageUrl: null,
@@ -383,6 +430,10 @@ export async function loadQditReceipts(
 
   await Promise.all([attachApprovals(receipts, deps), attachQditPages(receipts, deps, await linked)]);
 
+  if (!history) {
+    // D-85: nothing about the link rows beyond the records they pointed at.
+    return receipts.length > 0 ? { receipts, more: 0, historyUnread: true } : null;
+  }
   if (receipts.length === 0 && candidates.length <= max) return null;
   return { receipts, more: candidates.length - checked.length };
 }

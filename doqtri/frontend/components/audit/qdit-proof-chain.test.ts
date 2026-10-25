@@ -102,6 +102,18 @@ const differs = (status: MilestoneChainStatus, version: number): ReceiptCheck =>
 });
 
 describe("ProofChainView: the list", () => {
+  it("words each state as qdit's page does (D-78): Done, Pending, Does not match, Could not check", () => {
+    const tags = (html: string) =>
+      (["plan", "submitted", "approved", "verified"] as const).map((k) => step(html, k).match(/>(Done|Pending|Does not match|Could not check)<\/span>/)![1]);
+    expect(tags(render(receipt({ check: differs("Submitted", 2) })))).toEqual(["Done", "Done", "Pending", "Does not match"]);
+    expect(tags(render(receipt({ check: { state: "unreachable", reason: "rpc" } })))).toEqual([
+      "Done",
+      "Could not check",
+      "Could not check",
+      "Could not check",
+    ]);
+  });
+
   it("is an ordered list of the four steps, folded inside the receipt, each state in words", () => {
     const html = render(receipt());
     expect(html).toContain('<details data-testid="proof-chain"');
@@ -198,11 +210,20 @@ describe("ProofChainView: step 2, submitted", () => {
     [{ state: "unreachable", reason: "invalid_ref" }, "does not follow the integration contract&#x27;s grammar"],
     [{ state: "unreachable", reason: "link" }, "Doqtri could not read its own records just now"],
     [{ state: "differs", mismatch: "project" }, "does not match a qdit project and contract registered in Doqtri"],
-    [{ state: "differs", chain: null, ledger: 5000 }, "has no record of this milestone, though this heading was signed against v2"],
-    [differs("Approved", 1), "holds v1, older than v2"],
   ] as const)("could not check: %j", (check, text) => {
     const li = step(render(receipt({ check: check as ReceiptCheck })), "submitted");
     expect(stateOf(li)).toBe("unchecked");
+    expect(li).toContain(">Could not check</span>");
+    expect(li).toContain(text);
+  });
+
+  it.each([
+    [{ state: "differs", chain: null, ledger: 5000 }, "has no record of this milestone, though this heading was signed against v2"],
+    [differs("Approved", 1), "holds v1 (Approved), older than v2"],
+  ] as const)("does not match: the chain was read and has no submission at vV: %j", (check, text) => {
+    const li = step(render(receipt({ check: check as ReceiptCheck })), "submitted");
+    expect(stateOf(li)).toBe("mismatch");
+    expect(li).toContain(">Does not match</span>");
     expect(li).toContain(text);
   });
 });
@@ -210,7 +231,7 @@ describe("ProofChainView: step 2, submitted", () => {
 describe("ProofChainView: step 3, approved", () => {
   it("done: approved at the signed version, with the approval transaction and its ledger", () => {
     const li = step(render(receipt()), "approved");
-    expect(li).toContain("Approved at <strong");
+    expect(li).toContain(">v2</strong> approved, the version this heading was signed against.");
     expect(li).toContain(`href="https://stellar.expert/explorer/testnet/tx/${TX(30)}"`);
     expect(li).toContain("Approval transaction →");
     expect(li).toContain("(ledger 4,990)");
@@ -238,11 +259,25 @@ describe("ProofChainView: step 3, approved", () => {
     expect(li).toContain("Rejected at v2: not approved.");
   });
 
-  it("pending after a resubmission: the newer version's approval is named as that version's", () => {
-    const li = step(render(receipt({ v: 1, check: differs("Approved", 2) })), "approved");
-    expect(stateOf(li)).toBe("pending");
-    expect(li).toContain("v1 is not the approved version: the milestone was resubmitted as v2");
+  it("fixture M2: done for the current record after a resubmission, naming the heading's version (D-78)", () => {
+    // Signed Built @v1; v1 rejected, v2 approved. qdit's page says "v2 approved" too.
+    const li = step(render(receipt({ v: 1, status: "Built", check: differs("Approved", 2) })), "approved");
+    expect(stateOf(li)).toBe("done");
+    expect(li).toContain(">Done</span>");
+    expect(li).toMatch(/>v2<\/strong> approved; the heading was signed for v1\./);
     expect(li).toContain("Approval transaction of v2 →");
+  });
+
+  it("pending after a resubmission not yet decided, naming the heading's version", () => {
+    const li = step(render(receipt({ v: 1, status: "Built", check: differs("Submitted", 2) })), "approved");
+    expect(stateOf(li)).toBe("pending");
+    expect(li).toContain("Not approved yet: the chain says Submitted at v2; the heading was signed for v1.");
+  });
+
+  it("pending when the chain has no record: nothing is approved", () => {
+    const li = step(render(receipt({ check: { state: "differs", chain: null, ledger: 5000 } })), "approved");
+    expect(stateOf(li)).toBe("pending");
+    expect(li).toContain("has no record of this milestone, so nothing is approved.");
   });
 
   it("could not check when the submission could not", () => {
@@ -275,10 +310,45 @@ describe("ProofChainView: step 4, verified", () => {
     expect(li).toContain("Doqtri&#x27;s record says Built: not signed Verified.");
   });
 
-  it("could not check: signed Verified but the chain says otherwise, never shown as verified", () => {
+  it("fixture M3: does not match when signed Verified but the chain says Submitted, never shown as verified", () => {
     const li = step(render(receipt({ check: differs("Submitted", 2) })), "verified");
-    expect(stateOf(li)).toBe("unchecked");
-    expect(li).toContain("Signed as Verified; the chain now says Submitted at v2, so this heading is not shown as verified.");
+    expect(stateOf(li)).toBe("mismatch");
+    expect(li).toContain(">Does not match</span>");
+    expect(li).not.toContain("Could not check");
+    expect(li).toContain(
+      "Signed as Verified for v2; the chain now says Submitted at v2, so this heading is not shown as verified.",
+    );
+  });
+
+  it("does not match after a resubmission was approved: the signature is for v1", () => {
+    const html = render(receipt({ v: 1, check: differs("Approved", 2) }));
+    const li = step(html, "verified");
+    expect(stateOf(li)).toBe("mismatch");
+    expect(li).toContain("Signed as Verified for v1; the chain now says Approved at v2");
+    expect(html).toContain("Full proof chain: 3 of 4 steps done");
+  });
+
+  it("does not match when the chain has no record of the milestone", () => {
+    const li = step(render(receipt({ check: { state: "differs", chain: null, ledger: 5000 } })), "verified");
+    expect(stateOf(li)).toBe("mismatch");
+    expect(li).toContain("Signed as Verified for v2; qdit&#x27;s contract has no record of this milestone");
+  });
+
+  it("does not match when the ref is not the note's linked project's, worded the same for every mismatch", () => {
+    const texts = (["unlinked", "project", "no_chain", "chain"] as const).map((mismatch) =>
+      step(render(receipt({ check: { state: "differs", mismatch } })), "verified"),
+    );
+    for (const li of texts) {
+      expect(stateOf(li)).toBe("mismatch");
+      expect(li).toContain("does not match a qdit project and contract registered in Doqtri for this note");
+    }
+    expect(new Set(texts).size).toBe(1);
+  });
+
+  it("pending after a resubmission was approved: names the version the record was signed for", () => {
+    const li = step(render(receipt({ v: 1, status: "Built", check: differs("Approved", 2) })), "verified");
+    expect(stateOf(li)).toBe("pending");
+    expect(li).toContain("qdit approved v2; Doqtri&#x27;s record still says Built for v1, not yet signed Verified.");
   });
 
   it("could not check: signed Verified and the chain could not be read", () => {
@@ -303,6 +373,17 @@ describe("ProofChainView: step 4, verified", () => {
     ]) {
       expect(step(render(receipt(), PLAN, [r]), "verified")).not.toContain("Signed after removal");
     }
+  });
+
+  it("names the role when an owner-only signing write's wallet could not be read, as the version history does", () => {
+    const r = receipt();
+    const li = step(render({ ...r, signing: { ...r.signing!, signer: null, signerFrom: "owner" } }), "verified");
+    expect(li).toContain('data-testid="chain-signer-owner-at-time"');
+    expect(li).toContain("Signed by the note&#x27;s owner at the time");
+    expect(li).not.toContain(`title="${SIGNER}"`);
+    expect(li).not.toContain("Signed after removal");
+    // Still the signing transaction.
+    expect(li).toContain(`href="https://stellar.expert/explorer/testnet/tx/${TX(20)}"`);
   });
 
   it("names the missing transaction when the history did not have the signing write", () => {

@@ -196,7 +196,13 @@ Two supporting tables:
   so concurrent refreshes on different server instances cannot overwrite each
   other's rotated refresh token. A key rotation keeps the old key in
   `INTEGRATION_TOKEN_KEY_PREVIOUS` until refreshes have resealed the tokens
-  (D-67). A reconnect to another qdit account is allowed and the row keeps
+  (D-67): keep it for at least qdit's refresh-token lifetime (D-81), since an
+  idle connection is resealed only on its next refresh. A wrong or swapped
+  `INTEGRATION_TOKEN_KEY` deletes each user's stored tokens on their next
+  qdit request (the row turns `needs_reconnect` and its ciphertext is
+  cleared), and putting the old env back does not bring them back, so set
+  `INTEGRATION_TOKEN_KEY_PREVIOUS` in the same deploy that changes the key
+  (the runbook below has the steps). A reconnect to another qdit account is allowed and the row keeps
   the replaced one in `previous_subject`/`previous_account_label`, so the
   profile can say "Now connected as X (was Y)" (D-66).
   Disconnect is best effort on qdit's side (D-65): doqtri always drops its
@@ -233,6 +239,14 @@ Two supporting tables:
   keeping the newest event and the newest ledger whatever order they arrive
   in (D-25), and unlinking forgets it. `doc_project_links` gained the
   project's chain, so the webhook knows which contract to read.
+
+- `public.qdit_milestone_approvals`, `public.qdit_milestone_approval_misses`
+  and `public.qdit_milestone_approval_incomplete_scans` — the transactions
+  that approved qdit milestones, found in Stellar RPC's event window for the
+  public receipts (WP-3.1), and when a lookup found nothing (a miss, which
+  starts the 8-day give-up clock) or ran out of its page budget (an
+  incomplete scan, which only throttles the next lookup to one an hour,
+  WP-2.13). Service role only; an approval found is never changed.
 
 The notes table itself is still the only content store. There are deliberately **no** graph tables: nodes and
 edges are parsed from `markdown` at render time by `lib/wikilinks.ts`, so the
@@ -347,6 +361,59 @@ as a pre-existing user, and users are created via the Admin API
 (`POST /auth/v1/admin/users` with `email_confirm: true`), which bypasses
 confirmation by design. Keep it that way — an e2e suite that waits on real mail
 is a flaky suite.
+
+## qdit integration operations
+
+### Runbook: rotating `INTEGRATION_TOKEN_KEY` (D-67, D-81)
+
+The stored qdit tokens are sealed with `INTEGRATION_TOKEN_KEY`. A connected
+row whose tokens open under neither the current nor the previous key is
+treated as broken: on that user's next qdit request it is marked
+`needs_reconnect` and its ciphertext is cleared. That cannot be undone, so a
+wrong key, a key set without the previous one, or the two values swapped
+deletes every user's tokens one request at a time, and restoring the old env
+afterwards does not bring them back. To rotate:
+
+1. Generate the new key (`openssl rand -base64 32`).
+2. In **one** deploy, set `INTEGRATION_TOKEN_KEY` to the new key and
+   `INTEGRATION_TOKEN_KEY_PREVIOUS` to the key it replaces. Check the two are
+   not swapped before deploying.
+3. Keep `INTEGRATION_TOKEN_KEY_PREVIOUS` for at least qdit's refresh-token
+   lifetime (its Supabase session time-box or inactivity timeout). Each
+   connection is resealed under the new key on its next refresh, so an idle
+   one still needs the previous key until then; once it is removed, a
+   connection still sealed under it needs a reconnect. If qdit sets neither,
+   its refresh tokens do not expire and there is no finite period: keep the
+   previous key until every row has been resealed, or accept that
+   connections unused since the rotation will need a reconnect (contract
+   section 1, D-81).
+4. Then remove `INTEGRATION_TOKEN_KEY_PREVIOUS` in a later deploy.
+
+An invalid value in either variable turns the integration off rather than
+deleting anything.
+
+### A spike of `needs_reconnect`
+
+One user turning `needs_reconnect` is that user: they revoked Doqtri in qdit,
+or their grant expired. Many at once is not users. Look first at:
+
+- **This deploy's `INTEGRATION_TOKEN_KEY`** (above), if it just changed.
+- **qdit's auth configuration**, with the keys unchanged: its OAuth server's
+  JWKS, issuer or signing algorithm, or its token settings. Doqtri marks a
+  connection `needs_reconnect` when qdit refuses a token it has just
+  refreshed with a second `401`, or refuses the refresh token itself
+  (`invalid_grant`), so if qdit's API stops accepting the tokens its own
+  OAuth server issues, or a shortened session limit expires every grant,
+  every active user is marked in turn. Fix it on qdit's side; users then
+  have to reconnect, since their tokens were dropped. (A refused client id
+  or secret is different: requests fail as not configured and no
+  connection is marked.)
+
+```sql
+-- How many connections turned needs_reconnect in the last hour.
+select count(*) from public.integration_connections
+ where provider = 'qdit' and status = 'needs_reconnect' and updated_at > now() - interval '1 hour';
+```
 
 ## Known advisory
 
