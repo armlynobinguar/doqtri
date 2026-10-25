@@ -1,6 +1,6 @@
 # doqtri x qdit integration contract
 
-Status: v1.1.0, WP-2.0 (history in section 13, Changelog). This file is
+Status: v1.1.1, WP-2.0 (history in section 13, Changelog). This file is
 byte-identical in both repos (`qdit/docs/integration/CONTRACT.md`,
 `doqtri/docs/integration/CONTRACT.md`).
 Change it in both repos in the same phase, through the masterplan's decision
@@ -28,7 +28,7 @@ Keywords MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 | doqtri webhook | `https://www.doqtri.xyz/api/integrations/qdit/webhook` |
 | doqtri origin (doc URLs) | `https://www.doqtri.xyz` |
 | qdit origin (public pages) | `https://qdit.atalusan.com` |
-| `DoqtriRegistry` (doqtri's chain) | testnet `CCCIDUCFQMTMAGESMPTB3MFW4TURS62ORSZNICFOE6MNQZO3MI7F6QRJ` |
+| `DoqtriRegistry` (doqtri's chain, D-84) | testnet `CCCIDUCFQMTMAGESMPTB3MFW4TURS62ORSZNICFOE6MNQZO3MI7F6QRJ`; mainnet: not deployed yet, set by the operator |
 
 Preview and local deployments configure their own base URLs through env vars.
 Paths never change. Each deployment of the pair sets these constants; the two
@@ -41,8 +41,8 @@ sides of one pair MUST agree on them:
 | doqtri's OAuth client id | `QDIT_OAUTH_CLIENT_ID` | `DOQTRI_OAUTH_CLIENT_ID` | the client qdit registered for doqtri in this environment (D-61) |
 | doqtri's client secret | `QDIT_CLIENT_SECRET` | (held by qdit's OAuth server) | sent with `client_secret_basic` (D-67) |
 | Webhook secret | `QDIT_WEBHOOK_SECRET` | per row in `integration_webhooks` | section 9 |
-| doqtri origin | `NEXT_PUBLIC_SITE_URL` (else the Vercel production URL) | `DOQTRI_ORIGIN` | the origin every `doc_url` starts with (D-45, D-72) |
-| `DoqtriRegistry` | `NEXT_PUBLIC_CONTRACT_ID`, `NEXT_PUBLIC_NETWORK_PASSPHRASE` | `DOQTRI_REGISTRY_CONTRACT_ID`, `DOQTRI_REGISTRY_NETWORK` (WP-3.2) | the registry qdit checks plan versions against (section 12) |
+| doqtri origin | `NEXT_PUBLIC_SITE_URL` (else the Vercel production URL) | `DOQTRI_ORIGIN`, and `integration_settings.doqtri_origin` in its database (D-77) | the origin every `doc_url` starts with (D-45, D-72) |
+| `DoqtriRegistry` (D-84) | `NEXT_PUBLIC_CONTRACT_ID`, `NEXT_PUBLIC_NETWORK_PASSPHRASE` | `DOQTRI_REGISTRY_CONTRACT_ID`, `DOQTRI_REGISTRY_NETWORK` (WP-3.2) | the registry address on that network (table above); the registry qdit checks plan versions against (section 12) |
 
 - `DOQTRI_OAUTH_CLIENT_ID` (D-61). qdit counts a write as doqtri's (for
   example when it records which doqtri connections keep a plan doc linked)
@@ -52,11 +52,18 @@ sides of one pair MUST agree on them:
   do not record which client wrote them, and a project member's own qdit
   session may write `milestone_external_links` too, so a link row is never
   evidence of what doqtri planned: qdit's public page shows a doqtri node
-  only on on-chain evidence (section 12). qdit's database
+  only on on-chain evidence (section 12, D-73). qdit's database
   needs the same value, so the operator stores it once per environment in
   qdit's hidden one-row integration settings (qdit's runbook has the SQL).
   Unset, nothing counts as a doqtri connection, and qdit logs a `WARNING`
-  saying so.
+  saying so. The column, `integration_settings.doqtri_oauth_client_id`,
+  stays a `uuid` (D-77), and qdit's `/api/v1` refuses a token whose
+  `client_id` is not a UUID (section 5).
+- doqtri origin in qdit's database (D-77). `public_milestone_proof()`
+  (section 12) runs in SQL and cannot read qdit's env, so the operator also
+  stores the origin once per environment in
+  `integration_settings.doqtri_origin`, the same value as `DOQTRI_ORIGIN`.
+  Unset, the function returns no doc URL.
 - Client authentication (D-67). doqtri is registered with
   `token_endpoint_auth_method` = `client_secret_basic`: every call to
   `<issuer>/oauth/token` carries HTTP Basic credentials per RFC 6749
@@ -71,6 +78,31 @@ sides of one pair MUST agree on them:
   either key and re-encrypts with the current one on the next write of that
   row. Changing the key without setting the previous one disconnects every
   user.
+  - Retention (D-81). Keep `INTEGRATION_TOKEN_KEY_PREVIOUS` set for at least
+    qdit's refresh-token lifetime (its Supabase session time-box or
+    inactivity timeout). A row is resealed only when doqtri next writes it,
+    which for most users is their next refresh, so a connection unused for
+    longer still needs the old key. There is no key id yet: doqtri tries
+    both keys.
+  - Wrong key (D-81). A wrong or swapped key (for example another
+    deployment's) cannot open the stored tokens it did not seal. doqtri then
+    deletes that user's stored tokens on their next request and marks the
+    connection `needs_reconnect`; only a reconnect recovers it. After a key
+    change, check the keys first if connections start needing a reconnect.
+    A spike in `needs_reconnect`
+    with the keys unchanged points at qdit's auth configuration (its OAuth
+    client, secret or token settings) instead.
+- `DoqtriRegistry` (D-84). Both apps of a pair read the same registry
+  address for the pair's network. Testnet:
+  `CCCIDUCFQMTMAGESMPTB3MFW4TURS62ORSZNICFOE6MNQZO3MI7F6QRJ`, doqtri's
+  built-in default (`TESTNET_CONTRACT` in `lib/stellar/config.ts`) and the
+  value in qdit's `web/.env.example`. Mainnet: no address yet; the operator
+  sets it on both sides, and doqtri refuses to start on mainnet without
+  `NEXT_PUBLIC_CONTRACT_ID`. The two sides name the network differently:
+  doqtri by its passphrase (`Test SDF Network ; September 2015` or
+  `Public Global Stellar Network ; September 2015`), qdit by `testnet` or
+  `mainnet`. They MUST name the same network. qdit may also set the
+  optional `DOQTRI_REGISTRY_RPC_URL` for those reads.
 - doqtri also reads optional `QDIT_OAUTH_REDIRECT_URI` and
   `QDIT_CHAIN_RPC_URL_TESTNET` / `QDIT_CHAIN_RPC_URL_MAINNET`, and shows the
   integration only when `NEXT_PUBLIC_QDIT_INTEGRATION` is on. qdit's own
@@ -107,8 +139,10 @@ Rules that follow from the decisions:
   (D-03): no status changes, approvals, rejections, deletes of projects or
   milestones, members or proofs, and no writes to anchors. qdit enforces this
   with RESTRICTIVE RLS on the `client_id` claim, so it holds even if the token
-  is used against PostgREST directly. The D-59 revoke check is enforced on
-  `/api/v1` only; see the known limit in section 5.
+  is used against PostgREST directly. The restrictive write guards also
+  refuse a revoked token (D-75, `not public.oauth_token_revoked()`), so after
+  a revoke the token cannot write through PostgREST either; PostgREST reads
+  keep the window in section 5's known limit.
 - Within that, the caller's qdit project role decides (D-23): admins and
   owners link and unlink docs, members and above create and rename milestones
   and write links, viewers only read. Section 8 lists the role per endpoint.
@@ -152,7 +186,8 @@ Rules that follow from the decisions:
   - the signature verifies against `<issuer>/.well-known/jwks.json`;
   - `iss` equals the issuer above and `exp` is in the future;
   - `role` is `authenticated`;
-  - `sub` (the qdit user id) and `client_id` (the OAuth client id) are present;
+  - `sub` (the qdit user id) and `client_id` (the OAuth client id) are present,
+    and `client_id` is a UUID (D-77);
   - the user has not revoked that client since the token was issued (D-59,
     below).
   A first-party qdit session token has no `client_id` and is refused with
@@ -166,28 +201,42 @@ Rules that follow from the decisions:
 
 Revocation (D-59). A user revokes an app under Authorized apps in qdit's
 settings. From that moment qdit MUST refuse, on every `/api/v1` endpoint
-(the scope of this rule; see the known limit below), each token of that app
+and on every PostgREST write the D-03 guards cover (D-75; for PostgREST
+reads see the known limit below), each token of that app
 for that user that was issued at or before the revoke, that is every token
 whose `iat` <= the revoke time recorded for its `(sub, client_id)`, even
-while its `exp` is still in the future. The answer is `401 unauthorized`
-with `WWW-Authenticate: Bearer error="invalid_token"`, the same as any other
-refused token (section 6). qdit keeps the revoke time
+while its `exp` is still in the future. On `/api/v1` the answer is
+`401 unauthorized` with `WWW-Authenticate: Bearer error="invalid_token"`, the
+same as any other refused token (section 6); a PostgREST write is refused by
+RLS. qdit keeps the revoke time
 in a table no client can read, looks it up once per request, and fails
 closed: if the lookup itself fails it answers `503 unavailable`, never a
 pass. qdit's own record of which doqtri connections keep a plan doc linked
 takes its revoke time from the same table. A later consent issues new tokens
 with a later `iat`, so the app works again for that user without any action
-on qdit's side. A token issued in the same second as the revoke is refused;
-doqtri's normal refresh-once handles that.
+on qdit's side.
 
-- Known limit (D-59 scope). Supabase's revoke ends that client's sessions
-  and refresh tokens but does not invalidate access tokens it has already
-  issued, and PostgREST does not check sessions. A revoked app's current
-  access token therefore keeps working against qdit's PostgREST directly
-  until its `exp` (Supabase's JWT expiry, 1 hour by default), still bounded
-  by the D-03 guards (section 2). Link rows it writes that way never count
-  as a doqtri connection, because qdit's connection record checks the same
-  revoke table. doqtri MUST NOT use PostgREST directly; it calls only
+Revoke order (D-76). qdit records the revoke time first and then revokes the
+grant in Supabase Auth, so a failure between the two steps leaves the app's
+tokens refused rather than accepted. The cost is a known, accepted edge: `iat` has whole seconds, so a
+token issued in the same second as the recorded revoke (for example by a new
+consent in that second) is refused too, because its `iat` <= the revoke time.
+The next refresh or re-consent issues a token with a later `iat` and recovers
+it; doqtri's normal refresh-once handles that.
+
+- Known limit (D-59, D-75 scope). Supabase's revoke ends that client's
+  sessions and refresh tokens but does not invalidate access tokens it has
+  already issued, and PostgREST does not check sessions. qdit's restrictive
+  OAuth write guards (`milestones` `INSERT` and `UPDATE`,
+  `milestone_external_links` `INSERT`, `UPDATE` and `DELETE`,
+  `project_doc_links` `DELETE`) also require
+  `not public.oauth_token_revoked()`, so a revoked token's writes straight
+  against PostgREST are refused at once (D-75). Its reads are not: a revoked
+  app's current access token may still read what the D-03 guards allow
+  through qdit's PostgREST until its `exp` (Supabase's JWT expiry, 1 hour
+  by default, so at most about 1 h). qdit's connection record checks the
+  same revoke table, so nothing that token does counts as a doqtri
+  connection. doqtri MUST NOT use PostgREST directly; it calls only
   `/api/v1`.
 
 Disconnect in doqtri (D-65) is best effort. It deletes doqtri's copy of the
@@ -208,6 +257,13 @@ workspace, not to the connection. doqtri tells the user which account they
 are now connected as and which one it replaced ("Now connected as X (was
 Y)"). The earlier account's grant stays in qdit until that account revokes it
 there.
+
+Deleting a doqtri account (D-63). doqtri anonymises the account and keeps its
+content. That user's qdit connection is dropped (doqtri deletes its stored
+tokens, as on Disconnect); the doc and milestone links stay with the doc, as
+on an account switch (D-66, D-82). Where a page shows that user as a signer,
+the wallet address stays (it is the on-chain identity) and any name shown for
+it reads "Former user".
 
 ## 6. Errors
 
@@ -235,7 +291,7 @@ server-to-server only and sends no CORS headers, so no preflight is needed.[^1]
 | HTTP | `code` | When |
 | --- | --- | --- |
 | 400 | `invalid_request` | Malformed JSON, wrong content type, unknown or invalid field. `details.fields` maps field name to problem. |
-| 401 | `unauthorized` | Missing, malformed, expired, revoked (D-59) or non-OAuth token. Response has `WWW-Authenticate: Bearer error="invalid_token"`. |
+| 401 | `unauthorized` | Missing, malformed, expired, revoked (D-59) or non-OAuth token, or a `client_id` that is not a UUID (D-77). Response has `WWW-Authenticate: Bearer error="invalid_token"`. |
 | 403 | `forbidden` | Valid token, but the user's qdit role or the D-03 guard does not allow the action on a resource the user can see. |
 | 404 | `not_found` | Unknown path or id, a resource the user cannot see, or a method a known path does not support (D-27). Never reveals existence. |
 | 409 | `conflict` | State conflict. `details.reason` is one of the reasons listed per endpoint. |
@@ -794,7 +850,7 @@ Comparing a node's `@vV` with the current `MilestoneRecord.version`:
   the rejection.
 - record newer than `V`: the milestone was resubmitted after the node was
   signed. The page shows the newer submission and says the node's signature
-  refers to `vV`; fact 3 at `vV` comes only from history.
+  refers to `vV`; fact 3 at `vV` itself comes only from history.
 - record older than `V`, `MilestoneNotFound`, or (where the page knows the
   project's `chain`) a `<contract-id>` or `<network>` that differs from it:
   inconsistent. The page shows an explicit unverified state naming the
@@ -805,25 +861,56 @@ record or, after a resubmission, from history. A node signed
 `Verified` whose milestone is not `Approved` at `V` is shown as "signed as
 Verified; the chain now says <status>", never as verified.
 
+### Step states (D-78)
+
+Both public pages show the four facts as four steps, in the order of the
+table above, and each step is in exactly one of four states. Both pages say
+the state in these words, next to any icon and never by colour alone:
+
+| State | Words on both pages | Meaning |
+| --- | --- | --- |
+| done | "Done" | the chain says it happened |
+| pending | "Pending" | the chain says it has not happened yet |
+| could not check | "Could not check" | a read failed or is not configured; never a pass |
+| does not match | "Does not match" | the records contradict each other (the inconsistent cases above, or a node-evidence mismatch below); the step says how |
+
+Step 3 (Approved) is keyed on the milestone's current on-chain record on both
+pages: it is "Done" when that record is `Approved`, and "Pending" while it is
+`Submitted` or `Rejected` (the step then says it was rejected). When the
+heading's `@vV` is older than the current record's `version`, the step adds
+a note that the heading was signed for `vV`, an older version of the
+milestone. That note does not change step 3's state; step 4 still needs
+fact 3 at the heading's own `V` (above).
+
 ### qdit's "Planned in doqtri" block (D-04, D-11)
 
-qdit's link rows are not evidence of what doqtri planned. Any OAuth client
-with the role may write `project_doc_links` and `milestone_external_links`
-(section 2), and a project member's own qdit session may insert or re-point
-a `milestone_external_links` row, its `node_id` and `doc_version` included.
+qdit's link rows are pointers, never evidence of what doqtri planned (D-73).
+Any OAuth client with the role may write `project_doc_links` and
+`milestone_external_links` (section 2), and a project member's own qdit
+session may insert or re-point a `milestone_external_links` row, its
+`node_id` and `doc_version` included.
 The block therefore uses the link row only to know which doc and node to
 read, and takes every doqtri claim from `DoqtriRegistry` on
 `DOQTRI_REGISTRY_CONTRACT_ID` over RPC on `DOQTRI_REGISTRY_NETWORK`
 (section 1). It makes two separate checks:
 
-- Node evidence. It reads `get_node(link.doc_id, link.node_id)`. Only when
-  that record has `tool = "qdit"` and its `artifact_ref` names this project
-  and milestone (any `@vV`) may the block show the node id, the record's
+- Node evidence (D-73, D-74). It reads `get_node(link.doc_id, link.node_id)`.
+  Node evidence holds only when that record has `tool = "qdit"` and its
+  `artifact_ref` names this project and milestone (any `@vV`) and its
+  `<network>` and `<contract-id>` equal the project's stored chain
+  (`projects.chain_network` and `chain_contract_id`, the `chain` of
+  section 7). Only then may the block show the node id, the record's
   `status` and `@vV`, or call the milestone "planned in node `N`" (fact 4
-  when `status` is `Verified` and fact 3 holds at `V`). Otherwise the block
-  shows only "linked to doqtri doc `D`", with no node id and no version,
-  and says the milestone is not signed in doqtri yet. That is not an error:
-  positional ids move (R-03), and a node is signed only after it is linked.
+  when `status` is `Verified` and fact 3 holds at `V`).
+  - A record with `tool = "qdit"` that names this project and milestone but
+    another network or contract, or a project with no stored chain, is
+    inconsistent: the block shows the explicit inconsistent unverified state
+    naming the mismatch ("Does not match", above), with no node id, and never
+    verified.
+  - Any other record, or none: the block shows only "linked to doqtri doc
+    `D`", with no node id and no version, and says the milestone is not
+    signed in doqtri yet. That is not an error: positional ids move (R-03),
+    and a node is signed only after it is linked.
 - Doc anchor. It reads `get_document(link.doc_id)`. The result is labelled
   "doc anchored at version >= `V`", where `V` is `link.doc_version`, and
   holds when the document exists and its on-chain `version` is at least `V`
@@ -842,6 +929,33 @@ plan version it then names is the on-chain document `version` (fact 1), not
 `link.doc_version`. Any other combination is shown as unverified with its
 reason. A milestone with no doqtri link renders exactly as it did before
 phase 3.
+
+### doqtri's receipt (D-79, D-85)
+
+doqtri's public doc page shows a receipt for each heading whose current
+`NodeRecord` has `tool = "qdit"`: facts 2 to 4, read from the contract its
+`artifact_ref` names, next to doqtri's own write of that record.
+
+- Stricter rule (D-79). doqtri reads a ref only when it names the note's
+  linked qdit project (doqtri's `doc_project_links`) and that project's
+  stored chain (network and contract id, as qdit's API last reported them).
+  An editor signs with their own wallet (D-14), so a ref may name any
+  contract, including a look-alike that answers `Approved` for anything.
+  With no linked project (never linked, unlinked, or doqtri's side dropped
+  under D-68), no stored chain, or a ref that names another project, network
+  or contract, the receipt shows the unverified state and doqtri does not
+  read the contract the ref names. This is stricter than the comparing rule
+  above, which needs the chain to match only where the page knows it. The
+  cost: after an unlink or a D-68 drop, headings that were Verified earlier
+  show unverified until the note is linked again. Keeping them readable is
+  deferred (D-79). The page says only that the ref does not match; it shows
+  nothing else from the link rows (below).
+- Which headings to read (D-85). doqtri finds the signed headings from the
+  registry's transaction history on Horizon. When that history cannot be
+  read, the receipt does not disappear: doqtri calls `get_node` for the node
+  ids of the note's qdit links (its `node_links` with `provider = 'qdit'`)
+  and uses those ids only to choose which records to read. What the receipt
+  shows still comes from those records, under the rule above.
 
 ### Transaction links
 
@@ -873,6 +987,16 @@ Stellar RPC keeps events for about 7 days. When a page has no hash for a fact
 doqtri showing a qdit approval from last month), it MUST still show the fact
 read from current state, link the contract page instead, and say the
 transaction is older than the RPC event window. It MUST NOT show nothing.
+
+qdit keeps no record of doqtri's transactions. On qdit's page the registry
+facts (the plan version of fact 1 and the Verified record of fact 4) MAY
+therefore always be shown as read from current state, with the
+`DoqtriRegistry` contract link instead of a transaction and a line saying
+so. That is the fallback above applied to them, not a missing fact.
+
+A proof hash is the hash of the submitted work, not a transaction: no page
+links it to `/tx/` (D-83). qdit's "Current proof hash" is shown as the hash
+only.
 
 ### Links between the pages
 
@@ -907,22 +1031,91 @@ above), the milestone's title or qdit status, or
 anything else taken from qdit's API or from doqtri's link rows
 (`doc_project_links`, `node_links`), and no member names.
 
-qdit's page MAY show what `public_milestone_proof()` returns today (project
-name and slug, milestone title, status, due date, chain fields, anchor
-history, review decisions with reasons) and, for a linked milestone, the
-link's `doc_id`, `node_id` and `doc_version` (WP-3.2 adds these to
-`public_milestone_proof()`; the node id only under the node-evidence rule
-above), the doqtri link it builds from `doc_id`, and what it read from
-`DoqtriRegistry`. It MUST NOT show the stored `doc_url`, `doc_title`, any
-heading text other than the milestone's own title
+qdit's page MAY show what `public_milestone_proof()` returned before phase 3
+(project name and slug, milestone title, status, due date, chain fields,
+anchor history, review decisions with reasons) and, for a linked milestone,
+the link's `doc_id` and `doc_version`, the node id only under the
+node-evidence rule above, the doqtri link it builds from `doc_id`, and what
+it read from `DoqtriRegistry`. It MUST NOT show the stored `doc_url`,
+`doc_title`, any heading text other than the milestone's own title
 (`node_label` equals it, D-12), who made the link, or anything about the
 doqtri workspace. A project that does not publish shows nothing at all.
+
+`public_milestone_proof()` is callable by anyone, so what it returns is
+public whatever the page shows (D-77). For a linked milestone it adds one
+`docSource` object (an unlinked milestone gets no such key) that carries
+exactly:
+
+- `docId`: the link's `doc_id`;
+- `docVersion`: the link's `doc_version`, or `null`;
+- `nodeLabel`: the link's `node_label`, always equal to the milestone title
+  the page already publishes (D-12);
+- `nodeId`: the link's `node_id`, only under the node-evidence rule above.
+  SQL cannot read the chain, so qdit either keeps `node_id` out of the
+  anonymous answer and shows it only after its server has checked node
+  evidence, or returns it only while a node-evidence result that qdit's
+  server recorded after reading `DoqtriRegistry` still matches the link
+  row. Either way an anonymous caller never receives a node id for which
+  node evidence does not hold;
+- `projectId`: `projects.id` for a project registered on `milestone_proof`,
+  else `null`. A registered project's id is already public on chain (it keys
+  every `MilestoneRecord` and is in every event and `artifact_ref`). The page
+  uses it for the checks and does not show it;
+- `docUrl`, if the function carries it at all, only when the stored
+  `doc_url` starts with `integration_settings.doqtri_origin` followed by `/`
+  (section 1), else `null`. The page still builds its doqtri link from
+  `doc_id` and does not show it.
+
+It never carries `doc_title`, a `doc_url` off that origin, an unregistered
+project's id, the link ids, or who made the link.
 
 ## 13. Changelog
 
 Every change here is additive within v1 (section 3), except that v1.0.2
 narrows what `doc_url` accepts (D-45). Section 3 allows that because
 doqtri only ever sent its own URLs.
+
+- v1.1.1 (2026-10-25): writes down decisions D-73 to D-85 (masterplan rev
+  40). No request or response shape changes on `/api/v1`. D-75 and D-77
+  tighten server behaviour that a conforming client already meets: doqtri
+  never writes through PostgREST, and its client id is a UUID.
+  - Section 1: `integration_settings.doqtri_oauth_client_id` stays a `uuid`,
+    and the operator also stores the doqtri origin in
+    `integration_settings.doqtri_origin` (D-77). Keep
+    `INTEGRATION_TOKEN_KEY_PREVIOUS` for at least qdit's refresh-token
+    lifetime; a wrong or swapped key deletes each user's stored tokens on
+    their next request, and a `needs_reconnect` spike with the keys
+    unchanged points at qdit's auth configuration (D-81). The
+    `DoqtriRegistry` address per network (testnet set, mainnet by the
+    operator) and both apps' env names for it, which name the network
+    differently (D-84).
+  - Section 2: the restrictive write guards refuse a revoked token (D-75).
+  - Section 5: a token whose `client_id` is not a UUID is refused (D-77). A
+    revoked token is refused on PostgREST writes too; PostgREST reads may
+    succeed until `exp`, at most about 1 h (D-75). Revoke order is
+    record-first, then Supabase Auth, and the same-second false refusal is
+    a known, accepted edge (D-76). Deleting a doqtri account drops its qdit
+    connection, keeps the links with the doc, and shows the signer's wallet
+    with the name "Former user" (D-63). Section 6's `401` row matches.
+  - Section 12: link rows are pointers, never evidence (D-73, confirmed).
+    Node evidence also needs the `artifact_ref`'s network and contract id to
+    equal the project's stored chain; otherwise the inconsistent unverified
+    state, never verified (D-74, the wave-5 review's open finding). New
+    "Step states": the four states and their words on both pages ("Done",
+    "Pending", "Could not check", "Does not match"), and step 3 keyed on the
+    current on-chain record with a note when the heading was signed for an
+    older version (D-78). New "doqtri's receipt": doqtri reads a ref only
+    when it names the note's linked project and that project's stored
+    chain, else unverified without reading the named contract, so earlier
+    Verified headings show unverified after an unlink or a D-68 drop (D-79);
+    when Horizon history cannot be read, the receipt falls back to
+    `get_node` for the note's qdit-linked node ids (D-85). Registry facts on
+    qdit's page may be shown as read from current state with the registry
+    contract link; a proof hash is never linked as a transaction (D-83).
+    What `public_milestone_proof()` carries for a linked milestone, field
+    by field: `docUrl` only on doqtri's origin, `nodeId` only under node
+    evidence, `projectId` only for a registered project, never the doc
+    title (D-77).
 
 - v1.1.0 (2026-10-25): minor version for the new section 12. The rest writes
   down decisions D-59 to D-72. No request or response shape changes; D-59 and
