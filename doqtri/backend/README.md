@@ -130,10 +130,14 @@ Two supporting tables:
   (`20261025090000_chain_jobs_scheduler.sql`, which says how to store its
   Vault secrets); `chain_jobs_scheduler_health()` reports whether the
   minutely job can run. Each claim stamps a job with a `claim_token`, which
-  re-pointing a handover clears, and the server records an outcome only
-  while the job still holds its token
+  re-pointing a handover or queueing a removal onto an open revocation
+  clears (keeping the claim's two-minute lease, as its call may still be in
+  flight), and the server records an outcome only while the job still holds
+  its token, releasing it as it does
   (`20261025130000_chain_jobs_claim_token.sql`), so a handover re-pointed
-  mid-call stays open for the new heir. Deleting an account queues revocations for every
+  mid-call stays open for the new heir and a member removed while their
+  demotion is in flight is still revoked. A job records when it was done
+  (`done_at`). Deleting an account queues revocations for every
   role its wallets hold, deletes the invites to and from it, and then lets
   its wallet records cascade (D-50, D-51). It refuses, with a hint, an
   account whose personal workspace holds anchored notes or other people's
@@ -147,7 +151,10 @@ Two supporting tables:
   with the wallet addresses they had then, and when they got it back. Written
   only by triggers; RLS on with no policies. The public audit page reads it
   through `signer_removals_for_document()` (service role) to flag history
-  entries signed after the signer was removed (WP-1.8, risk R-05).
+  entries signed after the signer was removed (WP-1.8, risk R-05); with each
+  removal it returns when that wallet's revocation was done (`revoked_at`),
+  so the page reads a removed member's feed until the chain stopped
+  accepting them (WP-1.10).
 
 - `public.doc_locks` — who is editing a document (D-17). One editor holds a
   document's lock at a time, from one edit session (one open tab: every call

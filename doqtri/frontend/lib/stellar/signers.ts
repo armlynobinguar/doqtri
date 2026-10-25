@@ -20,6 +20,12 @@ export type SignerRemoval = {
   removedAt: string;
   /** When they could sign there again, or null while they cannot. */
   restoredAt: string | null;
+  /**
+   * When doqtri's revocation of this wallet was done, so the chain no longer
+   * accepted its signature there (workspace_chain_jobs.done_at, WP-1.10);
+   * null while none is.
+   */
+  revokedAt: string | null;
 };
 
 /**
@@ -59,12 +65,13 @@ export function parseSignerRemovals(rows: unknown): SignerRemoval[] {
   if (!Array.isArray(rows)) return [];
   const removals: SignerRemoval[] = [];
   for (const row of rows) {
-    const { address, removed_at, restored_at } = (row ?? {}) as Record<string, unknown>;
+    const { address, removed_at, restored_at, revoked_at } = (row ?? {}) as Record<string, unknown>;
     if (typeof address !== "string" || typeof removed_at !== "string") continue;
     removals.push({
       address,
       removedAt: removed_at,
       restoredAt: typeof restored_at === "string" ? restored_at : null,
+      revokedAt: typeof revoked_at === "string" ? revoked_at : null,
     });
   }
   return removals;

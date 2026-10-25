@@ -249,13 +249,67 @@ describe("getDocumentHistory for a workspace note", () => {
       expect(history?.partial).toBeUndefined();
     });
 
-    it("stops at the day for a member the chain no longer lists", async () => {
+    it("stops at the day for a member the chain no longer lists, whose revocation was done within it", async () => {
+      // A later write in their feed stands in for what the day's bound cuts off.
+      const revokedAt = closedAt(removedLedger + 120);
       horizon({ [OWNER]: [register], [REMOVED]: [...removedFeed(removedLedger), lateStatus] });
 
-      const history = await getDocumentHistory(DOC, { removedSigners: [removal] });
+      const history = await getDocumentHistory(DOC, { removedSigners: [{ ...removal, revokedAt }] });
+      expect(state.readWorkspaceCalls).toBe(1);
       expect(history?.nodeEvents).toEqual([]);
       expect(history?.versions.map((v) => v.txHash)).toEqual(["reg", "own-late"]);
       expect(history?.partial).toBeUndefined();
+    });
+
+    describe("a revocation that reached the chain more than a week late (review)", () => {
+      // Removed ten days ago; their revoke failed until two days ago. The
+      // status write nine days ago is outside the RPC's event window
+      // (oldestLedger is about six days back), so only their feed has it.
+      const longAgo = ledgerAt(Date.now() - 10 * 24 * 60 * 60 * 1000);
+      const weekOld = ledgerAt(Date.now() - 9 * 24 * 60 * 60 * 1000);
+      const oldRemoval = { address: REMOVED, removedAt: closedAt(longAgo) };
+      const oldStatus = call(
+        "set_node_status_as",
+        [as(REMOVED), str(DOC), str("h2"), status("Built"), str("n8n"), str("wf_7")],
+        weekOld,
+        "week-old-status",
+      );
+      const feed = () => [...removedFeed(longAgo), oldStatus];
+
+      it("is outside the event window, so only the feed can find it", () => {
+        expect(weekOld).toBeLessThan(LATEST - 100_000);
+      });
+
+      it("reads on to when the revocation was done", async () => {
+        const revokedAt = closedAt(ledgerAt(Date.now() - 2 * 24 * 60 * 60 * 1000));
+        horizon({ [OWNER]: [register], [REMOVED]: feed() });
+
+        const history = await getDocumentHistory(DOC, { removedSigners: [{ ...oldRemoval, revokedAt }] });
+        expect(history?.nodeEvents.map((e) => [e.nodeId, e.txHash, e.signer])).toEqual([["h2", "week-old-status", REMOVED]]);
+        expect(history?.versions.map((v) => v.txHash)).toEqual(["reg", "own-late"]);
+        expect(history?.partial).toBeUndefined();
+      });
+
+      it("reads on to now when doqtri has no record of the revocation being done", async () => {
+        horizon({ [OWNER]: [register], [REMOVED]: feed() });
+
+        const history = await getDocumentHistory(DOC, { removedSigners: [{ ...oldRemoval, revokedAt: null }] });
+        expect(history?.nodeEvents.map((e) => e.txHash)).toEqual(["week-old-status"]);
+        expect(history?.partial).toBeUndefined();
+      });
+
+      it("is partial when reading on runs out of pages first", async () => {
+        // Their feed is busy after the removal: more than the page budget of
+        // unrelated operations before the write.
+        const busy = Array.from({ length: 10 * 200 + 1 }, (_, i) =>
+          call("update_document", [str(`other-${i}`), bytes(3)], longAgo + 10 + i, `busy-${i}`),
+        );
+        horizon({ [OWNER]: [register], [REMOVED]: [...busy, oldStatus] });
+
+        const history = await getDocumentHistory(DOC, { removedSigners: [oldRemoval] });
+        expect(history?.nodeEvents).toEqual([]);
+        expect(history?.partial).toBe(true);
+      });
     });
 
     it("is partial when the chain's editor list cannot be read", async () => {

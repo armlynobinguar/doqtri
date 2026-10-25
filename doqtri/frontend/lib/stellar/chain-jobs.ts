@@ -54,9 +54,10 @@ export type JobUpdate = {
 export type ChainJobStore = {
   claim(workspaceId: string | null, limit: number): Promise<ChainJob[]>;
   /**
-   * Records a claimed job's outcome. False when the job changed since the
-   * claim (an account deletion re-pointed a handover, D-31, or a later run
-   * claimed it again): the row is left as it is, pending, for its next run.
+   * Records a claimed job's outcome and releases the claim. False when the
+   * job changed since the claim (an account deletion re-pointed a handover,
+   * D-31, a removal was queued onto a revocation, or a later run claimed it
+   * again): the row is left as it is, pending, for its next run.
    */
   finish(job: ChainJob, update: JobUpdate): Promise<boolean>;
   /** Puts jobs waiting for the product owner back in the queue, once their key is configured. */
@@ -188,8 +189,10 @@ export function supabaseChainJobStore(admin: SupabaseClient, network: string, ac
       return (data ?? []) as ChainJob[];
     },
     async finish(job, update) {
-      // By claim token too: an account deletion can re-point a handover while
-      // its call is in flight (D-31), and that clears the token
+      // By claim token too: an account deletion can re-point a handover, and
+      // a later removal can be queued onto a revocation, while its call is in
+      // flight (D-31, D-16), and either clears the token. Finishing releases
+      // it, so a job still holding one is one a run may be busy with
       // (20261025130000_chain_jobs_claim_token.sql).
       if (!job.claim_token) {
         console.error(`[chain-jobs] job ${job.id} came back from the claim without a token; left for its next run`);
@@ -197,7 +200,7 @@ export function supabaseChainJobStore(admin: SupabaseClient, network: string, ac
       }
       const { data, error } = await admin
         .from("workspace_chain_jobs")
-        .update(update)
+        .update({ ...update, claim_token: null })
         .eq("id", job.id)
         .eq("claim_token", job.claim_token)
         .select("id");

@@ -188,6 +188,38 @@ describe("processChainJobs", () => {
     expect(summary.done).toBe(1);
   });
 
+  it("leaves a revocation a removal was queued onto during its call open (WP-1.10 review)", async () => {
+    // An admin demoted to editor: the run brings their on-chain role down to editor.
+    const claimed = job({ address: adminWallet, network: null, claim_token: "first" });
+    const roles: Record<string, WorkspaceRole> = { [adminWallet]: "editor" };
+    const store = memoryStore([claimed], roles);
+    const chain: Record<string, ChainRole> = { [adminWallet]: "admin" };
+    const sent: string[] = [];
+    const revoker: RevokerChain = {
+      readRole: async (_ws, address) => chain[address] ?? null,
+      async submit(fn, _ws, address) {
+        // They are removed while this call is in flight: the removal's
+        // revocation is queued onto this job and clears its token.
+        delete roles[address];
+        store.voided.add("first");
+        sent.push(`${fn}:${address}`);
+        chain[address] = fn === "remove_admin" ? "editor" : null;
+        return "ab".repeat(32);
+      },
+    };
+    const first = await processChainJobs(store, { ...base, editors: true, revoker, reassigner: null });
+    expect(sent).toEqual([`remove_admin:${adminWallet}`]);
+    expect(store.finished.j1).toBeUndefined();
+    expect(first).toMatchObject({ done: 0, pending: 1 });
+
+    // The next run reads the chain again and takes the editor role too.
+    const again = memoryStore([{ ...claimed, claim_token: "second" }], roles);
+    await processChainJobs(again, { ...base, editors: true, revoker, reassigner: null });
+    expect(sent).toEqual([`remove_admin:${adminWallet}`, `remove_editor:${adminWallet}`]);
+    expect(chain[adminWallet]).toBeNull();
+    expect(again.finished.j1.status).toBe("done");
+  });
+
   it("waits for an heir who has no wallet yet", async () => {
     const store = memoryStore([job({ id: "h", kind: "reassign_owner", user_id: "heir", address: null })]);
     const reassign = vi.fn();
@@ -230,11 +262,12 @@ describe("supabaseChainJobStore.finish", () => {
   }
   const access = { addressRole: async () => null };
 
-  it("updates the job by id and by the token its claim returned", async () => {
+  it("updates the job by id and by the token its claim returned, releasing the token", async () => {
     const { admin, calls } = adminReturning({ data: [{ id: "j1" }], error: null });
     const store = supabaseChainJobStore(admin, "testnet", access);
     await expect(store.finish(job({ claim_token: "tok" }), { status: "done", last_error: null })).resolves.toBe(true);
-    expect(calls.update).toEqual({ status: "done", last_error: null });
+    // And releases the claim as it records the outcome.
+    expect(calls.update).toEqual({ status: "done", last_error: null, claim_token: null });
     expect(calls.eq).toEqual([["id", "j1"], ["claim_token", "tok"]]);
   });
 

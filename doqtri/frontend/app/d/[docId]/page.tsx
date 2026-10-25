@@ -76,7 +76,12 @@ async function loadAudit(docId: string): Promise<Audit> {
   const [history, ttl, labels, removals] = await Promise.all([
     removalsLoaded.then((removals) =>
       getDocumentHistory(docId, {
-        removedSigners: removals.map(({ address, removedAt, restoredAt }) => ({ address, removedAt, restoredAt })),
+        removedSigners: removals.map(({ address, removedAt, restoredAt, revokedAt }) => ({
+          address,
+          removedAt,
+          restoredAt,
+          revokedAt,
+        })),
       }).catch(() => null),
     ),
     getDocumentTtl(docId).catch(() => null),

@@ -8,6 +8,7 @@ const removal = (removedAt: string, restoredAt: string | null = null, address = 
   address,
   removedAt,
   restoredAt,
+  revokedAt: null,
 });
 
 describe("removalInEffect", () => {
@@ -59,13 +60,15 @@ describe("parseSignerRemovals", () => {
       parseSignerRemovals([
         { address: EDITOR, removed_at: "2026-10-24T12:00:00+00:00", restored_at: null },
         { address: OTHER, removed_at: "2026-10-24T12:00:00+00:00", restored_at: "2026-10-24T13:00:00+00:00" },
+        { address: EDITOR, removed_at: "2026-10-25T12:00:00+00:00", restored_at: null, revoked_at: "2026-10-25T12:00:09+00:00" },
         { address: 42, removed_at: "2026-10-24T12:00:00+00:00" },
         { address: EDITOR },
         null,
       ]),
     ).toEqual([
-      { address: EDITOR, removedAt: "2026-10-24T12:00:00+00:00", restoredAt: null },
-      { address: OTHER, removedAt: "2026-10-24T12:00:00+00:00", restoredAt: "2026-10-24T13:00:00+00:00" },
+      { address: EDITOR, removedAt: "2026-10-24T12:00:00+00:00", restoredAt: null, revokedAt: null },
+      { address: OTHER, removedAt: "2026-10-24T12:00:00+00:00", restoredAt: "2026-10-24T13:00:00+00:00", revokedAt: null },
+      { address: EDITOR, removedAt: "2026-10-25T12:00:00+00:00", restoredAt: null, revokedAt: "2026-10-25T12:00:09+00:00" },
     ]);
     expect(parseSignerRemovals(null)).toEqual([]);
   });
