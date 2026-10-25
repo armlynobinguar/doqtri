@@ -5,6 +5,7 @@ import {
   chainRead,
   qditAddressUrl,
   qditExplorerUrl,
+  vouchedRef,
   type QditReceipt,
   type QditReceipts,
 } from "@/lib/integrations/qdit-receipts";
@@ -29,7 +30,9 @@ import type { SignerRemoval } from "@/lib/stellar/signers";
  * submission time), so a viewer can find the same submission on qdit's
  * page and on Stellar Expert. A ref that does not match a qdit project and
  * contract registered in doqtri for the note is unverified, in one wording
- * whatever the mismatch, so nothing about the link row shows.
+ * whatever the mismatch, so nothing about the link row shows; its raw
+ * artifact_ref is shown as text, with no link to the contract it names
+ * (D-94): that may be a look-alike that answers Approved for anything.
  *
  * Given the page's Document, history and removals (`chain`), each receipt also folds
  * out the full proof chain (WP-3.3, components/audit/qdit-proof-chain.tsx).
@@ -209,6 +212,8 @@ function Receipt({
   chain: ChainViewContext | undefined;
 }) {
   const { record, ref, signing } = receipt;
+  // Only a ref checked against the note's linked project links its contract (D-94).
+  const contract = vouchedRef(receipt);
   return (
     <li data-testid="qdit-receipt" data-state={receipt.check.state} className="grid gap-1.5 px-4 py-3">
       <span className="flex flex-wrap items-center justify-between gap-2">
@@ -239,10 +244,10 @@ function Receipt({
         <ApprovalLine receipt={receipt} />
         <span className="font-mono break-all">
           {record.artifactRef}
-          {ref ? (
+          {contract ? (
             <>
               {" · "}
-              <a className={LINK} href={qditExplorerUrl(ref.network, "contract", ref.contractId)} target="_blank" rel="noreferrer">
+              <a className={LINK} href={qditExplorerUrl(contract.network, "contract", contract.contractId)} target="_blank" rel="noreferrer">
                 contract →
               </a>
             </>

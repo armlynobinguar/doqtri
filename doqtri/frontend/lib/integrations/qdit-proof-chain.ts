@@ -1,5 +1,5 @@
 import type { MilestoneChainRecord, QditArtifactRef } from "@/lib/integrations/qdit-chain";
-import { chainRead, type QditReceipt } from "@/lib/integrations/qdit-receipts";
+import { chainRead, vouchedRef, type QditReceipt } from "@/lib/integrations/qdit-receipts";
 import type { ChainDocument } from "@/lib/stellar/contract-client";
 import type { ChainNodeEvent, DocumentHistory } from "@/lib/stellar/history";
 
@@ -179,15 +179,6 @@ export function planStep(receipt: QditReceipt, { doc, history }: PlanContext): P
   const at = receipt.signing?.docVersion;
   const signedAt = at && at >= 1 && at <= doc.version ? versionEntry(history, at) : null;
   return { key: "plan", state: signedAt ? "done" : "unchecked", current, signedAt };
-}
-
-/** The ref, when it was checked against the note's linked project and matched. */
-function vouchedRef({ ref, check }: QditReceipt): QditArtifactRef | null {
-  // A read (or a failed read: "rpc", "contract") happens only after the match.
-  const matched =
-    chainRead(check) != null ||
-    (check.state === "unreachable" && (check.reason === "rpc" || check.reason === "contract"));
-  return matched ? ref : null;
 }
 
 /** Why the chain could not be asked about `V`, or null when it was read. */
