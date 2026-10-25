@@ -8,9 +8,11 @@ import { shortAddress } from "@/lib/stellar/signers";
 /**
  * A signer's wallet address on the audit page: shortened, with the whole
  * address on hover, a link to its explorer page and a copy button. Only the
- * address: member names are not published (WP-1.8).
+ * address: member names are not published (WP-1.8). `href` replaces the
+ * explorer link, for an address on another network than doqtri's (a qdit
+ * submitter, WP-3.1).
  */
-export function SignerAddress({ address, owner = false }: { address: string; owner?: boolean }) {
+export function SignerAddress({ address, owner = false, href }: { address: string; owner?: boolean; href?: string }) {
   const [copied, setCopied] = useState(false);
 
   async function copy() {
@@ -27,7 +29,7 @@ export function SignerAddress({ address, owner = false }: { address: string; own
     <span className="inline-flex items-center gap-1">
       <a
         className="text-foreground/85 font-mono underline-offset-2 hover:underline"
-        href={expertAddressUrl(address)}
+        href={href ?? expertAddressUrl(address)}
         target="_blank"
         rel="noreferrer"
         title={address}

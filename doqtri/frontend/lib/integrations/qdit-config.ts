@@ -87,3 +87,21 @@ export function qditWebhookSecret(env: NodeJS.ProcessEnv = process.env): string 
   const secret = env.QDIT_WEBHOOK_SECRET?.replace(/\r?\n$/, "");
   return secret ? secret : null;
 }
+
+/**
+ * The qdit origin (section 1: the origin of QDIT_API_BASE_URL), where qdit's
+ * public pages live, e.g. https://qdit.atalusan.com. Null when the
+ * integration is off or the base is unset or not an http(s) URL: the public
+ * receipts then link no qdit page (WP-3.1, section 12).
+ */
+export function qditPublicOrigin(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (env.NEXT_PUBLIC_QDIT_INTEGRATION !== "1") return null;
+  const base = env.QDIT_API_BASE_URL?.trim();
+  if (!base) return null;
+  try {
+    const url = new URL(base);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.origin : null;
+  } catch {
+    return null;
+  }
+}

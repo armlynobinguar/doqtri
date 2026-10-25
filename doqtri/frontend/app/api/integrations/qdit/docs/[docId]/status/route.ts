@@ -1,4 +1,6 @@
+import { after } from "next/server";
 import { roleAtLeast } from "@/lib/workspace-roles";
+import { approvalRecorder, deferredRecorder, supabaseApprovalStore } from "@/lib/integrations/qdit-approvals";
 import {
   readChainOverRpc,
   recheckDocStatuses,
@@ -17,6 +19,10 @@ import { linkingErrorResponse, noStoreJson, qditRouteContext, readBody } from "@
  *
  * `{ force: true }` skips the freshness windows, so an editor's signature
  * follows a read made just before it; viewers' requests never force.
+ *
+ * Approvals the reads find are looked up for the public receipts (WP-3.1)
+ * after the answer is sent, so the panel and a signature never wait on an
+ * event scan.
  */
 export async function POST(request: Request, context: RouteContext<"/api/integrations/qdit/docs/[docId]/status">) {
   const { docId } = await context.params;
@@ -32,6 +38,7 @@ export async function POST(request: Request, context: RouteContext<"/api/integra
       docId: doc.id,
       readChain: readChainOverRpc,
       force,
+      recordApproval: deferredRecorder(approvalRecorder(supabaseApprovalStore(admin)), after),
     });
     return noStoreJson(200, result);
   } catch (error) {

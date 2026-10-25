@@ -9,6 +9,7 @@ import {
   type ProjectChain,
   type QditChainNetwork,
 } from "@/lib/integrations/qdit-chain";
+import type { RecordApproval } from "@/lib/integrations/qdit-approvals";
 import { QditError, type QditClient, type QditMilestoneStatus } from "@/lib/integrations/qdit-client";
 import { QDIT_MILESTONE_STATE_COLUMNS, type QditMilestoneStateRow } from "@/lib/integrations/qdit-status";
 
@@ -32,6 +33,13 @@ import { QDIT_MILESTONE_STATE_COLUMNS, type QditMilestoneStateRow } from "@/lib/
  *
  * Neither signs anything or touches the chain beyond reading it (D-04, D-05):
  * an editor signs in the browser, with their own wallet (D-14).
+ *
+ * When a read finds a milestone Approved, both also hand it to
+ * `recordApproval` (WP-3.1, lib/integrations/qdit-approvals.ts), which looks
+ * the approving transaction up in RPC's event window for the public
+ * receipts unless it has it already (or missed it within the hour, or for
+ * longer than the window). That is best effort and never changes either
+ * one's answer; the re-check route defers it past its response.
  */
 
 export const QDIT_WEBHOOK_EVENT = "milestone.status_changed";
@@ -312,6 +320,22 @@ export async function chainStateFor(
   };
 }
 
+/** The approval a chain read shows, as qdit_milestone_approvals keys it; null unless Approved. */
+function approvalKeyOf(chain: ChainState, projectId: string, milestoneId: string) {
+  if (chain.status !== "Approved" || chain.version === null) return null;
+  return { network: chain.network, contractId: chain.contractId, projectId, milestoneId, version: chain.version };
+}
+
+/** Hands an approval to `record`, which should not throw; if it does, nothing else is affected. */
+async function noteApproval(record: RecordApproval | undefined, key: ReturnType<typeof approvalKeyOf>) {
+  if (!record || !key) return;
+  try {
+    await record(key);
+  } catch {
+    // The receipt links to the contract instead.
+  }
+}
+
 // ---------------------------------------------------------------------------
 // The webhook (section 9)
 // ---------------------------------------------------------------------------
@@ -332,6 +356,8 @@ export async function handleQditWebhook(params: {
   nowMs: number;
   store: StatusStore;
   readChain: ReadChain;
+  /** WP-3.1: called when the read shows the milestone Approved. */
+  recordApproval?: RecordApproval;
 }): Promise<WebhookResult> {
   const { rawBody, store } = params;
   if (rawBody.byteLength > MAX_WEBHOOK_BODY_BYTES) return { status: 413, body: { error: "Body too large" } };
@@ -387,6 +413,9 @@ export async function handleQditWebhook(params: {
       chain,
       eventId: event.id,
     });
+    // An approval event is what makes qdit send this, so the approving
+    // transaction is at the newest end of RPC's window now.
+    if (outcome === "recorded") await noteApproval(params.recordApproval, approvalKeyOf(chain, event.projectId, event.milestoneId));
     return { status: 200, body: outcome === "unlinked" ? { ok: true, ignored: "unlinked" } : { ok: true } };
   } catch (error) {
     console.error(`[qdit-webhook] ${error instanceof Error ? error.message : String(error)}`);
@@ -432,6 +461,8 @@ export async function recheckDocStatuses(params: {
   readChain: ReadChain;
   force?: boolean;
   now?: () => number;
+  /** WP-3.1: called whenever a read shows a milestone Approved. */
+  recordApproval?: RecordApproval;
 }): Promise<RecheckResult> {
   const { store, docId, readChain, force = false } = params;
   const now = params.now ?? Date.now;
@@ -493,7 +524,13 @@ export async function recheckDocStatuses(params: {
     }
     if (force || age(state?.chain_checked_at, now()) > CHAIN_RECHECK_MS) {
       try {
-        await store.record({ ...link, chain: await chainStateFor(chain, link.projectId, link.milestoneId, readChain) });
+        const read = await chainStateFor(chain, link.projectId, link.milestoneId, readChain);
+        await store.record({ ...link, chain: read });
+        // On every read, not just the first that saw it: the webhook's own
+        // lookup may have failed. recordApproval skips an approval it has,
+        // missed within the last hour, or has missed for longer than RPC's
+        // window; the route's recorder runs after the answer is sent.
+        await noteApproval(params.recordApproval, approvalKeyOf(read, link.projectId, link.milestoneId));
       } catch (error) {
         unread.add(link.milestoneId);
         errors.add(
