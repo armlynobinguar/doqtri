@@ -30,7 +30,7 @@ const onChain = (status: MilestoneChainStatus, version: number) => ({
 
 const CONFIRMED: QditReceipt = {
   nodeId: "h4",
-  record: { status: "Verified", artifactRef: REF },
+  record: { status: "Verified", artifactRef: REF, updatedAt: 1_792_843_200 },
   ref: parseQditArtifactRef(REF),
   signing: {
     nodeId: "h4",
@@ -45,6 +45,7 @@ const CONFIRMED: QditReceipt = {
   },
   check: { state: "confirmed", chain: onChain("Approved", 2), ledger: 1234567 },
   approvalTxHash: APPROVAL_TX,
+  approvalLedger: 1234000,
   qditPageUrl: null,
 };
 
@@ -313,7 +314,7 @@ describe("QditReceiptsSection", () => {
 
     const bad = "qdit:testnet:not-a-ref";
     const invalid = render([
-      { ...CONFIRMED, record: { status: "Verified", artifactRef: bad }, ref: null, check: { state: "unreachable", reason: "invalid_ref" }, approvalTxHash: null },
+      { ...CONFIRMED, record: { status: "Verified", artifactRef: bad, updatedAt: null }, ref: null, check: { state: "unreachable", reason: "invalid_ref" }, approvalTxHash: null },
     ]);
     expect(invalid).toContain("does not follow the qdit grammar");
     expect(invalid).toContain(bad);

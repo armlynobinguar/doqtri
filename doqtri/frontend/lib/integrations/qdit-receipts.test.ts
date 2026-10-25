@@ -166,7 +166,7 @@ describe("loadQditReceipts: off", () => {
 describe("loadQditReceipts: states", () => {
   it("confirmed: a Verified record whose milestone is Approved at the ref's version", async () => {
     approvalRows = [
-      { network: "testnet", contract_id: CONTRACT, project_id: PROJECT, milestone_id: M2, version: 2, tx_hash: APPROVAL_TX },
+      { network: "testnet", contract_id: CONTRACT, project_id: PROJECT, milestone_id: M2, version: 2, tx_hash: APPROVAL_TX, ledger: 4990 },
     ];
     const h = setup([event("h1", "Built", ref(M2, 2), 1), event("h1", "Verified", ref(M2, 2), 2)]);
     const d = deps();
@@ -175,11 +175,13 @@ describe("loadQditReceipts: states", () => {
     expect(result?.receipts).toHaveLength(1);
     const [r] = result!.receipts;
     expect(r.check).toEqual({ state: "confirmed", chain: onChain(M2, "Approved", 2), ledger: 5000 });
-    expect(r.record).toEqual({ status: "Verified", artifactRef: ref(M2, 2) });
+    // The contract's own record, with its ledger time (WP-3.3's chain view).
+    expect(r.record).toEqual({ status: "Verified", artifactRef: ref(M2, 2), updatedAt: 1 });
     expect(r.ref).toMatchObject({ network: "testnet", contractId: CONTRACT, projectId: PROJECT, milestoneId: M2, version: 2 });
     // doqtri's own write that set this record, not the earlier Built one.
     expect(r.signing?.txHash).toBe(TX(2));
     expect(r.approvalTxHash).toBe(APPROVAL_TX);
+    expect(r.approvalLedger).toBe(4990);
     expect(d.approvals).toHaveBeenCalledWith([M2]);
     // The read went to the ref's own contract, for its own ids.
     const call = simulate.mock.calls[0][0];
@@ -199,6 +201,8 @@ describe("loadQditReceipts: states", () => {
     expect(r.check).toEqual({ state: "differs", chain: onChain(M2, "Approved", 2), ledger: 5000 });
     // The approval shown is v2's, which the component labels as such.
     expect(r.approvalTxHash).toBe(APPROVAL_TX);
+    // A row recorded without its ledger leaves it unknown.
+    expect(r.approvalLedger).toBeNull();
   });
 
   it("differs for any status when the chain is ahead of the ref, even one the newer record would match", async () => {
@@ -384,6 +388,8 @@ describe("loadQditReceipts: the current record", () => {
     nodes.set("h1", new Error("rpc down"));
     const [r] = (await loadQditReceipts(DOC, h, deps()))!.receipts;
     expect(r.record.status).toBe("Verified");
+    // No record time without the contract's own answer.
+    expect(r.record.updatedAt).toBeNull();
     expect(r.check.state).toBe("confirmed");
     expect(r.signing?.txHash).toBe(TX(1));
   });

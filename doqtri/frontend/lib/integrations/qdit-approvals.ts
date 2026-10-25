@@ -150,6 +150,8 @@ export type ApprovalRow = {
   milestone_id: string;
   version: number;
   tx_hash: string;
+  /** The ledger the approval closed in. */
+  ledger?: number;
 };
 
 export type ApprovalStore = {
@@ -203,10 +205,14 @@ export function supabaseApprovalStore(admin: SupabaseClient): ApprovalStore {
     async forMilestones(milestoneIds) {
       if (milestoneIds.length === 0) return [];
       const { data, error } = await table()
-        .select("network, contract_id, project_id, milestone_id, version, tx_hash")
+        .select("network, contract_id, project_id, milestone_id, version, tx_hash, ledger")
         .in("milestone_id", milestoneIds);
       if (error) throw new Error(`Could not read the milestones' approvals: ${error.message}`);
-      return ((data ?? []) as ApprovalRow[]).map((row) => ({ ...row, version: Number(row.version) }));
+      return ((data ?? []) as ApprovalRow[]).map((row) => ({
+        ...row,
+        version: Number(row.version),
+        ...(row.ledger != null ? { ledger: Number(row.ledger) } : {}),
+      }));
     },
   };
 }

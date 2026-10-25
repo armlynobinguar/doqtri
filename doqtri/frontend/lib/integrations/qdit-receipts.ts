@@ -141,14 +141,20 @@ export function linkMismatch(ref: QditArtifactRef, project: LinkedProject | null
 
 export type QditReceipt = {
   nodeId: string;
-  /** The heading's current DoqtriRegistry record. */
-  record: { status: string; artifactRef: string };
+  /**
+   * The heading's current DoqtriRegistry record. `updatedAt` is the
+   * record's own ledger time (seconds), or null when the contract could not
+   * be asked and the history's latest write stands in for it.
+   */
+  record: { status: string; artifactRef: string; updatedAt: number | null };
   ref: QditArtifactRef | null;
   /** doqtri's write that set the record, when the history read found it. */
   signing: ChainNodeEvent | null;
   check: ReceiptCheck;
   /** The approval of the version the chain holds, when the chain says Approved and doqtri recorded it. */
   approvalTxHash: string | null;
+  /** The ledger that approval closed in, when recorded with it. */
+  approvalLedger: number | null;
   /** qdit's public page for the milestone, only once qdit was seen publishing it. */
   qditPageUrl: string | null;
 };
@@ -329,10 +335,12 @@ export async function loadQditReceipts(
     // The record as the contract holds it now; the history's latest write
     // stands in for it when the contract can't be asked.
     let record: ChainNode | ChainNodeEvent = latest;
+    let updatedAt: number | null = null;
     try {
       const current = await deps.readNode(docId, latest.nodeId);
       if (!current) return null;
       record = current;
+      updatedAt = current.updatedAt;
     } catch {
       // Keep the history's.
     }
@@ -340,9 +348,10 @@ export async function loadQditReceipts(
 
     const base = {
       nodeId: latest.nodeId,
-      record: { status: record.status, artifactRef: record.artifactRef },
+      record: { status: record.status, artifactRef: record.artifactRef, updatedAt },
       signing: signingEvent(history, latest.nodeId, record),
       approvalTxHash: null,
+      approvalLedger: null,
       qditPageUrl: null,
     };
     const ref = parseQditArtifactRef(record.artifactRef);
@@ -400,6 +409,7 @@ async function attachApprovals(receipts: QditReceipt[], deps: ReceiptDeps): Prom
           Number(r.version) === version,
       );
       receipt.approvalTxHash = row?.tx_hash ?? null;
+      receipt.approvalLedger = row?.tx_hash && row.ledger != null ? Number(row.ledger) : null;
     }
   }
 }
