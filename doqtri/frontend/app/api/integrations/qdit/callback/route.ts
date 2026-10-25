@@ -54,7 +54,7 @@ export async function GET(request: NextRequest) {
     request.cookies.get(OAUTH_STATE_COOKIE)?.value,
     params.get("state"),
     user.id,
-    setup.tokenKey,
+    setup.tokenKeys,
   );
   if (!checked.ok) {
     return back("error", checked.reason === "expired" ? "expired" : checked.reason === "other_user" ? "other_user" : "state");

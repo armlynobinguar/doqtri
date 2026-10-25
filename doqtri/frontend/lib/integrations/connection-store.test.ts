@@ -100,4 +100,32 @@ describe("supabaseConnectionStore", () => {
     await store.saveConnected(ANA, { subject: "qdit-ana", accountLabel: "ana" }, { ...tokens, accessToken: "at3" });
     expect(await store.load(ANA)).toMatchObject({ status: "connected", generation: 3, accessToken: "at3" });
   });
+
+  it("reads tokens sealed under the previous key, and a refresh reseals them under the current one (D-67)", async () => {
+    const rows: Row[] = [];
+    const previous = randomBytes(32);
+    await supabaseConnectionStore(fakeAdmin(rows), previous).saveConnected(ANA, { subject: "qdit-ana", accountLabel: null }, tokens);
+    const sealedBefore = rows[0].refresh_token_ciphertext;
+
+    // The key rotated: INTEGRATION_TOKEN_KEY is new, the old one is INTEGRATION_TOKEN_KEY_PREVIOUS.
+    const store = supabaseConnectionStore(fakeAdmin(rows), { current: key, previous });
+    const conn = await store.load(ANA);
+    expect(conn).toMatchObject({ accessToken: "at-secret", refreshToken: "rt-secret" });
+
+    // qdit did not rotate the refresh token; the client hands the old one back.
+    expect(await store.saveRefreshed(ANA, conn!.generation, { ...tokens, accessToken: "at2" })).toBe(true);
+    expect(rows[0].refresh_token_ciphertext).not.toBe(sealedBefore);
+    // Readable with the current key alone: the previous key can now go.
+    expect(await supabaseConnectionStore(fakeAdmin(rows), key).load(ANA)).toMatchObject({
+      accessToken: "at2",
+      refreshToken: "rt-secret",
+    });
+  });
+
+  it("reads a row sealed under a key that is neither current nor previous as tokenless", async () => {
+    const rows: Row[] = [];
+    await supabaseConnectionStore(fakeAdmin(rows), randomBytes(32)).saveConnected(ANA, { subject: "qdit-ana", accountLabel: null }, tokens);
+    const store = supabaseConnectionStore(fakeAdmin(rows), { current: key, previous: randomBytes(32) });
+    expect(await store.load(ANA)).toMatchObject({ status: "connected", accessToken: null, refreshToken: null });
+  });
 });

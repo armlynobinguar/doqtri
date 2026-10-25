@@ -7,7 +7,7 @@ import {
   type ConnectionStore,
   type StoredConnection,
 } from "@/lib/integrations/connection-store";
-import { parseTokenKey } from "@/lib/integrations/token-crypto";
+import { parseTokenKey, type TokenKeyRing } from "@/lib/integrations/token-crypto";
 
 /**
  * Typed client for qdit's `/api/v1`, as one doqtri user (WP-2.3; server-only).
@@ -22,7 +22,9 @@ import { parseTokenKey } from "@/lib/integrations/token-crypto";
  * another's rotated refresh token. When qdit refuses the refresh token
  * (`invalid_grant`: the user revoked doqtri in qdit, or the grant expired),
  * the connection becomes `needs_reconnect`, its tokens are dropped, and the
- * call fails with QditNotConnectedError.
+ * call fails with QditNotConnectedError. The same happens when qdit refuses
+ * a freshly refreshed token with a second 401, and when a connected row's
+ * tokens no longer decrypt.
  *
  * Errors. Every failure is a QditError whose `kind` the caller branches on,
  * with qdit's `code`, `details.reason` and `X-Request-Id` when qdit sent them
@@ -330,9 +332,26 @@ export function createQditClient(userId: string, deps: QditClientDeps): QditClie
       throw new QditError("unavailable", "qdit's sign-in service is unavailable. Try again shortly.");
     }
 
+    // qdit may not rotate the refresh token: then the one just used is
+    // written back with the rest, which also seals it under the current key
+    // if it was opened with the previous one (D-67).
+    const next = { ...tokens, refreshToken: tokens.refreshToken ?? conn.refreshToken };
     // False means another write landed first. These tokens are still valid
     // for this call; the stored ones are the other writer's.
-    await store.saveRefreshed(userId, conn.generation, tokens);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await store.saveRefreshed(userId, conn.generation, next);
+        break;
+      } catch (error) {
+        // qdit has already rotated the refresh token, so the stored one is
+        // spent. The access token still works for this call, so use it; if
+        // the write keeps failing, the next refresh is refused and the
+        // connection is marked needs_reconnect then.
+        console.error(
+          `[qdit] storing refreshed tokens failed${attempt === 0 ? ", retrying" : ""}: ${(error as Error).message}`,
+        );
+      }
+    }
     return tokens.accessToken;
   }
 
@@ -341,7 +360,16 @@ export function createQditClient(userId: string, deps: QditClientDeps): QditClie
    * the stored one has changed since, it is refreshed whatever its expiry.
    */
   async function accessToken(stale?: string): Promise<string> {
-    const conn = await store.load(userId);
+    let conn = await store.load(userId);
+    if (conn?.status === "connected" && !conn.accessToken) {
+      // Stored as connected, but the token no longer decrypts under either
+      // key (INTEGRATION_TOKEN_KEY changed, or the ciphertext is damaged).
+      // Say so in the row too, so the profile offers Reconnect.
+      if (await store.markStatus(userId, conn.generation, "needs_reconnect")) {
+        throw new QditNotConnectedError("needs_reconnect");
+      }
+      conn = await store.load(userId);
+    }
     if (!usable(conn)) throw notConnected(conn);
     if (stale !== undefined ? conn.accessToken !== stale : conn.expiresAt === null || conn.expiresAt - now() > EXPIRY_SKEW_MS) {
       return conn.accessToken;
@@ -353,6 +381,26 @@ export function createQditClient(userId: string, deps: QditClientDeps): QditClie
     const run = refresh(conn).finally(() => refreshing.delete(key));
     refreshing.set(key, run);
     return run;
+  }
+
+  /**
+   * qdit refused a token it was just handed after a refresh (section 5): the
+   * grant is no longer good, whatever the refresh said. Unless another
+   * write has replaced that token since, the connection is marked
+   * needs_reconnect, so later calls fail fast without asking qdit and the
+   * profile and ship panel offer Reconnect. Otherwise the 401 is reported
+   * as is.
+   */
+  async function refusedAgain(token: string, res: Response): Promise<never> {
+    const latest = await store.load(userId);
+    if (
+      latest?.status === "connected" &&
+      latest.accessToken === token &&
+      (await store.markStatus(userId, latest.generation, "needs_reconnect"))
+    ) {
+      throw new QditNotConnectedError("needs_reconnect");
+    }
+    throw await errorFromResponse(res, now());
   }
 
   async function send(method: string, path: string, token: string, body?: unknown): Promise<Response> {
@@ -382,9 +430,10 @@ export function createQditClient(userId: string, deps: QditClientDeps): QditClie
     const token = await accessToken();
     let res = await send(method, path, token, body);
     if (res.status === 401) {
-      // Section 5: refresh once, retry once. A second 401 is reported as is.
+      // Section 5: refresh once, retry once.
       const fresh = await accessToken(token);
       res = await send(method, path, fresh, body);
+      if (res.status === 401) await refusedAgain(fresh, res);
     }
     if (!res.ok) throw await errorFromResponse(res, now());
     if (res.status === 204) return { status: 204, json: null };
@@ -448,24 +497,42 @@ export function createQditClient(userId: string, deps: QditClientDeps): QditClie
   return client;
 }
 
-export type QditServerSetup = { config: QditConfig; tokenKey: Buffer; store: ConnectionStore };
+export type QditServerSetup = {
+  config: QditConfig;
+  /** The current token key: everything new is sealed with it. */
+  tokenKey: Buffer;
+  /** The current key and, during a rotation, the previous one: what sealed values are opened with (D-67). */
+  tokenKeys: TokenKeyRing;
+  store: ConnectionStore;
+};
 
 /**
- * This deployment's qdit configuration, its token key and the service-role
+ * This deployment's qdit configuration, its token keys and the service-role
  * connection store, or null when the integration is off, a value is missing,
- * or INTEGRATION_TOKEN_KEY is not a valid key.
+ * or INTEGRATION_TOKEN_KEY (or INTEGRATION_TOKEN_KEY_PREVIOUS, when set) is
+ * not a valid key. A bad previous key turns the integration off rather than
+ * being skipped: skipped, every token it sealed would read as unreadable and
+ * its connection would be marked needs_reconnect.
  */
 export function qditServerSetup(): QditServerSetup | null {
   const config = qditConfig();
   if (!config) return null;
-  let tokenKey: Buffer;
+  let tokenKeys: TokenKeyRing;
   try {
-    tokenKey = parseTokenKey(config.tokenKey);
+    tokenKeys = {
+      current: parseTokenKey(config.tokenKey),
+      previous: config.tokenKeyPrevious ? parseTokenKey(config.tokenKeyPrevious, "INTEGRATION_TOKEN_KEY_PREVIOUS") : null,
+    };
   } catch (error) {
     console.error(`[qdit] ${(error as Error).message}`);
     return null;
   }
-  return { config, tokenKey, store: supabaseConnectionStore(createSupabaseAdminClient(), tokenKey) };
+  return {
+    config,
+    tokenKey: tokenKeys.current,
+    tokenKeys,
+    store: supabaseConnectionStore(createSupabaseAdminClient(), tokenKeys),
+  };
 }
 
 /**

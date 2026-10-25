@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { decryptSecret, encryptSecret } from "@/lib/integrations/token-crypto";
+import { asKeyRing, encryptSecret, openSecret, type TokenKeyRing } from "@/lib/integrations/token-crypto";
 import type { TokenSet } from "@/lib/integrations/qdit-oauth";
 
 /**
@@ -8,6 +8,9 @@ import type { TokenSet } from "@/lib/integrations/qdit-oauth";
  * Tokens are encrypted on the way in and decrypted on the way out, each bound
  * to its user and its column (see token-crypto.ts), so the database and
  * everything above this file deal in plaintext only inside the server.
+ * Writes always use the current key; reads also try the previous one while
+ * a key rotation is under way (D-67), so a refresh moves a token onto the
+ * current key.
  *
  * Every token write names the `generation` it read and bumps it; a write
  * whose generation is no longer current changes nothing and reports false.
@@ -29,7 +32,7 @@ export type StoredConnection = {
   generation: number;
   /** Epoch ms, or null if unknown. */
   expiresAt: number | null;
-  /** Null when not connected, or when the stored value no longer decrypts (key changed). */
+  /** Null when not connected, or when the stored value no longer decrypts under either key (key changed). */
   accessToken: string | null;
   refreshToken: string | null;
 };
@@ -68,7 +71,9 @@ function iso(ms: number | null): string | null {
   return ms === null ? null : new Date(ms).toISOString();
 }
 
-export function supabaseConnectionStore(admin: SupabaseClient, tokenKey: Buffer): ConnectionStore {
+export function supabaseConnectionStore(admin: SupabaseClient, keys: Buffer | TokenKeyRing): ConnectionStore {
+  const ring = asKeyRing(keys);
+  const tokenKey = ring.current;
   function tokenColumns(userId: string, tokens: TokenSet) {
     return {
       access_token_ciphertext: encryptSecret(tokens.accessToken, tokenKey, accessContext(userId)),
@@ -112,8 +117,8 @@ export function supabaseConnectionStore(admin: SupabaseClient, tokenKey: Buffer)
         status: data.status,
         generation: Number(data.generation),
         expiresAt: data.expires_at ? Date.parse(data.expires_at) : null,
-        accessToken: decryptSecret(data.access_token_ciphertext, tokenKey, accessContext(userId)),
-        refreshToken: decryptSecret(data.refresh_token_ciphertext, tokenKey, refreshContext(userId)),
+        accessToken: openSecret(data.access_token_ciphertext, ring, accessContext(userId))?.plaintext ?? null,
+        refreshToken: openSecret(data.refresh_token_ciphertext, ring, refreshContext(userId))?.plaintext ?? null,
       };
     },
 

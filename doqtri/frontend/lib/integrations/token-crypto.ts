@@ -13,8 +13,13 @@ import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "crypto"
  * from the refresh column into the access column, fails to decrypt rather
  * than being used as someone else's token.
  *
- * Format: `v1.<iv>.<ciphertext>.<tag>`, base64url. The version prefix leaves
- * room for a key rotation later.
+ * Format: `v1.<iv>.<ciphertext>.<tag>`, base64url.
+ *
+ * Rotation (D-67) is a two-key ring: INTEGRATION_TOKEN_KEY is the current
+ * key and INTEGRATION_TOKEN_KEY_PREVIOUS, while set, the one it replaced.
+ * Everything is encrypted under the current key; a value is opened with the
+ * current key and then the previous one, and the next write of it (a token
+ * refresh) seals it under the current key again.
  *
  * The same key also seals the short-lived OAuth state cookie, under a subkey
  * derived with HKDF, so a sealed cookie can never decrypt as a token or the
@@ -26,18 +31,26 @@ const IV_BYTES = 12;
 const TAG_BYTES = 16;
 
 export class TokenKeyError extends Error {
-  constructor() {
-    super("INTEGRATION_TOKEN_KEY must be 32 bytes, base64 or hex encoded.");
+  constructor(name = "INTEGRATION_TOKEN_KEY") {
+    super(`${name} must be 32 bytes, base64 or hex encoded.`);
     this.name = "TokenKeyError";
   }
 }
 
-/** The raw 32-byte key from its encoded form; throws TokenKeyError otherwise. */
-export function parseTokenKey(encoded: string): Buffer {
+/** The raw 32-byte key from its encoded form; throws TokenKeyError (naming `name`) otherwise. */
+export function parseTokenKey(encoded: string, name?: string): Buffer {
   const value = encoded.trim();
   const key = /^[0-9a-fA-F]{64}$/.test(value) ? Buffer.from(value, "hex") : Buffer.from(value, "base64");
-  if (key.length !== 32) throw new TokenKeyError();
+  if (key.length !== 32) throw new TokenKeyError(name);
   return key;
+}
+
+/** The current key, and while a rotation is under way the key it replaced (D-67). */
+export type TokenKeyRing = { current: Buffer; previous: Buffer | null };
+
+/** A ring for `keys`: a lone key is a ring with no previous key. */
+export function asKeyRing(keys: Buffer | TokenKeyRing): TokenKeyRing {
+  return Buffer.isBuffer(keys) ? { current: keys, previous: null } : keys;
 }
 
 /** A 32-byte subkey of `key` for one purpose, so no two uses share a key. */
@@ -74,4 +87,21 @@ export function decryptSecret(sealed: string | null | undefined, key: Buffer, co
   } catch {
     return null;
   }
+}
+
+/**
+ * decryptSecret() under a ring: the current key first, then the previous
+ * one. `previousKey` says only the previous key opened it, so it is due to
+ * be sealed again under the current one. Null when neither key opens it.
+ */
+export function openSecret(
+  sealed: string | null | undefined,
+  keys: Buffer | TokenKeyRing,
+  context: string,
+): { plaintext: string; previousKey: boolean } | null {
+  const ring = asKeyRing(keys);
+  const current = decryptSecret(sealed, ring.current, context);
+  if (current !== null) return { plaintext: current, previousKey: false };
+  const previous = ring.previous ? decryptSecret(sealed, ring.previous, context) : null;
+  return previous === null ? null : { plaintext: previous, previousKey: true };
 }

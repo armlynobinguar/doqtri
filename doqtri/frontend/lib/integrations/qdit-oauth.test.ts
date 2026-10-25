@@ -26,6 +26,7 @@ const config: QditConfig = {
   clientSecret: "s3cret:with&odd chars",
   redirectUri: null,
   tokenKey: key.toString("base64"),
+  tokenKeyPrevious: null,
 };
 const REDIRECT = "https://doqtri.test/api/integrations/qdit/callback";
 
@@ -90,6 +91,17 @@ describe("OAuth state round trip", () => {
     expect(checkOAuthState(undefined, state.state, ANA, key)).toEqual({ ok: false, reason: "missing" });
     expect(checkOAuthState(cookie, state.state, ANA, randomBytes(32), now)).toEqual({ ok: false, reason: "invalid" });
     expect(checkOAuthState(`${cookie}x`, state.state, ANA, key, now)).toEqual({ ok: false, reason: "invalid" });
+  });
+
+  it("finishes a flow started just before a key rotation (D-67)", () => {
+    const now = 1_800_000_000_000;
+    const next = randomBytes(32);
+    const { state, cookie } = startOAuthState(ANA, REDIRECT, key, now);
+    expect(checkOAuthState(cookie, state.state, ANA, { current: next, previous: key }, now).ok).toBe(true);
+    expect(checkOAuthState(cookie, state.state, ANA, { current: next, previous: null }, now)).toEqual({
+      ok: false,
+      reason: "invalid",
+    });
   });
 
   it("does not open as a token sealed under the same key", async () => {
