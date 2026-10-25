@@ -10,6 +10,7 @@ import {
   ShieldIcon,
   ImageIcon,
   FlagIcon,
+  GiftIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -110,6 +111,10 @@ function AdminMenu() {
           <DropdownMenuItem onClick={() => router.push("/admin/promo")}>
             <ImageIcon strokeWidth={1.5} />
             Promo entries
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => router.push("/admin/referrals")}>
+            <GiftIcon strokeWidth={1.5} />
+            Referrals
           </DropdownMenuItem>
         </DropdownMenuGroup>
       </DropdownMenuContent>

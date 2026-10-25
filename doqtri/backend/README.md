@@ -81,7 +81,7 @@ Two supporting tables:
   an account created after the code was seen, never for the user's own code.
   Both functions are service role only. Owners can read their own code;
   referrals are exposed only as counts, total and by source, on the profile
-  page.
+  page, and in full to admins at `/admin/referrals`.
 - `public.mindmap_styles` — each user's mindmap studio style, one row per map
   (`global`, or `doc:<id>` with a cascading `document_id`), so a look follows
   the user across devices. The browser upserts its own rows under RLS a moment
