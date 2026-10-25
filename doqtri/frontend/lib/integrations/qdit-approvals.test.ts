@@ -348,3 +348,24 @@ describe("supabaseApprovalStore: misses", () => {
     expect(calls[1].match).toMatchObject({ milestone_id: KEY.milestoneId, version: KEY.version });
   });
 });
+
+describe("supabaseApprovalStore: forMilestones", () => {
+  it("returns each approval with its ledger, as numbers (WP-3.3's chain view shows it)", async () => {
+    const selected: string[] = [];
+    const rows = [
+      { network: "testnet", contract_id: KEY.contractId, project_id: KEY.projectId, milestone_id: KEY.milestoneId, version: "2", tx_hash: TX_A, ledger: "4990" },
+      { network: "testnet", contract_id: KEY.contractId, project_id: KEY.projectId, milestone_id: KEY.milestoneId, version: "1", tx_hash: TX_A, ledger: null },
+    ];
+    const builder = {
+      select: (columns: string) => (selected.push(columns), builder),
+      in: async () => ({ data: rows, error: null }),
+    };
+    const s = supabaseApprovalStore({ from: () => builder } as never);
+    const [withLedger, without] = await s.forMilestones([KEY.milestoneId]);
+    expect(selected[0]).toContain("ledger");
+    expect(withLedger).toMatchObject({ version: 2, ledger: 4990 });
+    expect(without.version).toBe(1);
+    expect(without.ledger ?? null).toBeNull();
+    expect(await s.forMilestones([])).toEqual([]);
+  });
+});

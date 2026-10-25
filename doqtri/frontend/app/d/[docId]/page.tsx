@@ -45,8 +45,10 @@ import { loadQditReceipts, type LinkedProject, type QditReceipts } from "@/lib/i
  * note's doc_project_links row says which project and contract a record
  * may name (a record naming any other is shown as unverified, without the
  * row's values); its slug is shown only as part of a URL qdit itself
- * publishes. Without the flag, or with no such heading, the page is
- * unchanged.
+ * publishes. Each receipt folds out the heading's full proof chain (WP-3.3,
+ * CONTRACT.md section 12: plan version, submitted, approved, verified),
+ * from the same reads. Without the flag, or with no such heading, the page
+ * is unchanged.
  */
 export const revalidate = 30;
 
@@ -531,7 +533,9 @@ function Anchored({
         )}
       </section>
 
-      {receipts ? <QditReceiptsSection receipts={receipts} labels={labels} /> : null}
+      {receipts ? (
+        <QditReceiptsSection receipts={receipts} labels={labels} chain={{ docId, doc, history, removals }} />
+      ) : null}
 
       <section className="glass grid gap-5 rounded-2xl px-6 py-5 text-[13px] sm:grid-cols-2">
         <div className="grid content-start gap-1.5">
