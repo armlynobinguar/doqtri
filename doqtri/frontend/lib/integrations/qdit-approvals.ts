@@ -37,8 +37,11 @@ export type ApprovalTx = { txHash: string; ledger: number };
 /** One lookup's RPC budget: an event scan is a few pages at most. */
 const LOOKUP_PAGES = 4;
 const LOOKUP_SLICES = 2;
-/** The webhook answers qdit within 10 seconds (section 9); a lookup gets part of that. */
-export const LOOKUP_TIMEOUT_MS = 4_000;
+/**
+ * The webhook answers qdit within 10 seconds (section 9), and its chain read
+ * may already have used up to 5 of them; a lookup gets part of the rest.
+ */
+export const LOOKUP_TIMEOUT_MS = 3_000;
 
 const TX_HASH = /^[0-9a-f]{64}$/;
 
