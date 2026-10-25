@@ -1,6 +1,8 @@
 -- pgTAP tests for deleting an account (WP-1.9): D-49, D-50 and D-51 as
 -- 20261024150500_workspace_members_management.sql implements them, with
--- 20261024160000_workspace_member_removals.sql's log alongside.
+-- 20261024160000_workspace_member_removals.sql's log alongside, and D-63's
+-- anonymisation (20261026100000_account_deletion_anonymises.sql, WP-1.11)
+-- in place of D-51's refusals.
 --
 --   pg_prove -d "$DATABASE_URL" doqtri/backend/tests/account_deletion.test.sql
 --
@@ -23,7 +25,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(45);
+select plan(43);
 
 insert into auth.users (id, email, email_confirmed_at) values
   ('00000000-0000-4000-8000-0000000000c1', 'owner@example.com', now()),
@@ -267,8 +269,13 @@ select is((select count(*)::int from public.workspace_invites where invitee = 'u
 
 
 -- ---------------------------------------------------------------------------
--- What still refuses a deletion, before anything is queued or retired
+-- What no longer refuses a deletion (D-63), and what still does (D-31)
 -- ---------------------------------------------------------------------------
+--
+-- D-51 refused an account with an anchored personal note or a template it
+-- published or bought; D-63 anonymises it instead and keeps all of that.
+-- account_anonymisation.test.sql covers what is kept and what is removed in
+-- detail; here, the same accounts that used to be refused.
 
 -- x holds a passkey wallet and anchored a personal note through the relay.
 insert into public.smart_wallets (user_id, network, address, created_tx) values
@@ -280,23 +287,29 @@ insert into public.documents (id, user_id, workspace_id, title, markdown) values
    (select friend from ws), 'Mine', '# Mine');
 insert into public.chain_writes (network, tx_hash, document_id, fn, owner) values
   ('testnet', repeat('d', 64), '32000000-0000-4000-8000-000000000002', 'anchor', 'C' || repeat('X', 55));
-create temp table jobs_before as select count(*)::int as n from public.workspace_chain_jobs;
 
-select throws_ok(
-  $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c3' $$,
-  '23001', null, 'an account with an anchored personal note is refused');
-select is((select count(*)::int from public.workspace_chain_jobs), (select n from jobs_before),
-  'and nothing is queued for it');
-select is((select count(*)::int from public.smart_wallets where user_id = '00000000-0000-4000-8000-0000000000c3'),
-  1, 'nor its wallet retired');
-
--- The last owner of a team workspace with no admin (D-31).
+-- The last owner of a team workspace with no admin (D-31) is still refused.
 select throws_ok(
   $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c2' $$,
   '23001', null, 'the last owner of a team workspace with nobody to hand it to is refused');
 
--- m has published a template (a draft) and bought one (20261013000000:
--- both rows are `on delete restrict` against the account).
+select lives_ok(
+  $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c3' $$,
+  'an account with an anchored personal note deletes itself (D-63)');
+select results_eq(
+  $$ select j.address from public.workspace_chain_jobs j
+      where j.workspace_id = (select acme from ws) and j.kind = 'revoke' and j.address = 'C' || repeat('X', 55) $$,
+  $$ values ('C' || repeat('X', 55)) $$,
+  'its editor role in a team workspace is queued for revocation first, as for anyone');
+select is((select count(*)::int from public.smart_wallets where address = 'C' || repeat('X', 55)),
+  0, 'its wallet record is retired');
+select results_eq(
+  $$ select d.workspace_id, d.user_id, (select count(*)::int from public.chain_writes c where c.document_id = d.id)
+       from public.documents d where d.id = '32000000-0000-4000-8000-000000000002' $$,
+  $$ select friend, null::uuid, 1 from ws $$,
+  'and the anchored note stays where it was, author-less, with its record');
+
+-- m has published a template (a draft) and bought one of o's.
 insert into auth.users (id, email, email_confirmed_at) values
   ('00000000-0000-4000-8000-0000000000c7', 'market@example.com', now());
 insert into public.workspace_members (workspace_id, user_id, role) values
@@ -309,32 +322,18 @@ insert into public.market_templates
    'Draft', 'Work', 'body', repeat('f', 64), 'C' || repeat('T', 55), 0, 'pending');
 insert into public.market_purchases (network, template_id, buyer_id, buyer_wallet, amount) values
   ('testnet', 'aaaaaaaaaaaaaaaa', '00000000-0000-4000-8000-0000000000c7', 'G' || repeat('M', 55), 0);
-truncate jobs_before;
-insert into jobs_before select count(*)::int from public.workspace_chain_jobs;
 
-select throws_ok(
-  $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c7' $$,
-  '23001', 'this account has published 1 community template(s) and bought or claimed 1 on record',
-  'an account with a template it published and one it bought is refused, saying why');
-select is((select count(*)::int from public.workspace_chain_jobs), (select n from jobs_before),
-  'and nothing is queued for it');
-delete from public.market_purchases where buyer_id = '00000000-0000-4000-8000-0000000000c7';
-select throws_ok(
-  $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c7' $$,
-  '23001', null, 'a template draft alone still refuses it (a known limit)');
-delete from public.market_templates where creator_id = '00000000-0000-4000-8000-0000000000c7';
 select lives_ok(
   $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c7' $$,
-  'with neither left, the account deletes itself');
-
--- None of these refusals is about the wallet any more: with its note's record
--- gone, x deletes itself, wallet and all.
-delete from public.chain_writes where document_id = '32000000-0000-4000-8000-000000000002';
-select lives_ok(
-  $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c3' $$,
-  'once nothing anchored is left, the same passkey account deletes itself');
-select is((select count(*)::int from public.smart_wallets where address = 'C' || repeat('X', 55)),
-  0, 'and its wallet record is retired with it');
+  'an account with a template it published and one it bought deletes itself (D-63)');
+select results_eq(
+  $$ select id, creator_id, creator_wallet, status from public.market_templates where id = 'bbbbbbbbbbbbbbbb' $$,
+  $$ values ('bbbbbbbbbbbbbbbb'::text, null::uuid, 'G' || repeat('M', 55), 'pending'::text) $$,
+  'its template stays as it was, credited to its wallet only');
+select results_eq(
+  $$ select template_id, buyer_id, buyer_wallet from public.market_purchases where template_id = 'aaaaaaaaaaaaaaaa' $$,
+  $$ values ('aaaaaaaaaaaaaaaa'::text, null::uuid, 'G' || repeat('M', 55)) $$,
+  'and its purchase stays on record, by its wallet');
 
 select * from finish();
 rollback;

@@ -372,8 +372,9 @@ select lives_ok(
 select is((select count(*)::int from public.documents where id = '30000000-0000-4000-8000-000000000002'),
   0, 'and it is gone');
 
--- The outsider's personal workspace holds a linked note: deleting the
--- account would take it, so the account deletion is refused and nothing goes.
+-- The outsider's personal workspace holds a linked note. Deleting the
+-- account keeps it (D-63), link and all, so qdit's links still point at a
+-- note that exists.
 insert into public.documents (id, user_id, workspace_id, title, markdown)
 select '30000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-000000000005', w.id, 'Mine', '# M'
   from public.workspaces w
@@ -381,11 +382,15 @@ select '30000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-00000000
 insert into public.doc_project_links (document_id, project_id, project_name, project_slug, qdit_link_id, doc_url)
 values ('30000000-0000-4000-8000-000000000003', '3f6c2a1e-8b4d-4c7e-9a10-2d5b7e9f1c34',
         'Soroban payroll', 'soroban-payroll', '9b5c4d3e-2f10-4b0a-9d8e-7f6a5b4c3d2e', 'https://doqtri.test/d/m');
-select throws_ok(
+select lives_ok(
   $$delete from auth.users where id = '00000000-0000-4000-8000-000000000005'$$,
-  '23001', 'note 30000000-0000-4000-8000-000000000003 is linked to the qdit project "Soroban payroll"', 'an account whose personal workspace holds a linked note cannot be deleted');
-select is((select count(*)::int from public.documents where id = '30000000-0000-4000-8000-000000000003'),
-  1, 'and the note stays');
+  'an account whose personal workspace holds a linked note can be deleted (D-63)');
+select results_eq(
+  $$select d.user_id, l.project_name from public.documents d
+      join public.doc_project_links l on l.document_id = d.id
+     where d.id = '30000000-0000-4000-8000-000000000003'$$,
+  $$values (null::uuid, 'Soroban payroll'::text)$$,
+  'and the note stays, author-less, with its project link');
 
 select * from finish();
 rollback;

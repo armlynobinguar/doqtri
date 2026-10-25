@@ -863,7 +863,7 @@ select is((select count(*)::int from public.workspace_invites where invitee = 'h
 
 
 -- ---------------------------------------------------------------------------
--- Deleting an account whose personal workspace holds an anchored note
+-- Deleting an account whose personal workspace holds an anchored note (D-63)
 -- ---------------------------------------------------------------------------
 
 -- k holds a passkey wallet and anchored a personal note through the relay.
@@ -878,19 +878,19 @@ insert into public.documents (id, user_id, workspace_id, title, markdown)
 insert into public.chain_writes (network, tx_hash, document_id, fn, owner) values
   ('testnet', repeat('f', 64), '31000000-0000-4000-8000-000000000001', 'anchor', 'C' || repeat('K', 55));
 
-select throws_ok(
-  $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000ab' $$,
-  '23001', 'this account''s personal workspace holds 1 note(s) anchored on Stellar',
-  'an account whose personal note is anchored is refused, and told why');
-select is((select count(*)::int from public.smart_wallets where user_id = '00000000-0000-4000-8000-0000000000ab'),
-  1, 'its passkey wallet is kept');
-select is((select count(*)::int from public.documents where id = '31000000-0000-4000-8000-000000000001'),
-  1, 'and so is the note, with its record');
-
-delete from public.chain_writes where document_id = '31000000-0000-4000-8000-000000000001';
 select lives_ok(
   $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000ab' $$,
-  'with nothing anchored, the same account deletes itself (D-51)');
+  'an account whose personal note is anchored deletes itself (D-63 replaces D-51''s refusal)');
+select is((select count(*)::int from public.smart_wallets where user_id = '00000000-0000-4000-8000-0000000000ab'),
+  0, 'its passkey wallet record is retired');
+select results_eq(
+  $$ select d.user_id, w.name, (select count(*)::int from public.chain_writes c where c.document_id = d.id)
+       from public.documents d join public.workspaces w on w.id = d.workspace_id
+      where d.id = '31000000-0000-4000-8000-000000000001' $$,
+  $$ values (null::uuid, 'Former user'::text, 1) $$,
+  'and the note stays, author-less, in its "Former user" workspace, with its record');
+select is((select count(*)::int from public.chain_writes where owner = 'C' || repeat('K', 55)),
+  1, 'the wallet stays its on-chain identity: the index still names it as owner');
 
 select * from finish();
 rollback;
