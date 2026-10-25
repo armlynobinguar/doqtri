@@ -368,9 +368,14 @@ afterwards does not bring them back. To rotate:
    `INTEGRATION_TOKEN_KEY_PREVIOUS` to the key it replaces. Check the two are
    not swapped before deploying.
 3. Keep `INTEGRATION_TOKEN_KEY_PREVIOUS` for at least qdit's refresh-token
-   lifetime. Each connection is resealed under the new key on its next
-   refresh, so an idle one still needs the previous key until then; once it
-   is removed, a connection still sealed under it needs a reconnect.
+   lifetime (its Supabase session time-box or inactivity timeout). Each
+   connection is resealed under the new key on its next refresh, so an idle
+   one still needs the previous key until then; once it is removed, a
+   connection still sealed under it needs a reconnect. If qdit sets neither,
+   its refresh tokens do not expire and there is no finite period: keep the
+   previous key until every row has been resealed, or accept that
+   connections unused since the rotation will need a reconnect (contract
+   section 1, D-81).
 4. Then remove `INTEGRATION_TOKEN_KEY_PREVIOUS` in a later deploy.
 
 An invalid value in either variable turns the integration off rather than
@@ -382,12 +387,16 @@ One user turning `needs_reconnect` is that user: they revoked Doqtri in qdit,
 or their grant expired. Many at once is not users. Look first at:
 
 - **This deploy's `INTEGRATION_TOKEN_KEY`** (above), if it just changed.
-- **qdit's auth configuration**: its OAuth server's JWKS, issuer or signing
-  algorithm. Doqtri marks a connection `needs_reconnect` when qdit refuses a
-  token it has just refreshed with a second `401`, so if qdit's API stops
-  accepting the tokens its own OAuth server issues, every active user is
-  marked in turn. Fix it on qdit's side; users then have to reconnect, since
-  their tokens were dropped.
+- **qdit's auth configuration**, with the keys unchanged: its OAuth server's
+  JWKS, issuer or signing algorithm, or its token settings. Doqtri marks a
+  connection `needs_reconnect` when qdit refuses a token it has just
+  refreshed with a second `401`, or refuses the refresh token itself
+  (`invalid_grant`), so if qdit's API stops accepting the tokens its own
+  OAuth server issues, or a shortened session limit expires every grant,
+  every active user is marked in turn. Fix it on qdit's side; users then
+  have to reconnect, since their tokens were dropped. (A refused client id
+  or secret is different: requests fail as not configured and no
+  connection is marked.)
 
 ```sql
 -- How many connections turned needs_reconnect in the last hour.
