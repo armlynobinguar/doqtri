@@ -261,6 +261,27 @@ describe("getDocumentHistory for a workspace note", () => {
       expect(history?.partial).toBeUndefined();
     });
 
+    it("reads a deleted owner only up to when the handover to their heir landed (WP-1.11)", async () => {
+      // signer_removals_for_document() gives an owner's removal the time the
+      // reassign_owner job was done; the chain now names the heir as owner.
+      const heir = Keypair.random().publicKey();
+      state.chainWorkspace = async () => ({ owner: heir, members: {} });
+      const beforeHandover = call(
+        "set_node_status_as",
+        [as(REMOVED), str(DOC), str("h3"), status("Built"), str("n8n"), str("wf_3")],
+        ledgerAt(Date.now() - 2.5 * 24 * 60 * 60 * 1000),
+        "before-handover",
+      );
+      const revokedAt = closedAt(ledgerAt(Date.now() - 2 * 24 * 60 * 60 * 1000));
+      horizon({ [OWNER]: [register], [REMOVED]: [...removedFeed(removedLedger), beforeHandover, lateStatus] });
+
+      const history = await getDocumentHistory(DOC, { removedSigners: [{ ...removal, revokedAt }] });
+      expect(history?.nodeEvents.map((e) => [e.nodeId, e.txHash, e.signer])).toEqual([
+        ["h3", "before-handover", REMOVED],
+      ]);
+      expect(history?.partial).toBeUndefined();
+    });
+
     describe("a revocation that reached the chain more than a week late (review)", () => {
       // Removed ten days ago; their revoke failed until two days ago. The
       // status write nine days ago is outside the RPC's event window
