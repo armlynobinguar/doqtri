@@ -46,6 +46,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261025100000_integration_connections.sql    # NOT yet applied (WP-2.3)
 20261025110000_qdit_linking.sql               # NOT yet applied (WP-2.5)
 20261025120000_qdit_webhook_events.sql        # NOT yet applied (WP-2.8)
+20261025130000_chain_jobs_claim_token.sql     # NOT yet applied (WP-1.10)
 ```
 
 The remote records its own version stamps (e.g. `20260929114657` for
@@ -128,7 +129,11 @@ Two supporting tables:
   pg_cron job and daily by Vercel Cron
   (`20261025090000_chain_jobs_scheduler.sql`, which says how to store its
   Vault secrets); `chain_jobs_scheduler_health()` reports whether the
-  minutely job can run. Deleting an account queues revocations for every
+  minutely job can run. Each claim stamps a job with a `claim_token`, which
+  re-pointing a handover clears, and the server records an outcome only
+  while the job still holds its token
+  (`20261025130000_chain_jobs_claim_token.sql`), so a handover re-pointed
+  mid-call stays open for the new heir. Deleting an account queues revocations for every
   role its wallets hold, deletes the invites to and from it, and then lets
   its wallet records cascade (D-50, D-51). It refuses, with a hint, an
   account whose personal workspace holds anchored notes or other people's

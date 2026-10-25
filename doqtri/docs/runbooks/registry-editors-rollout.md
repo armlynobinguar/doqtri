@@ -41,7 +41,12 @@ Migrations to apply, in order (none is applied to the remote project yet):
 20261024150500_workspace_members_management.sql
 20261024160000_workspace_member_removals.sql
 20261025090000_chain_jobs_scheduler.sql
+20261025130000_chain_jobs_claim_token.sql
 ```
+
+`20261025130000` (WP-1.10) amends the chain job queue of `20261024150500`
+and depends on nothing else, so it goes with this set even though the
+integration migrations (`20261025100000` to `20261025120000`) sort before it.
 
 ## 1. Dry-run on a Supabase branch
 

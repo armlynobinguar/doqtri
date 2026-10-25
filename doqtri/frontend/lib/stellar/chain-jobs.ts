@@ -38,6 +38,8 @@ export type ChainJob = {
   address: string | null;
   network: string | null;
   attempts: number;
+  /** Set by the claim; the job is finished only while it still holds it (WP-1.10). */
+  claim_token: string | null;
 };
 
 export type JobUpdate = {
@@ -51,7 +53,12 @@ export type JobUpdate = {
 /** The database side of the queue; Supabase in production, an in-memory store in tests. */
 export type ChainJobStore = {
   claim(workspaceId: string | null, limit: number): Promise<ChainJob[]>;
-  finish(id: string, update: JobUpdate): Promise<void>;
+  /**
+   * Records a claimed job's outcome. False when the job changed since the
+   * claim (an account deletion re-pointed a handover, D-31, or a later run
+   * claimed it again): the row is left as it is, pending, for its next run.
+   */
+  finish(job: ChainJob, update: JobUpdate): Promise<boolean>;
   /** Puts jobs waiting for the product owner back in the queue, once their key is configured. */
   reopenProductOwnerJobs(): Promise<void>;
   /** The database role, now, of the account holding `address` in the workspace. */
@@ -78,6 +85,8 @@ export type ProcessDeps = {
 };
 
 export type ProcessSummary = { skipped: boolean; done: number; pending: number; failed: number; needsProductOwner: number };
+
+type Outcome = Exclude<keyof ProcessSummary, "skipped">;
 
 /** Waits 30s, 1m, 2m, … up to an hour between tries of a job that keeps failing. */
 export function retryDelayMs(attempts: number): number {
@@ -112,16 +121,17 @@ export async function processChainJobs(
     } catch (error) {
       update = { status: "pending", last_error: (error instanceof Error ? error.message : String(error)).slice(0, 300) };
     }
-    if (update.status === "pending") {
-      update.next_attempt_at ??= later(now(), retryDelayMs(job.attempts));
-      summary.pending++;
-    } else if (update.status === "done") summary.done++;
-    else if (update.status === "failed") summary.failed++;
-    else summary.needsProductOwner++;
+    if (update.status === "pending") update.next_attempt_at ??= later(now(), retryDelayMs(job.attempts));
     if (update.status === "failed" || update.status === "needs_product_owner") {
       console.warn(`[chain-jobs] ${job.kind} for workspace ${job.workspace_id}: ${update.status}: ${update.last_error ?? ""}`);
     }
-    await store.finish(job.id, update);
+    // A job that changed under the call stays pending for its next run.
+    const outcome: Outcome = !(await store.finish(job, update))
+      ? "pending"
+      : update.status === "needs_product_owner"
+        ? "needsProductOwner"
+        : update.status;
+    summary[outcome]++;
   }
   return summary;
 }
@@ -177,9 +187,29 @@ export function supabaseChainJobStore(admin: SupabaseClient, network: string, ac
       if (error) throw new Error(`claiming chain jobs failed: ${error.message}`);
       return (data ?? []) as ChainJob[];
     },
-    async finish(id, update) {
-      const { error } = await admin.from("workspace_chain_jobs").update(update).eq("id", id);
-      if (error) console.error(`[chain-jobs] could not record job ${id}: ${error.message}`);
+    async finish(job, update) {
+      // By claim token too: an account deletion can re-point a handover while
+      // its call is in flight (D-31), and that clears the token
+      // (20261025130000_chain_jobs_claim_token.sql).
+      if (!job.claim_token) {
+        console.error(`[chain-jobs] job ${job.id} came back from the claim without a token; left for its next run`);
+        return false;
+      }
+      const { data, error } = await admin
+        .from("workspace_chain_jobs")
+        .update(update)
+        .eq("id", job.id)
+        .eq("claim_token", job.claim_token)
+        .select("id");
+      if (error) {
+        console.error(`[chain-jobs] could not record job ${job.id}: ${error.message}`);
+        return false;
+      }
+      if (!data?.length) {
+        console.info(`[chain-jobs] job ${job.id} changed since it was claimed; left for its next run`);
+        return false;
+      }
+      return true;
     },
     async reopenProductOwnerJobs() {
       const { error } = await admin
