@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { personalWorkspaceId } from "@/lib/workspace-docs";
+import { isFormerPersonalWorkspace } from "@/lib/former-user";
 import { roleAtLeast, type WorkspaceRole } from "@/lib/workspace-roles";
 import {
   ACTIVE_WORKSPACE_COOKIE,
@@ -59,6 +60,7 @@ export async function listMyWorkspaces(client: SupabaseClient, userId: string): 
       personal: Boolean(w.is_personal),
       role: row.role,
       mine: w.created_by === userId,
+      former: isFormerPersonalWorkspace(w),
     });
   }
   return sortWorkspaces(choices);

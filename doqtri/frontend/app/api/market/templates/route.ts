@@ -49,13 +49,15 @@ export async function GET(request: Request) {
   }
 
   const parentIds = [...new Set(rows.map((r) => r.parent_id).filter((id): id is string => Boolean(id)))];
-  const parents = new Map<string, { id: string; title: string; creatorWallet: string }>();
+  const parents = new Map<string, NonNullable<CommunityTemplate["parent"]>>();
   if (parentIds.length) {
     const { data } = await createSupabaseAdminClient()
       .from("market_templates")
-      .select("id, title, creator_wallet")
+      .select("id, title, creator_id, creator_wallet")
       .in("id", parentIds);
-    for (const p of data ?? []) parents.set(p.id, { id: p.id, title: p.title, creatorWallet: p.creator_wallet });
+    for (const p of data ?? []) {
+      parents.set(p.id, { id: p.id, title: p.title, creatorWallet: p.creator_wallet, creatorGone: p.creator_id === null });
+    }
   }
 
   // Templates this user already bought: "Use again" instead of "Buy".
@@ -79,6 +81,8 @@ export async function GET(request: Request) {
       token: r.token,
       tokenCode: marketToken(r.token)?.code ?? "?",
       creatorWallet: r.creator_wallet,
+      // A deleted creator's template stays listed (D-63): "Former user".
+      creatorGone: r.creator_id === null,
       mine: r.creator_id === user.id,
       owned: owned.has(r.id),
       uses: r.uses,

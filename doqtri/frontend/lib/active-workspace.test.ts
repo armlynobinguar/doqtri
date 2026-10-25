@@ -76,6 +76,24 @@ describe("listMyWorkspaces", () => {
     expect(calls[0].filters).toEqual([["user_id", USER]]);
   });
 
+  it("marks a personal workspace whose creator deleted their account (D-63)", async () => {
+    const { client } = fakeClient({
+      workspace_members: [
+        memberships([
+          { id: STRANGER, name: "Former user", personal: true, role: "viewer", createdBy: null },
+          { id: PERSONAL, name: "Ana", personal: true, role: "owner", createdBy: USER },
+          { id: TEAM, name: "Acme", personal: false, role: "viewer", createdBy: null },
+        ]),
+      ],
+    });
+    const list = await listMyWorkspaces(client, USER);
+    expect(list.map((w) => [w.name, w.mine, w.former])).toEqual([
+      ["Ana", true, false],
+      ["Acme", false, false],
+      ["Former user", false, true],
+    ]);
+  });
+
   it("skips memberships whose workspace it cannot see", async () => {
     const { client } = fakeClient({
       workspace_members: [{ data: [{ role: "editor", workspaces: null }], error: null }],

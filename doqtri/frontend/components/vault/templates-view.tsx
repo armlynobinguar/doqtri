@@ -41,7 +41,8 @@ import {
 import { cn } from "@/lib/utils";
 import { expertContractUrl, expertTxUrl, MARKET_CONTRACT_ID } from "@/lib/stellar/config";
 import { TemplateMarket } from "@/lib/stellar/market-client";
-import { formatAmount, parseAmount, shortAddress, type CommunityTemplate } from "@/lib/market";
+import { formatAmount, parseAmount, type CommunityTemplate } from "@/lib/market";
+import { templateAuthor } from "@/lib/former-user";
 import { useWallet } from "@/components/vault/wallet-provider";
 import { BuyTemplateDialog } from "@/components/vault/buy-template-dialog";
 import { ReportTemplateDialog } from "@/components/vault/report-template-dialog";
@@ -577,7 +578,7 @@ function CommunityGallery({
                       <span className="text-muted-foreground mt-1 block text-[12px] leading-snug">{t.description}</span>
                     ) : null}
                     <span className="text-label mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
-                      <span className="font-mono">{shortAddress(t.creatorWallet)}</span>
+                      <span className="font-mono">{templateAuthor(t)}</span>
                       <span>
                         {t.uses} {t.uses === 1 ? "use" : "uses"}
                       </span>
@@ -650,12 +651,12 @@ function CommunityPreview({
         <div className="min-w-0">
           <p className="text-foreground truncate text-[14px] font-semibold">{template.title}</p>
           <p className="text-muted-foreground text-[12px]">
-            by <span className="font-mono">{shortAddress(template.creatorWallet)}</span> · {priceLabel(template)}
+            by <span className="font-mono">{templateAuthor(template)}</span> · {priceLabel(template)}
           </p>
           {template.parent ? (
             <p className="text-muted-foreground text-[11px]">
               Derived from “{template.parent.title}” by{" "}
-              <span className="font-mono">{shortAddress(template.parent.creatorWallet)}</span>
+              <span className="font-mono">{templateAuthor(template.parent)}</span>
             </p>
           ) : null}
         </div>
