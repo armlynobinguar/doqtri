@@ -14,6 +14,11 @@ import {
  * closing), and starts again when a page comes back from the back-forward
  * cache. The logic lives in the controller (lib/doc-lock-client.ts); give it
  * callbacks with `controller.setHandlers()` from an effect.
+ *
+ * The keepalive release is best effort. When it never arrives, the closed or
+ * reloaded tab's lock keeps its heartbeat and its session, so a reloaded tab
+ * stays "elsewhere" (read-only) until that lock times out (DOC_LOCK_IDLE_MS,
+ * ten minutes) or the user clicks Edit here; polling does not clear it.
  */
 export function useDocLock(docId: string): { lock: DocLockState; controller: DocLockController } {
   // The page remounts the editor per note, so one controller per mount, and

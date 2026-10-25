@@ -23,7 +23,9 @@
  * event window (about a week) says which transactions to read for those, and
  * the feeds of signers the workspace removed (passed in by the caller, which
  * reads them from doqtri's database) cover the writes the audit page most
- * needs to show: ones made after a removal (WP-1.8). Older Freighter writes
+ * needs to show: ones made after a removal (WP-1.8), for a day, or for as
+ * long as the chain still lists them or until their revocation reached it
+ * (WP-1.10). Older Freighter writes
  * by current editors can still be missing; the version count then marks such
  * a history incomplete rather than numbering it wrong. Every source only says
  * where to look: each write is read from Horizon and decoded here.
@@ -55,6 +57,7 @@ import { CONTRACT_ID, HORIZON_URL, LEGACY_CONTRACT_IDS, REGISTRY_EDITORS, RPC_UR
 import { docLedgerKey } from "@/lib/stellar/anchored";
 import { DoqtriRegistry } from "@/lib/stellar/contract-client";
 import { FEE_FORWARDER, NETWORK } from "@/lib/stellar/smart-wallet-config";
+import { chainRoleOf, type ChainWorkspace } from "@/lib/stellar/workspace-chain";
 
 /**
  * Where an entry's signer comes from: the call itself names it ("call"), or
@@ -106,9 +109,10 @@ export type DocumentHistory = {
   incomplete?: true;
   /**
    * Set when a bounded read (the registry's event window, or a removed
-   * signer's feed after their removal) stopped before its end, so an
-   * editor's write can be missing even when the version count matches: a
-   * build status has no count to check.
+   * signer's feed after their removal) stopped before its end, or the
+   * chain could not say whether a removed signer is still on the
+   * workspace's editor list, so an editor's write can be missing even when
+   * the version count matches: a build status has no count to check.
    */
   partial?: true;
   /** The note's on-chain workspace, when it is in one (registry v3). */
@@ -736,26 +740,43 @@ const MAX_SINCE_PAGES = 10;
  * How long after a removal their feed is read. The writes the flag is for
  * land in the gap before remove_editor reaches the chain (seconds, D-16);
  * a day covers a relayer that is slow or down. Later ones are left to the
- * event window.
+ * event window, unless the removal reached the chain later than that, or
+ * not at all (`removalWindowLapsed`, WP-1.10).
  */
 const REMOVAL_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * True when a removal's day-long window closed before the feed's natural end
+ * (the restoration, or now). The registry accepts that member's writes for
+ * as long as they stay on its editor list, so a revoke that failed (R-05)
+ * leaves writes after the window that only reading on can find.
+ */
+export function removalWindowLapsed(signer: RemovedSigner, now: number = Date.now()): boolean {
+  const from = Date.parse(signer.removedAt);
+  if (Number.isNaN(from)) return false;
+  const restored = signer.restoredAt ? Date.parse(signer.restoredAt) : Number.NaN;
+  return from + REMOVAL_WINDOW_MS < (Number.isNaN(restored) ? now : restored);
+}
 
 /**
  * An account's operations from `since` until `until` (or a day after
  * `since`), oldest first: read forward from a ledger just before `since`,
  * so the writes right after a removal come first and cannot be pushed out
- * by later activity. `complete` is false when the page budget ran out
- * before the window's end.
+ * by later activity. With `readOn`, the day's bound is lifted and the feed
+ * is read to `until` or now, for a member whose removal reached the chain
+ * late or not yet. `complete` is false when the page budget ran out before
+ * the window's end.
  */
 export async function fetchAccountOperationsSince(
   account: string,
   since: string,
   until?: string | null,
+  { readOn = false }: { readOn?: boolean } = {},
 ): Promise<{ ops: HorizonOperation[]; complete: boolean }> {
   const from = Date.parse(since);
   if (Number.isNaN(from)) return { ops: [], complete: true };
   const restored = until ? Date.parse(until) : Number.NaN;
-  const to = Math.min(from + REMOVAL_WINDOW_MS, Number.isNaN(restored) ? Infinity : restored);
+  const to = Math.min(readOn ? Infinity : from + REMOVAL_WINDOW_MS, Number.isNaN(restored) ? Infinity : restored);
   // A paging token is a TOID: the ledger in its high 32 bits.
   const cursor = (BigInt(await ledgerAtOrBefore(from)) << BigInt(32)).toString();
 
@@ -777,8 +798,12 @@ export async function fetchAccountOperationsSince(
   return { ops: inLedgerOrder(ops), complete: true };
 }
 
-/** A wallet the document's workspace removed, and when; from doqtri's database. */
-export type RemovedSigner = { address: string; removedAt: string; restoredAt?: string | null };
+/**
+ * A wallet the document's workspace removed, and when; from doqtri's
+ * database. `revokedAt` is when doqtri's revocation of it was done, so the
+ * chain no longer accepted its signature (null while none is).
+ */
+export type RemovedSigner = { address: string; removedAt: string; restoredAt?: string | null; revokedAt?: string | null };
 
 export type HistoryOptions = {
   /**
@@ -800,7 +825,57 @@ function removedAccounts(signers: readonly RemovedSigner[]): RemovedSigner[] {
 }
 
 /** Bounds the removed feeds read for one page view. */
-const MAX_REMOVED_FEEDS = 10;
+export const MAX_REMOVED_FEEDS = 10;
+
+/**
+ * A removed member's own writes of `docId` from their feed. When their
+ * removal's window has lapsed, `onChain` (the workspace as the registry holds
+ * it now; undefined when it could not be read) decides: a member the chain
+ * still lists is read on past the window, within the same page budget; one
+ * it no longer lists, or one restored since, is read on to when their
+ * revocation was done, if that was after the window, or to now (or the
+ * restoration) when doqtri has no record of it being done (it reached the
+ * chain some other way, or its job gave up), since the list cannot say when
+ * they left it. When the
+ * chain could not be read the result is marked incomplete, so the page says
+ * history may be partial.
+ */
+async function removedSignerWrites(
+  signer: RemovedSigner,
+  docId: string,
+  onChain: () => Promise<ChainWorkspace | null | undefined>,
+  now: number,
+): Promise<{ ops: HorizonOperation[]; complete: boolean }> {
+  let readOn = false;
+  let until = signer.restoredAt ?? null;
+  let unknown = false;
+  // Off the chain by when doqtri's revocation was done: within the day, the
+  // day's cut stands; later, the feed is read on to then; with no record of
+  // it, to the feed's natural end.
+  const byRevocation = () => {
+    const revokedAt = signer.revokedAt ?? null;
+    const revoked = revokedAt ? Date.parse(revokedAt) : Number.NaN;
+    if (Number.isNaN(revoked)) readOn = true;
+    else if (revoked > Date.parse(signer.removedAt) + REMOVAL_WINDOW_MS) {
+      readOn = true;
+      until = revokedAt;
+    }
+  };
+  if (removalWindowLapsed(signer, now)) {
+    if (signer.restoredAt) {
+      // Listed again now, rightly, so the list cannot say whether the
+      // removal ever reached the chain; the revocation's record can.
+      byRevocation();
+    } else {
+      const workspace = await onChain();
+      if (workspace === undefined) unknown = true;
+      else if (workspace != null && chainRoleOf(workspace, signer.address) != null) readOn = true;
+      else byRevocation();
+    }
+  }
+  const { ops, complete } = await fetchAccountOperationsSince(signer.address, signer.removedAt, until, { readOn });
+  return { ops: ownWritesOnly(ops, docId, () => signer.address), complete: complete && !unknown };
+}
 
 /**
  * Full history for `docId`, or null when it is not anchored. Throws on
@@ -833,15 +908,17 @@ export async function getDocumentHistory(
   // the first two hold, and the version count says if that is short.
   const unreachable = { ops: [] as HorizonOperation[], complete: false };
   const removedFeeds = removedAccounts(options.removedSigners ?? []).filter((r) => r.address !== owner);
+  // Read once, and only when a removal's window has lapsed.
+  let chainWorkspace: Promise<ChainWorkspace | null | undefined> | undefined;
+  const onChain = () => (chainWorkspace ??= DoqtriRegistry.readWorkspace(workspace).catch(() => undefined));
+  const now = Date.now();
   const [ownerOps, indexed, evented, ...removed] = await Promise.all([
     passkeyOwner ? [] : fetchOwnerOperations(owner),
     fetchIndexedOperations(docId),
     fetchEventOperations(docId).catch(() => unreachable),
-    ...removedFeeds.slice(0, MAX_REMOVED_FEEDS).map((r) =>
-      fetchAccountOperationsSince(r.address, r.removedAt, r.restoredAt)
-        .then(({ ops, complete }) => ({ ops: ownWritesOnly(ops, docId, () => r.address), complete }))
-        .catch(() => unreachable),
-    ),
+    ...removedFeeds
+      .slice(0, MAX_REMOVED_FEEDS)
+      .map((r) => removedSignerWrites(r, docId, onChain, now).catch(() => unreachable)),
   ]);
   const ops = mergeOperations(ownerOps, indexed, evented.ops, ...removed.map((r) => r.ops));
   const partial =

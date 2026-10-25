@@ -41,7 +41,17 @@ Migrations to apply, in order (none is applied to the remote project yet):
 20261024150500_workspace_members_management.sql
 20261024160000_workspace_member_removals.sql
 20261025090000_chain_jobs_scheduler.sql
+20261025130000_chain_jobs_claim_token.sql
 ```
+
+`20261025130000` (WP-1.10) amends the chain job queue of `20261024150500`
+and `signer_removals_for_document()` of `20261024160000` (one more column,
+`revoked_at`, which an older server ignores; a server without it reads a
+removed member's feed on to now once their day has passed), and depends on
+nothing else, so it goes with this set even though the integration
+migrations (`20261025100000` to `20261025120000`) sort before it. Apply it
+before the server that releases claim tokens on finish goes live: that
+server's finish writes `claim_token`, which only this migration adds.
 
 ## 1. Dry-run on a Supabase branch
 
