@@ -181,6 +181,18 @@ describe("planQditSignature", () => {
     expect(planQditSignature({ ...base, unreadMilestones: ["c81e4f07-6a2c-4d93-8e5f-0c7a9b3d2e61"] }).ok).toBe(true);
   });
 
+  it("refuses, never 'nothing to sign', when the links could not be reloaded (WP-2.8)", () => {
+    const plan = planQditSignature({ ...base, rows: null });
+    expect(plan).toMatchObject({ ok: false, reason: "links_unread" });
+    expect(plan.ok ? "" : plan.message).not.toMatch(/already says/);
+  });
+
+  it("refuses when none of the picked links is on the note any more", () => {
+    const plan = planQditSignature({ ...base, rows: [{ ...row, id: "row-2" }] });
+    expect(plan).toMatchObject({ ok: false, reason: "links_gone" });
+    expect(planQditSignature({ ...base, rows: [] })).toMatchObject({ ok: false, reason: "links_gone" });
+  });
+
   it("says so when there is nothing to sign", () => {
     const signed = { ...records, h1: { status: "Verified", tool: "qdit", artifactRef: REF } };
     expect(planQditSignature({ ...base, records: signed })).toMatchObject({ ok: false, reason: "nothing" });

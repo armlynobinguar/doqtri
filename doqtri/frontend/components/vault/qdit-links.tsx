@@ -23,7 +23,7 @@ import {
   type LinkableNode,
   type QditLinkRow,
 } from "@/lib/node-links";
-import { QditStatusLine, useQditStatusSync } from "@/components/vault/qdit-status";
+import { QDIT_LINKS_LOAD_TOAST, QditStatusLine, useQditStatusSync } from "@/components/vault/qdit-status";
 
 /**
  * The qdit provider of the ship panel's link list (WP-2.5). Shown only with
@@ -111,7 +111,9 @@ export function QditLinks({
   const [showExisting, setShowExisting] = useState(false);
   const [relinkChoice, setRelinkChoice] = useState<Record<string, string>>({});
 
-  const load = useCallback(async (): Promise<QditLinkRow[]> => {
+  // Null when the links could not be loaded, so a signature can tell that
+  // apart from a note with nothing left to sign (WP-2.8).
+  const load = useCallback(async (): Promise<QditLinkRow[] | null> => {
     const supabase = createSupabaseBrowserClient();
     const [projectRes, linksRes] = await Promise.all([
       supabase.from("doc_project_links").select(DOC_PROJECT_LINK_COLUMNS).eq("document_id", docId).maybeSingle(),
@@ -123,8 +125,8 @@ export function QditLinks({
         .order("created_at"),
     ]);
     if (projectRes.error || linksRes.error) {
-      toast.error("Could not load qdit links");
-      return [];
+      toast.error("Could not load qdit links", { id: QDIT_LINKS_LOAD_TOAST });
+      return null;
     }
     setProject((projectRes.data as DocProjectLinkRow | null) ?? null);
     const rows = (linksRes.data ?? []) as QditLinkRow[];

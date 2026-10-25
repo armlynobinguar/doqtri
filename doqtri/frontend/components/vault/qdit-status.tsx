@@ -91,6 +91,9 @@ async function readRecords(docId: string, nodeIds: string[]): Promise<NodeReads>
   return { records, failed };
 }
 
+/** The toast id for a failed links load, so a refused signature replaces it rather than stacking on it. */
+export const QDIT_LINKS_LOAD_TOAST = "qdit-links-load";
+
 export type QditStatusSync = {
   suggestions: Record<string, QditSuggestion>;
   records: Record<string, ChainNode | null>;
@@ -124,8 +127,8 @@ export function useQditStatusSync({
   otherLinked: string[];
   canSign: boolean;
   onSave: () => Promise<string>;
-  /** Re-reads the note's qdit links (a save may move them) and answers them. */
-  reloadLinks: () => Promise<QditLinkRow[]>;
+  /** Re-reads the note's qdit links (a save may move them) and answers them; null when they could not be loaded. */
+  reloadLinks: () => Promise<QditLinkRow[] | null>;
   onSynced: () => void;
 }): QditStatusSync {
   const wallet = useWallet();
@@ -220,6 +223,8 @@ export function useQditStatusSync({
       });
       if (!plan.ok) {
         if (plan.reason === "nothing") toast.info(plan.message);
+        // In place of the load's own "Could not load qdit links" toast.
+        else if (plan.reason === "links_unread") toast.error(plan.message, { id: QDIT_LINKS_LOAD_TOAST });
         else toast.error(plan.message);
         return;
       }
