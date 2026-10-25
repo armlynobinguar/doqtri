@@ -15,21 +15,27 @@ import type { ChainNodeEvent, DocumentHistory } from "@/lib/stellar/history";
  *      set N's record, both with their anchoring transaction from doqtri's
  *      own history;
  *   2. submitted: milestone_proof's record for M, compared with `V`;
- *   3. approved: that record Approved at `V` itself;
+ *   3. approved: that record, as it stands now, Approved (D-78: keyed on the
+ *      current on-chain record, as on qdit's page, with a note when `V` is
+ *      another version);
  *   4. verified: N's record with `tool = "qdit"` and `status = Verified`,
- *      its signer and transaction. It holds only together with fact 3 at
- *      the same `V`.
+ *      its signer and transaction. It holds only with the record Approved
+ *      at `V` itself.
  *
- * Each step is `done`, `pending` (the chain says it has not happened, or
- * not yet for `V`), or `unchecked` (it could not be checked: Stellar did not
- * answer, the ref is not the note's linked project's, or the chain
- * contradicts the record). Everything comes from the receipt WP-3.1 built
- * (lib/integrations/qdit-receipts.ts) and the history and Document the page
- * already read: no further reads, and nothing from qdit's API or doqtri's
- * link rows, so the anonymous rules of section 12 hold as they do for the
- * receipt. In particular the plan version in step 1 is the one the chain
- * shows was in effect when N was signed, not the `doc_version` a link row
- * holds.
+ * Each step is one of the four states qdit's page uses too (D-78; qdit's
+ * web/src/lib/proof-chain.ts), in the same words: `done` ("Done", the chain
+ * says it happened), `pending` ("Pending", the chain says it has not, or
+ * not yet), `mismatch` ("Does not match": checked, and the records
+ * contradict each other, for example a heading signed Verified that the
+ * chain does not back), or `unchecked` ("Could not check": Stellar did not
+ * answer, the ref does not parse, or the ref is not the note's linked
+ * project's so its contract was not read). Everything comes from the
+ * receipt WP-3.1 built (lib/integrations/qdit-receipts.ts) and the history
+ * and Document the page already read: no further reads, and nothing from
+ * qdit's API or doqtri's link rows, so the anonymous rules of section 12
+ * hold as they do for the receipt. In particular the plan version in step 1
+ * is the one the chain shows was in effect when N was signed, not the
+ * `doc_version` a link row holds.
  *
  * Transactions: doqtri's own writes come from its history; the approval from
  * qdit_milestone_approvals when doqtri recorded it. Nothing records the
@@ -38,7 +44,7 @@ import type { ChainNodeEvent, DocumentHistory } from "@/lib/stellar/history";
  * the fact).
  */
 
-export type StepState = "done" | "pending" | "unchecked";
+export type StepState = "done" | "pending" | "mismatch" | "unchecked";
 
 /** A DoqtriRegistry document version and the write that anchored it. */
 export type PlanVersion = {
@@ -58,8 +64,15 @@ export type UncheckedReason =
   | "invalid_ref"
   /** doqtri could not read its own records to check the ref against. */
   | "link"
-  /** The ref does not name the note's linked project and its contract. */
-  | "mismatch"
+  /**
+   * The ref does not name the note's linked project and its contract, so
+   * that contract was not read (D-79). One reason whatever the mismatch, so
+   * nothing about the link row shows.
+   */
+  | "link_mismatch";
+
+/** How the chain, read, contradicts the version `V` the heading names. */
+export type ChainConflict =
   /** The chain holds an older version than `V`. */
   | "older"
   /** The chain has no record of the milestone. */
@@ -85,15 +98,25 @@ export type SubmittedStep = {
   ledger: number | null;
   /** The chain holds a later submission than `V`. */
   newer: boolean;
+  /** Set when the state is `unchecked`. */
   reason?: UncheckedReason;
+  /** Set when the state is `mismatch`: the chain has no submission at `V`. */
+  conflict?: ChainConflict;
 };
 
 export type ApprovedStep = {
   key: "approved";
+  /** Keyed on the current record (D-78): `done` when it is Approved, whatever its version. */
   state: StepState;
   version: number | null;
   chain: MilestoneChainRecord | null;
   newer: boolean;
+  /**
+   * `V`, when the current record the step speaks for is another version:
+   * "the heading was signed for vV". Null when they agree or nothing was
+   * read.
+   */
+  signedFor: number | null;
   /** The approval of the version the chain holds, when recorded. */
   txHash: string | null;
   txLedger: number | null;
@@ -103,9 +126,11 @@ export type ApprovedStep = {
 export type VerifiedStep = {
   key: "verified";
   /**
-   * `done` only for a Verified record with step 3 done; `pending` for a
-   * record not (yet) Verified; `unchecked` for a Verified record step 3
-   * does not back, whatever the reason.
+   * `done` only for a Verified record the chain holds Approved at `V`;
+   * `pending` for a record not (yet) Verified; `mismatch` for a Verified
+   * record the chain, read, does not back (or whose ref is not the note's
+   * linked project's); `unchecked` for one whose milestone could not be
+   * read at all.
    */
   state: StepState;
   /** The record's status as DoqtriRegistry holds it. */
@@ -165,13 +190,16 @@ function vouchedRef({ ref, check }: QditReceipt): QditArtifactRef | null {
   return matched ? ref : null;
 }
 
-/** Why the chain could not speak for `V`, or null when it can. */
-function uncheckedReason(receipt: QditReceipt): UncheckedReason | null {
-  const { check, ref } = receipt;
+/** Why the chain could not be asked about `V`, or null when it was read. */
+function uncheckedReason({ check }: QditReceipt): UncheckedReason | null {
   if (check.state === "unreachable") return check.reason === "rpc" || check.reason === "contract" ? "unreachable" : check.reason;
-  if (check.mismatch) return "mismatch";
-  if (!ref || !check.chain) return "missing";
-  return check.chain.version < ref.version ? "older" : null;
+  return check.mismatch ? "link_mismatch" : null;
+}
+
+/** How the record that was read contradicts `V`, or null when it does not. */
+function chainConflict({ ref }: QditReceipt, chain: MilestoneChainRecord | null): ChainConflict | null {
+  if (!ref || !chain) return "missing";
+  return chain.version < ref.version ? "older" : null;
 }
 
 export function proofChain(receipt: QditReceipt, context: PlanContext): ProofChain {
@@ -179,42 +207,54 @@ export function proofChain(receipt: QditReceipt, context: PlanContext): ProofCha
   const read = chainRead(receipt.check);
   const chain = read?.chain ?? null;
   const reason = uncheckedReason(receipt);
+  const conflict = reason ? null : chainConflict(receipt, chain);
   const newer = !reason && chain != null && version != null && chain.version > version;
-  const atV = !reason && !newer;
+  const atV = !reason && chain != null && chain.version === version;
 
   // Step 2. A record at V that is still Proposed has not been submitted; a
   // later version means V was submitted too (versions count submissions).
+  // A record older than V, or none, contradicts a ref that names V.
   const submitted: SubmittedStep = {
     key: "submitted",
-    state: reason ? "unchecked" : atV && chain!.status === "Proposed" ? "pending" : "done",
+    state: reason ? "unchecked" : conflict ? "mismatch" : atV && chain!.status === "Proposed" ? "pending" : "done",
     version,
     chain,
     ledger: read?.ledger ?? null,
     newer,
     ...(reason ? { reason } : {}),
+    ...(conflict ? { conflict } : {}),
   };
 
-  // Step 3. Only Approved at V itself. Approved is terminal, so a record
-  // newer than V means V was not the approved one (checkReceipt).
-  const approvedAtV = atV && chain!.status === "Approved";
+  // Step 3. Keyed on the current record, as qdit's page is (D-78): done when
+  // it is Approved, with the heading's own version named when it differs.
   const approved: ApprovedStep = {
     key: "approved",
-    state: reason ? "unchecked" : approvedAtV ? "done" : "pending",
+    state: reason ? "unchecked" : chain?.status === "Approved" ? "done" : "pending",
     version,
     chain,
     newer,
-    // The recorded approval is the chain's current version's, which may be
-    // newer than V; none is offered for a chain that can't speak for V.
+    signedFor: !reason && chain != null && version != null && chain.version !== version ? version : null,
+    // The recorded approval is the chain's current version's.
     txHash: !reason && chain?.status === "Approved" ? receipt.approvalTxHash : null,
     txLedger: !reason && chain?.status === "Approved" ? receipt.approvalLedger : null,
     ...(reason ? { reason } : {}),
   };
 
-  // Step 4. Never verified without step 3 at the same V.
+  // Step 4. Never verified without the record Approved at the same V.
+  // A Verified heading the chain was read against and does not back is a
+  // contradiction, not a failed check; so is one whose ref is not the note's
+  // linked project's.
   const isVerified = receipt.record.status === "Verified";
+  const backed = atV && chain!.status === "Approved";
   const verified: VerifiedStep = {
     key: "verified",
-    state: !isVerified ? "pending" : approved.state === "done" ? "done" : "unchecked",
+    state: !isVerified
+      ? "pending"
+      : backed
+        ? "done"
+        : reason && reason !== "link_mismatch"
+          ? "unchecked"
+          : "mismatch",
     status: receipt.record.status,
     signing: receipt.signing,
     updatedAt: receipt.record.updatedAt,

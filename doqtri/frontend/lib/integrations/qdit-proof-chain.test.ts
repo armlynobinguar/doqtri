@@ -170,32 +170,74 @@ describe("proofChain: steps 2 and 3, submitted and approved", () => {
     ]);
   });
 
-  it("a newer submission: vV was submitted, but its approval is not the chain's", () => {
+  it("a newer submission, signed Verified: step 3 speaks for the current record, step 4 does not match", () => {
     // Signed Verified against v1; v1 was rejected and v2 approved since.
     const chain = proofChain(receipt({ v: 1, check: differs("Approved", 2) }), CONTEXT);
     const [, submitted, approved, verified] = chain.steps;
     expect(submitted).toMatchObject({ state: "done", newer: true, version: 1, chain: { version: 2 } });
-    // The recorded approval is v2's; the component names it as such.
-    expect(approved).toMatchObject({ state: "pending", newer: true, txHash: TX(30) });
-    // Never verified without fact 3 at the same version.
-    expect(verified.state).toBe("unchecked");
-    expect(chain.done).toBe(2);
+    // D-78: keyed on the current record, as qdit's page is; the heading's v1 is named.
+    expect(approved).toMatchObject({ state: "done", newer: true, signedFor: 1, txHash: TX(30) });
+    // Never verified without the record Approved at the same version: checked, and it contradicts.
+    expect(verified.state).toBe("mismatch");
+    expect(chain.done).toBe(3);
+  });
+
+  it("fixture M2: signed Built @v1, v1 rejected, v2 approved: step 3 done for v2, step 4 pending", () => {
+    const chain = proofChain(receipt({ v: 1, status: "Built", check: differs("Approved", 2) }), CONTEXT);
+    expect(chain.steps.map((s) => s.state)).toEqual(["done", "done", "done", "pending"]);
+    expect(chain.steps[2]).toMatchObject({ chain: { status: "Approved", version: 2 }, signedFor: 1 });
+  });
+
+  it("a newer submission not yet decided: step 3 pending, with the heading's version named", () => {
+    const [, submitted, approved] = proofChain(receipt({ v: 1, status: "Built", check: differs("Submitted", 2) }), CONTEXT).steps;
+    expect(submitted).toMatchObject({ state: "done", newer: true });
+    expect(approved).toMatchObject({ state: "pending", signedFor: 1, txHash: null });
   });
 
   it.each([
-    ["Stellar did not answer", { state: "unreachable", reason: "rpc" }, "unreachable"],
-    ["the contract is not milestone_proof", { state: "unreachable", reason: "contract" }, "unreachable"],
-    ["the ref is not in section 10's grammar", { state: "unreachable", reason: "invalid_ref" }, "invalid_ref"],
-    ["doqtri's own records could not be read", { state: "unreachable", reason: "link" }, "link"],
-    ["the ref is not the linked project's", { state: "differs", mismatch: "chain" }, "mismatch"],
-    ["the chain has no record", { state: "differs", chain: null, ledger: 5000 }, "missing"],
-    ["the chain is behind vV", differs("Approved", 1), "older"],
-  ] as const)("unchecked when %s", (_, check, reason) => {
+    ["Stellar did not answer", { state: "unreachable", reason: "rpc" }, "unreachable", "unchecked"],
+    ["the contract is not milestone_proof", { state: "unreachable", reason: "contract" }, "unreachable", "unchecked"],
+    ["the ref is not in section 10's grammar", { state: "unreachable", reason: "invalid_ref" }, "invalid_ref", "unchecked"],
+    ["doqtri's own records could not be read", { state: "unreachable", reason: "link" }, "link", "unchecked"],
+    // D-79: its contract is not read, but a Verified heading naming another project contradicts the link.
+    ["the ref is not the linked project's", { state: "differs", mismatch: "chain" }, "link_mismatch", "mismatch"],
+  ] as const)("steps 2 and 3 could not check when %s", (_, check, reason, verifiedState) => {
     const chain = proofChain(receipt({ check: check as ReceiptCheck }), CONTEXT);
     const [, submitted, approved, verified] = chain.steps;
     expect(submitted).toMatchObject({ state: "unchecked", reason });
-    expect(approved).toMatchObject({ state: "unchecked", reason, txHash: null });
-    expect(verified.state).toBe("unchecked");
+    expect(approved).toMatchObject({ state: "unchecked", reason, txHash: null, signedFor: null });
+    expect(verified.state).toBe(verifiedState);
+  });
+
+  it.each(["unlinked", "project", "no_chain", "chain"] as const)(
+    "every link mismatch reads the same, so nothing about the link row shows (%s)",
+    (mismatch) => {
+      expect(states(receipt({ check: { state: "differs", mismatch } }))).toEqual(["done", "unchecked", "unchecked", "mismatch"]);
+    },
+  );
+
+  it("the chain has no record of vV: step 2 does not match, step 3 pending", () => {
+    const [, submitted, approved, verified] = proofChain(receipt({ check: { state: "differs", chain: null, ledger: 5000 } }), CONTEXT).steps;
+    expect(submitted).toMatchObject({ state: "mismatch", conflict: "missing" });
+    expect(submitted.reason).toBeUndefined();
+    expect(approved).toMatchObject({ state: "pending", chain: null, signedFor: null, txHash: null });
+    expect(verified.state).toBe("mismatch");
+  });
+
+  it("the chain is behind vV: step 2 does not match, step 3 speaks for the record it holds", () => {
+    const [, submitted, approved, verified] = proofChain(receipt({ check: differs("Approved", 1) }), CONTEXT).steps;
+    expect(submitted).toMatchObject({ state: "mismatch", conflict: "older", chain: { version: 1 } });
+    expect(approved).toMatchObject({ state: "done", signedFor: 2 });
+    expect(verified.state).toBe("mismatch");
+  });
+
+  it("a Planned heading with no record on chain is still a contradiction at step 2, not at step 4", () => {
+    expect(states(receipt({ status: "Planned", check: { state: "differs", chain: null, ledger: 5000 } }))).toEqual([
+      "done",
+      "mismatch",
+      "pending",
+      "pending",
+    ]);
   });
 
   it("no approval transaction recorded: approved is still done, from the chain's state", () => {
@@ -211,9 +253,18 @@ describe("proofChain: step 4, verified", () => {
     expect(chain.steps[3]).toMatchObject({ status: "Built" });
   });
 
-  it("unchecked for a Verified record the chain does not back at vV (Submitted)", () => {
+  it("fixture M3: does not match for a Verified record the chain says is Submitted at vV", () => {
     const [, , approved, verified] = proofChain(receipt({ check: differs("Submitted", 2) }), CONTEXT).steps;
-    expect(approved.state).toBe("pending");
+    expect(approved).toMatchObject({ state: "pending", signedFor: null });
+    expect(verified).toMatchObject({ state: "mismatch", status: "Verified" });
+  });
+
+  it("does not match for a Verified record whose v2 was rejected", () => {
+    expect(states(receipt({ check: differs("Rejected", 2) }))).toEqual(["done", "done", "pending", "mismatch"]);
+  });
+
+  it("could not check a Verified record when Stellar did not answer", () => {
+    const [, , , verified] = proofChain(receipt({ check: { state: "unreachable", reason: "rpc" } }), CONTEXT).steps;
     expect(verified).toMatchObject({ state: "unchecked", status: "Verified" });
   });
 
