@@ -75,7 +75,14 @@ export const NATIVE_XLM = Asset.native().contractId(NETWORK_PASSPHRASE);
 export const USER_PAYS_FEES = FEE_FORWARDER !== null && DOQTRI_RELAYER !== null;
 
 /**
- * The most a user signs to pay for one write: 0.5 XLM, matching the relay's
- * resource-fee cap. They are charged the actual cost, never more than this.
+ * The most a user signs to pay for one write. They are charged the actual
+ * cost, never more than this. Also the balance a wallet needs before it can
+ * write.
+ *
+ * Mainnet: 0.5 XLM, matching the relay's resource-fee cap. Testnet: 500 XLM.
+ * Its live state passed the network's target size in October 2026, which
+ * multiplies rent: on 2026-10-25 anchoring a new document simulated at 20 XLM,
+ * with 8 nodes 131 XLM and with the 32-node maximum 463 XLM. Testnet XLM is
+ * free, and a top-up brings 9,990.
  */
-export const MAX_USER_FEE_STROOPS = BigInt(5_000_000);
+export const MAX_USER_FEE_STROOPS = IS_MAINNET ? BigInt(5_000_000) : BigInt(5_000_000_000);

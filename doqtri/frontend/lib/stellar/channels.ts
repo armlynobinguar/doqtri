@@ -21,11 +21,17 @@ const SIMULATION_SOURCE = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 /**
  * Refuse anything whose simulated resource fee is above this. Mainnet wallet
  * deploys simulate at ~0.29 XLM and registry writes at ~0.07 XLM; occasional
- * first-touch TTL bumps cost far more and are deliberately refused.
+ * first-touch TTL bumps cost far more and are deliberately refused: 0.5 XLM.
+ *
+ * Testnet: 25 XLM. Its live state passed the network's target size in October
+ * 2026, which multiplies rent: a wallet deploy simulated at 5.6 XLM on
+ * 2026-10-25 (0.08 on 2026-10-06). Testnet XLM is free; what this spends is
+ * the Channels key's daily allowance.
  */
 function maxResourceFeeStroops(): bigint {
   const raw = process.env.CHAIN_MAX_RESOURCE_FEE_STROOPS;
-  return raw && /^\d+$/.test(raw) ? BigInt(raw) : BigInt(5_000_000);
+  if (raw && /^\d+$/.test(raw)) return BigInt(raw);
+  return IS_MAINNET ? BigInt(5_000_000) : BigInt(250_000_000);
 }
 
 export function channelsClient(): ChannelsClient {
