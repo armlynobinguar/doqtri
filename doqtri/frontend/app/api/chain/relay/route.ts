@@ -46,7 +46,8 @@ import { topUpWallet } from "@/lib/stellar/friendbot-topup";
  * `{ success, data: { transactionId, hash, status } }` or `{ success: false,
  * error }`. Every request spends Doqtri's Channels allowance, so it must come
  * from a signed-in email account, pass the shape checks in relay-validation,
- * fit the per-user and global quota, and simulate under the fee cap.
+ * simulate under the fee cap, and fit the per-user and global quota (charged
+ * only once a request has simulated, so a refused one doesn't count).
  *
  * Four kinds of submission: a wallet deployment; a DoqtriRegistry write
  * signed by the caller's own wallet for one of the caller's own notes; a
@@ -175,10 +176,11 @@ async function relayRegistryWrite(userId: string, submission: RelaySubmission) {
     .maybeSingle();
   if (!doc) return fail("That note isn't in your vault.", 403);
 
+  // Simulated before charging: a request refused here spends nothing.
+  await simulateWithinCap(submission.func, submission.auth);
   const refused = await chargeQuota(userId, "write", WRITES_PER_USER, WRITES_GLOBAL);
   if (refused) return refused;
 
-  await simulateWithinCap(submission.func, submission.auth);
   const sent = await submitAndConfirm(submission.func, submission.auth);
 
   const { error } = await admin.from("chain_writes").insert({
@@ -372,10 +374,11 @@ async function relayMarketWrite(userId: string, submission: RelaySubmission) {
   const plan = await marketCallPlan(call, wallet.address);
   validateMarketWrite(submission, { market: MARKET_CONTRACT_ID!, wallet: wallet.address, transfers: plan.transfers });
 
+  // Simulated before charging: a request refused here spends nothing.
+  await simulateWithinCap(submission.func, submission.auth);
   const refused = await chargeQuota(userId, "market", MARKET_PER_USER, MARKET_GLOBAL);
   if (refused) return refused;
 
-  await simulateWithinCap(submission.func, submission.auth);
   const sent = await submitAndConfirm(submission.func, submission.auth);
   await recordPurchase(userId, wallet.address, call, plan.sale, sent.hash);
   return Response.json({ success: true, data: sent });
@@ -412,10 +415,11 @@ async function relayWalletAdmin(userId: string, submission: RelaySubmission, rpI
     removed = target.credentialId;
   }
 
+  // Simulated before charging: a request refused here spends nothing.
+  await simulateWithinCap(submission.func, submission.auth);
   const refused = await chargeQuota(userId, "write", WRITES_PER_USER, WRITES_GLOBAL);
   if (refused) return refused;
 
-  await simulateWithinCap(submission.func, submission.auth);
   const sent = await submitAndConfirm(submission.func, submission.auth);
 
   if (change.fn === "add_signer") {
@@ -458,11 +462,11 @@ async function deployWallet(userId: string, submission: RelaySubmission, rpId: s
     deployer: deployerAddress(SHARED_DEPLOYER_SEED),
   });
 
-  // Charged after validation, so a malformed request costs nothing.
+  // Charged after validation and simulation, so a request that is malformed,
+  // would fail on-chain or costs more than the cap spends nothing.
+  await simulateWithinCap(submission.func, submission.auth);
   const refused = await chargeQuota(userId, "deploy", DEPLOYS_PER_USER, DEPLOYS_GLOBAL);
   if (refused) return refused;
-
-  await simulateWithinCap(submission.func, submission.auth);
 
   // Where wallets pay their own fees, a new wallet can't anchor until it holds
   // test XLM. The address is known before the deploy lands and the native token
