@@ -1,7 +1,7 @@
 import { randomBytes } from "crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
-import { supabaseConnectionStore } from "./connection-store";
+import { fitAccountLabel, supabaseConnectionStore } from "./connection-store";
 
 const ANA = "11111111-1111-4111-8111-111111111111";
 const BEN = "22222222-2222-4222-8222-222222222222";
@@ -127,5 +127,40 @@ describe("supabaseConnectionStore", () => {
     await supabaseConnectionStore(fakeAdmin(rows), randomBytes(32)).saveConnected(ANA, { subject: "qdit-ana", accountLabel: null }, tokens);
     const store = supabaseConnectionStore(fakeAdmin(rows), { current: key, previous: randomBytes(32) });
     expect(await store.load(ANA)).toMatchObject({ status: "connected", accessToken: null, refreshToken: null });
+  });
+
+  it("remembers the qdit account a reconnect replaced, and forgets it on a reconnect to the same one (D-66)", async () => {
+    const rows: Row[] = [];
+    const store = supabaseConnectionStore(fakeAdmin(rows), key);
+    expect(await store.saveConnected(ANA, { subject: "qdit-ana-old", accountLabel: "ana-old" }, tokens)).toEqual({ replaced: null });
+
+    expect(await store.saveConnected(ANA, { subject: "qdit-ana", accountLabel: "ana" }, tokens)).toEqual({
+      replaced: { subject: "qdit-ana-old", accountLabel: "ana-old" },
+    });
+    expect(rows[0]).toMatchObject({ subject: "qdit-ana", previous_subject: "qdit-ana-old", previous_account_label: "ana-old" });
+
+    expect(await store.saveConnected(ANA, { subject: "qdit-ana", accountLabel: "ana" }, tokens)).toEqual({ replaced: null });
+    expect(rows[0]).toMatchObject({ previous_subject: null, previous_account_label: null });
+  });
+
+  it("never writes a label longer than the column holds (WP-2.3)", async () => {
+    const rows: Row[] = [];
+    const store = supabaseConnectionStore(fakeAdmin(rows), key);
+    await store.saveConnected(ANA, { subject: "qdit-ana", accountLabel: "x".repeat(500) }, tokens);
+    expect(rows[0].account_label).toBe("x".repeat(200));
+  });
+});
+
+describe("fitAccountLabel", () => {
+  it("trims, cuts to 200 characters by code point, and turns blank into null", () => {
+    expect(fitAccountLabel("  ana  ")).toBe("ana");
+    expect(fitAccountLabel("   ")).toBeNull();
+    expect(fitAccountLabel(null)).toBeNull();
+    expect(fitAccountLabel(undefined)).toBeNull();
+    const emoji = fitAccountLabel("😀".repeat(250))!;
+    expect(Array.from(emoji)).toHaveLength(200);
+    // Never half a surrogate pair.
+    expect(emoji).toBe("😀".repeat(200));
+    expect(fitAccountLabel("a".repeat(199) + " b")).toBe("a".repeat(199));
   });
 });

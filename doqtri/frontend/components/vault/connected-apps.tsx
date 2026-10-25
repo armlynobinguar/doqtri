@@ -9,6 +9,7 @@ import { StatusTag } from "@/components/ui/status-tag";
 import {
   connectedAppsPath,
   describeQditOutcome,
+  qditAccountName,
   type QditConnectionSummary,
 } from "@/lib/integrations/connected-apps";
 import { cn } from "@/lib/utils";
@@ -34,7 +35,7 @@ const CONNECT_URL = "/api/integrations/qdit/connect";
 export function ConnectedApps({ data }: { data: ConnectedAppsData }) {
   const router = useRouter();
   const params = useSearchParams();
-  const [notice] = useState(() => describeQditOutcome(params.get("qdit"), params.get("reason")));
+  const [notice] = useState(() => describeQditOutcome(params.get("qdit"), params.get("reason"), data.qdit));
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const cleaned = useRef(false);
@@ -116,7 +117,7 @@ export function ConnectedApps({ data }: { data: ConnectedAppsData }) {
           <div className="grid grid-cols-[7.5rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-[13px] max-sm:grid-cols-1">
             <span className="text-muted-foreground">Account</span>
             <span className="truncate" title={qdit.subject} data-testid="qdit-account">
-              {qdit.accountLabel ?? qdit.subject}
+              {qditAccountName(qdit)}
             </span>
             <span className="text-muted-foreground">Connected</span>
             <span>{new Date(qdit.connectedAt).toLocaleDateString(undefined, { dateStyle: "long" })}</span>

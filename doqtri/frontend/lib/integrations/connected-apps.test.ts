@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { connectedAppsPath, describeQditOutcome } from "./connected-apps";
+import { connectedAppsPath, describeQditOutcome, type QditConnectionSummary } from "./connected-apps";
 
 describe("connectedAppsPath", () => {
   it("points at the profile's apps tab with the outcome", () => {
@@ -20,5 +20,35 @@ describe("describeQditOutcome", () => {
     expect(describeQditOutcome("error", "toString")?.text).toBe(describeQditOutcome("error", "provider")?.text);
     expect(describeQditOutcome(null, null)).toBeNull();
     expect(describeQditOutcome("whatever", null)).toBeNull();
+  });
+});
+
+describe("describeQditOutcome: switching accounts (D-66)", () => {
+  const switched: QditConnectionSummary = {
+    status: "connected",
+    accountLabel: "ana",
+    subject: "qdit-ana",
+    connectedAt: "2026-10-25T08:00:00.000Z",
+    previous: { subject: "qdit-ana-old", accountLabel: "ana-old" },
+  };
+
+  it("says which account replaced which, from the connection", () => {
+    expect(describeQditOutcome("switched", null, switched)).toEqual({
+      tone: "success",
+      text: "Now connected as ana (was ana-old).",
+    });
+    // An account without a label goes by its id.
+    expect(
+      describeQditOutcome("switched", null, { ...switched, accountLabel: null, previous: { subject: "qdit-old", accountLabel: null } })
+        ?.text,
+    ).toBe("Now connected as qdit-ana (was qdit-old).");
+  });
+
+  it("reads as a plain connect when nothing on record was replaced, or the connection is not connected", () => {
+    expect(describeQditOutcome("switched", null, { ...switched, previous: null })?.text).toBe("qdit is connected.");
+    expect(describeQditOutcome("switched", null, null)?.text).toBe("qdit is connected.");
+    expect(describeQditOutcome("switched", null, { ...switched, status: "revoked" })?.text).toBe("qdit is connected.");
+    // A plain connect never names the previous account, even if one is on record.
+    expect(describeQditOutcome("connected", null, switched)?.text).toBe("qdit is connected.");
   });
 });

@@ -17,6 +17,7 @@ const store: ConnectionStore = {
   // One row, Ana's or nobody's: another user's load finds nothing.
   load: async (userId: string) => (row && row.userId === userId ? { ...row } : null),
   saveConnected: vi.fn(async (userId: string, account: ConnectedAccount, tokens: TokenSet) => {
+    const replaced = row && row.subject !== account.subject ? { subject: row.subject, accountLabel: row.accountLabel } : null;
     row = {
       userId,
       ...account,
@@ -27,6 +28,7 @@ const store: ConnectionStore = {
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
     };
+    return { replaced };
   }),
   saveRefreshed: async () => true,
   markStatus: vi.fn(async (userId: string, generation: number, status: "needs_reconnect" | "revoked") => {
@@ -42,7 +44,10 @@ vi.mock("@/lib/supabase/server", () => ({
   }),
   createSupabaseAdminClient: () => ({}),
 }));
-vi.mock("@/lib/integrations/connection-store", () => ({ supabaseConnectionStore: () => store }));
+vi.mock("@/lib/integrations/connection-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/integrations/connection-store")>()),
+  supabaseConnectionStore: () => store,
+}));
 
 import { GET as connect } from "./connect/route";
 import { GET as callback } from "./callback/route";
@@ -219,6 +224,49 @@ describe("callback", () => {
     const { cookie, state } = await startConnect();
     await callback(callbackRequest(`code=c1&state=${state}`, cookie.value));
     expect(row).toMatchObject({ status: "connected", generation: 5, accessToken: "at1" });
+  });
+});
+
+describe("callback: the account label (WP-2.3) and switching accounts (D-66)", () => {
+  it("cuts a long display name to what account_label holds, instead of failing the connect", async () => {
+    const long = "A".repeat(150) + "😀".repeat(100);
+    qdit.me = () => json(200, { data: { user: { id: "qdit-ana", username: null, display_name: long }, client_id: CLIENT_ID } });
+    const { cookie, state } = await startConnect();
+    const res = await callback(callbackRequest(`code=c1&state=${state}`, cookie.value));
+    expect(outcome(res)).toMatchObject({ qdit: "connected" });
+    expect(Array.from(row!.accountLabel!)).toHaveLength(200);
+    expect(row!.accountLabel!.startsWith("A".repeat(150))).toBe(true);
+  });
+
+  it("stores no label for a blank name", async () => {
+    qdit.me = () => json(200, { data: { user: { id: "qdit-ana", username: "  ", display_name: null }, client_id: CLIENT_ID } });
+    const { cookie, state } = await startConnect();
+    await callback(callbackRequest(`code=c1&state=${state}`, cookie.value));
+    expect(row).toMatchObject({ status: "connected", accountLabel: null });
+  });
+
+  it("says 'switched' when the reconnect landed on another qdit account, and 'connected' for the same one", async () => {
+    row = {
+      userId: ANA,
+      subject: "qdit-ana-old",
+      accountLabel: "ana-old",
+      scopes: [],
+      status: "needs_reconnect",
+      generation: 2,
+      expiresAt: null,
+      accessToken: null,
+      refreshToken: null,
+    };
+    let { cookie, state } = await startConnect();
+    let res = await callback(callbackRequest(`code=c1&state=${state}`, cookie.value));
+    expect(outcome(res)).toEqual({ path: "/vault/profile", qdit: "switched", reason: null });
+    // Names stay out of the URL: the profile reads them from the connection.
+    expect(res.headers.get("location")).not.toContain("ana");
+    expect(row).toMatchObject({ subject: "qdit-ana", status: "connected" });
+
+    ({ cookie, state } = await startConnect());
+    res = await callback(callbackRequest(`code=c1&state=${state}`, cookie.value));
+    expect(outcome(res)).toMatchObject({ qdit: "connected" });
   });
 });
 

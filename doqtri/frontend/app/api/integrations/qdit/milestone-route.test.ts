@@ -167,7 +167,7 @@ describe("GET /api/integrations/qdit/milestones/[id]", () => {
     const marks: string[] = [];
     const memory = {
       load: async () => (connection ? { ...connection } : null),
-      saveConnected: async () => {},
+      saveConnected: async () => ({ replaced: null }),
       saveRefreshed: async (_u: string, generation: number, tokens: { accessToken: string }) => {
         connection = { ...connection!, generation: generation + 1, accessToken: tokens.accessToken };
         return true;

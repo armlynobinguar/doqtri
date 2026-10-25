@@ -45,7 +45,7 @@ function memoryStore(initial: Partial<StoredConnection> | null) {
       row = { ...row!, ...r };
     },
     load: vi.fn(async () => (row ? { ...row } : null)),
-    saveConnected: vi.fn(async () => {}),
+    saveConnected: vi.fn(async () => ({ replaced: null })),
     saveRefreshed: vi.fn(async (_userId: string, generation: number, tokens: TokenSet) => {
       if (!row || row.generation !== generation) return false;
       row = {
