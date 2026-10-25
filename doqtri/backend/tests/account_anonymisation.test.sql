@@ -11,7 +11,8 @@
 --                          workspace with an anchored note (headings public),
 --                          a private draft and a qdit-linked note, b as a
 --                          viewer there; editor of Acme with a note there;
---                          a listed template, bought by c; a template of o's
+--                          a paid listed template, bought by c, and a free
+--                          one; a template of o's
 --                          it bought; a qdit connection; an open invite; a
 --                          lock, a map style and two imports
 --   b  buddy@example.com   viewer of a's personal workspace
@@ -108,6 +109,8 @@ insert into public.market_templates
   (id, network, creator_id, creator_wallet, title, category, body, content_hash, token, price, status, listed_at) values
   ('cccccccccccccccc', 'testnet', '00000000-0000-4000-8000-0000000000d1', 'C' || repeat('A', 55),
    'Launch plan', 'Planning', 'body', repeat('d', 64), 'C' || repeat('T', 55), 10000000, 'listed', now()),
+  ('eeeeeeeeeeeeeeee', 'testnet', '00000000-0000-4000-8000-0000000000d1', 'C' || repeat('A', 55),
+   'Free plan', 'Planning', 'body', repeat('a', 64), 'C' || repeat('T', 55), 0, 'listed', now()),
   ('dddddddddddddddd', 'testnet', '00000000-0000-4000-8000-0000000000d4', 'G' || repeat('O', 55),
    'Roadmap', 'Planning', 'body', repeat('e', 64), 'C' || repeat('T', 55), 0, 'listed', now());
 insert into public.market_purchases (network, template_id, buyer_id, buyer_wallet, amount, tx_hash) values
@@ -265,9 +268,11 @@ select results_eq(
   'the import behind a kept note stays with the note (D-42), detached from the account');
 
 select results_eq(
-  $$ select creator_id, creator_wallet, status, hidden from public.market_templates where id = 'cccccccccccccccc' $$,
-  $$ values (null::uuid, 'C' || repeat('A', 55), 'listed'::text, false) $$,
-  'its template stays listed, credited to its wallet');
+  $$ select id, creator_id, creator_wallet, status, hidden from public.market_templates
+      where id in ('cccccccccccccccc', 'eeeeeeeeeeeeeeee') order by id $$,
+  $$ values ('cccccccccccccccc'::text, null::uuid, 'C' || repeat('A', 55), 'listed'::text, true),
+            ('eeeeeeeeeeeeeeee'::text, null::uuid, 'C' || repeat('A', 55), 'listed'::text, false) $$,
+  'its templates stay, credited to its wallet: the free one listed, the paid one hidden (D-89)');
 select results_eq(
   $$ select buyer_id, buyer_wallet, tx_hash from public.market_purchases where template_id = 'cccccccccccccccc' $$,
   $$ values ('00000000-0000-4000-8000-0000000000d3'::uuid, 'G' || repeat('C', 55), repeat('f', 64)) $$,
@@ -278,15 +283,17 @@ select results_eq(
   'and its own purchase stays on record, by its wallet, for the seller''s earnings');
 
 -- The gallery's read (app/api/market/templates/route.ts): a template whose
--- creator_id is null is shown as by "Former user", with its wallet.
+-- creator_id is null is shown as by "Former user", with its wallet. Scoped
+-- to this file's templates, so it passes on a database with production data.
 select results_eq(
   $$ select t.id, t.creator_id is null as former, t.creator_wallet
        from public.market_templates t
-      where t.network = 'testnet' and t.status = 'listed' and not t.hidden
+      where t.id in ('cccccccccccccccc', 'dddddddddddddddd', 'eeeeeeeeeeeeeeee')
+        and t.network = 'testnet' and t.status = 'listed' and not t.hidden
       order by t.id $$,
-  $$ values ('cccccccccccccccc'::text, true, 'C' || repeat('A', 55)),
-            ('dddddddddddddddd'::text, false, 'G' || repeat('O', 55)) $$,
-  'the gallery still lists it, flagged as a former user''s');
+  $$ values ('dddddddddddddddd'::text, false, 'G' || repeat('O', 55)),
+            ('eeeeeeeeeeeeeeee'::text, true, 'C' || repeat('A', 55)) $$,
+  'the gallery still lists its free one, flagged as a former user''s');
 
 
 -- The public audit page (/d/[docId]) reads with the service role.

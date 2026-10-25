@@ -106,8 +106,22 @@ function Version({ label, v }: { label: string; v: PlanVersion }) {
   );
 }
 
+/** D-79, D-93: the ref was deliberately not read; one wording whatever the mismatch. */
+const LINK_CONFLICT =
+  "This record does not match a qdit project and contract registered in Doqtri for this note, so the contract it names was not read.";
+
 function PlanBody({ step, updatedAt }: { step: PlanStep; updatedAt: number }) {
   const { current, signedAt } = step;
+  if (step.conflict === "link") {
+    // The registry's own versions are still shown; only the tie to a qdit milestone fails.
+    return (
+      <>
+        {signedAt ? <Version label="Signed at plan version" v={signedAt} /> : null}
+        {signedAt?.version !== current.version ? <Version label="Current plan version" v={current} /> : null}
+        <span className="block">{LINK_CONFLICT} This plan version is not shown as planned for a qdit milestone.</span>
+      </>
+    );
+  }
   if (!signedAt) {
     return (
       <>
@@ -137,12 +151,11 @@ function uncheckedText(reason: UncheckedReason): string {
       return "The record's artifact_ref does not follow the integration contract's grammar, so there is nothing to check.";
     case "link":
       return "Doqtri could not read its own records just now to check which qdit contract this record may name.";
-    case "link_mismatch":
-      return "This record does not match a qdit project and contract registered in Doqtri for this note, so the contract it names was not read.";
   }
 }
 
 function conflictText(conflict: ChainConflict, step: SubmittedStep): string {
+  if (conflict === "link") return LINK_CONFLICT;
   const v = step.version != null ? `v${step.version}` : "the version it names";
   return conflict === "older"
     ? `qdit's contract holds v${step.chain?.version} (${step.chain?.status}), older than ${v}, the version this heading was signed against.`
@@ -203,6 +216,13 @@ function SubmittedBody({ step, milestone: ref }: { step: SubmittedStep; mileston
 }
 
 function ApprovedBody({ step, milestone: ref }: { step: ApprovedStep; milestone: QditArtifactRef | null }) {
+  if (step.conflict === "link") {
+    return (
+      <span className="block">
+        The submission above does not match this note&apos;s qdit project, so nothing is shown as approved.
+      </span>
+    );
+  }
   if (step.state === "unchecked" || !ref) {
     return <span className="block">Not checked: the submission above could not be checked.</span>;
   }
@@ -258,7 +278,7 @@ function VerifiedBody({
         approved v{approved.version}.
       </>
     ) : step.state === "mismatch" ? (
-      approved.state === "unchecked" ? (
+      approved.conflict === "link" ? (
         <>
           Signed as Verified, but this record does not match a qdit project and contract registered in Doqtri for
           this note, so this heading is not shown as verified.

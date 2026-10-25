@@ -132,6 +132,21 @@ export function chainRead(check: ReceiptCheck): { chain: MilestoneChainRecord | 
   return check.state === "unreachable" || check.mismatch ? null : check;
 }
 
+/**
+ * The receipt's ref, when doqtri checked it against the note's linked
+ * project and it matched, so its contract may be offered as qdit's
+ * milestone_proof. Null when the link could not be read, did not match, or
+ * the ref does not parse: a look-alike contract, or the project's contract
+ * id on another network, is never linked from the page (D-94).
+ */
+export function vouchedRef({ ref, check }: Pick<QditReceipt, "ref" | "check">): QditArtifactRef | null {
+  // A read (or a failed read: "rpc", "contract") happens only after the match.
+  const matched =
+    chainRead(check) != null ||
+    (check.state === "unreachable" && (check.reason === "rpc" || check.reason === "contract"));
+  return matched ? ref : null;
+}
+
 /** The note's linked qdit project as doqtri stored it (doc_project_links). */
 export type LinkedProject = {
   projectId: string;

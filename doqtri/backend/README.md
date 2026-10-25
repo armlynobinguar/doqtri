@@ -50,6 +50,9 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261025140000_integration_connections_previous_account.sql  # NOT yet applied (WP-2.11)
 20261026100000_account_deletion_anonymises.sql    # NOT yet applied (WP-1.11)
 20261026100001_signer_removals_owner_handover.sql # NOT yet applied (WP-1.11)
+20261026110000_qdit_approval_incomplete_scans.sql # NOT yet applied (WP-2.13)
+20261026120000_account_deletion_market_templates.sql # NOT yet applied (WP-1.12)
+20261026120001_qdit_approval_incomplete_first_at.sql # NOT yet applied (WP-1.12)
 ```
 
 The remote records its own version stamps (e.g. `20260929114657` for
@@ -154,10 +157,17 @@ Two supporting tables:
   personal workspace stays, renamed "Former user", with no owner and its
   other members still in it, whenever it holds a note or another member
   (an empty one is deleted); the imports behind kept notes stay with them;
-  its community templates stay listed and its purchases valid, credited to
-  their wallets (`creator_id`, `buyer_id` set null). The app shows "Former
+  its free community templates stay listed and its purchases valid, credited
+  to their wallets (`creator_id`, `buyer_id` set null); its paid templates are
+  hidden from the gallery (the admin hide; the contract listing stays, and
+  buyers still copy what they bought) and its drafts never confirmed on chain
+  (`pending`) are deleted (D-89,
+  `20261026120000_account_deletion_market_templates.sql`). The app shows "Former
   user" where it would name the account (`lib/former-user.ts`). It still
-  refuses the last owner of a team workspace with no admin (D-31).
+  refuses the last owner of a team workspace with no admin (D-31). SQL does
+  not remove the account's uploads in Storage or its grant in qdit, and a
+  soft delete runs none of this: see the known limits in
+  `docs/runbooks/registry-editors-rollout.md` (D-90, D-91).
 - `public.workspace_member_removals` — when each member lost the right to
   sign in a workspace (removed, left, account deleted, or demoted to viewer),
   with the wallet addresses they had then, and when they got it back. Written

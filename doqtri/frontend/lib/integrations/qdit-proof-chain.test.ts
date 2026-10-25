@@ -199,8 +199,6 @@ describe("proofChain: steps 2 and 3, submitted and approved", () => {
     ["the contract is not milestone_proof", { state: "unreachable", reason: "contract" }, "unreachable", "unchecked"],
     ["the ref is not in section 10's grammar", { state: "unreachable", reason: "invalid_ref" }, "invalid_ref", "unchecked"],
     ["doqtri's own records could not be read", { state: "unreachable", reason: "link" }, "link", "unchecked"],
-    // D-79: its contract is not read, but a Verified heading naming another project contradicts the link.
-    ["the ref is not the linked project's", { state: "differs", mismatch: "chain" }, "link_mismatch", "mismatch"],
   ] as const)("steps 2 and 3 could not check when %s", (_, check, reason, verifiedState) => {
     const chain = proofChain(receipt({ check: check as ReceiptCheck }), CONTEXT);
     const [, submitted, approved, verified] = chain.steps;
@@ -212,9 +210,35 @@ describe("proofChain: steps 2 and 3, submitted and approved", () => {
   it.each(["unlinked", "project", "no_chain", "chain"] as const)(
     "every link mismatch reads the same, so nothing about the link row shows (%s)",
     (mismatch) => {
-      expect(states(receipt({ check: { state: "differs", mismatch } }))).toEqual(["done", "unchecked", "unchecked", "mismatch"]);
+      expect(states(receipt({ check: { state: "differs", mismatch } }))).toEqual(["mismatch", "mismatch", "mismatch", "mismatch"]);
     },
   );
+
+  it("a ref deliberately not read (D-79) does not match on steps 1 to 3, never could not check (D-93)", () => {
+    const chain = proofChain(receipt({ check: { state: "differs", mismatch: "chain" }, approvalTxHash: TX(30) }), CONTEXT);
+    const [plan, submitted, approved, verified] = chain.steps;
+    // Step 1 still shows the registry's own versions.
+    expect(plan).toMatchObject({ state: "mismatch", conflict: "link", current: { version: 3 }, signedAt: { version: 2 } });
+    expect(submitted).toMatchObject({ state: "mismatch", conflict: "link", chain: null, ledger: null, newer: false });
+    expect(submitted.reason).toBeUndefined();
+    expect(approved).toMatchObject({ state: "mismatch", conflict: "link", chain: null, signedFor: null, txHash: null, txLedger: null });
+    expect(approved.reason).toBeUndefined();
+    expect(verified.state).toBe("mismatch");
+    expect(chain.done).toBe(0);
+    expect(chain.qditContract).toBeNull();
+    // A heading not signed Verified is not a contradiction at step 4, only at 1 to 3.
+    expect(states(receipt({ status: "Built", check: { state: "differs", mismatch: "project" } }))).toEqual([
+      "mismatch",
+      "mismatch",
+      "mismatch",
+      "pending",
+    ]);
+    // Even without the signing write in the history, step 1 says the ref does not match.
+    expect(proofChain(receipt({ signing: null, check: { state: "differs", mismatch: "unlinked" } }), CONTEXT).steps[0]).toMatchObject({
+      state: "mismatch",
+      signedAt: null,
+    });
+  });
 
   it("the chain has no record of vV: step 2 does not match, step 3 pending", () => {
     const [, submitted, approved, verified] = proofChain(receipt({ check: { state: "differs", chain: null, ledger: 5000 } }), CONTEXT).steps;

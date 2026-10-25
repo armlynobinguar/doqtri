@@ -243,6 +243,49 @@ describe("QditReceiptsSection", () => {
     expect(html("chain", "Built")).not.toContain("not shown as approved");
   });
 
+  it("never links the contract a ref names unless it matched the note's linked project (D-94)", () => {
+    const PROJECT = "3f6c2a1e-8b4d-4c7e-9a10-2d5b7e9f1c34";
+    const MILESTONE = "f3d69c2a-1b7e-4ce8-8da4-50af4b8c7316";
+    // G3's h6: a look-alike milestone_proof on the project's own network.
+    const LOOKALIKE = "CBLN6EVXFW6YCRRW7QBQ3TXPNK2DHEB4ZTML5CMI6IV3FHTQT6VCQUIW";
+    const lookalikeRef = `qdit:mainnet:${LOOKALIKE}:${PROJECT}/${MILESTONE}@v1`;
+    // G3's h5: the project's own contract id, but on the other network.
+    const otherNetworkRef = `qdit:testnet:${CONTRACT}:${PROJECT}/${MILESTONE}@v1`;
+    const unvouched = (artifactRef: string, check: QditReceipt["check"]) =>
+      render([
+        {
+          ...CONFIRMED,
+          record: { ...CONFIRMED.record, artifactRef },
+          ref: parseQditArtifactRef(artifactRef),
+          check,
+          approvalTxHash: null,
+        },
+      ]);
+    for (const html of [
+      unvouched(lookalikeRef, { state: "differs", mismatch: "chain" }),
+      unvouched(otherNetworkRef, { state: "differs", mismatch: "chain" }),
+      // Doqtri could not read its own records, so the ref was not checked either.
+      unvouched(lookalikeRef, { state: "unreachable", reason: "link" }),
+    ]) {
+      // The raw ref is still there as text, with no link to what it names.
+      expect(html).toMatch(/qdit:(mainnet|testnet):C[A-Z2-7]{55}:/);
+      expect(html).not.toContain("/contract/");
+      expect(html).not.toContain("contract →");
+      expect(html).not.toContain(LOOKALIKE + '"');
+    }
+
+    // Control: a ref that matched links its contract, read or not, and older than V too.
+    for (const check of [
+      CONFIRMED.check,
+      { state: "differs", chain: onChain("Submitted", 1), ledger: 1234567 },
+      { state: "unreachable", reason: "rpc" },
+    ] satisfies QditReceipt["check"][]) {
+      const html = render([{ ...CONFIRMED, check, approvalTxHash: null }]);
+      expect(html).toContain(`href="https://stellar.expert/explorer/testnet/contract/${CONTRACT}"`);
+      expect(html).toContain("contract →");
+    }
+  });
+
   it("shows fact 2 in full: the submission's version, proof hash, submitter and time", () => {
     const html = render([CONFIRMED]);
     expect(html).toContain('data-testid="receipt-submission"');

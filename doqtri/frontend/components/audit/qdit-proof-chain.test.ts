@@ -209,7 +209,6 @@ describe("ProofChainView: step 2, submitted", () => {
     [{ state: "unreachable", reason: "rpc" }, "could not be read just now"],
     [{ state: "unreachable", reason: "invalid_ref" }, "does not follow the integration contract&#x27;s grammar"],
     [{ state: "unreachable", reason: "link" }, "Doqtri could not read its own records just now"],
-    [{ state: "differs", mismatch: "project" }, "does not match a qdit project and contract registered in Doqtri"],
   ] as const)("could not check: %j", (check, text) => {
     const li = step(render(receipt({ check: check as ReceiptCheck })), "submitted");
     expect(stateOf(li)).toBe("unchecked");
@@ -220,7 +219,9 @@ describe("ProofChainView: step 2, submitted", () => {
   it.each([
     [{ state: "differs", chain: null, ledger: 5000 }, "has no record of this milestone, though this heading was signed against v2"],
     [differs("Approved", 1), "holds v1 (Approved), older than v2"],
-  ] as const)("does not match: the chain was read and has no submission at vV: %j", (check, text) => {
+    // D-79, D-93: deliberately not read, which is no failed read.
+    [{ state: "differs", mismatch: "project" }, "does not match a qdit project and contract registered in Doqtri"],
+  ] as const)("does not match: the chain was read and has no submission at vV, or the ref is not the link's: %j", (check, text) => {
     const li = step(render(receipt({ check: check as ReceiptCheck })), "submitted");
     expect(stateOf(li)).toBe("mismatch");
     expect(li).toContain(">Does not match</span>");
@@ -393,6 +394,27 @@ describe("ProofChainView: step 4, verified", () => {
 });
 
 describe("ProofChainView: a ref not checked against the linked project", () => {
+  it("a ref deliberately not read: steps 1 to 3 say Does not match, never Could not check (D-93)", () => {
+    const html = render(receipt({ check: { state: "differs", mismatch: "chain" } }));
+    for (const key of ["plan", "submitted", "approved", "verified"] as const) {
+      const li = step(html, key);
+      expect(stateOf(li)).toBe("mismatch");
+      expect(li).toContain(">Does not match</span>");
+    }
+    expect(html).not.toContain("Could not check");
+    expect(html).not.toContain("Not checked");
+    // Step 1 still shows the registry's versions, and says why they are not tied to the milestone.
+    const plan = step(html, "plan");
+    expect(plan).toContain(">v2</strong>");
+    expect(plan).toContain("does not match a qdit project and contract registered in Doqtri for this note");
+    expect(step(html, "approved")).toContain("does not match this note&#x27;s qdit project, so nothing is shown as approved");
+    expect(step(html, "verified")).toContain("Signed as Verified, but this record does not match");
+    // Nothing links the contract the ref names (D-94); only DoqtriRegistry is linked.
+    expect(html).not.toContain(`/contract/${CONTRACT}`);
+    expect(html).not.toContain("get_milestone_status");
+  });
+
+
   it.each([
     ["does not match it", { state: "differs", mismatch: "chain" }],
     ["could not be compared: Doqtri's link rows were unreadable", { state: "unreachable", reason: "link" }],

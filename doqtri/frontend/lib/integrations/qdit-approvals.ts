@@ -31,7 +31,11 @@ import { scanRegistryEvents, type EventSource, type LedgerEvent } from "@/lib/st
  * (qdit_milestone_approval_incomplete_scans,
  * 20261026110000_qdit_approval_incomplete_scans.sql): otherwise a
  * milestone whose scans always run out, behind an RPC that caps the ledger
- * range per request, would be scanned on every sighting for good. The
+ * range per request, would be scanned on every sighting. It also gives up
+ * the same way, GIVE_UP_AFTER_MS after its first incomplete scan, on a
+ * clock of its own (first_incomplete_at, D-92,
+ * 20261026120001_qdit_approval_incomplete_first_at.sql): the approval
+ * existed then, so its event has left the window by that time too. The
  * receipt then falls back to the contract's page.
  *
  * The ship panel's re-check hands its approvals over through
@@ -60,8 +64,8 @@ const LOOKUP_SLICES = 2;
 export const LOOKUP_TIMEOUT_MS = 3_000;
 
 /**
- * How long after its first empty lookup an approval is looked for again:
- * RPC's event window (about 7 days) plus a day's margin.
+ * How long after its first empty or incomplete lookup an approval is looked
+ * for again: RPC's event window (about 7 days) plus a day's margin.
  */
 export const GIVE_UP_AFTER_MS = 8 * 24 * 60 * 60_000;
 
@@ -178,8 +182,8 @@ export type ApprovalStore = {
   miss(key: ApprovalKey): Promise<{ firstAt: number; lastAt: number } | null>;
   /** Records an empty lookup now: the first miss stands, the last attempt moves (`seen`: a miss is on record already). */
   recordMiss(key: ApprovalKey, seen: boolean): Promise<void>;
-  /** When a lookup of `key` last ran out of its page budget (epoch ms), or null when none has. */
-  incomplete(key: ApprovalKey): Promise<number | null>;
+  /** When lookups of `key` first and last ran out of their page budget (epoch ms), or null when none has. */
+  incomplete(key: ApprovalKey): Promise<{ firstAt: number; lastAt: number } | null>;
   /** Records an incomplete lookup now (`seen`: one is on record already). Never a miss. */
   recordIncomplete(key: ApprovalKey, seen: boolean): Promise<void>;
   /** The recorded approvals of these milestones, any version. */
@@ -224,13 +228,19 @@ export function supabaseApprovalStore(admin: SupabaseClient): ApprovalStore {
       if (error) throw new Error(`Could not record the approval's lookup: ${error.message}`);
     },
     async incomplete(key) {
-      const { data, error } = await incompletes().select("last_attempt_at").match(columns(key)).maybeSingle();
+      const { data, error } = await incompletes()
+        .select("first_incomplete_at, last_attempt_at")
+        .match(columns(key))
+        .maybeSingle();
       if (error) throw new Error(`Could not read the approval's incomplete lookups: ${error.message}`);
-      const at = data ? Date.parse(String(data.last_attempt_at)) : NaN;
-      return Number.isFinite(at) ? at : null;
+      const lastAt = data ? Date.parse(String(data.last_attempt_at)) : NaN;
+      const firstAt = data ? Date.parse(String(data.first_incomplete_at)) : NaN;
+      if (!Number.isFinite(lastAt)) return null;
+      return { firstAt: Number.isFinite(firstAt) ? firstAt : lastAt, lastAt };
     },
     async recordIncomplete(key, seen) {
-      // As for misses: the service role may update last_attempt_at and nothing else.
+      // As for misses: the service role may update last_attempt_at and nothing
+      // else, so first_incomplete_at keeps the insert's default.
       const { error } = seen
         ? await incompletes().update({ last_attempt_at: new Date().toISOString() }).match(columns(key))
         : await incompletes().upsert(columns(key), ON_KEY);
@@ -252,13 +262,13 @@ export function supabaseApprovalStore(admin: SupabaseClient): ApprovalStore {
 }
 
 /**
- * Records the approval of `key` unless it already is, has been missed for
- * longer than RPC keeps events, or was missed or scanned incompletely
- * within the last RESCAN_AFTER_MS: what the webhook and the re-check call
- * whenever the chain says Approved. A recorded or recently looked-up
- * approval costs one to three indexed reads. Never throws; a failure only
- * means the receipt links to the contract instead, until a later sighting
- * finds it.
+ * Records the approval of `key` unless it already is, has been missed or
+ * scanned incompletely for longer than RPC keeps events, or was missed or
+ * scanned incompletely within the last RESCAN_AFTER_MS: what the webhook
+ * and the re-check call whenever the chain says Approved. A recorded or
+ * recently looked-up approval costs one to three indexed reads. Never
+ * throws; a failure only means the receipt links to the contract instead,
+ * until a later sighting finds it.
  */
 export type RecordApproval = (key: ApprovalKey) => Promise<void>;
 
@@ -270,16 +280,18 @@ export function approvalRecorder(
   return async (key) => {
     try {
       if (await store.has(key)) return;
-      const [missed, incompleteAt] = await Promise.all([store.miss(key), store.incomplete(key)]);
-      if (missed && (now() - missed.firstAt > GIVE_UP_AFTER_MS || now() - missed.lastAt < RESCAN_AFTER_MS)) return;
-      if (incompleteAt !== null && now() - incompleteAt < RESCAN_AFTER_MS) return;
+      const [missed, incomplete] = await Promise.all([store.miss(key), store.incomplete(key)]);
+      // Each clock gives up on its own (D-92): an incomplete scan never starts the miss clock.
+      for (const lookups of [missed, incomplete]) {
+        if (lookups && (now() - lookups.firstAt > GIVE_UP_AFTER_MS || now() - lookups.lastAt < RESCAN_AFTER_MS)) return;
+      }
       // A failed lookup throws past this, so only a real "not there" counts as a miss.
       let tx: ApprovalTx | null;
       try {
         tx = await find(key);
       } catch (error) {
         // Throttled like a miss, without starting the give-up clock.
-        if (error instanceof IncompleteScanError) await store.recordIncomplete(key, incompleteAt !== null);
+        if (error instanceof IncompleteScanError) await store.recordIncomplete(key, incomplete !== null);
         throw error;
       }
       if (tx) await store.record(key, tx);
