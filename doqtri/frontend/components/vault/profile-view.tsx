@@ -464,10 +464,10 @@ export function ProfileView({ joinedAt, referral }: { joinedAt: string; referral
             </Section>
             {MARKET_CONTRACT_ID ? (
               <Button
-                type="button"
                 size="sm"
                 variant="outline"
                 className="self-start"
+                nativeButton={false}
                 render={<Link href="/vault/templates?tab=yours" />}
               >
                 <StoreIcon />
