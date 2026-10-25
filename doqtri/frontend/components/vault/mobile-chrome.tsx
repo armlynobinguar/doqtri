@@ -10,6 +10,7 @@ import {
   NetworkIcon,
   SearchIcon,
   SettingsIcon,
+  UserRoundIcon,
 } from "lucide-react";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import type { RibbonAction } from "@/components/vault/ribbon";
@@ -29,11 +30,14 @@ export function MobileTopBar({
   saveState,
   creating,
   onNewNote,
+  profileActive,
 }: {
   title: string;
   saveState: SaveState;
   creating: boolean;
   onNewNote: () => void;
+  /** On the profile page: the profile button shows as current. */
+  profileActive: boolean;
 }) {
   return (
     <header className="bg-sidebar border-border flex h-[calc(3rem+env(safe-area-inset-top))] shrink-0 items-center gap-2 border-b pt-[env(safe-area-inset-top)] pr-1.5 pl-2 lg:hidden">
@@ -65,6 +69,27 @@ export function MobileTopBar({
           <FilePlusIcon className="size-5" strokeWidth={1.5} />
         )}
       </button>
+
+      {/* The way to the profile and wallet on a phone. A ringed avatar, so it
+          reads as "you" rather than as one more tool icon. */}
+      <Link
+        href="/vault/profile"
+        aria-label="Profile & wallet"
+        aria-current={profileActive ? "page" : undefined}
+        data-testid="mobile-profile"
+        className="group focus-visible:ring-ring flex size-10 shrink-0 items-center justify-center rounded-lg focus-visible:ring-1 focus-visible:outline-hidden"
+      >
+        <span
+          className={cn(
+            "flex size-8 items-center justify-center rounded-full border transition-colors",
+            profileActive
+              ? "text-foreground border-[var(--glass-hi)] bg-[var(--glass-strong)] shadow-[inset_0_1px_0_0_var(--glass-hi)]"
+              : "text-sidebar-foreground group-active:text-foreground border-[var(--glass-lo)] bg-[var(--glass)] group-hover:text-foreground",
+          )}
+        >
+          <UserRoundIcon className="size-[18px]" strokeWidth={1.5} />
+        </span>
+      </Link>
     </header>
   );
 }
