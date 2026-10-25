@@ -1,6 +1,6 @@
 # doqtri x qdit integration contract
 
-Status: v1.0.3, WP-2.0 (history in section 12, Changelog). This file is
+Status: v1.1.0, WP-2.0 (history in section 13, Changelog). This file is
 byte-identical in both repos (`qdit/docs/integration/CONTRACT.md`,
 `doqtri/docs/integration/CONTRACT.md`).
 Change it in both repos in the same phase, through the masterplan's decision
@@ -21,19 +21,53 @@ Keywords MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
   field are signals and previews. doqtri MUST read `milestone_proof` itself
   before suggesting or signing any node status.
 
-| Base URL | Production |
+| Base URL or contract | Production |
 | --- | --- |
 | qdit API | `https://qdit.atalusan.com/api/v1` |
 | qdit OAuth server | `https://bsxnjoviwtkbuvaqpfng.supabase.co/auth/v1` |
 | doqtri webhook | `https://www.doqtri.xyz/api/integrations/qdit/webhook` |
 | doqtri origin (doc URLs) | `https://www.doqtri.xyz` |
+| qdit origin (public pages) | `https://qdit.atalusan.com` |
+| `DoqtriRegistry` (doqtri's chain) | testnet `CCCIDUCFQMTMAGESMPTB3MFW4TURS62ORSZNICFOE6MNQZO3MI7F6QRJ` |
 
-Preview and local deployments configure their own base URLs through env vars
-(doqtri: `QDIT_API_BASE_URL`, `QDIT_OAUTH_ISSUER`, `QDIT_OAUTH_CLIENT_ID`,
-`QDIT_CLIENT_SECRET`, `QDIT_WEBHOOK_SECRET`; qdit stores the webhook URL and
-secret per row in `integration_webhooks`, and sets the doqtri origin it
-accepts in `doc_url` per environment, for example `DOQTRI_ORIGIN`; D-45,
-section 8). Paths never change.
+Preview and local deployments configure their own base URLs through env vars.
+Paths never change. Each deployment of the pair sets these constants; the two
+sides of one pair MUST agree on them:
+
+| Constant | doqtri env | qdit env | Meaning |
+| --- | --- | --- | --- |
+| qdit API base | `QDIT_API_BASE_URL` | (its own origin) | `/api/v1` base; its origin is the qdit origin above |
+| OAuth issuer | `QDIT_OAUTH_ISSUER` | (its Supabase project) | `<issuer>` in section 5 |
+| doqtri's OAuth client id | `QDIT_OAUTH_CLIENT_ID` | `DOQTRI_OAUTH_CLIENT_ID` | the client qdit registered for doqtri in this environment (D-61) |
+| doqtri's client secret | `QDIT_CLIENT_SECRET` | (held by qdit's OAuth server) | sent with `client_secret_basic` (D-67) |
+| Webhook secret | `QDIT_WEBHOOK_SECRET` | per row in `integration_webhooks` | section 9 |
+| doqtri origin | `NEXT_PUBLIC_SITE_URL` (else the Vercel production URL) | `DOQTRI_ORIGIN` | the origin every `doc_url` starts with (D-45, D-72) |
+| `DoqtriRegistry` | `NEXT_PUBLIC_CONTRACT_ID`, `NEXT_PUBLIC_NETWORK_PASSPHRASE` | `DOQTRI_REGISTRY_CONTRACT_ID`, `DOQTRI_REGISTRY_NETWORK` (WP-3.2) | the registry qdit checks plan versions against (section 12) |
+
+- `DOQTRI_OAUTH_CLIENT_ID` (D-61). qdit counts a write as doqtri's (for
+  example when it records which doqtri connections keep a plan doc linked)
+  only when the token's `client_id` equals this value. Other OAuth clients
+  stay bound by section 2 but are never shown as doqtri. qdit's database
+  needs the same value, so the operator stores it once per environment in
+  qdit's hidden one-row integration settings (qdit's runbook has the SQL).
+  Unset, nothing counts as a doqtri connection, and qdit logs a `WARNING`
+  saying so.
+- Client authentication (D-67). doqtri is registered with
+  `token_endpoint_auth_method` = `client_secret_basic`: every call to
+  `<issuer>/oauth/token` carries
+  `Authorization: Basic base64(client_id ":" client_secret)`, and the secret
+  is never sent in the body.
+- Token encryption key (D-67). doqtri encrypts the stored OAuth tokens with
+  `INTEGRATION_TOKEN_KEY` (server-only). During a key change the old key goes
+  in the optional `INTEGRATION_TOKEN_KEY_PREVIOUS`: doqtri decrypts with
+  either key and re-encrypts with the current one on the next write of that
+  row. Changing the key without setting the previous one disconnects every
+  user.
+- doqtri also reads optional `QDIT_OAUTH_REDIRECT_URI` and
+  `QDIT_CHAIN_RPC_URL_TESTNET` / `QDIT_CHAIN_RPC_URL_MAINNET`, and shows the
+  integration only when `NEXT_PUBLIC_QDIT_INTEGRATION` is on. qdit's own
+  webhook delivery uses `CRON_SECRET` and `INTEGRATION_WEBHOOK_ENCRYPTION_KEY`.
+  These are not shared with the other side.
 
 ## 2. Data ownership
 
@@ -41,7 +75,7 @@ section 8). Paths never change.
 | --- | --- | --- |
 | Docs, headings (nodes), node status, workspaces and roles | doqtri | qdit: `project_doc_links` (doc id, title, url) and `milestone_external_links` (doc id, node id, node label, doc version) |
 | Projects, milestones, milestone status, approvals, proofs, project roles | qdit | doqtri: `doc_project_links` and `node_links` rows with `provider = 'qdit'`, `external_ref = '<project_id>/<milestone_id>'` |
-| OAuth grant | qdit (user can revoke in qdit settings) | doqtri: access and refresh tokens, encrypted, server-only, in `integration_connections` |
+| OAuth grant | qdit (user can revoke in qdit settings; section 5, D-59) | doqtri: access and refresh tokens, encrypted, server-only, in `integration_connections` |
 | Webhook secret | qdit, encrypted in `integration_webhooks` | doqtri: same value in `QDIT_WEBHOOK_SECRET` |
 
 Rules that follow from the decisions:
@@ -101,14 +135,17 @@ Rules that follow from the decisions:
 
 - Every `/api/v1` request carries `Authorization: Bearer <access_token>`.
 - The token is a JWT issued by qdit's Supabase OAuth 2.1 server through the
-  authorization code grant with PKCE (`S256`) and a client secret. Authorize at
+  authorization code grant with PKCE (`S256`) and a client secret
+  (`client_secret_basic`, section 1). Authorize at
   `<issuer>/oauth/authorize`; exchange and refresh at `<issuer>/oauth/token`.
   qdit's consent screen is `https://qdit.atalusan.com/oauth/consent`.
 - qdit MUST accept a token only when all of these hold:
   - the signature verifies against `<issuer>/.well-known/jwks.json`;
   - `iss` equals the issuer above and `exp` is in the future;
   - `role` is `authenticated`;
-  - `sub` (the qdit user id) and `client_id` (the OAuth client id) are present.
+  - `sub` (the qdit user id) and `client_id` (the OAuth client id) are present;
+  - the user has not revoked that client since the token was issued (D-59,
+    below).
   A first-party qdit session token has no `client_id` and is refused with
   `unauthorized`.
 - qdit runs every `/api/v1` read and write with the caller's token, so RLS
@@ -117,6 +154,40 @@ Rules that follow from the decisions:
 - doqtri refreshes on `401 unauthorized` once, then retries the request once.
   If refresh fails (grant revoked), doqtri marks the connection disconnected
   and asks the user to reconnect.
+
+Revocation (D-59). A user revokes an app under Authorized apps in qdit's
+settings. From that moment qdit MUST refuse, on every `/api/v1` endpoint,
+each token of that app for that user that was issued at or before the
+revoke, that is every token whose `iat` <= the revoke time recorded for its
+`(sub, client_id)`, even while its `exp` is still in the future. The answer
+is `401 unauthorized` with `WWW-Authenticate: Bearer error="invalid_token"`,
+the same as any other refused token (section 6). qdit keeps the revoke time
+in a table no client can read, looks it up once per request, and fails
+closed: if the lookup itself fails it answers `503 unavailable`, never a
+pass. qdit's own record of which doqtri connections keep a plan doc linked
+takes its revoke time from the same table. A later consent issues new tokens
+with a later `iat`, so the app works again for that user without any action
+on qdit's side. A token issued in the same second as the revoke is refused;
+doqtri's normal refresh-once handles that.
+
+Disconnect in doqtri (D-65) is best effort. It deletes doqtri's copy of the
+tokens; the authoritative revoke is the user's, in qdit's Authorized apps, and
+doqtri says so in its UI. Supabase's OAuth 2.1 server publishes its metadata
+at `<issuer>/.well-known/oauth-authorization-server`; its documentation lists
+the authorization, token, userinfo and JWKS endpoints and does not document an
+RFC 7009 revocation endpoint (checked 2026-10-25). If that metadata ever
+advertises a `revocation_endpoint`, doqtri SHOULD call it on Disconnect with
+the refresh token (`token_type_hint=refresh_token`, `client_secret_basic`).
+A failed or missing revocation call never blocks Disconnect.
+
+Reconnecting as another account (D-66). A user may reconnect doqtri to a
+different qdit account. The new grant replaces the connection's subject
+(`sub`); every later call acts as the new account, with that account's qdit
+roles (D-20). Doc and milestone links made earlier stay: they belong to the
+workspace, not to the connection. doqtri tells the user which account they
+are now connected as and which one it replaced ("Now connected as X (was
+Y)"). The earlier account's grant stays in qdit until that account revokes it
+there.
 
 ## 6. Errors
 
@@ -144,13 +215,13 @@ server-to-server only and sends no CORS headers, so no preflight is needed.[^1]
 | HTTP | `code` | When |
 | --- | --- | --- |
 | 400 | `invalid_request` | Malformed JSON, wrong content type, unknown or invalid field. `details.fields` maps field name to problem. |
-| 401 | `unauthorized` | Missing, malformed, expired or non-OAuth token. Response has `WWW-Authenticate: Bearer error="invalid_token"`. |
+| 401 | `unauthorized` | Missing, malformed, expired, revoked (D-59) or non-OAuth token. Response has `WWW-Authenticate: Bearer error="invalid_token"`. |
 | 403 | `forbidden` | Valid token, but the user's qdit role or the D-03 guard does not allow the action on a resource the user can see. |
 | 404 | `not_found` | Unknown path or id, a resource the user cannot see, or a method a known path does not support (D-27). Never reveals existence. |
 | 409 | `conflict` | State conflict. `details.reason` is one of the reasons listed per endpoint. |
 | 429 | `rate_limited` | Over the rate limit. `Retry-After` gives seconds. |
 | 500 | `internal_error` | Bug on qdit's side. Safe to retry with backoff. |
-| 503 | `unavailable` | qdit or its database is down. Safe to retry; may carry `Retry-After`. |
+| 503 | `unavailable` | qdit or its database is down, including when the D-59 revoke check cannot run. Safe to retry; may carry `Retry-After`. |
 
 Rate limits are counted per `(client_id, sub)` and per `client_id`. Defaults
 are 60 requests per minute per user and 600 per minute per client; clients
@@ -273,6 +344,14 @@ These are the only method and path pairs in v1. Any other method on one of
 these paths, `HEAD` and `OPTIONS` included, is `404 not_found` (D-27,
 section 6).
 
+Doc links are app-only (D-60). qdit creates, refreshes and removes
+`project_doc_links` rows only through its database functions
+`link_project_doc()` and `unlink_project_doc()` (D-48), which the two
+`/projects/{id}/docs` endpoints call with the caller's token. Both functions
+refuse a caller whose JWT has no `client_id` (SQLSTATE `42501`), so a
+first-party qdit session, in qdit's UI or straight against PostgREST, cannot
+write a doc link. Only an OAuth app can, through these endpoints.
+
 ### GET /api/v1/me
 
 ```json
@@ -306,11 +385,21 @@ refreshes `doc_title` and `doc_url`.
 
 `doc_title` 1 to 300 characters after trim. `doc_url` MUST be a valid
 absolute `https` URL and MUST start with doqtri's origin followed by `/`
-(D-45): `https://www.doqtri.xyz/` in production. qdit sets the allowed origin per environment (for example
-`DOQTRI_ORIGIN`), so preview and local deployments accept their own doqtri
-origin and nothing else. The trailing `/` is part of the check, so
-`https://www.doqtri.xyz.example.com/...` does not pass. Any other value is
-`400 invalid_request` with `doc_url` in `details.fields`.
+(D-45, D-72): `https://www.doqtri.xyz/` in production. qdit sets the allowed
+origin per environment (`DOQTRI_ORIGIN`, section 1), so preview and local
+deployments accept their own doqtri origin and nothing else. The check is
+strict: the origin followed by `/` is a required prefix, so each of these is
+refused:
+
+- `https://www.doqtri.xyz` (bare origin, no `/`);
+- `https://www.doqtri.xyz?x` (query directly after the origin);
+- `https://www.doqtri.xyz#x` (fragment directly after the origin);
+- `https://www.doqtri.xyz.example.com/d/...` (another host);
+- `http://www.doqtri.xyz/d/...` (not `https`).
+
+doqtri always sends `<origin>/d/<doc_id>`, its public doc page (section 12).
+Any refused value is `400 invalid_request` with `doc_url` in
+`details.fields`.
 Response: `{"data": DocLink}`. 409 reasons: `doc_linked_elsewhere` (the doc
 is linked to another project; unlink it there first).
 
@@ -336,6 +425,26 @@ and clears its own qdit `node_links` for that doc, only when the project
 still appears in the caller's `GET /projects`. Otherwise it reports the
 failure to the user and keeps its local links, since qdit may still hold the
 doc link and title-locked milestones.
+
+Exception (D-68). When qdit answers `404` and the project is also missing
+from the caller's `GET /projects` (the project was deleted, or the admin can
+no longer see it), doqtri reports that qdit did not confirm the unlink
+(doqtri's code `QDIT_UNCONFIRMED`). A doqtri workspace admin MAY then confirm
+"forget the link here": doqtri deletes its own `doc_project_links` row and
+that doc's qdit `node_links` without qdit's confirmation, and logs the qdit
+link ids that may now dangle. qdit was never told, so it may keep its
+`project_doc_links` row, the doc's `milestone_external_links` rows and the
+title locks they hold (D-12, D-46). Any other failure (qdit unreachable, a
+`5xx`, a project still in the list) keeps every local link, as above.
+
+- Consequence: linking that doc to another project stays blocked
+  (`409 doc_linked_elsewhere`) until qdit no longer holds the old doc link,
+  for example when the project is deleted in qdit (its doc links go with it)
+  or a caller who can still see the project unlinks the doc there.
+- Known limit: the confirm exists only in doqtri's integration UI. On a
+  deployment with `NEXT_PUBLIC_QDIT_INTEGRATION` off, a note that is still
+  linked to a qdit project cannot be deleted in the app; an operator has to
+  remove its link rows in SQL first.
 
 ### POST /api/v1/milestones
 
@@ -573,9 +682,9 @@ doqtri suggests a status only from the chain column. If the project's
 
 ## 11. Rules doqtri applies
 
-Roll-up (D-24). A node with no link of its own that has at least one child
-node takes its status from its direct children's statuses, evaluated in this
-order:
+Roll-up (D-24, D-70). A node with no link of its own that has at least one
+child node, and that is not attested (below), takes its status from its
+direct children's statuses, evaluated in this order:
 
 1. all children `Verified` -> `Verified`;
 2. else all children `Built` or `Verified` -> `Built`;
@@ -585,6 +694,13 @@ order:
 A child's status is its own on-chain `NodeRecord.status` (or its own roll-up,
 recursively), and `Planned` if it has none. A node with its own link always
 takes the D-19 status of its own milestone, never a roll-up.
+
+Attested parents (D-70). A node whose current on-chain `NodeRecord` carries a
+`tool` other than `"rollup"` (for example `"qdit"`, `"github"` or a builder
+such as `"n8n"`) is attested: it is not rolled up, doqtri does not overwrite
+its record with a `"rollup"` record, and it counts for its own parent with the
+`status` of that record, whatever its children say. A node whose current
+record has `tool = "rollup"`, or that has no record, rolls up as above.
 
 Move or rename, decided on every save. For each qdit link with stored
 `(node_id = N, node_label = L)`, labels compared after trimming whitespace,
@@ -608,11 +724,187 @@ case-sensitive, moves handled before renames:
 On-chain records stay keyed by positional id, so after a move the next
 signature writes the record at the new id (R-03).
 
-## 12. Changelog
+## 12. Public proof chain
+
+Phase 3 (WP-3.1 doqtri, WP-3.2 qdit, WP-3.3 both). Gate G3: someone outside
+the team checks one plan item from plan version to approval using only the
+two public pages and Stellar Expert. This section fixes what each page shows
+and where each fact comes from, so both pages tell the same story. Neither
+page needs a login or a qdit token, and every fact is either read from the
+chain (D-04) or already public on that app's public page.
+
+### Pages
+
+| Page | URL | Reachable |
+| --- | --- | --- |
+| doqtri public doc page | `doc_url` = `<doqtri origin>/d/<doc_id>` (D-45) | Always. Until the doc is on `DoqtriRegistry` it says the doc is not anchored. |
+| qdit public milestone page | `<qdit origin>/p/<project slug>/<milestone id>` | Only while the project publishes its proofs (`projects.public_proofs`). Otherwise `404`, the same answer as an unknown milestone. |
+
+`<doqtri origin>` and `<qdit origin>` are the section 1 constants.
+
+### The four facts
+
+For a node `N` of doc `D` linked to milestone `M` of project `P`, whose
+`NodeRecord` carries `artifact_ref` = `qdit:<network>:<contract-id>:P/M@vV`
+(section 10):
+
+| # | Fact | Read from | Shown on |
+| --- | --- | --- | --- |
+| 1 | Plan version | `DoqtriRegistry.get_document(D)`: `version`, `content_hash`, `updated_at`. `DoqtriRegistry.get_node(D, N)`: `status`, `tool`, `artifact_ref`. | doqtri; qdit in its "Planned in doqtri" block |
+| 2 | Submitted | `milestone_proof.get_milestone_status(P, M)` on `<contract-id>` over RPC on `<network>`: `version`, `proof_hash`, `submitter`, `timestamp`, `status` | qdit (anchor history); doqtri (receipt) |
+| 3 | Approved | the same record with `status = Approved` at version `V` | both |
+| 4 | Verified | `DoqtriRegistry.get_node(D, N)` with `tool = "qdit"`, `status = Verified` and the `artifact_ref` above | doqtri; qdit in its "Planned in doqtri" block |
+
+Both contracts store only the current record: the current `Document`, the
+current `NodeRecord` per node, the current `MilestoneRecord` per milestone.
+Earlier versions are visible only through transaction history (below), so a
+page labels what it read as the current on-chain state.
+
+Comparing a node's `@vV` with the current `MilestoneRecord.version`:
+
+- equal: the record speaks for the submission the node was signed against.
+  `Submitted` shows fact 2; `Approved` shows facts 2 and 3; `Rejected` shows
+  the rejection.
+- record newer than `V`: the milestone was resubmitted after the node was
+  signed. The page shows the newer submission and says the node's signature
+  refers to `vV`; fact 3 at `vV` comes only from history.
+- record older than `V`, `MilestoneNotFound`, or (where the page knows the
+  project's `chain`) a `<contract-id>` or `<network>` that differs from it:
+  inconsistent. The page shows an explicit unverified state naming the
+  mismatch.
+
+Fact 4 holds only together with fact 3 at the same `V`, read from the current
+record or, after a resubmission, from history. A node signed
+`Verified` whose milestone is not `Approved` at `V` is shown as "signed as
+Verified; the chain now says <status>", never as verified.
+
+### qdit's check of the plan version (D-04)
+
+Before qdit shows "Planned in doqtri" as verified, it reads
+`DoqtriRegistry.get_document(link.doc_id)` on `DOQTRI_REGISTRY_CONTRACT_ID`
+over RPC on `DOQTRI_REGISTRY_NETWORK` (section 1). It is verified when the
+document exists and its on-chain `version` is at least `link.doc_version`
+(versions only go up). Otherwise qdit shows an explicit unverified state with
+its reason:
+
+- `link.doc_version` is `null`: the doc was not anchored when it was linked;
+- the document is not on the registry;
+- the on-chain `version` is lower than `link.doc_version`;
+- the registry could not be read: said as a read failure, not as a mismatch.
+
+The block also reads `get_node(link.doc_id, link.node_id)`. When that record
+has `tool = "qdit"` and its `artifact_ref` names this project and milestone,
+qdit shows its `status` and `@vV` (fact 4 when it is `Verified`). Otherwise it
+says the milestone is not signed in doqtri yet. That is not an error:
+positional ids move (R-03). A milestone with no doqtri link renders exactly as
+it did before phase 3.
+
+### Transaction links
+
+Explorer links go to Stellar Expert, where `<net>` is `testnet` on testnet
+and `public` on mainnet (`artifact_ref` and qdit say `mainnet`; Stellar
+Expert says `public`):
+
+- transaction: `https://stellar.expert/explorer/<net>/tx/<hash>`
+- contract: `https://stellar.expert/explorer/<net>/contract/<C...>`
+- account (a signer's `G...` address): `https://stellar.expert/explorer/<net>/account/<G...>`
+
+A contract read returns state, not the transaction that wrote it. A page gets
+a transaction hash from:
+
+1. its own app's recorded writes: doqtri's `chain_writes` (the `tx_hash` of
+   each registry write its relay submitted, publicly readable) and the
+   signer's own operations on Horizon; qdit's `milestone_anchors` (`tx_hash`
+   and `ledger` per action and version, on qdit's public page and in the
+   API's `anchor.last_tx_hash`);
+2. otherwise contract events over Stellar RPC: `DoqtriRegistry` publishes
+   topics `("doqtri", "register" | "update" | "node")`, with the signer as a
+   third topic on the `*_as` calls, and the `doc_id` as value; `milestone_proof` publishes topics
+   `("qdit", "submit" | "approve" | "reject", project_id)` with
+   `milestone_id` and `version` in the data.
+
+Stellar RPC keeps events for about 7 days. When a page has no hash for a fact
+(it is older than that window and not in the app's own records, for example
+doqtri showing a qdit approval from last month), it MUST still show the fact
+read from current state, link the contract page instead, and say the
+transaction is older than the RPC event window. It MUST NOT show nothing.
+
+### Links between the pages
+
+- qdit to doqtri: the "Planned in doqtri" block links `doc_url`, and only
+  when it passes the D-72 check against the current `DOQTRI_ORIGIN`.
+- doqtri to qdit: doqtri's receipt MAY link
+  `<qdit origin>/p/<project slug>/<milestone id>`, built from the
+  `project_slug` doqtri stored from the API and the milestone id in the
+  `artifact_ref`. The slug comes from a private API answer, so doqtri MUST
+  NOT show or link it on an anonymous page unless qdit already publishes it:
+  doqtri's server confirms with an anonymous `GET` of that URL (no token, no
+  cookies) that answers `200`, and keeps that answer for at most 10 minutes.
+  Any other answer shows no qdit link; the on-chain receipt stands without it.
+
+### What an anonymous viewer may see
+
+doqtri's page MAY show everything on chain (the `Document`, its
+`NodeRecord`s, the `milestone_proof` records their `artifact_ref`s name,
+events and signer addresses), heading labels under doqtri's existing rule
+(the owner opted in and the private note still hashes to the anchored hash;
+the root label is the doc title), and the qdit link above. It MUST NOT show
+the qdit project's name or slug, the milestone's title or qdit status, or
+anything else taken from qdit's API or from doqtri's link rows
+(`doc_project_links`, `node_links`), and no member names.
+
+qdit's page MAY show what `public_milestone_proof()` returns today (project
+name and slug, milestone title, status, due date, chain fields, anchor
+history, review decisions with reasons) and, for a linked milestone, the
+link's `doc_id`, `node_id`, `doc_version` and `doc_url` (WP-3.2 adds these to
+`public_milestone_proof()`) plus what it read from `DoqtriRegistry`. It MUST
+NOT show `doc_title`, any heading text other than the milestone's own title
+(`node_label` equals it, D-12), who made the link, or anything about the
+doqtri workspace. A project that does not publish shows nothing at all.
+
+## 13. Changelog
 
 Every change here is additive within v1 (section 3), except that v1.0.2
 narrows what `doc_url` accepts (D-45). Section 3 allows that because
 doqtri only ever sent its own URLs.
+
+- v1.1.0 (2026-10-25): minor version for the new section 12. The rest writes
+  down decisions D-59 to D-72. No request or response shape changes; D-59 and
+  D-60 tighten server behaviour that a conforming client already handles
+  (a refused token is a `401` it refreshes on; doc links were always written
+  through the API).
+  - Section 1: deployment constants table. `DOQTRI_OAUTH_CLIENT_ID`: only
+    that client's writes count as a doqtri connection; unset, none do and
+    qdit warns (D-61). doqtri authenticates with `client_secret_basic`
+    (D-67). Env names as implemented, plus `INTEGRATION_TOKEN_KEY` and the
+    optional `INTEGRATION_TOKEN_KEY_PREVIOUS` key ring (D-67). qdit origin
+    and the `DoqtriRegistry` constants for section 12.
+  - Section 5: after a revoke, qdit refuses that app's tokens for that user
+    with `iat` <= the revoke time on every `/api/v1` endpoint
+    (`401 unauthorized`, `invalid_token`), fails closed with `503` when it
+    cannot check, and a new consent works again (D-59). Disconnect in doqtri
+    is best effort; an advertised RFC 7009 `revocation_endpoint` SHOULD be
+    called (D-65). Reconnecting as another qdit account replaces the
+    connection's subject and keeps the workspace's links (D-66). Section 6
+    rows for `401` and `503` mention D-59.
+  - Section 8: `link_project_doc()` and `unlink_project_doc()` are app-only
+    and refuse a JWT without `client_id` with `42501` (D-60). The strict
+    `doc_url` check is restated with refused examples (D-72). Exception: a
+    workspace admin may forget doqtri's side of a doc link when the qdit
+    project is gone, relinking stays blocked until qdit drops its doc link,
+    and on a deployment with the flag off a linked note needs SQL to delete
+    (D-68).
+  - Section 11: a parent whose current record has a tool other than
+    `"rollup"` is attested, is not rolled up, and counts with that record for
+    its own parent (D-70).
+  - Section 12 (new): the public proof chain for phase 3 (WP-3.1 to
+    WP-3.3): the four facts and their on-chain sources, qdit's plan-version
+    check against `DoqtriRegistry` with explicit unverified states, Stellar
+    Expert link formats, where transaction hashes come from and the fallback
+    for transactions older than the RPC event window, the qdit public
+    milestone URL and when doqtri may link it, and what each side may show an
+    anonymous viewer.
+  - The changelog moves to section 13.
 
 - v1.0.3 (2026-10-25): wording only, no behaviour change.
   - Section 8: `doc_url` MUST be a valid absolute `https` URL as well as
