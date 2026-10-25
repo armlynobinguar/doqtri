@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { HashCheck } from "@/components/audit/hash-check";
+import { QditReceiptsSection } from "@/components/audit/qdit-receipts";
 import { SignerAddress } from "@/components/audit/signer-address";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { StatusTag } from "@/components/ui/status-tag";
@@ -24,6 +25,10 @@ import { sha256Hex } from "@/lib/stellar/hash";
 import { parseSignerRemovals, removalInEffect, type SignerRemoval } from "@/lib/stellar/signers";
 import { buildMindmap, type MindmapNode } from "@/lib/mindmap";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { supabaseApprovalStore } from "@/lib/integrations/qdit-approvals";
+import { readMilestoneRecord } from "@/lib/integrations/qdit-chain";
+import { qditIntegrationEnabled } from "@/lib/integrations/qdit-config";
+import { loadQditReceipts, type QditReceipts } from "@/lib/integrations/qdit-receipts";
 
 /*
  * Public, read-only audit page. Everything shown comes from the ledger through
@@ -32,6 +37,11 @@ import { createSupabaseAdminClient } from "@/lib/supabase/server";
  * private note still hashes to the anchored hash; and when a signer was
  * removed from the note's workspace, to flag entries signed after that
  * (WP-1.8). Signers are shown by wallet address only, never by name.
+ *
+ * With NEXT_PUBLIC_QDIT_INTEGRATION=1, headings signed from a qdit milestone
+ * also get a receipt (WP-3.1): qdit's milestone_proof contract read on the
+ * record's own network, and the approving transaction when doqtri recorded
+ * it. Without the flag, or with no such heading, the page is unchanged.
  */
 export const revalidate = 30;
 
@@ -57,6 +67,7 @@ type Audit =
       ttl: DocumentTtl | null;
       labels: Map<string, string> | null;
       removals: SignerRemoval[];
+      receipts: QditReceipts | null;
     };
 
 async function loadAudit(docId: string): Promise<Audit> {
@@ -84,7 +95,19 @@ async function loadAudit(docId: string): Promise<Audit> {
     removalsLoaded,
   ]);
 
-  return { state: "anchored", doc, history, ttl, labels, removals };
+  const receipts = qditIntegrationEnabled() ? await loadReceipts(docId, history).catch(() => null) : null;
+  return { state: "anchored", doc, history, ttl, labels, removals, receipts };
+}
+
+/** The qdit receipts (WP-3.1): chain reads, plus approvals doqtri recorded. */
+function loadReceipts(docId: string, history: DocumentHistory | null): Promise<QditReceipts | null> {
+  const approvals = supabaseApprovalStore(createSupabaseAdminClient());
+  return loadQditReceipts(docId, history, {
+    enabled: true,
+    readNode: (id, nodeId) => DoqtriRegistry.readNode(id, nodeId),
+    readMilestone: (chain, projectId, milestoneId) => readMilestoneRecord(chain, projectId, milestoneId),
+    approvals: (milestoneIds) => approvals.forMilestones(milestoneIds),
+  });
 }
 
 /**
@@ -232,6 +255,7 @@ function Anchored({
   ttl,
   labels,
   removals,
+  receipts,
 }: {
   docId: string;
   doc: ChainDocument;
@@ -239,6 +263,7 @@ function Anchored({
   ttl: DocumentTtl | null;
   labels: Map<string, string> | null;
   removals: SignerRemoval[];
+  receipts: QditReceipts | null;
 }) {
   // An incomplete history (passkey-wallet owners only) numbers versions by
   // what was found, which can be wrong, so it labels nothing here.
@@ -468,6 +493,8 @@ function Anchored({
           </p>
         )}
       </section>
+
+      {receipts ? <QditReceiptsSection receipts={receipts} labels={labels} /> : null}
 
       <section className="glass grid gap-5 rounded-2xl px-6 py-5 text-[13px] sm:grid-cols-2">
         <div className="grid content-start gap-1.5">
