@@ -54,9 +54,12 @@ sides of one pair MUST agree on them:
   saying so.
 - Client authentication (D-67). doqtri is registered with
   `token_endpoint_auth_method` = `client_secret_basic`: every call to
-  `<issuer>/oauth/token` carries
-  `Authorization: Basic base64(client_id ":" client_secret)`, and the secret
-  is never sent in the body.
+  `<issuer>/oauth/token` carries HTTP Basic credentials per RFC 6749
+  section 2.3.1 (`client_id` and `client_secret` each
+  `application/x-www-form-urlencoded`, joined by `:`, then base64), and the
+  secret is never sent in the body. For a UUID client id and a secret with no
+  reserved characters this is the plain `base64(client_id ":" client_secret)`
+  that Supabase's documentation shows.
 - Token encryption key (D-67). doqtri encrypts the stored OAuth tokens with
   `INTEGRATION_TOKEN_KEY` (server-only). During a key change the old key goes
   in the optional `INTEGRATION_TOKEN_KEY_PREVIOUS`: doqtri decrypts with
@@ -99,7 +102,8 @@ Rules that follow from the decisions:
   (D-03): no status changes, approvals, rejections, deletes of projects or
   milestones, members or proofs, and no writes to anchors. qdit enforces this
   with RESTRICTIVE RLS on the `client_id` claim, so it holds even if the token
-  is used against PostgREST directly.
+  is used against PostgREST directly. The D-59 revoke check is enforced on
+  `/api/v1` only; see the known limit in section 5.
 - Within that, the caller's qdit project role decides (D-23): admins and
   owners link and unlink docs, members and above create and rename milestones
   and write links, viewers only read. Section 8 lists the role per endpoint.
@@ -156,12 +160,13 @@ Rules that follow from the decisions:
   and asks the user to reconnect.
 
 Revocation (D-59). A user revokes an app under Authorized apps in qdit's
-settings. From that moment qdit MUST refuse, on every `/api/v1` endpoint,
-each token of that app for that user that was issued at or before the
-revoke, that is every token whose `iat` <= the revoke time recorded for its
-`(sub, client_id)`, even while its `exp` is still in the future. The answer
-is `401 unauthorized` with `WWW-Authenticate: Bearer error="invalid_token"`,
-the same as any other refused token (section 6). qdit keeps the revoke time
+settings. From that moment qdit MUST refuse, on every `/api/v1` endpoint
+(the scope of this rule; see the known limit below), each token of that app
+for that user that was issued at or before the revoke, that is every token
+whose `iat` <= the revoke time recorded for its `(sub, client_id)`, even
+while its `exp` is still in the future. The answer is `401 unauthorized`
+with `WWW-Authenticate: Bearer error="invalid_token"`, the same as any other
+refused token (section 6). qdit keeps the revoke time
 in a table no client can read, looks it up once per request, and fails
 closed: if the lookup itself fails it answers `503 unavailable`, never a
 pass. qdit's own record of which doqtri connections keep a plan doc linked
@@ -169,6 +174,16 @@ takes its revoke time from the same table. A later consent issues new tokens
 with a later `iat`, so the app works again for that user without any action
 on qdit's side. A token issued in the same second as the revoke is refused;
 doqtri's normal refresh-once handles that.
+
+- Known limit (D-59 scope). Supabase's revoke ends that client's sessions
+  and refresh tokens but does not invalidate access tokens it has already
+  issued, and PostgREST does not check sessions. A revoked app's current
+  access token therefore keeps working against qdit's PostgREST directly
+  until its `exp` (Supabase's JWT expiry, 1 hour by default), still bounded
+  by the D-03 guards (section 2). Link rows it writes that way never count
+  as a doqtri connection, because qdit's connection record checks the same
+  revoke table. doqtri MUST NOT use PostgREST directly; it calls only
+  `/api/v1`.
 
 Disconnect in doqtri (D-65) is best effort. It deletes doqtri's copy of the
 tokens; the authoritative revoke is the user's, in qdit's Authorized apps, and
@@ -344,13 +359,16 @@ These are the only method and path pairs in v1. Any other method on one of
 these paths, `HEAD` and `OPTIONS` included, is `404 not_found` (D-27,
 section 6).
 
-Doc links are app-only (D-60). qdit creates, refreshes and removes
-`project_doc_links` rows only through its database functions
-`link_project_doc()` and `unlink_project_doc()` (D-48), which the two
-`/projects/{id}/docs` endpoints call with the caller's token. Both functions
-refuse a caller whose JWT has no `client_id` (SQLSTATE `42501`), so a
-first-party qdit session, in qdit's UI or straight against PostgREST, cannot
-write a doc link. Only an OAuth app can, through these endpoints.
+Doc links are app-only (D-60). `link_project_doc()` and
+`unlink_project_doc()`, the database functions the two `/projects/{id}/docs`
+endpoints call with the caller's token, refuse a caller whose JWT has no
+`client_id` (SQLSTATE `42501`). Direct `INSERT` and `UPDATE` on
+`project_doc_links` are closed for every caller (D-48), so a doc link is
+created or refreshed only by an OAuth app through `POST /projects/{id}/docs`.
+A qdit project admin may still `DELETE` a doc link with their own session
+straight against PostgREST (qdit's UI has no control for it); the delete
+takes the doc's milestone links with it (D-22). That is how qdit clears a doc
+link left behind by a D-68 forget, below.
 
 ### GET /api/v1/me
 
@@ -438,9 +456,11 @@ title locks they hold (D-12, D-46). Any other failure (qdit unreachable, a
 `5xx`, a project still in the list) keeps every local link, as above.
 
 - Consequence: linking that doc to another project stays blocked
-  (`409 doc_linked_elsewhere`) until qdit no longer holds the old doc link,
-  for example when the project is deleted in qdit (its doc links go with it)
-  or a caller who can still see the project unlinks the doc there.
+  (`409 doc_linked_elsewhere`) until qdit no longer holds the old doc link.
+  That happens when the project is deleted in qdit (its doc links go with
+  it), when a doqtri workspace admin who can still see the project calls
+  `DELETE /projects/{id}/docs/{doc_id}` for it, or when a qdit admin of that
+  project deletes the doc link directly (section 8, D-60).
 - Known limit: the confirm exists only in doqtri's integration UI. On a
   deployment with `NEXT_PUBLIC_QDIT_INTEGRATION` off, a note that is still
   linked to a qdit project cannot be deleted in the app; an operator has to
@@ -819,7 +839,8 @@ a transaction hash from:
    API's `anchor.last_tx_hash`);
 2. otherwise contract events over Stellar RPC: `DoqtriRegistry` publishes
    topics `("doqtri", "register" | "update" | "node")`, with the signer as a
-   third topic on the `*_as` calls, and the `doc_id` as value; `milestone_proof` publishes topics
+   third topic on the `*_as` calls, and the `doc_id` as value;
+   `milestone_proof` publishes topics
    `("qdit", "submit" | "approve" | "reject", project_id)` with
    `milestone_id` and `version` in the data.
 
@@ -840,7 +861,12 @@ transaction is older than the RPC event window. It MUST NOT show nothing.
   NOT show or link it on an anonymous page unless qdit already publishes it:
   doqtri's server confirms with an anonymous `GET` of that URL (no token, no
   cookies) that answers `200`, and keeps that answer for at most 10 minutes.
-  Any other answer shows no qdit link; the on-chain receipt stands without it.
+  The URL is `<qdit origin>/p/` + `encodeURIComponent(project_slug)` + `/` +
+  the milestone id (a lowercase UUID). The `GET` is sent with redirects
+  disabled (`redirect: "manual"`), and only a direct `200` from the qdit
+  origin counts. Any `3xx`, other status, network error or timeout counts as
+  not published and shows no qdit link; the on-chain receipt stands without
+  it.
 
 ### What an anonymous viewer may see
 
@@ -886,9 +912,14 @@ doqtri only ever sent its own URLs.
     is best effort; an advertised RFC 7009 `revocation_endpoint` SHOULD be
     called (D-65). Reconnecting as another qdit account replaces the
     connection's subject and keeps the workspace's links (D-66). Section 6
-    rows for `401` and `503` mention D-59.
+    rows for `401` and `503` mention D-59. Known limit: the revoke check
+    covers `/api/v1`; an already issued access token keeps working against
+    PostgREST directly until `exp`, within the D-03 guards. Section 1 spells
+    out `client_secret_basic` encoding per RFC 6749 section 2.3.1.
   - Section 8: `link_project_doc()` and `unlink_project_doc()` are app-only
-    and refuse a JWT without `client_id` with `42501` (D-60). The strict
+    and refuse a JWT without `client_id` with `42501` (D-60); a qdit project
+    admin may still delete a doc link directly, which is how qdit clears a
+    link a D-68 forget left behind. The strict
     `doc_url` check is restated with refused examples (D-72). Exception: a
     workspace admin may forget doqtri's side of a doc link when the qdit
     project is gone, relinking stays blocked until qdit drops its doc link,
@@ -902,8 +933,8 @@ doqtri only ever sent its own URLs.
     check against `DoqtriRegistry` with explicit unverified states, Stellar
     Expert link formats, where transaction hashes come from and the fallback
     for transactions older than the RPC event window, the qdit public
-    milestone URL and when doqtri may link it, and what each side may show an
-    anonymous viewer.
+    milestone URL and when doqtri may link it (encoded slug, redirects not
+    followed), and what each side may show an anonymous viewer.
   - The changelog moves to section 13.
 
 - v1.0.3 (2026-10-25): wording only, no behaviour change.
