@@ -134,12 +134,14 @@ export type CommunityTemplate = {
   token: string;
   tokenCode: string;
   creatorWallet: string;
+  /** The creator deleted their account: shown as "Former user" beside the wallet (D-63). */
+  creatorGone: boolean;
   mine: boolean;
   /** Bought before by this user: copying again is free. */
   owned: boolean;
   uses: number;
   sales: number;
-  parent: { id: string; title: string; creatorWallet: string } | null;
+  parent: { id: string; title: string; creatorWallet: string; creatorGone: boolean } | null;
   listedAt: string;
 };
 

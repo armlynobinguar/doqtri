@@ -29,6 +29,7 @@ import { NETWORK } from "@/lib/stellar/smart-wallet-config";
 import { NEW_OWNER_APPROVAL_LEDGERS, OWNER_APPROVAL_LEDGERS } from "@/lib/stellar/transfer-approval";
 import type { ChainWorkspace } from "@/lib/stellar/workspace-chain";
 import { shortenAddress } from "@/lib/wallet";
+import { FORMER_PERSONAL_WORKSPACE_NOTE } from "@/lib/former-user";
 import { cn } from "@/lib/utils";
 import type { WorkspaceRole } from "@/lib/workspace-roles";
 import { workspaceSlug } from "@/lib/workspace-scope";
@@ -52,7 +53,7 @@ import {
 } from "@/lib/workspace-members";
 
 /** A workspace the user belongs to, for the picker. */
-export type WorkspaceChoice = { id: string; name: string; personal: boolean; role: WorkspaceRole };
+export type WorkspaceChoice = { id: string; name: string; personal: boolean; role: WorkspaceRole; former?: boolean };
 
 type Invite = { id: string; label: string | null; role: WorkspaceRole; createdAt: string };
 type MyInvite = { id: string; workspaceId: string; workspaceName: string; role: WorkspaceRole; invitedBy: string | null };
@@ -174,6 +175,7 @@ export function MembersView({
   const myAddress = identity.kind === "wallet" ? identity.address : (identity.smartWallet?.address ?? null);
   const workspace = workspaces.find((w) => w.id === workspaceId) ?? null;
   const personal = workspace?.personal ?? true;
+  const former = workspace?.former === true;
 
   const [data, setData] = useState<Loaded>(EMPTY);
   const [loaded, setLoaded] = useState(false);
@@ -430,7 +432,9 @@ export function MembersView({
           </div>
         </section>
 
-        {!REGISTRY_EDITORS ? (
+        {former ? (
+          <Note testId="members-former-user">{FORMER_PERSONAL_WORKSPACE_NOTE}</Note>
+        ) : !REGISTRY_EDITORS ? (
           <Note>
             On-chain roles are off on this registry. Invites, role changes and removals apply in doqtri right away; no
             chain calls are made until the registry is upgraded.

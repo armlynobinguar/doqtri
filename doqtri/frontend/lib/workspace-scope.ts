@@ -24,6 +24,8 @@ export type WorkspaceChoice = {
   role: WorkspaceRole;
   /** They created it: for a personal workspace, it is theirs. */
   mine: boolean;
+  /** A personal workspace whose creator deleted their account (D-63): kept, with no owner. */
+  former?: boolean;
 };
 
 /** The httpOnly cookie that remembers the active workspace in this browser. */

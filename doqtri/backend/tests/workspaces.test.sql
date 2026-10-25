@@ -723,7 +723,8 @@ insert into public.documents (user_id, workspace_id, title, markdown) values
    (select id from public.workspaces where is_personal and created_by = '00000000-0000-4000-8000-000000000003'),
    'Editor note', '# Mine');
 
--- A member of no team workspace as owner: only their personal workspace goes.
+-- A member of no team workspace as owner. Its personal workspace holds a
+-- note and has another member, so it stays, anonymised (D-63).
 create temp table docs_before as select id, user_id, title, markdown from public.documents;
 create temp table vw_personal as
   select id from public.workspaces
@@ -732,28 +733,31 @@ create temp table vw_personal as
 select lives_ok(
   $$ delete from auth.users where id = '00000000-0000-4000-8000-000000000004' $$,
   'an account that owns only its personal workspace can be deleted');
-select is(
-  (select count(*)::int from public.workspaces where id = (select id from vw_personal)),
-  0, 'its personal workspace is deleted with it');
-select is(
-  (select count(*)::int from public.workspace_members where workspace_id = (select id from vw_personal)),
-  0, 'along with that workspace''s other members');
+select results_eq(
+  $$ select name, created_by from public.workspaces where id = (select id from vw_personal) $$,
+  $$ values ('Former user'::text, null::uuid) $$,
+  'its personal workspace, which holds a note and another member, stays as "Former user" (D-63)');
+select results_eq(
+  $$ select user_id, role::text from public.workspace_members where workspace_id = (select id from vw_personal) $$,
+  $$ values ('00000000-0000-4000-8000-000000000003'::uuid, 'editor'::text) $$,
+  'with that workspace''s other member still in it, and no owner');
 select is(
   (select count(*)::int from public.workspace_members where user_id = '00000000-0000-4000-8000-000000000004'),
   0, 'its memberships go with it');
 select is(
   (select count(*)::int from public.workspace_members where user_id = '00000000-0000-4000-8000-000000000003'),
-  4, 'the personal workspace''s other member keeps every other membership, their own personal one included');
+  5, 'the personal workspace''s other member keeps every membership, that one and their own personal one included');
 select is(
   (select count(*)::int from public.workspaces where id = '10000000-0000-4000-8000-000000000001'),
   1, 'team workspaces it belonged to are untouched');
 select is(
   (select count(*)::int from public.documents where user_id = '00000000-0000-4000-8000-000000000004'),
-  0, 'its own documents go with its personal workspace');
+  0, 'no document names it as author any more');
 select set_eq(
   'select id, user_id, title, markdown from public.documents',
-  'select * from docs_before where user_id <> ''00000000-0000-4000-8000-000000000004''',
-  'every other account''s documents are untouched, the other member''s included');
+  'select id, case when user_id = ''00000000-0000-4000-8000-000000000004'' then null else user_id end,
+          title, markdown from docs_before',
+  'every document stays, its own author-less and every other account''s untouched');
 
 -- joined_at decides the succession, so no client can choose it. w, beta's
 -- latest admin, tries to add o as an admin backdated to 1960 and to backdate

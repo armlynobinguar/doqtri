@@ -1,4 +1,6 @@
--- pgTAP tests for 20261024130000_workspace_document_ownership.sql (WP-1.2).
+-- pgTAP tests for 20261024130000_workspace_document_ownership.sql (WP-1.2),
+-- with account deletion as 20261026100000_account_deletion_anonymises.sql
+-- leaves it (WP-1.11, D-63).
 --
 -- Run against a database that has every migration applied and the pgtap
 -- extension available, e.g. a Supabase branch or a local stack:
@@ -32,7 +34,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(120);
+select plan(119);
 
 -- A test-only lookup of a user's personal workspace that works under any
 -- role, so the tests can name it without being a member.
@@ -576,8 +578,16 @@ select throws_ok(
 
 
 -- ---------------------------------------------------------------------------
--- Deleting an account
+-- Deleting an account (D-63: anonymised, content kept)
 -- ---------------------------------------------------------------------------
+
+-- Each personal workspace's id, while its owner's account is still there.
+create table wp12_test.former as
+  select u.id as user_id, wp12_test.personal(u.id) as workspace_id
+    from auth.users u
+   where u.id in ('00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000003',
+                  '00000000-0000-4000-8000-000000000006');
+grant select on wp12_test.former to authenticated;
 
 -- ed authored the team's Roadmap and a link on it, and a note in their own
 -- personal workspace.
@@ -591,9 +601,20 @@ select results_eq(
 select is(
   (select user_id from public.node_links where id = '40000000-0000-4000-8000-000000000003'),
   null, 'so does a link they made');
-select is(
-  (select count(*)::int from public.documents where id = '30000000-0000-4000-8000-000000000015'),
-  0, 'the documents in their personal workspace go with it');
+select results_eq(
+  $$ select d.workspace_id, d.user_id from public.documents d
+      where d.id = '30000000-0000-4000-8000-000000000015' $$,
+  $$ select f.workspace_id, null::uuid from wp12_test.former f
+      where f.user_id = '00000000-0000-4000-8000-000000000003' $$,
+  'the note in their personal workspace stays there too, without an author (D-63)');
+select results_eq(
+  $$ select w.name, w.created_by, w.is_personal,
+            (select count(*)::int from public.workspace_members m where m.workspace_id = w.id)
+       from public.workspaces w
+      where w.id = (select workspace_id from wp12_test.former
+                     where user_id = '00000000-0000-4000-8000-000000000003') $$,
+  $$ values ('Former user'::text, null::uuid, true, 0) $$,
+  'and that workspace is kept as "Former user", with no creator and nobody in it');
 
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000002","role":"authenticated"}';
@@ -604,55 +625,52 @@ with u as (update public.documents set updated_at = now()
 select is(count(*)::int, 1, 'and edit it') from u;
 reset role;
 
--- o's personal workspace holds o's note and x's guest note (D-39): the guest's
--- note blocks the deletion until it is gone.
-select throws_ok(
+-- o's personal workspace holds o's note and x's guest note (D-39 refused
+-- this; D-63 keeps both, and x keeps working there).
+select lives_ok(
   $$ delete from auth.users where id = '00000000-0000-4000-8000-000000000001' $$,
-  '23001', 'this account''s personal workspace holds 1 note(s) written by other people',
-  'an account whose personal workspace holds a guest''s note cannot be deleted');
+  'an account whose personal workspace holds a guest''s note can be deleted (D-63)');
+select results_eq(
+  $$ select d.id::text, d.user_id from public.documents d
+      where d.workspace_id = (select workspace_id from wp12_test.former
+                               where user_id = '00000000-0000-4000-8000-000000000001')
+      order by d.id $$,
+  $$ values ('30000000-0000-4000-8000-000000000001', null::uuid),
+            ('30000000-0000-4000-8000-000000000021', '00000000-0000-4000-8000-000000000005'::uuid) $$,
+  'both notes stay in that workspace: the owner''s without an author, the guest''s still theirs');
+select results_eq(
+  $$ select m.user_id, m.role::text from public.workspace_members m
+      where m.workspace_id = (select workspace_id from wp12_test.former
+                               where user_id = '00000000-0000-4000-8000-000000000001') $$,
+  $$ values ('00000000-0000-4000-8000-000000000005'::uuid, 'editor'::text) $$,
+  'the guest keeps their role there, and nobody owns it any more');
+
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000005","role":"authenticated"}';
 select is(
   (select count(*)::int from public.documents
     where id in ('30000000-0000-4000-8000-000000000001', '30000000-0000-4000-8000-000000000021')),
-  2, 'and nothing in that workspace was deleted');
-select is(
-  (select count(*)::int from auth.users where id = '00000000-0000-4000-8000-000000000001'),
-  1, 'nor the account');
-select is(
-  (select role::text from public.workspace_members
-    where workspace_id = '10000000-0000-4000-8000-000000000001'
-      and user_id = '00000000-0000-4000-8000-000000000002'),
-  'admin', 'nor was a team workspace handed over (D-31 waits for the deletion to go ahead)');
-
--- A note whose author has since deleted their own account has nobody left
--- to lose it, so it does not block.
-insert into public.documents (id, user_id, workspace_id, title) values
-  ('30000000-0000-4000-8000-000000000022', null,
-   wp12_test.personal('00000000-0000-4000-8000-000000000001'), 'Orphan note');
-
-set local role authenticated;
-set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
-with d as (delete from public.documents
-               where id = '30000000-0000-4000-8000-000000000021' returning 1)
-select is(count(*)::int, 1, 'the owner deletes the guest''s note') from d;
+  2, 'the guest still reads both notes');
 reset role;
+select throws_ok(
+  $$ update public.workspace_members set role = 'owner'
+      where workspace_id = (select workspace_id from wp12_test.former
+                             where user_id = '00000000-0000-4000-8000-000000000001')
+        and user_id = '00000000-0000-4000-8000-000000000005' $$,
+  '23514', 'only the creator of a personal workspace can be its owner',
+  'and nobody can become its owner, the service role included (D-30)');
 
-select lives_ok(
-  $$ delete from auth.users where id = '00000000-0000-4000-8000-000000000001' $$,
-  'then the account can be deleted');
-select is(
-  (select count(*)::int from public.documents
-    where id in ('30000000-0000-4000-8000-000000000001', '30000000-0000-4000-8000-000000000022')),
-  0, 'every document left in their personal workspace goes with it, an orphaned one included');
 select is(
   (select role::text from public.workspace_members
     where workspace_id = '10000000-0000-4000-8000-000000000001'
       and user_id = '00000000-0000-4000-8000-000000000002'),
-  'owner', 'and the team workspace they last owned passes to its admin (D-31)');
+  'owner', 'the team workspace they last owned passes to its admin (D-31)');
 select is(
   (select count(*)::int from public.documents where id = '30000000-0000-4000-8000-000000000014'),
   1, 'their note in the team workspace stays');
 
--- An anchored note: chain_writes refuses its deletion, so the account stays.
+-- An anchored note: chain_writes still refuses deleting the note itself,
+-- and the account now goes without it (D-63).
 insert into public.documents (id, user_id, workspace_id, title) values
   ('30000000-0000-4000-8000-000000000030', '00000000-0000-4000-8000-000000000006',
    wp12_test.personal('00000000-0000-4000-8000-000000000006'), 'Anchored');
@@ -665,11 +683,14 @@ select throws_ok(
   $$ delete from public.documents where id = '30000000-0000-4000-8000-000000000030' $$,
   '23001', null, 'an anchored document cannot be deleted, even by its author');
 reset role;
-select throws_ok(
+select lives_ok(
   $$ delete from auth.users where id = '00000000-0000-4000-8000-000000000006' $$,
-  '23001', null, 'nor can an account whose personal workspace holds one');
-select is((select count(*)::int from public.documents where id = '30000000-0000-4000-8000-000000000030'),
-  1, 'and the document is still there');
+  'an account whose personal workspace holds one can be deleted (D-63)');
+select results_eq(
+  $$ select d.user_id, (select count(*)::int from public.chain_writes c where c.document_id = d.id)
+       from public.documents d where d.id = '30000000-0000-4000-8000-000000000030' $$,
+  $$ values (null::uuid, 1) $$,
+  'and the document is still there, author-less, with its record');
 
 
 select * from finish();
