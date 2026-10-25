@@ -26,9 +26,9 @@ import { parseSignerRemovals, removalInEffect, type SignerRemoval } from "@/lib/
 import { buildMindmap, type MindmapNode } from "@/lib/mindmap";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { supabaseApprovalStore } from "@/lib/integrations/qdit-approvals";
-import { readMilestoneRecord } from "@/lib/integrations/qdit-chain";
+import { isProjectChain, readMilestoneRecord } from "@/lib/integrations/qdit-chain";
 import { qditIntegrationEnabled, qditPublicOrigin } from "@/lib/integrations/qdit-config";
-import { loadQditReceipts, type QditReceipts } from "@/lib/integrations/qdit-receipts";
+import { loadQditReceipts, type LinkedProject, type QditReceipts } from "@/lib/integrations/qdit-receipts";
 
 /*
  * Public, read-only audit page. Everything shown comes from the ledger through
@@ -41,10 +41,12 @@ import { loadQditReceipts, type QditReceipts } from "@/lib/integrations/qdit-rec
  * With NEXT_PUBLIC_QDIT_INTEGRATION=1, headings signed from a qdit milestone
  * also get a receipt (WP-3.1): qdit's milestone_proof contract read on the
  * record's own network, the approving transaction when doqtri recorded it,
- * and qdit's public milestone page once qdit answers it anonymously (the
- * slug comes from the note's doc_project_links row, and is shown only as
- * part of a URL qdit itself publishes). Without the flag, or with no such
- * heading, the page is unchanged.
+ * and qdit's public milestone page once qdit answers it anonymously. The
+ * note's doc_project_links row says which project and contract a record
+ * may name (a record naming any other is shown as unverified, without the
+ * row's values); its slug is shown only as part of a URL qdit itself
+ * publishes. Without the flag, or with no such heading, the page is
+ * unchanged.
  */
 export const revalidate = 30;
 
@@ -114,19 +116,30 @@ async function loadReceipts(docId: string, history: DocumentHistory | null): Pro
     readNode: (id, nodeId) => DoqtriRegistry.readNode(id, nodeId),
     readMilestone: (chain, projectId, milestoneId) => readMilestoneRecord(chain, projectId, milestoneId),
     approvals: (milestoneIds) => supabaseApprovalStore(createSupabaseAdminClient()).forMilestones(milestoneIds),
-    qditPage: origin && UUID.test(docId) ? { origin, project: () => loadLinkedProject(docId) } : undefined,
+    linkedProject: () => loadLinkedProject(docId),
+    qditPage: origin ? { origin } : undefined,
   });
 }
 
-/** The qdit project the note is linked to (D-09), as doqtri stored it. */
-async function loadLinkedProject(docId: string): Promise<{ projectId: string; slug: string } | null> {
+/**
+ * The qdit project the note is linked to (D-09) and its chain, as doqtri
+ * stored them. Only app notes can be linked.
+ */
+async function loadLinkedProject(docId: string): Promise<LinkedProject | null> {
+  if (!UUID.test(docId)) return null;
   const { data, error } = await createSupabaseAdminClient()
     .from("doc_project_links")
-    .select("project_id, project_slug")
+    .select("project_id, project_slug, chain_network, chain_contract_id")
     .eq("document_id", docId)
     .maybeSingle();
   if (error) throw new Error(`doc project link unavailable: ${error.message}`);
-  return data ? { projectId: String(data.project_id), slug: String(data.project_slug) } : null;
+  if (!data) return null;
+  const chain = { network: data.chain_network, contractId: data.chain_contract_id };
+  return {
+    projectId: String(data.project_id),
+    slug: String(data.project_slug),
+    chain: isProjectChain(chain) ? chain : null,
+  };
 }
 
 /**

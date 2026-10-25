@@ -23,8 +23,13 @@ import { scanRegistryEvents, type EventSource, type LedgerEvent } from "@/lib/st
  * the next sighting of the approval tries again; one that finds nothing
  * keeps the time it first missed (qdit_milestone_approval_misses), and
  * lookups stop once that is GIVE_UP_AFTER_MS old: the approval already
- * existed then, so its event has left RPC's window. The receipt then falls
- * back to the contract's page.
+ * existed then, so its event has left RPC's window. Until then a missed
+ * approval is scanned for at most once per RESCAN_AFTER_MS, however often
+ * it is seen. The receipt then falls back to the contract's page.
+ *
+ * The ship panel's re-check hands its approvals over through
+ * deferredRecorder, so the scans run after its answer is sent (next/server
+ * `after()`) and never hold up an editor about to sign.
  */
 
 /** The key an approval is recorded under: one approved version on one contract. */
@@ -52,6 +57,12 @@ export const LOOKUP_TIMEOUT_MS = 3_000;
  * RPC's event window (about 7 days) plus a day's margin.
  */
 export const GIVE_UP_AFTER_MS = 8 * 24 * 60 * 60_000;
+
+/** How long after an empty lookup the same approval is scanned for again. */
+export const RESCAN_AFTER_MS = 60 * 60_000;
+
+/** At most this many lookups run at once from one deferred batch. */
+const DEFERRED_CONCURRENCY = 4;
 
 const TX_HASH = /^[0-9a-f]{64}$/;
 
@@ -141,10 +152,10 @@ export type ApprovalStore = {
   has(key: ApprovalKey): Promise<boolean>;
   /** Insert-only: an approval already recorded stays as it is. */
   record(key: ApprovalKey, tx: ApprovalTx): Promise<void>;
-  /** When a lookup of `key` first found nothing (epoch ms), or null. */
-  firstMiss(key: ApprovalKey): Promise<number | null>;
-  /** Insert-only: the first miss stands. */
-  recordMiss(key: ApprovalKey): Promise<void>;
+  /** When lookups of `key` first and last found nothing (epoch ms), or null when none has. */
+  miss(key: ApprovalKey): Promise<{ firstAt: number; lastAt: number } | null>;
+  /** Records an empty lookup now: the first miss stands, the last attempt moves (`seen`: a miss is on record already). */
+  recordMiss(key: ApprovalKey, seen: boolean): Promise<void>;
   /** The recorded approvals of these milestones, any version. */
   forMilestones(milestoneIds: string[]): Promise<ApprovalRow[]>;
 };
@@ -171,14 +182,18 @@ export function supabaseApprovalStore(admin: SupabaseClient): ApprovalStore {
       const { error } = await table().upsert({ ...columns(key), tx_hash: tx.txHash, ledger: tx.ledger }, ON_KEY);
       if (error) throw new Error(`Could not record the milestone's approval: ${error.message}`);
     },
-    async firstMiss(key) {
-      const { data, error } = await misses().select("first_missed_at").match(columns(key)).maybeSingle();
+    async miss(key) {
+      const { data, error } = await misses().select("first_missed_at, last_attempt_at").match(columns(key)).maybeSingle();
       if (error) throw new Error(`Could not read the approval's lookups: ${error.message}`);
-      const at = data ? Date.parse(String(data.first_missed_at)) : NaN;
-      return Number.isFinite(at) ? at : null;
+      const firstAt = data ? Date.parse(String(data.first_missed_at)) : NaN;
+      const lastAt = data ? Date.parse(String(data.last_attempt_at)) : NaN;
+      return Number.isFinite(firstAt) ? { firstAt, lastAt: Number.isFinite(lastAt) ? lastAt : firstAt } : null;
     },
-    async recordMiss(key) {
-      const { error } = await misses().upsert(columns(key), ON_KEY);
+    async recordMiss(key, seen) {
+      // The service role may update last_attempt_at and nothing else.
+      const { error } = seen
+        ? await misses().update({ last_attempt_at: new Date().toISOString() }).match(columns(key))
+        : await misses().upsert(columns(key), ON_KEY);
       if (error) throw new Error(`Could not record the approval's lookup: ${error.message}`);
     },
     async forMilestones(milestoneIds) {
@@ -193,11 +208,12 @@ export function supabaseApprovalStore(admin: SupabaseClient): ApprovalStore {
 }
 
 /**
- * Records the approval of `key` unless it already is, or has been missed for
- * longer than RPC keeps events: what the webhook and the re-check call
- * whenever the chain says Approved. A recorded approval costs one indexed
- * read. Never throws; a failure only means the receipt links to the
- * contract instead, until a later sighting finds it.
+ * Records the approval of `key` unless it already is, has been missed for
+ * longer than RPC keeps events, or was missed within the last
+ * RESCAN_AFTER_MS: what the webhook and the re-check call whenever the
+ * chain says Approved. A recorded or recently missed approval costs one or
+ * two indexed reads. Never throws; a failure only means the receipt links
+ * to the contract instead, until a later sighting finds it.
  */
 export type RecordApproval = (key: ApprovalKey) => Promise<void>;
 
@@ -209,14 +225,41 @@ export function approvalRecorder(
   return async (key) => {
     try {
       if (await store.has(key)) return;
-      const missed = await store.firstMiss(key);
-      if (missed !== null && now() - missed > GIVE_UP_AFTER_MS) return;
+      const missed = await store.miss(key);
+      if (missed && (now() - missed.firstAt > GIVE_UP_AFTER_MS || now() - missed.lastAt < RESCAN_AFTER_MS)) return;
       // A failed lookup throws past this, so only a real "not there" counts as a miss.
       const tx = await find(key);
       if (tx) await store.record(key, tx);
-      else await store.recordMiss(key);
+      else await store.recordMiss(key, missed !== null);
     } catch (error) {
       console.error(`[qdit-approvals] ${key.milestoneId}@v${key.version}: ${error instanceof Error ? error.message : String(error)}`);
     }
+  };
+}
+
+/**
+ * A RecordApproval that only queues: the keys it is handed are recorded by
+ * one task given to `defer` (in a route, next/server `after()`, which runs
+ * it once the response is sent), a few at a time. It resolves at once, so
+ * a caller that awaits it waits for nothing.
+ */
+export function deferredRecorder(
+  record: RecordApproval,
+  defer: (task: () => Promise<void>) => void,
+): RecordApproval {
+  let queue: ApprovalKey[] | null = null;
+  return async (key) => {
+    if (queue) {
+      queue.push(key);
+      return;
+    }
+    const keys = (queue = [key]);
+    defer(async () => {
+      // Keys handed over after this point start a batch of their own.
+      queue = null;
+      for (let i = 0; i < keys.length; i += DEFERRED_CONCURRENCY) {
+        await Promise.all(keys.slice(i, i + DEFERRED_CONCURRENCY).map(record));
+      }
+    });
   };
 }

@@ -8,6 +8,11 @@ import type { WorkspaceRole } from "@/lib/workspace-roles";
  */
 
 const DOC = "30000000-0000-4000-8000-000000000010";
+const afterTasks = vi.hoisted(() => [] as Array<() => unknown>);
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/server")>()),
+  after: (task: () => unknown) => void afterTasks.push(task),
+}));
 let role: WorkspaceRole | null = "viewer";
 let user: { id: string } | null = { id: "00000000-0000-4000-8000-000000000003" };
 
@@ -50,6 +55,7 @@ beforeEach(() => {
   role = "viewer";
   user = { id: "00000000-0000-4000-8000-000000000003" };
   recheck.mockClear();
+  afterTasks.length = 0;
 });
 
 describe("POST /api/integrations/qdit/docs/[docId]/status", () => {
@@ -66,6 +72,22 @@ describe("POST /api/integrations/qdit/docs/[docId]/status", () => {
     role = "editor";
     await call({ force: true });
     expect(recheck).toHaveBeenLastCalledWith(expect.objectContaining({ force: true }));
+  });
+
+  it("leaves approval lookups (WP-3.1) to after(): the answer does not wait on them", async () => {
+    role = "editor";
+    recheck.mockImplementationOnce((async (params: { recordApproval: (key: unknown) => Promise<void> }) => {
+      await params.recordApproval({
+        network: "testnet",
+        contractId: "CBP3NKXCRUSOJLLUXDF5AIRNPAC6IL7TFJ2KCNL5A2GTKC2MB7M4OHVG",
+        projectId: "3f6c2a1e-8b4d-4c7e-9a10-2d5b7e9f1c34",
+        milestoneId: "c92f5018-7b3d-4ea4-9f60-1d8b0c4e3f72",
+        version: 2,
+      });
+      return { states: {}, errors: [], unread: [] };
+    }) as never);
+    expect((await call({ force: true })).status).toBe(200);
+    expect(afterTasks).toHaveLength(1);
   });
 
   it("is off with the integration off, and closed to non-members and the signed out", async () => {

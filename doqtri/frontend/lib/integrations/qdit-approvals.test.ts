@@ -4,8 +4,11 @@ import {
   approvalEventFilter,
   approvalFromEvents,
   approvalRecorder,
+  deferredRecorder,
   findApprovalTx,
   GIVE_UP_AFTER_MS,
+  RESCAN_AFTER_MS,
+  supabaseApprovalStore,
   type ApprovalKey,
   type ApprovalStore,
 } from "@/lib/integrations/qdit-approvals";
@@ -139,12 +142,12 @@ describe("findApprovalTx", () => {
 describe("approvalRecorder", () => {
   function store(
     has = false,
-    firstMiss: number | null = null,
+    miss: { firstAt: number; lastAt: number } | null = null,
   ): ApprovalStore & { record: ReturnType<typeof vi.fn>; recordMiss: ReturnType<typeof vi.fn> } {
     return {
       has: vi.fn(async () => has),
       record: vi.fn(async () => {}),
-      firstMiss: vi.fn(async () => firstMiss),
+      miss: vi.fn(async () => miss),
       recordMiss: vi.fn(async () => {}),
       forMilestones: async () => [],
     };
@@ -168,21 +171,37 @@ describe("approvalRecorder", () => {
     const s = store();
     await approvalRecorder(s, async () => null)(KEY);
     expect(s.record).not.toHaveBeenCalled();
-    expect(s.recordMiss).toHaveBeenCalledWith(KEY);
+    expect(s.recordMiss).toHaveBeenCalledWith(KEY, false);
   });
 
   it("keeps looking within RPC's window of the first miss, and stops after it", async () => {
     const NOW = 1_800_000_000_000;
     const find = vi.fn(async () => null);
-    const recent = store(false, NOW - GIVE_UP_AFTER_MS);
+    const recent = store(false, { firstAt: NOW - GIVE_UP_AFTER_MS, lastAt: NOW - RESCAN_AFTER_MS });
     await approvalRecorder(recent, find, () => NOW)(KEY);
     expect(find).toHaveBeenCalledTimes(1);
+    // A miss is on record, so only its last attempt moves.
+    expect(recent.recordMiss).toHaveBeenCalledWith(KEY, true);
 
-    const old = store(false, NOW - GIVE_UP_AFTER_MS - 1);
+    const old = store(false, { firstAt: NOW - GIVE_UP_AFTER_MS - 1, lastAt: NOW - RESCAN_AFTER_MS });
     await approvalRecorder(old, find, () => NOW)(KEY);
     expect(find).toHaveBeenCalledTimes(1);
     expect(old.recordMiss).not.toHaveBeenCalled();
     expect(GIVE_UP_AFTER_MS).toBeGreaterThan(7 * 24 * 60 * 60_000);
+  });
+
+  it("scans a missed approval at most once an hour, however often it is seen", async () => {
+    const NOW = 1_800_000_000_000;
+    const find = vi.fn(async () => null);
+    const justMissed = store(false, { firstAt: NOW - 60_000, lastAt: NOW - RESCAN_AFTER_MS + 1 });
+    await approvalRecorder(justMissed, find, () => NOW)(KEY);
+    expect(find).not.toHaveBeenCalled();
+    expect(justMissed.recordMiss).not.toHaveBeenCalled();
+
+    const hourAgo = store(false, { firstAt: NOW - 3 * RESCAN_AFTER_MS, lastAt: NOW - RESCAN_AFTER_MS });
+    await approvalRecorder(hourAgo, find, () => NOW)(KEY);
+    expect(find).toHaveBeenCalledTimes(1);
+    expect(RESCAN_AFTER_MS).toBe(60 * 60_000);
   });
 
   it("a lookup that fails is not a miss: the next sighting tries again", async () => {
@@ -209,5 +228,77 @@ describe("approvalRecorder", () => {
     };
     await expect(approvalRecorder(s, async () => null)(KEY)).resolves.toBeUndefined();
     quiet.mockRestore();
+  });
+});
+
+describe("deferredRecorder", () => {
+  const key = (version: number): ApprovalKey => ({ ...KEY, version });
+
+  it("resolves at once and records everything in one deferred task, a few at a time", async () => {
+    const tasks: Array<() => Promise<void>> = [];
+    let running = 0;
+    let peak = 0;
+    const record = vi.fn<(key: ApprovalKey) => Promise<void>>(async () => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      running -= 1;
+    });
+    const deferred = deferredRecorder(record, (task) => void tasks.push(task));
+    for (let v = 1; v <= 6; v += 1) await deferred(key(v));
+    expect(record).not.toHaveBeenCalled();
+    expect(tasks).toHaveLength(1);
+    await tasks[0]();
+    expect(record.mock.calls.map(([k]) => k.version)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(peak).toBeLessThanOrEqual(4);
+    // Keys handed over after the task started go in a new one.
+    await deferred(key(7));
+    expect(tasks).toHaveLength(2);
+  });
+});
+
+describe("supabaseApprovalStore: misses", () => {
+  /** A PostgREST builder fake that records what each call asked for. */
+  function fakeAdmin(row: Record<string, string> | null = null) {
+    const calls: Array<{ op: string; table: string; values?: unknown; match?: unknown }> = [];
+    const from = (table: string) => {
+      const builder = {
+        select: () => builder,
+        match: (m: unknown) => {
+          const last = calls.at(-1);
+          if (last && last.table === table && last.match === undefined && last.op !== "select") last.match = m;
+          return builder;
+        },
+        maybeSingle: async () => ({ data: row, error: null }),
+        upsert: (values: unknown) => (calls.push({ op: "upsert", table, values }), Promise.resolve({ error: null })),
+        update: (values: unknown) => {
+          calls.push({ op: "update", table, values });
+          return { match: async (m: unknown) => ((calls.at(-1)!.match = m), { error: null }) };
+        },
+      };
+      return builder;
+    };
+    return { admin: { from } as never, calls };
+  }
+
+  it("reads the first and last miss", async () => {
+    const { admin } = fakeAdmin({ first_missed_at: "2026-10-01T00:00:00Z", last_attempt_at: "2026-10-02T00:00:00Z" });
+    expect(await supabaseApprovalStore(admin).miss(KEY)).toEqual({
+      firstAt: Date.parse("2026-10-01T00:00:00Z"),
+      lastAt: Date.parse("2026-10-02T00:00:00Z"),
+    });
+    expect(await supabaseApprovalStore(fakeAdmin(null).admin).miss(KEY)).toBeNull();
+  });
+
+  it("inserts the first miss, and afterwards moves only last_attempt_at", async () => {
+    const { admin, calls } = fakeAdmin();
+    const s = supabaseApprovalStore(admin);
+    await s.recordMiss(KEY, false);
+    await s.recordMiss(KEY, true);
+    expect(calls[0]).toMatchObject({ op: "upsert", table: "qdit_milestone_approval_misses" });
+    expect(calls[0].values).not.toHaveProperty("last_attempt_at");
+    expect(calls[1]).toMatchObject({ op: "update", table: "qdit_milestone_approval_misses" });
+    expect(Object.keys(calls[1].values as object)).toEqual(["last_attempt_at"]);
+    expect(calls[1].match).toMatchObject({ milestone_id: KEY.milestoneId, version: KEY.version });
   });
 });

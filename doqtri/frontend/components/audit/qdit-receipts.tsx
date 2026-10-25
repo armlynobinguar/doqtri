@@ -1,6 +1,6 @@
 import { SignerAddress } from "@/components/audit/signer-address";
 import { StatusTag } from "@/components/ui/status-tag";
-import { qditExplorerUrl, type QditReceipt, type QditReceipts } from "@/lib/integrations/qdit-receipts";
+import { chainRead, qditExplorerUrl, type QditReceipt, type QditReceipts } from "@/lib/integrations/qdit-receipts";
 import { expertTxUrl } from "@/lib/stellar/config";
 
 /**
@@ -15,7 +15,9 @@ import { expertTxUrl } from "@/lib/stellar/config";
  * with the version `vV` the heading was signed against. A newer record is a
  * resubmission and is shown as such; an older or missing one is an explicit
  * unverified state naming the mismatch; and a Verified heading is shown as
- * approved only when the chain says Approved at `vV` itself.
+ * approved only when the chain says Approved at `vV` itself. A ref that
+ * does not match the note's linked qdit project is unverified, in one
+ * wording whatever the mismatch, so nothing about the link row shows.
  */
 
 const LINK = "text-primary underline-offset-2 hover:underline";
@@ -23,16 +25,18 @@ const NETWORK_LABEL = { testnet: "Testnet", mainnet: "Mainnet" } as const;
 
 /** How the chain's record stands to the version the heading was signed against. */
 function relation(receipt: QditReceipt): "same" | "newer" | "older" | "missing" | null {
-  const { check, ref } = receipt;
-  if (check.state === "unreachable" || !ref) return null;
-  if (!check.chain) return "missing";
-  if (check.chain.version === ref.version) return "same";
-  return check.chain.version > ref.version ? "newer" : "older";
+  const { ref } = receipt;
+  const read = chainRead(receipt.check);
+  if (!read || !ref) return null;
+  if (!read.chain) return "missing";
+  if (read.chain.version === ref.version) return "same";
+  return read.chain.version > ref.version ? "newer" : "older";
 }
 
 function stateTag(receipt: QditReceipt) {
   const { check } = receipt;
   if (check.state === "unreachable") return <StatusTag tone="planned">Not checked</StatusTag>;
+  if (check.mismatch) return <StatusTag tone="warning">Unverified</StatusTag>;
   if (check.state === "differs") {
     const rel = relation(receipt);
     if (rel === "older" || rel === "missing") return <StatusTag tone="warning">Unverified</StatusTag>;
@@ -55,8 +59,18 @@ function ChainLine({ receipt }: { receipt: QditReceipt }) {
       contract: "The contract this record names could not be read as qdit's milestone_proof.",
       invalid_ref:
         "This record's artifact_ref does not follow the qdit grammar (integration contract, section 10), so it cannot be checked.",
+      link: "Doqtri could not read its own records just now to check which qdit contract this record may name, so it was not checked. Try again in a moment.",
     }[check.reason];
     return <span data-testid="receipt-unreachable">{text}</span>;
+  }
+  if (check.mismatch) {
+    return (
+      <span data-testid="receipt-link-mismatch">
+        Unverified: this record names a qdit project or contract other than the one registered in Doqtri for this
+        note, so the contract it names was not read.
+        {record.status === "Verified" ? " This heading is not shown as approved." : null}
+      </span>
+    );
   }
   const verified = record.status === "Verified";
   const ledger = check.ledger.toLocaleString("en-US");
@@ -111,10 +125,11 @@ function ChainLine({ receipt }: { receipt: QditReceipt }) {
 }
 
 function ApprovalLine({ receipt }: { receipt: QditReceipt }) {
-  const { check, ref, approvalTxHash } = receipt;
-  if (!ref || check.state === "unreachable" || check.chain?.status !== "Approved") return null;
+  const { ref, approvalTxHash } = receipt;
+  const chain = chainRead(receipt.check)?.chain;
+  if (!ref || chain?.status !== "Approved") return null;
   // An approval of another version than the signed one is named as such.
-  const of = check.chain.version === ref.version ? "" : ` of v${check.chain.version}`;
+  const of = chain.version === ref.version ? "" : ` of v${chain.version}`;
   if (approvalTxHash) {
     return (
       <span>

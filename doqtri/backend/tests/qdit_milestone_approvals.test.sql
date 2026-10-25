@@ -12,7 +12,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(29);
+select plan(31);
 
 -- ---------------------------------------------------------------------------
 -- Schema and privileges
@@ -56,9 +56,12 @@ select ok(not has_table_privilege('anon', 'public.qdit_milestone_approval_misses
 select ok(has_table_privilege('service_role', 'public.qdit_milestone_approval_misses', 'insert')
           and has_table_privilege('service_role', 'public.qdit_milestone_approval_misses', 'select'),
   'the service role records and reads them');
-select ok(not has_table_privilege('service_role', 'public.qdit_milestone_approval_misses', 'update')
+select ok(not has_column_privilege('service_role', 'public.qdit_milestone_approval_misses', 'first_missed_at', 'update')
           and not has_table_privilege('service_role', 'public.qdit_milestone_approval_misses', 'delete'),
   'but cannot move or drop the first miss');
+select ok(has_column_privilege('service_role', 'public.qdit_milestone_approval_misses', 'last_attempt_at', 'update')
+          and not has_column_privilege('service_role', 'public.qdit_milestone_approval_misses', 'version', 'update'),
+  'it may only move the last attempt');
 
 
 -- ---------------------------------------------------------------------------
@@ -147,6 +150,12 @@ $$, '23514', null, 'misses take the same key checks');
 select throws_ok($$
   update public.qdit_milestone_approval_misses set first_missed_at = now()
 $$, '42501', null, 'the service role cannot reset a miss');
+update public.qdit_milestone_approval_misses set last_attempt_at = '2026-10-02 00:00:00+00'
+ where milestone_id = 'd0a36129-8c4e-4fb5-8a71-2e9c1d5f4083' and version = 1;
+select is((select row(first_missed_at, last_attempt_at)::text from public.qdit_milestone_approval_misses
+            where milestone_id = 'd0a36129-8c4e-4fb5-8a71-2e9c1d5f4083' and version = 1),
+  (select row('2026-10-01 00:00:00+00'::timestamptz, '2026-10-02 00:00:00+00'::timestamptz)::text),
+  'a rescan moves the last attempt and keeps the first miss');
 
 reset role;
 select * from finish();

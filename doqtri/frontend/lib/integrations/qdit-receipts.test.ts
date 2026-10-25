@@ -10,6 +10,7 @@ import {
   PUBLIC_PAGE_TTL_MS,
   qditExplorerUrl,
   qditMilestonePageUrl,
+  type LinkedProject,
   type ReceiptDeps,
 } from "@/lib/integrations/qdit-receipts";
 import type { ChainNode } from "@/lib/stellar/contract-client";
@@ -76,6 +77,8 @@ let answers: Record<string, keyof typeof RECORDS>;
 let simulate: ReturnType<typeof vi.fn<SimulateCall>>;
 let nodes: Map<string, ChainNode | null | Error>;
 let approvalRows: ApprovalRow[];
+/** The note's doc_project_links row as the page reads it. */
+let linked: LinkedProject | null;
 
 function deps(overrides: Partial<ReceiptDeps> = {}): ReceiptDeps {
   return {
@@ -87,6 +90,7 @@ function deps(overrides: Partial<ReceiptDeps> = {}): ReceiptDeps {
     }),
     readMilestone: (chain, projectId, milestoneId) => readMilestoneRecord(chain, projectId, milestoneId, { simulate }),
     approvals: vi.fn(async () => approvalRows),
+    linkedProject: vi.fn(async () => linked),
     cache: createReadCache(),
     ...overrides,
   };
@@ -104,6 +108,7 @@ beforeEach(() => {
   });
   nodes = new Map();
   approvalRows = [];
+  linked = { projectId: PROJECT, slug: "soroban-payroll", chain: { network: "testnet", contractId: CONTRACT } };
 });
 
 /** History whose latest records are also the contract's current ones. */
@@ -121,6 +126,7 @@ describe("loadQditReceipts: off", () => {
     expect(d.readNode).not.toHaveBeenCalled();
     expect(simulate).not.toHaveBeenCalled();
     expect(d.approvals).not.toHaveBeenCalled();
+    expect(d.linkedProject).not.toHaveBeenCalled();
   });
 
   it("defaults to NEXT_PUBLIC_QDIT_INTEGRATION", async () => {
@@ -139,6 +145,7 @@ describe("loadQditReceipts: off", () => {
     const h = setup([event("h0", "Built", "github:acme/app#4", 1, "github"), event("h2", "Verified", "children:h3", 2, "rollup")]);
     expect(await loadQditReceipts(DOC, h, d)).toBeNull();
     expect(d.readNode).not.toHaveBeenCalled();
+    expect(d.linkedProject).not.toHaveBeenCalled();
   });
 });
 
@@ -271,6 +278,74 @@ describe("loadQditReceipts: states", () => {
   });
 });
 
+describe("loadQditReceipts: the note's linked project (section 12)", () => {
+  /** A contract that is not the linked project's: a look-alike milestone_proof answering Approved. */
+  const LOOKALIKE = "CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526";
+  const OTHER_PROJECT = "4a7d3b2f-9c5e-4d8f-8b21-3e6c8f0a2d45";
+  const refTo = (contract: string, project = PROJECT, network = "testnet") =>
+    `qdit:${network}:${contract}:${project}/${M2}@v2`;
+
+  it("a ref naming another contract is unverified, and that contract is never asked", async () => {
+    // The look-alike would answer Approved at v2 (the fake simulate answers any contract).
+    const h = setup([event("h1", "Verified", refTo(LOOKALIKE), 1)]);
+    const d = deps();
+    const [r] = (await loadQditReceipts(DOC, h, d))!.receipts;
+    expect(r.check).toEqual({ state: "differs", mismatch: "chain" });
+    expect(simulate).not.toHaveBeenCalled();
+    expect(d.approvals).not.toHaveBeenCalled();
+    expect(r.approvalTxHash).toBeNull();
+  });
+
+  it("a ref on the other network is unverified, even with the same contract id", async () => {
+    const h = setup([event("h1", "Verified", refTo(CONTRACT, PROJECT, "mainnet"), 1)]);
+    const [r] = (await loadQditReceipts(DOC, h, deps()))!.receipts;
+    expect(r.check).toEqual({ state: "differs", mismatch: "chain" });
+    expect(simulate).not.toHaveBeenCalled();
+  });
+
+  it("a ref naming another project than the linked one is unverified", async () => {
+    answers[M2] = "m2_approved_v2";
+    const h = setup([event("h1", "Verified", refTo(CONTRACT, OTHER_PROJECT), 1)]);
+    const [r] = (await loadQditReceipts(DOC, h, deps()))!.receipts;
+    expect(r.check).toEqual({ state: "differs", mismatch: "project" });
+    expect(simulate).not.toHaveBeenCalled();
+  });
+
+  it("unverified when the linked project has no stored chain yet, or the note is not linked", async () => {
+    const h = setup([event("h1", "Verified", ref(M2, 2), 1)]);
+    linked = { projectId: PROJECT, slug: "soroban-payroll", chain: null };
+    expect((await loadQditReceipts(DOC, h, deps()))!.receipts[0].check).toEqual({ state: "differs", mismatch: "no_chain" });
+    linked = null;
+    expect((await loadQditReceipts(DOC, h, deps()))!.receipts[0].check).toEqual({ state: "differs", mismatch: "unlinked" });
+    expect(simulate).not.toHaveBeenCalled();
+  });
+
+  it("not checked when the link can't be read: fails closed, never confirmed", async () => {
+    const h = setup([event("h1", "Verified", ref(M2, 2), 1)]);
+    const [r] = (await loadQditReceipts(DOC, h, deps({ linkedProject: async () => Promise.reject(new Error("db down")) })))!.receipts;
+    expect(r.check).toEqual({ state: "unreachable", reason: "link" });
+    expect(simulate).not.toHaveBeenCalled();
+  });
+
+  it("reads the link once per view, and checks each heading on its own", async () => {
+    const h = setup([
+      event("h1", "Verified", ref(M2, 2), 1),
+      event("h2", "Verified", refTo(LOOKALIKE), 2),
+      event("h3", "Verified", ref(M2, 2, "mainnet"), 3),
+    ]);
+    const d = deps();
+    const { receipts } = (await loadQditReceipts(DOC, h, d))!;
+    expect(receipts.map((r) => r.check.state === "unreachable" ? r.check.reason : (r.check.mismatch ?? r.check.state))).toEqual([
+      "confirmed",
+      "chain",
+      "chain",
+    ]);
+    expect(d.linkedProject).toHaveBeenCalledTimes(1);
+    expect(simulate).toHaveBeenCalledTimes(1);
+    expect(simulate.mock.calls[0][0].contractId).toBe(CONTRACT);
+  });
+});
+
 describe("loadQditReceipts: the current record", () => {
   it("uses the contract's record, not history's, and finds the write that set it", async () => {
     const h = history([event("h1", "Built", ref(M2, 2), 1)]);
@@ -347,18 +422,22 @@ describe("loadQditReceipts: qdit's public milestone page (section 12)", () => {
   const SLUG = "soroban payroll/ü";
   const pageUrl = (milestone: string) => `${ORIGIN}/p/${encodeURIComponent(SLUG)}/${milestone}`;
 
+  beforeEach(() => {
+    linked = { projectId: PROJECT, slug: SLUG, chain: { network: "testnet", contractId: CONTRACT } };
+  });
+
   function withPage(overrides: Partial<NonNullable<ReceiptDeps["qditPage"]>> = {}) {
     const isPublished = vi.fn(async () => true);
-    const project = vi.fn(async () => ({ projectId: PROJECT, slug: SLUG }));
-    return { origin: ORIGIN, project, isPublished, cache: createReadCache<boolean>({ ttlMs: PUBLIC_PAGE_TTL_MS }), ...overrides };
+    return { origin: ORIGIN, isPublished, cache: createReadCache<boolean>({ ttlMs: PUBLIC_PAGE_TTL_MS }), ...overrides };
   }
 
   it("links the page once qdit answers it anonymously, one check per page", async () => {
     const page = withPage();
     const h = setup([event("h1", "Verified", ref(M2, 2), 1), event("h2", "Verified", ref(M2, 2), 2), event("h3", "Built", ref(M1, 1), 3)]);
-    const { receipts } = (await loadQditReceipts(DOC, h, deps({ qditPage: page })))!;
+    const d = deps({ qditPage: page });
+    const { receipts } = (await loadQditReceipts(DOC, h, d))!;
     expect(receipts.map((r) => r.qditPageUrl)).toEqual([pageUrl(M2), pageUrl(M2), pageUrl(M1)]);
-    expect(page.project).toHaveBeenCalledTimes(1);
+    expect(d.linkedProject).toHaveBeenCalledTimes(1);
     expect(page.isPublished).toHaveBeenCalledTimes(2);
     expect(page.isPublished).toHaveBeenCalledWith(pageUrl(M2));
   });
@@ -368,18 +447,24 @@ describe("loadQditReceipts: qdit's public milestone page (section 12)", () => {
     const unpublished = (await loadQditReceipts(DOC, h, deps({ qditPage: withPage({ isPublished: async () => false }) })))!;
     expect(unpublished.receipts[0].qditPageUrl).toBeNull();
 
-    const other = withPage({ project: async () => ({ projectId: "4a7d3b2f-9c5e-4d8f-8b21-3e6c8f0a2d45", slug: SLUG }) });
+    linked = { projectId: "4a7d3b2f-9c5e-4d8f-8b21-3e6c8f0a2d45", slug: SLUG, chain: { network: "testnet", contractId: CONTRACT } };
+    const other = withPage();
     const result = (await loadQditReceipts(DOC, h, deps({ qditPage: other })))!;
     expect(result.receipts[0].qditPageUrl).toBeNull();
     expect(other.isPublished).not.toHaveBeenCalled();
   });
 
-  it("no link without a linked project, or when the link can't be read; the receipt stands", async () => {
+  it("no link without a linked project, when the link can't be read, or when the ref's contract is not the project's", async () => {
     const h = setup([event("h1", "Verified", ref(M2, 2), 1)]);
-    for (const project of [async () => null, async () => Promise.reject(new Error("db down"))]) {
-      const page = withPage({ project });
-      const [r] = (await loadQditReceipts(DOC, h, deps({ qditPage: page })))!.receipts;
-      expect(r.check.state).toBe("confirmed");
+    const cases: Array<() => Promise<LinkedProject | null>> = [
+      async () => null,
+      async () => Promise.reject(new Error("db down")),
+      async () => ({ projectId: PROJECT, slug: SLUG, chain: { network: "mainnet", contractId: CONTRACT } }),
+    ];
+    for (const linkedProject of cases) {
+      const page = withPage();
+      const [r] = (await loadQditReceipts(DOC, h, deps({ qditPage: page, linkedProject })))!.receipts;
+      expect(r.check.state).not.toBe("confirmed");
       expect(r.qditPageUrl).toBeNull();
       expect(page.isPublished).not.toHaveBeenCalled();
     }

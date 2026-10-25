@@ -37,8 +37,9 @@ import { QDIT_MILESTONE_STATE_COLUMNS, type QditMilestoneStateRow } from "@/lib/
  * When a read finds a milestone Approved, both also hand it to
  * `recordApproval` (WP-3.1, lib/integrations/qdit-approvals.ts), which looks
  * the approving transaction up in RPC's event window for the public
- * receipts unless it has it already (or has missed it for longer than the
- * window). That is best effort and never changes either one's answer.
+ * receipts unless it has it already (or missed it within the hour, or for
+ * longer than the window). That is best effort and never changes either
+ * one's answer; the re-check route defers it past its response.
  */
 
 export const QDIT_WEBHOOK_EVENT = "milestone.status_changed";
@@ -527,7 +528,8 @@ export async function recheckDocStatuses(params: {
         await store.record({ ...link, chain: read });
         // On every read, not just the first that saw it: the webhook's own
         // lookup may have failed. recordApproval skips an approval it has,
-        // or has missed for longer than RPC's window.
+        // missed within the last hour, or has missed for longer than RPC's
+        // window; the route's recorder runs after the answer is sent.
         await noteApproval(params.recordApproval, approvalKeyOf(read, link.projectId, link.milestoneId));
       } catch (error) {
         unread.add(link.milestoneId);

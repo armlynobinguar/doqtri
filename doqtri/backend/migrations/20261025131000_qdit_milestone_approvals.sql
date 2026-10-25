@@ -28,10 +28,14 @@
 --                             empty. The approval already existed then, so
 --                             once that is older than RPC's window (about a
 --                             week; the app waits 8 days) the event is gone
---                             and doqtri stops scanning for it. A lookup that
---                             failed (RPC down, timeout) records no miss, so
---                             a later sighting tries again. Service role
---                             only, insert-only like the approvals.
+--                             and doqtri stops scanning for it. Until then it
+--                             rescans at most hourly (last_attempt_at), so
+--                             an approval from before the window costs a
+--                             scan an hour while someone looks, not one per
+--                             re-check. A lookup that failed (RPC down,
+--                             timeout) records no miss, so a later sighting
+--                             tries again. Service role only; the first miss
+--                             never moves, only last_attempt_at does.
 
 create table public.qdit_milestone_approvals (
   network      text not null check (network in ('testnet', 'mainnet')),
@@ -73,13 +77,16 @@ create table public.qdit_milestone_approval_misses (
   version         bigint not null check (version between 1 and 4294967295),
   -- The first empty lookup; later ones change nothing (on conflict do nothing).
   first_missed_at timestamptz not null default now(),
+  -- The latest empty lookup; the app waits an hour before the next.
+  last_attempt_at timestamptz not null default now(),
   primary key (network, contract_id, project_id, milestone_id, version)
 );
 
 comment on table public.qdit_milestone_approval_misses is
-  'When a lookup of a qdit approval transaction in Stellar RPC''s event window first found nothing (WP-3.1). Service role only; insert-only.';
+  'When a lookup of a qdit approval transaction in Stellar RPC''s event window first and last found nothing (WP-3.1). Service role only; only last_attempt_at may change.';
 
 alter table public.qdit_milestone_approval_misses enable row level security;
 
 revoke all on table public.qdit_milestone_approval_misses from public, anon, authenticated, service_role;
 grant select, insert on table public.qdit_milestone_approval_misses to service_role;
+grant update (last_attempt_at) on table public.qdit_milestone_approval_misses to service_role;

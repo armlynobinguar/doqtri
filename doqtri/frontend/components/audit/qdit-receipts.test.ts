@@ -201,6 +201,34 @@ describe("QditReceiptsSection", () => {
     expect(building).toContain("though this heading was signed against v2, so it cannot be checked");
   });
 
+  it("a ref that does not match the note's linked project: unverified, one wording for every mismatch", () => {
+    const html = (mismatch: "unlinked" | "project" | "no_chain" | "chain", status = "Verified") =>
+      render([
+        {
+          ...CONFIRMED,
+          record: { ...CONFIRMED.record, status },
+          check: { state: "differs", mismatch },
+          approvalTxHash: null,
+        },
+      ]);
+    const chain = html("chain");
+    expect(chain).toContain('data-state="differs"');
+    expect(chain).toContain("Unverified</span>");
+    expect(chain).toContain('data-testid="receipt-link-mismatch"');
+    expect(chain).toContain(
+      "this record names a qdit project or contract other than the one registered in Doqtri for this note, so the contract it names was not read",
+    );
+    expect(chain).toContain("This heading is not shown as approved.");
+    expect(chain).not.toContain("Approved on chain");
+    expect(chain).not.toContain("Matches the chain");
+    expect(chain).not.toContain("Approval transaction");
+    expect(chain).not.toContain("approval-unrecorded");
+    expect(chain).not.toContain("as of ledger");
+    // The link row's values never show, and every mismatch reads alike.
+    for (const mismatch of ["unlinked", "project", "no_chain"] as const) expect(html(mismatch)).toBe(chain);
+    expect(html("chain", "Built")).not.toContain("not shown as approved");
+  });
+
   it("links qdit's milestone page only when the loader confirmed qdit publishes it", () => {
     expect(render([CONFIRMED])).not.toContain('data-testid="qdit-page"');
     const url = "https://qdit.example/p/soroban-payroll/c92f5018-7b3d-4ea4-9f60-1d8b0c4e3f72";
@@ -219,6 +247,11 @@ describe("QditReceiptsSection", () => {
 
     const contract = render([{ ...CONFIRMED, check: { state: "unreachable", reason: "contract" }, approvalTxHash: null }]);
     expect(contract).toContain("could not be read as qdit&#x27;s milestone_proof");
+
+    const link = render([{ ...CONFIRMED, check: { state: "unreachable", reason: "link" }, approvalTxHash: null }]);
+    expect(link).toContain("Not checked");
+    expect(link).toContain("Doqtri could not read its own records just now");
+    expect(link).not.toContain("Approved on chain");
 
     const bad = "qdit:testnet:not-a-ref";
     const invalid = render([

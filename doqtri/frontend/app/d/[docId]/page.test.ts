@@ -18,6 +18,8 @@ const HASH = "ab".repeat(32);
 
 const PROJECT = "3f6c2a1e-8b4d-4c7e-9a10-2d5b7e9f1c34";
 const MILESTONE = "c92f5018-7b3d-4ea4-9f60-1d8b0c4e3f72";
+/** The note's doc_project_links row: linked to PROJECT, whose milestone_proof is CONTRACT on testnet. */
+const LINK_ROW = { project_id: PROJECT, project_slug: "soroban-payroll", chain_network: "testnet", chain_contract_id: CONTRACT };
 
 const mocks = vi.hoisted(() => ({
   readNode: vi.fn(),
@@ -25,7 +27,7 @@ const mocks = vi.hoisted(() => ({
   from: vi.fn(),
   history: null as unknown,
   /** The note's doc_project_links row, or null. */
-  projectLink: null as { project_id: string; project_slug: string } | null,
+  projectLink: null as Record<string, string | null> | null,
 }));
 
 vi.mock("@/lib/stellar/contract-client", () => ({
@@ -99,7 +101,7 @@ const RECEIPTS_SECTION = /<section class="grid gap-3" data-testid="qdit-receipts
 beforeEach(() => {
   vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key");
   vi.stubEnv("QDIT_API_BASE_URL", "");
-  mocks.projectLink = null;
+  mocks.projectLink = LINK_ROW;
   mocks.history = historyWith([nodeEvent("h1", "github", "github:acme/app#4", 1), nodeEvent("h2", "qdit", REF, 2)]);
   mocks.readNode.mockReset().mockImplementation(async (_doc: string, nodeId: string) => {
     const e = (mocks.history as DocumentHistory).nodes.find((n) => n.nodeId === nodeId);
@@ -132,7 +134,6 @@ describe("/d/[docId] and NEXT_PUBLIC_QDIT_INTEGRATION", () => {
   it("unset, with qdit configured and the note linked: still nothing read, no qdit page asked for", async () => {
     vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "");
     vi.stubEnv("QDIT_API_BASE_URL", "https://qdit.example/api/v1");
-    mocks.projectLink = { project_id: PROJECT, project_slug: "soroban-payroll" };
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const html = await render();
@@ -176,20 +177,53 @@ describe("/d/[docId] and NEXT_PUBLIC_QDIT_INTEGRATION", () => {
     expect(on.replace(RECEIPTS_SECTION, "")).toBe(off);
   });
 
-  it("on, without the service-role key: the page still renders, with the chain's side of the receipt", async () => {
+  it("on, without the service-role key: the page still renders; the receipt is not checked, never approved", async () => {
     vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "1");
     vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "");
     const html = await render();
     expect(html).toContain("Build status");
     expect(html).toMatch(RECEIPTS_SECTION);
-    expect(html).toContain("Approved on chain");
-    expect(html).toContain('data-testid="approval-unrecorded"');
+    expect(html).toContain('data-state="unreachable"');
+    expect(html).not.toContain("Approved on chain");
+    // Without the link row there is no contract to trust, so none is asked.
+    expect(mocks.readMilestoneRecord).not.toHaveBeenCalled();
+  });
+
+  it("on, with a record naming a contract other than the linked project's: unverified, and that contract is not asked", async () => {
+    vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "1");
+    const lookalike = "CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526";
+    const forged = REF.replace(CONTRACT, lookalike);
+    mocks.history = historyWith([nodeEvent("h2", "qdit", forged, 2)]);
+    const html = await render();
+    const section = html.match(RECEIPTS_SECTION)![0];
+    expect(section).toContain('data-testid="receipt-link-mismatch"');
+    expect(section).not.toContain("Approved on chain");
+    expect(mocks.readMilestoneRecord).not.toHaveBeenCalled();
+    // Nothing from the link row shows: not the registered contract, not the slug.
+    expect(section).not.toContain(CONTRACT);
+    expect(html).not.toContain("soroban-payroll");
+  });
+
+  it("on, with the ref's network differing from the linked project's chain: unverified", async () => {
+    vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "1");
+    mocks.projectLink = { ...LINK_ROW, chain_network: "mainnet" };
+    const html = await render();
+    expect(html).toContain('data-testid="receipt-link-mismatch"');
+    expect(html).not.toContain("Approved on chain");
+    expect(mocks.readMilestoneRecord).not.toHaveBeenCalled();
+  });
+
+  it("on, for a note with no linked project: unverified", async () => {
+    vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "1");
+    mocks.projectLink = null;
+    const html = await render();
+    expect(html).toContain('data-testid="receipt-link-mismatch"');
+    expect(mocks.readMilestoneRecord).not.toHaveBeenCalled();
   });
 
   it("on, with qdit's origin known: links qdit's milestone page once qdit answers it anonymously", async () => {
     vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "1");
     vi.stubEnv("QDIT_API_BASE_URL", "https://qdit.example/api/v1");
-    mocks.projectLink = { project_id: PROJECT, project_slug: "soroban-payroll" };
     const url = `https://qdit.example/p/soroban-payroll/${MILESTONE}`;
     const fetchMock = vi.fn(async () => new Response("ok", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

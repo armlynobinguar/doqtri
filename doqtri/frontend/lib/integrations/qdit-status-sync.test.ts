@@ -1,6 +1,6 @@
 import { createHmac } from "crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { approvalRecorder, type ApprovalKey, type ApprovalStore, type ApprovalTx } from "@/lib/integrations/qdit-approvals";
+import { approvalRecorder, deferredRecorder, type ApprovalKey, type ApprovalStore, type ApprovalTx } from "@/lib/integrations/qdit-approvals";
 import { QditChainError, readMilestoneRecord, type MilestoneChainRead, type ProjectChain } from "@/lib/integrations/qdit-chain";
 import { QditError, QditNotConnectedError, type QditClient, type QditMilestone } from "@/lib/integrations/qdit-client";
 import type { QditMilestoneStateRow } from "@/lib/integrations/qdit-status";
@@ -448,7 +448,7 @@ describe("recheckDocStatuses (R-09)", () => {
     const approvalStore: ApprovalStore = {
       has: async (k) => approvals.has(keyOf(k)),
       record: async (k, tx) => void approvals.set(keyOf(k), tx),
-      firstMiss: async () => null,
+      miss: async () => null,
       recordMiss: async () => {},
       forMilestones: async () => [],
     };
@@ -476,6 +476,29 @@ describe("recheckDocStatuses (R-09)", () => {
     await recheckDocStatuses({ store, client: null, docId: DOC, readChain, now: () => NOW_MS + 40_000, recordApproval });
     expect(find).toHaveBeenCalledTimes(2);
     quiet.mockRestore();
+  });
+
+  it("a forced re-check through deferredRecorder answers without waiting on the lookup (WP-3.1)", async () => {
+    // A lookup that never finishes: the route would leave it to after().
+    const find = vi.fn(() => new Promise<ApprovalTx | null>(() => {}));
+    const approvalStore: ApprovalStore = {
+      has: async () => false,
+      record: async () => {},
+      miss: async () => null,
+      recordMiss: async () => {},
+      forMilestones: async () => [],
+    };
+    const deferred: Array<() => Promise<void>> = [];
+    const recordApproval = deferredRecorder(approvalRecorder(approvalStore, find), (task) => void deferred.push(task));
+    const result = await recheckDocStatuses({
+      store, client: null, docId: DOC, readChain, now: () => NOW_MS, force: true, recordApproval,
+    });
+    expect(result.states[MILESTONE]).toMatchObject({ chain_status: "Approved" });
+    expect(find).not.toHaveBeenCalled();
+    expect(deferred).toHaveLength(1);
+    // Once the answer is out, the task scans.
+    void deferred[0]();
+    await vi.waitFor(() => expect(find).toHaveBeenCalled());
   });
 
   it("puts a duplicated or out-of-order webhook right: the chain read now wins", async () => {

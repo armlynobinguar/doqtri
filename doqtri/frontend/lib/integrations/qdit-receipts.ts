@@ -41,6 +41,19 @@ import type { ChainNodeEvent, DocumentHistory } from "@/lib/stellar/history";
  * than `V`, or missing; both sides are shown, and a Verified record is never
  * shown as approved. `unreachable` when it could not be checked.
  *
+ * The ref is also held against the note's linked qdit project as doqtri
+ * stored it (doc_project_links: the project and its milestone_proof chain,
+ * as qdit's API last reported it). An editor signs with their own wallet
+ * (D-14), so the ref may name any contract, including a look-alike
+ * milestone_proof that answers Approved for anything. A ref is therefore
+ * only read, and can only be `confirmed`, when the note is linked to the
+ * project it names and that project's stored chain is the ref's network
+ * and contract; otherwise it is `differs` with a `mismatch` (section 12's
+ * "explicit unverified state naming the mismatch"), and the contract it
+ * names is not asked. The page words every mismatch the same way, so it
+ * shows nothing from the link row beyond the fact that the ref does not
+ * match it.
+ *
  * Optionally (section 12, a MAY) the receipt links qdit's public milestone
  * page, `<qdit origin>/p/<slug>/<milestone id>`, built from the slug doqtri
  * stored from qdit's API (doc_project_links). That slug came from a private
@@ -64,6 +77,14 @@ export const PUBLIC_PAGE_TIMEOUT_MS = 2_000;
 const CONCURRENCY = 4;
 const MAX_CACHE_ENTRIES = 500;
 
+/**
+ * Why a ref does not match the note's linked project: the note has no
+ * linked project (`unlinked`), it is linked to another one (`project`), no
+ * chain is stored for it yet (`no_chain`), or the stored chain is another
+ * network or contract (`chain`).
+ */
+export type LinkMismatch = "unlinked" | "project" | "no_chain" | "chain";
+
 export type ReceiptCheck =
   | {
       state: "confirmed" | "differs";
@@ -71,12 +92,40 @@ export type ReceiptCheck =
       chain: { status: MilestoneChainStatus; version: number } | null;
       /** The ledger the read saw. */
       ledger: number;
+      mismatch?: undefined;
+    }
+  | {
+      /** The ref does not match the note's linked project, so its contract was not read. */
+      state: "differs";
+      mismatch: LinkMismatch;
     }
   | {
       state: "unreachable";
-      /** `rpc`: Stellar did not answer. `contract`: the named contract could not be read as milestone_proof. `invalid_ref`: the ref does not follow section 10. */
-      reason: "rpc" | "contract" | "invalid_ref";
+      /** `rpc`: Stellar did not answer. `contract`: the named contract could not be read as milestone_proof. `invalid_ref`: the ref does not follow section 10. `link`: the note's linked project could not be read to check the ref against. */
+      reason: "rpc" | "contract" | "invalid_ref" | "link";
     };
+
+/** What a check read from milestone_proof, or null when it read nothing. */
+export function chainRead(check: ReceiptCheck): { chain: { status: MilestoneChainStatus; version: number } | null; ledger: number } | null {
+  return check.state === "unreachable" || check.mismatch ? null : check;
+}
+
+/** The note's linked qdit project as doqtri stored it (doc_project_links). */
+export type LinkedProject = {
+  projectId: string;
+  slug: string;
+  /** Its milestone_proof contract as qdit last reported it; null until registered. */
+  chain: ProjectChain | null;
+};
+
+/** Whether `ref` names the note's linked project on that project's own chain. */
+export function linkMismatch(ref: QditArtifactRef, project: LinkedProject | null): LinkMismatch | null {
+  if (!project) return "unlinked";
+  if (ref.projectId !== project.projectId) return "project";
+  if (!project.chain) return "no_chain";
+  if (ref.network !== project.chain.network || ref.contractId !== project.chain.contractId) return "chain";
+  return null;
+}
 
 export type QditReceipt = {
   nodeId: string;
@@ -216,14 +265,18 @@ export type ReceiptDeps = {
   /** Recorded approvals of these milestones (qdit_milestone_approvals). */
   approvals: (milestoneIds: string[]) => Promise<ApprovalRow[]>;
   /**
+   * The project the note is linked to, as doqtri stored it
+   * (doc_project_links); null when none. Read once per view, and only when
+   * some heading names qdit.
+   */
+  linkedProject: () => Promise<LinkedProject | null>;
+  /**
    * The optional link to qdit's public milestone page. Leave it out (no
    * qdit origin configured) and no receipt links qdit.
    */
   qditPage?: {
     /** The qdit origin (section 1), e.g. https://qdit.atalusan.com. */
     origin: string;
-    /** The project the note is linked to, as doqtri stored it (doc_project_links); null when none. */
-    project: () => Promise<{ projectId: string; slug: string } | null>;
     /** Defaults to isQditPagePublished. */
     isPublished?: (url: string) => Promise<boolean>;
     cache?: ReadCache<boolean>;
@@ -254,6 +307,8 @@ export async function loadQditReceipts(
   const max = deps.max ?? MAX_RECEIPTS;
   const checked = candidates.slice(0, max);
   const cache = deps.cache ?? receiptReadCache;
+  // Undefined when it could not be read: nothing is then checked against it.
+  const linked: Promise<LinkedProject | null | undefined> = deps.linkedProject().catch(() => undefined);
 
   const one = async (latest: ChainNodeEvent): Promise<QditReceipt | null> => {
     // The record as the contract holds it now; the history's latest write
@@ -278,6 +333,12 @@ export async function loadQditReceipts(
     const ref = parseQditArtifactRef(record.artifactRef);
     if (!ref) return { ...base, ref: null, check: { state: "unreachable", reason: "invalid_ref" } };
 
+    // Only the linked project's own contract is asked (see above).
+    const project = await linked;
+    if (project === undefined) return { ...base, ref, check: { state: "unreachable", reason: "link" } };
+    const mismatch = linkMismatch(ref, project);
+    if (mismatch) return { ...base, ref, check: { state: "differs", mismatch } };
+
     try {
       const read = await cache.get(cacheKey(ref.network, ref), () =>
         deps.readMilestone({ network: ref.network, contractId: ref.contractId }, ref.projectId, ref.milestoneId),
@@ -296,7 +357,7 @@ export async function loadQditReceipts(
     }
   }
 
-  await Promise.all([attachApprovals(receipts, deps), attachQditPages(receipts, deps)]);
+  await Promise.all([attachApprovals(receipts, deps), attachQditPages(receipts, deps, await linked)]);
 
   if (receipts.length === 0 && candidates.length <= max) return null;
   return { receipts, more: candidates.length - checked.length };
@@ -304,7 +365,7 @@ export async function loadQditReceipts(
 
 /** One query for every approval the chain now shows. */
 async function attachApprovals(receipts: QditReceipt[], deps: ReceiptDeps): Promise<void> {
-  const approved = receipts.filter((r) => r.ref && r.check.state !== "unreachable" && r.check.chain?.status === "Approved");
+  const approved = receipts.filter((r) => r.ref && chainRead(r.check)?.chain?.status === "Approved");
   if (approved.length > 0) {
     let rows: ApprovalRow[] = [];
     try {
@@ -314,7 +375,7 @@ async function attachApprovals(receipts: QditReceipt[], deps: ReceiptDeps): Prom
     }
     for (const receipt of approved) {
       const { ref, check } = receipt;
-      const version = check.state === "unreachable" ? null : check.chain?.version;
+      const version = chainRead(check)?.chain?.version;
       const row = rows.find(
         (r) =>
           r.network === ref!.network &&
@@ -329,27 +390,25 @@ async function attachApprovals(receipts: QditReceipt[], deps: ReceiptDeps): Prom
 }
 
 /**
- * qdit's public page for each receipt's milestone, when the note's linked
- * project is the one the ref names and qdit answers that page anonymously.
- * One check per distinct page (at most one per checked milestone), cached.
+ * qdit's public page for each receipt's milestone, when the ref matched the
+ * note's linked project (so its contract was read) and qdit answers that
+ * page anonymously. One check per distinct page (at most one per checked
+ * milestone), cached.
  */
-async function attachQditPages(receipts: QditReceipt[], deps: ReceiptDeps): Promise<void> {
+async function attachQditPages(
+  receipts: QditReceipt[],
+  deps: ReceiptDeps,
+  project: LinkedProject | null | undefined,
+): Promise<void> {
   const page = deps.qditPage;
-  if (!page || receipts.every((r) => !r.ref)) return;
-  let project: { projectId: string; slug: string } | null = null;
-  try {
-    project = await page.project();
-  } catch {
-    // No link, then.
-  }
-  if (!project) return;
+  if (!page || !project) return;
   const isPublished = page.isPublished ?? ((url: string) => isQditPagePublished(url));
   const cache = page.cache ?? qditPageCache;
   const { projectId, slug } = project;
   const checks = new Map<string, Promise<boolean>>();
   await Promise.all(
     receipts.map(async (receipt) => {
-      if (receipt.ref?.projectId !== projectId) return;
+      if (receipt.ref?.projectId !== projectId || !chainRead(receipt.check)) return;
       const url = qditMilestonePageUrl(page.origin, slug, receipt.ref.milestoneId);
       if (!checks.has(url)) checks.set(url, cache.get(url, () => isPublished(url)).catch(() => false));
       if (await checks.get(url)) receipt.qditPageUrl = url;
