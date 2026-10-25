@@ -342,8 +342,8 @@ function Anchored({
         ) : null}
         {history?.partial ? (
           <p data-testid="history-partial" className="text-muted-foreground text-[13px]">
-            Writes by the note&apos;s editors are found by reading a bounded stretch of the
-            ledger, and that read stopped before its end just now, so a recent write by an
+            Writes by the note&apos;s editors are found by reading bounded stretches of the
+            ledger, and one of those reads could not be finished just now, so a write by an
             editor may be missing below.
           </p>
         ) : null}
