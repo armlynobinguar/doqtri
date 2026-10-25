@@ -1,7 +1,8 @@
 import { randomBytes } from "crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fitAccountLabel, supabaseConnectionStore } from "./connection-store";
+import { createQditClient, QditNotConnectedError } from "./qdit-client";
 
 const ANA = "11111111-1111-4111-8111-111111111111";
 const BEN = "22222222-2222-4222-8222-222222222222";
@@ -148,6 +149,29 @@ describe("supabaseConnectionStore", () => {
     const store = supabaseConnectionStore(fakeAdmin(rows), key);
     await store.saveConnected(ANA, { subject: "qdit-ana", accountLabel: "x".repeat(500) }, tokens);
     expect(rows[0].account_label).toBe("x".repeat(200));
+  });
+});
+
+describe("a connected row sealed under another key (WP-2.3)", () => {
+  it("is marked needs_reconnect on its next use, before the call fails, and asks qdit nothing", async () => {
+    const rows: Row[] = [];
+    await supabaseConnectionStore(fakeAdmin(rows), randomBytes(32)).saveConnected(ANA, { subject: "qdit-ana", accountLabel: "ana" }, tokens);
+    const store = supabaseConnectionStore(fakeAdmin(rows), key);
+    const fetch = vi.fn(async () => new Response("{}", { status: 200 }));
+    const config = {
+      apiBaseUrl: "https://qdit.test/api/v1",
+      issuer: "https://auth.qdit.test/auth/v1",
+      clientId: "c",
+      clientSecret: "s",
+      redirectUri: null,
+      tokenKey: "",
+      tokenKeyPrevious: null,
+    };
+    const error = await createQditClient(ANA, { config, store, fetch }).me().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(QditNotConnectedError);
+    expect((error as QditNotConnectedError).connection).toBe("needs_reconnect");
+    expect(rows[0]).toMatchObject({ status: "needs_reconnect", access_token_ciphertext: null, refresh_token_ciphertext: null });
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 
