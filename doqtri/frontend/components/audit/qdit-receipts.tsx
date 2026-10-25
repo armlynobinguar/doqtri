@@ -1,3 +1,4 @@
+import { ProofChainView } from "@/components/audit/qdit-proof-chain";
 import { SignerAddress } from "@/components/audit/signer-address";
 import { StatusTag } from "@/components/ui/status-tag";
 import {
@@ -7,6 +8,7 @@ import {
   type QditReceipt,
   type QditReceipts,
 } from "@/lib/integrations/qdit-receipts";
+import { proofChain, type PlanContext } from "@/lib/integrations/qdit-proof-chain";
 import { expertTxUrl } from "@/lib/stellar/config";
 
 /**
@@ -27,6 +29,9 @@ import { expertTxUrl } from "@/lib/stellar/config";
  * page and on Stellar Expert. A ref that does not match a qdit project and
  * contract registered in doqtri for the note is unverified, in one wording
  * whatever the mismatch, so nothing about the link row shows.
+ *
+ * Given the page's Document and history (`chain`), each receipt also folds
+ * out the full proof chain (WP-3.3, components/audit/qdit-proof-chain.tsx).
  */
 
 const LINK = "text-primary underline-offset-2 hover:underline";
@@ -187,7 +192,18 @@ function ApprovalLine({ receipt }: { receipt: QditReceipt }) {
   );
 }
 
-function Receipt({ receipt, label }: { receipt: QditReceipt; label: string | undefined }) {
+/** What the chain view needs from the page: the note's id, its Document and history. */
+export type ChainViewContext = { docId: string } & PlanContext;
+
+function Receipt({
+  receipt,
+  label,
+  chain,
+}: {
+  receipt: QditReceipt;
+  label: string | undefined;
+  chain: ChainViewContext | undefined;
+}) {
   const { record, ref, signing } = receipt;
   return (
     <li data-testid="qdit-receipt" data-state={receipt.check.state} className="grid gap-1.5 px-4 py-3">
@@ -237,6 +253,14 @@ function Receipt({ receipt, label }: { receipt: QditReceipt; label: string | und
           ) : null}
         </span>
       </span>
+      {chain ? (
+        <ProofChainView
+          chain={proofChain(receipt, chain)}
+          docId={chain.docId}
+          milestone={ref}
+          updatedAt={chain.doc.updatedAt}
+        />
+      ) : null}
     </li>
   );
 }
@@ -244,9 +268,12 @@ function Receipt({ receipt, label }: { receipt: QditReceipt; label: string | und
 export function QditReceiptsSection({
   receipts,
   labels,
+  chain,
 }: {
   receipts: QditReceipts;
   labels: Map<string, string> | null;
+  /** Leave it out and no receipt folds out its proof chain. */
+  chain?: ChainViewContext;
 }) {
   return (
     <section className="grid gap-3" data-testid="qdit-receipts">
@@ -258,7 +285,7 @@ export function QditReceiptsSection({
       {receipts.receipts.length > 0 ? (
         <ul className="glass divide-y divide-[var(--glass-lo)] rounded-2xl text-[13px]">
           {receipts.receipts.map((receipt) => (
-            <Receipt key={receipt.nodeId} receipt={receipt} label={labels?.get(receipt.nodeId)} />
+            <Receipt key={receipt.nodeId} receipt={receipt} label={labels?.get(receipt.nodeId)} chain={chain} />
           ))}
         </ul>
       ) : null}
