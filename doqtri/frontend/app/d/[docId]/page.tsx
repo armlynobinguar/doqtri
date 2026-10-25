@@ -47,8 +47,10 @@ import { loadQditReceipts, type LinkedProject, type QditReceipts } from "@/lib/i
  * row's values); its slug is shown only as part of a URL qdit itself
  * publishes. Each receipt folds out the heading's full proof chain (WP-3.3,
  * CONTRACT.md section 12: plan version, submitted, approved, verified),
- * from the same reads. Without the flag, or with no such heading, the page
- * is unchanged.
+ * from the same reads. When Horizon history cannot be read, the headings to
+ * check are the note's qdit-linked ones (node_links), used only to choose
+ * which records to read (D-85). Without the flag, or with no such heading,
+ * the page is unchanged.
  */
 export const revalidate = 30;
 
@@ -124,6 +126,7 @@ async function loadReceipts(docId: string, history: DocumentHistory | null): Pro
     readMilestone: (chain, projectId, milestoneId) => readMilestoneRecord(chain, projectId, milestoneId),
     approvals: (milestoneIds) => supabaseApprovalStore(createSupabaseAdminClient()).forMilestones(milestoneIds),
     linkedProject: () => loadLinkedProject(docId),
+    linkedNodeIds: () => loadLinkedNodeIds(docId),
     qditPage: origin ? { origin } : undefined,
   });
 }
@@ -147,6 +150,22 @@ async function loadLinkedProject(docId: string): Promise<LinkedProject | null> {
     slug: String(data.project_slug),
     chain: isProjectChain(chain) ? chain : null,
   };
+}
+
+/**
+ * The note's headings linked to a qdit milestone, read only when history
+ * could not be (D-85): they choose which records to read and are never
+ * shown themselves.
+ */
+async function loadLinkedNodeIds(docId: string): Promise<string[]> {
+  if (!UUID.test(docId)) return [];
+  const { data, error } = await createSupabaseAdminClient()
+    .from("node_links")
+    .select("node_id")
+    .eq("document_id", docId)
+    .eq("provider", "qdit");
+  if (error) throw new Error(`node links unavailable: ${error.message}`);
+  return (data ?? []).map((row) => String(row.node_id));
 }
 
 /**
@@ -526,9 +545,15 @@ function Anchored({
               </p>
             )}
           </>
-        ) : (
+        ) : history ? (
           <p className="text-muted-foreground text-[14px]">
             No node statuses have been recorded for this document.
+          </p>
+        ) : (
+          // Not "none recorded": the statuses are in the history that could not be read.
+          <p data-testid="build-status-unread" className="text-muted-foreground text-[14px]">
+            Node statuses could not be read from Horizon right now. Each heading&apos;s current
+            status is still on the contract.
           </p>
         )}
       </section>

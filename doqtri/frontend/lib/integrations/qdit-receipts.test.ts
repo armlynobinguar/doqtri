@@ -153,7 +153,7 @@ describe("loadQditReceipts: off", () => {
     expect(simulate).toHaveBeenCalledTimes(1);
   });
 
-  it("returns null with no history, or no heading signed from qdit", async () => {
+  it("returns null with no history (and no linked headings to fall back on), or no heading signed from qdit", async () => {
     const d = deps();
     expect(await loadQditReceipts(DOC, null, d)).toBeNull();
     const h = setup([event("h0", "Built", "github:acme/app#4", 1, "github"), event("h2", "Verified", "children:h3", 2, "rollup")]);
@@ -399,6 +399,92 @@ describe("loadQditReceipts: the current record", () => {
     const [r] = (await loadQditReceipts(DOC, h, deps({ approvals: async () => Promise.reject(new Error("db down")) })))!.receipts;
     expect(r.check.state).toBe("confirmed");
     expect(r.approvalTxHash).toBeNull();
+  });
+});
+
+describe("loadQditReceipts: Horizon history unread (D-85)", () => {
+  const current = (status: string, artifactRef: string, tool = "qdit"): ChainNode => ({ status, tool, artifactRef, updatedAt: 7 });
+
+  it("reads the note's qdit-linked headings' records instead, and still shows the receipt", async () => {
+    nodes.set("h4", current("Verified", ref(M2, 2)));
+    const linkedNodeIds = vi.fn(async () => ["h4"]);
+    const d = deps({ linkedNodeIds });
+    const result = (await loadQditReceipts(DOC, null, d))!;
+    expect(result.historyUnread).toBe(true);
+    expect(result.more).toBe(0);
+    expect(result.receipts).toHaveLength(1);
+    const [r] = result.receipts;
+    expect(r).toMatchObject({
+      nodeId: "h4",
+      record: { status: "Verified", artifactRef: ref(M2, 2), updatedAt: 7 },
+      // No history, so no signing write to name.
+      signing: null,
+      check: { state: "confirmed", chain: { status: "Approved", version: 2 } },
+    });
+    expect(d.readNode).toHaveBeenCalledWith(DOC, "h4");
+    expect(linkedNodeIds).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks for the linked headings only when history could not be read", async () => {
+    const linkedNodeIds = vi.fn(async () => ["h4"]);
+    const h = setup([event("h1", "Verified", ref(M2, 2), 1)]);
+    const result = (await loadQditReceipts(DOC, h, deps({ linkedNodeIds })))!;
+    expect(linkedNodeIds).not.toHaveBeenCalled();
+    expect(result.historyUnread).toBeUndefined();
+    expect(result.receipts.map((r) => r.nodeId)).toEqual(["h1"]);
+  });
+
+  it("shows only records the chain holds with tool qdit: a link row is never evidence", async () => {
+    nodes.set("h1", current("Built", "github:acme/app#4", "github"));
+    nodes.set("h2", null);
+    nodes.set("h3", current("Verified", ref(M1, 1)));
+    const d = deps({ linkedNodeIds: async () => ["h3", "h1", "h2", "h3"] });
+    const result = (await loadQditReceipts(DOC, null, d))!;
+    expect(result.receipts.map((r) => r.nodeId)).toEqual(["h3"]);
+    // Nothing counts the link rows that did not lead to a receipt.
+    expect(result.more).toBe(0);
+    // Each id read once, in plan order.
+    expect(vi.mocked(d.readNode).mock.calls.map(([, id]) => id)).toEqual(["h1", "h2", "h3"]);
+  });
+
+  it("keeps the ref check against the note's linked project", async () => {
+    nodes.set("h4", current("Verified", ref(M2, 2)));
+    linked = null;
+    const [r] = (await loadQditReceipts(DOC, null, deps({ linkedNodeIds: async () => ["h4"] })))!.receipts;
+    expect(r.check).toEqual({ state: "differs", mismatch: "unlinked" });
+    expect(simulate).not.toHaveBeenCalled();
+  });
+
+  it("shows nothing for a heading whose record could not be read: no history to stand in", async () => {
+    nodes.set("h4", new Error("rpc down"));
+    expect(await loadQditReceipts(DOC, null, deps({ linkedNodeIds: async () => ["h4"] }))).toBeNull();
+  });
+
+  it("returns null when no linked heading holds a qdit record, the links could not be read, or there is no reader", async () => {
+    nodes.set("h1", current("Built", "github:acme/app#4", "github"));
+    expect(await loadQditReceipts(DOC, null, deps({ linkedNodeIds: async () => ["h1"] }))).toBeNull();
+    expect(await loadQditReceipts(DOC, null, deps({ linkedNodeIds: async () => [] }))).toBeNull();
+    const failing = deps({ linkedNodeIds: async () => Promise.reject(new Error("db down")) });
+    expect(await loadQditReceipts(DOC, null, failing)).toBeNull();
+    expect(failing.readNode).not.toHaveBeenCalled();
+    expect(await loadQditReceipts(DOC, null, deps())).toBeNull();
+  });
+
+  it("checks at most MAX_RECEIPTS linked headings, without counting the rest", async () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `h${i}`);
+    for (const id of ids) nodes.set(id, current("Verified", ref(M2, 2)));
+    const d = deps({ linkedNodeIds: async () => ids });
+    const result = (await loadQditReceipts(DOC, null, d))!;
+    expect(result.receipts).toHaveLength(10);
+    expect(result.more).toBe(0);
+    expect(d.readNode).toHaveBeenCalledTimes(10);
+    expect(result.receipts.at(-1)!.nodeId).toBe("h9");
+  });
+
+  it("is off with the integration", async () => {
+    const linkedNodeIds = vi.fn(async () => ["h4"]);
+    expect(await loadQditReceipts(DOC, null, deps({ enabled: false, linkedNodeIds }))).toBeNull();
+    expect(linkedNodeIds).not.toHaveBeenCalled();
   });
 });
 

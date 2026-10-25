@@ -28,6 +28,8 @@ const mocks = vi.hoisted(() => ({
   history: null as unknown,
   /** The note's doc_project_links row, or null. */
   projectLink: null as Record<string, string | null> | null,
+  /** The note's qdit node_links rows. */
+  nodeLinks: [] as { node_id: string }[],
 }));
 
 vi.mock("@/lib/stellar/contract-client", () => ({
@@ -78,7 +80,7 @@ function historyWith(nodes: ChainNodeEvent[]): DocumentHistory {
   };
 }
 
-/** A documents query (publish_headings off), the approvals query and the note's project link. */
+/** A documents query (publish_headings off), the approvals query, the note's project link and its qdit node links. */
 function table(name: string) {
   const rows = name === "qdit_milestone_approvals" ? [] : name === "doc_project_links" ? mocks.projectLink : null;
   const query = {
@@ -86,6 +88,9 @@ function table(name: string) {
     eq: () => query,
     in: async () => ({ data: rows, error: null }),
     maybeSingle: async () => ({ data: rows, error: null }),
+    // node_links is read as a list, by awaiting the query itself.
+    then: (resolve: (value: unknown) => void) =>
+      resolve({ data: name === "node_links" ? mocks.nodeLinks : rows, error: null }),
   };
   return query;
 }
@@ -102,6 +107,7 @@ beforeEach(() => {
   vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key");
   vi.stubEnv("QDIT_API_BASE_URL", "");
   mocks.projectLink = LINK_ROW;
+  mocks.nodeLinks = [{ node_id: "h2" }];
   mocks.history = historyWith([nodeEvent("h1", "github", "github:acme/app#4", 1), nodeEvent("h2", "qdit", REF, 2)]);
   mocks.readNode.mockReset().mockImplementation(async (_doc: string, nodeId: string) => {
     const e = (mocks.history as DocumentHistory).nodes.find((n) => n.nodeId === nodeId);
@@ -260,5 +266,62 @@ describe("/d/[docId]: the full proof chain (WP-3.3)", () => {
     const html = await render();
     expect(html).not.toContain("proof-chain");
     expect(html).not.toContain("Full proof chain");
+  });
+});
+
+describe("/d/[docId]: Horizon history unreadable (D-85)", () => {
+  /** h2's record is on chain; only the history read fails. */
+  function horizonDown() {
+    const onChain = historyWith([nodeEvent("h2", "qdit", REF, 2)]);
+    mocks.history = null;
+    mocks.readNode.mockImplementation(async (_doc: string, nodeId: string) => {
+      const e = onChain.nodes.find((n) => n.nodeId === nodeId);
+      return e ? { status: e.status, tool: e.tool, artifactRef: e.artifactRef, updatedAt: 1 } : null;
+    });
+  }
+
+  it("on: the receipt still shows, from get_node of the note's qdit-linked headings", async () => {
+    vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "1");
+    horizonDown();
+    const html = await render();
+    const section = html.match(RECEIPTS_SECTION)![0];
+    expect(section).toContain('data-testid="qdit-receipt"');
+    expect(section).toContain("Approved on chain");
+    expect(section).toContain('data-testid="receipts-history-unread"');
+    expect(section).toContain("Full proof chain: 3 of 4 steps done");
+    expect(mocks.readNode).toHaveBeenCalledWith(DOC, "h2");
+    expect(mocks.from.mock.calls.map(([name]) => name)).toContain("node_links");
+    // Build status does not claim nothing was recorded.
+    expect(html).toContain('data-testid="build-status-unread"');
+    expect(html).not.toContain("No node statuses have been recorded");
+    expect(html).not.toContain("soroban-payroll");
+  });
+
+  it("on: a linked heading whose record does not name qdit shows no receipt", async () => {
+    vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "1");
+    horizonDown();
+    mocks.nodeLinks = [{ node_id: "h1" }];
+    const html = await render();
+    expect(html).not.toContain('data-testid="qdit-receipts"');
+    expect(html).toContain('data-testid="build-status-unread"');
+  });
+
+  it("off: no link rows read, and Build status says history could not be read", async () => {
+    vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "");
+    horizonDown();
+    const html = await render();
+    expect(html).not.toContain('data-testid="qdit-receipts"');
+    expect(mocks.from.mock.calls.map(([name]) => name)).not.toContain("node_links");
+    expect(mocks.readNode).not.toHaveBeenCalled();
+    expect(html).toContain("Node statuses could not be read from Horizon right now.");
+    expect(html).not.toContain("No node statuses have been recorded");
+  });
+
+  it("with history read, an empty Build status still says none were recorded", async () => {
+    vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "");
+    mocks.history = historyWith([]);
+    const html = await render();
+    expect(html).toContain("No node statuses have been recorded for this document.");
+    expect(html).not.toContain("build-status-unread");
   });
 });

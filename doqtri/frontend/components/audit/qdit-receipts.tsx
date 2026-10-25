@@ -287,6 +287,12 @@ export function QditReceiptsSection({
         Headings signed from a qdit milestone, checked against qdit&apos;s milestone_proof contract on Stellar in the
         last 30 seconds. Nothing here is read from qdit itself.
       </p>
+      {receipts.historyUnread ? (
+        <p data-testid="receipts-history-unread" className="text-muted-foreground text-[12px]">
+          This note&apos;s history could not be read from Horizon just now, so other headings signed from qdit may not
+          be listed here, and signing transactions are not shown. Each record below is read from the contract itself.
+        </p>
+      ) : null}
       {receipts.receipts.length > 0 ? (
         <ul className="glass divide-y divide-[var(--glass-lo)] rounded-2xl text-[13px]">
           {receipts.receipts.map((receipt) => (
