@@ -97,15 +97,16 @@ export function AccountMenu({ className }: { className?: string }) {
         <span
           aria-hidden
           className={cn(
-            "size-1.5 rounded-full",
+            "size-1.5 shrink-0 rounded-full",
             connected ? "bg-success shadow-[0_0_6px_var(--success)]" : "bg-warning",
           )}
         />
-        <span className="font-mono">{shortenAddress(sessionAddress)}</span>
-        <span aria-hidden>·</span>
+        <span className="shrink-0 font-mono">{shortenAddress(sessionAddress)}</span>
+        <span aria-hidden className="shrink-0">·</span>
+        {/* Truncates rather than overflowing where space is tight (the phone drawer). */}
         <span
           data-testid="xlm-balance"
-          className={cn((low || unfunded || balanceError) && "text-warning")}
+          className={cn("min-w-0 truncate", (low || unfunded || balanceError) && "text-warning")}
         >
           {balanceLabel}
         </span>

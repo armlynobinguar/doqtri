@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { renderSVG } from "uqr";
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
 import { ProfileView, type ReferralSummary } from "@/components/vault/profile-view";
 import { referralUrl } from "@/lib/referral";
@@ -46,15 +47,15 @@ export default async function ProfilePage() {
 }
 
 /**
- * The user's referral link, creating their code on first visit, and how many
- * accounts signed up through it. Null (the section is hidden) if it can't be
+ * The user's referral code, link and a QR code of the link, creating the code
+ * on first visit, and how many accounts signed up through it. Null (the section is hidden) if it can't be
  * loaded, e.g. before the referrals migration is applied.
  */
 async function loadReferral(userId: string): Promise<ReferralSummary | null> {
   // Service role: userId comes from the verified session in the page above.
   const { data, error } = await createSupabaseAdminClient()
     .rpc("referral_code_for", { p_user_id: userId })
-    .single<{ code: string; referred: number }>();
+    .single<{ code: string; referred: number; via_link: number; via_qr: number; via_code: number }>();
   if (error || !data) {
     if (error) console.warn(`[profile] referral not loaded: ${error.message}`);
     return null;
@@ -62,7 +63,16 @@ async function loadReferral(userId: string): Promise<ReferralSummary | null> {
   const h = await headers();
   const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
   const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
-  return { url: referralUrl(`${proto}://${host}`, data.code), referred: data.referred };
+  const origin = `${proto}://${host}`;
+  return {
+    code: data.code,
+    url: referralUrl(origin, data.code),
+    // Tagged, so scans are told apart from opened links. Dark on light, with a
+    // quiet zone: what phone cameras read most reliably.
+    qrSvg: renderSVG(referralUrl(origin, data.code, "qr"), { border: 2 }),
+    referred: data.referred,
+    via: { link: data.via_link, qr: data.via_qr, code: data.via_code },
+  };
 }
 
 type ConnectionRow = {

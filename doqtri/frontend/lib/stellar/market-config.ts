@@ -8,7 +8,7 @@
  */
 import { Asset } from "@stellar/stellar-sdk";
 import { NETWORK_PASSPHRASE } from "@/lib/stellar/config";
-import { NETWORK } from "@/lib/stellar/smart-wallet-config";
+import { MAX_USER_FEE_STROOPS, NETWORK } from "@/lib/stellar/smart-wallet-config";
 
 export type MarketTokenCode = "XLM" | "USDC";
 
@@ -56,12 +56,16 @@ export function marketTokenByCode(code: string): MarketToken | null {
 }
 
 /**
- * The most a passkey user signs to pay for one market write: 1 XLM. A listing
- * creates a ~500-byte persistent entry and measured 0.47–0.54 XLM on testnet
- * (2026-10-13), above the 0.5 XLM cap registry writes use. Users are charged
+ * The most a passkey user signs to pay for one market write. Users are charged
  * the actual cost, never more than this.
+ *
+ * 1 XLM where registry writes are capped at 0.5: a listing creates a ~500-byte
+ * persistent entry and measured 0.47–0.54 XLM on testnet (2026-10-13). Where
+ * the registry cap is raised for testnet rent (see MAX_USER_FEE_STROOPS), the
+ * same cap applies here.
  */
-export const MAX_MARKET_FEE_STROOPS = BigInt(10_000_000);
+export const MAX_MARKET_FEE_STROOPS =
+  MAX_USER_FEE_STROOPS > BigInt(10_000_000) ? MAX_USER_FEE_STROOPS : BigInt(10_000_000);
 
 /** Paid templates (phase 2). One switch for the publish form, the API and the gallery. */
 export const PAID_TEMPLATES_ENABLED = true;

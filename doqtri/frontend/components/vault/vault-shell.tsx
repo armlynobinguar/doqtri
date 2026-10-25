@@ -121,13 +121,15 @@ function VaultShellInner({
 
   // The shell lives in the layout, so the active note comes from the URL
   // rather than from props. `/vault/mindmap`, `/vault/graph` and
-  // `/vault/templates` are vault-wide views, not notes.
+  // `/vault/templates` are vault-wide views, not notes; `/vault/profile` and
+  // `/vault/earnings` are account pages, not notes either.
   const segment = pathname.startsWith("/vault/")
     ? pathname.split("/")[2] || undefined
     : undefined;
   const routeAction: RibbonAction | undefined =
     segment === "mindmap" || segment === "graph" || segment === "templates" ? segment : undefined;
-  const activeId = routeAction ? undefined : segment;
+  const accountPage = segment === "profile" || segment === "earnings";
+  const activeId = routeAction || accountPage ? undefined : segment;
 
   // What the mobile top bar calls the current pane. The desktop layout has no
   // equivalent: there the explorer's highlight and the tab strip say it.
@@ -138,8 +140,10 @@ function VaultShellInner({
         ? "Global mindmap"
         : routeAction === "templates"
           ? "Templates"
-          : // With no note open, the phone says which workspace it is showing.
-            (notes.find((note) => note.id === activeId)?.title ?? workspace.name);
+          : segment === "profile"
+            ? "Profile"
+            : // With no note open, the phone says which workspace it is showing.
+              (notes.find((note) => note.id === activeId)?.title ?? workspace.name);
 
   // Blank by default; a template seeds the title and body instead. Into the
   // workspace on screen, named explicitly so a switch in another tab cannot
@@ -320,6 +324,7 @@ function VaultShellInner({
         creating={creating}
         canCreate={canCreate}
         onNewNote={() => void handleNewNote()}
+        profileActive={segment === "profile"}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -390,14 +395,11 @@ function VaultShellInner({
         >
           <SheetTitle className="sr-only">Notes</SheetTitle>
           <div className="min-h-0 flex-1">{explorer}</div>
-          <div className="bg-sidebar border-border flex h-12 shrink-0 items-center justify-between gap-2 border-t px-3 text-[12px]">
-            <span className="text-label tabular-nums">
-              {notes.length} {notes.length === 1 ? "note" : "notes"}
-            </span>
-            <div className="flex items-center gap-1">
-              <AccountMenu className="text-sidebar-foreground h-9 text-[12px]" />
-              <LogOutButton className="h-9 text-[12px] [&_svg]:size-3.5" />
-            </div>
+          {/* The wallet and sign-out. The note count is in the Notes header
+              above, and the profile has its own button in the top bar. */}
+          <div className="bg-sidebar border-border flex h-12 shrink-0 items-center justify-between gap-2 border-t px-3 text-[12px] whitespace-nowrap">
+            <AccountMenu className="text-sidebar-foreground h-9 min-w-0 text-[12px]" />
+            <LogOutButton className="h-9 shrink-0 text-[12px] [&_svg]:size-3.5" />
           </div>
         </SheetContent>
       </Sheet>

@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   CheckIcon,
   CopyIcon,
+  DownloadIcon,
   DropletIcon,
   ExternalLinkIcon,
   GiftIcon,
@@ -136,8 +137,15 @@ async function loadOnChainSince(address: string, createdTx: string | null): Prom
   return first ? { hash: first.transaction_hash, at: first.created_at } : null;
 }
 
-/** The user's referral link and how many accounts signed up through it. */
-export type ReferralSummary = { url: string; referred: number };
+/** The user's referral code, its link and QR code, and how many accounts signed up through each. */
+export type ReferralSummary = {
+  code: string;
+  url: string;
+  /** SVG markup of a QR code for the link. */
+  qrSvg: string;
+  referred: number;
+  via: { link: number; qr: number; code: number };
+};
 
 const PROFILE_TABS = ["account", "wallet", "preferences", "apps", "invite"] as const;
 type ProfileTab = (typeof PROFILE_TABS)[number];
@@ -176,6 +184,7 @@ export function ProfileView({
   const [passkeysOpen, setPasskeysOpen] = useState(false);
   const [onChainSince, setOnChainSince] = useState<{ hash: string; at: string } | null | undefined>(undefined);
   const [prefs, setPreference] = usePreferences();
+  const qrDataUrl = referral ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(referral.qrSvg)}` : "";
   const [savedAt, setSavedAt] = useState(0);
 
   // The tab lives in the URL (`?tab=`), so other screens can link to it.
@@ -488,10 +497,10 @@ export function ProfileView({
             </Section>
             {MARKET_CONTRACT_ID ? (
               <Button
-                type="button"
                 size="sm"
                 variant="outline"
                 className="self-start"
+                nativeButton={false}
                 render={<Link href="/vault/templates?tab=yours" />}
               >
                 <StoreIcon />
@@ -736,7 +745,8 @@ export function ProfileView({
         {tab === "invite" && referral ? (
           <Section title="Invite friends" icon={GiftIcon}>
             <p className="text-muted-foreground text-[13px]">
-              Share your link. Anyone who opens it and then creates an account is counted as your referral.
+              Share your link, let someone scan your QR code, or give them your code to enter when they sign up.
+              Anyone who then creates an account is counted as your referral.
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <span
@@ -751,10 +761,54 @@ export function ProfileView({
                 Copy link
               </Button>
             </div>
+            <Row label="Code">
+              <span className="flex items-center gap-2">
+                <span className="font-mono tracking-wider" data-testid="referral-code">
+                  {referral.code}
+                </span>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label="Copy referral code"
+                  onClick={() => void copy(referral.code, "Referral code")}
+                >
+                  <CopyIcon />
+                </Button>
+              </span>
+            </Row>
+            <Row label="QR code">
+              <span className="flex flex-wrap items-end gap-3">
+                {/* Always dark on white, in either theme: cameras need the contrast. */}
+                {/* eslint-disable-next-line @next/next/no-img-element -- an inline SVG data URL, nothing to optimize */}
+                <img
+                  src={qrDataUrl}
+                  alt={`QR code for ${referral.url}`}
+                  width={136}
+                  height={136}
+                  className="rounded-lg bg-white"
+                  data-testid="referral-qr"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  nativeButton={false}
+                  render={<a href={qrDataUrl} download={`doqtri-invite-${referral.code}.svg`} />}
+                >
+                  <DownloadIcon />
+                  Download
+                </Button>
+              </span>
+            </Row>
             <Row label="Signed up">
               <span data-testid="referral-count">
                 {referral.referred === 1 ? "1 person" : `${referral.referred} people`}
               </span>
+              {referral.referred > 0 ? (
+                <span className="text-muted-foreground mt-1 block text-[12px]" data-testid="referral-sources">
+                  {referral.via.link} by link · {referral.via.qr} by QR code · {referral.via.code} by code
+                </span>
+              ) : null}
             </Row>
           </Section>
         ) : null}

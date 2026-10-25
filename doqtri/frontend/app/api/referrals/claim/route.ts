@@ -31,6 +31,7 @@ export async function POST(request: NextRequest) {
       p_user_id: user.id,
       p_code: referral.code,
       p_clicked_at: new Date(referral.openedAt).toISOString(),
+      p_source: referral.source,
     });
     if (error) {
       // Keep the cookie so the next visit can try again.

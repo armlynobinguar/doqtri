@@ -116,4 +116,21 @@ test.describe("mobile vault", () => {
     await page.waitForURL("**/vault/mindmap");
     await expectNoHorizontalScroll(page);
   });
+
+  test("the top bar's profile button opens the profile", async ({ page }) => {
+    await page.goto("/vault");
+    const profile = page.getByRole("link", { name: "Profile & wallet" });
+    await expect(profile).toBeVisible();
+
+    await expect(async () => {
+      await profile.tap();
+      await page.waitForURL("**/vault/profile", { timeout: 2_000 });
+    }).toPass();
+    await expect(page.getByRole("heading", { name: "Profile", exact: true })).toBeVisible();
+    await expect(profile).toHaveAttribute("aria-current", "page");
+    // An account page, not a note: no tab is current.
+    const tabs = page.getByRole("navigation", { name: "Primary" });
+    await expect(tabs.locator('[aria-current="page"]')).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+  });
 });
