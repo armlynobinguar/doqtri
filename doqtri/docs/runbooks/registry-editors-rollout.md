@@ -72,6 +72,41 @@ admin hide; the contract listing stays and buyers still copy what they
 bought), and drafts never confirmed on chain (`pending`) are deleted. It
 redefines the deletion trigger only; apply it with `20261026100000`.
 
+Known limits of an account deletion, until the delete-account route exists
+(D-90, D-91; today an operator deletes in the Supabase dashboard):
+
+- **Hard delete only.** Delete the user in the dashboard, or with
+  `auth.admin.deleteUser(id)` without soft delete. A soft delete keeps the
+  `auth.users` row, so no trigger or cascade runs and none of D-63's
+  anonymisation happens.
+- **qdit first.** The deletion drops doqtri's qdit connection and tokens, but
+  the user's grant on qdit's side stays until that account revokes it
+  (contract section 2). Before deleting, have the user press Disconnect
+  under Connected apps (best effort on qdit's side, D-65), or tell them to
+  revoke Doqtri under Authorized apps in qdit. The future route calls the
+  Disconnect itself before deleting (D-90).
+- **Storage is not touched by SQL** (D-91). The private `uploads` bucket keeps
+  every object under `<user uuid>/`: the originals of kept notes (their
+  `ingests` row stays, detached, so the note route can still purge the
+  original if the note is deleted later) and the uploads of failed or
+  pending imports, whose `ingests` row went with the account, so nothing in
+  the database points to them any more. For a deletion on the user's
+  request, remove the objects under `<user uuid>/` that no remaining
+  `ingests.object_path` names, and keep the rest:
+
+  ```sql
+  -- the account's leftover uploads (run before or after the deletion)
+  select o.name
+    from storage.objects o
+   where o.bucket_id = 'uploads'
+     and o.name like '<user uuid>/%'
+     and not exists (select 1 from public.ingests i where i.object_path = o.name);
+  ```
+
+  Delete those through the Storage API (dashboard or `storage.from('uploads')
+  .remove([...])`), not with SQL on `storage.objects`, which would leave the
+  files behind. The future delete route does this purge itself (D-91).
+
 ## 1. Dry-run on a Supabase branch
 
 Never on production first.

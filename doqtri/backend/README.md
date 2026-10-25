@@ -163,7 +163,10 @@ Two supporting tables:
   (`pending`) are deleted (D-89,
   `20261026120000_account_deletion_market_templates.sql`). The app shows "Former
   user" where it would name the account (`lib/former-user.ts`). It still
-  refuses the last owner of a team workspace with no admin (D-31).
+  refuses the last owner of a team workspace with no admin (D-31). SQL does
+  not remove the account's uploads in Storage or its grant in qdit, and a
+  soft delete runs none of this: see the known limits in
+  `docs/runbooks/registry-editors-rollout.md` (D-90, D-91).
 - `public.workspace_member_removals` — when each member lost the right to
   sign in a workspace (removed, left, account deleted, or demoted to viewer),
   with the wallet addresses they had then, and when they got it back. Written
