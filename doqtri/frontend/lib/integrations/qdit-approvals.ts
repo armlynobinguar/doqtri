@@ -25,7 +25,14 @@ import { scanRegistryEvents, type EventSource, type LedgerEvent } from "@/lib/st
  * lookups stop once that is GIVE_UP_AFTER_MS old: the approval already
  * existed then, so its event has left RPC's window. Until then a missed
  * approval is scanned for at most once per RESCAN_AFTER_MS, however often
- * it is seen. The receipt then falls back to the contract's page.
+ * it is seen. A scan that ran out of its page budget before covering the
+ * window is not a miss (the event may still be there), so it never starts
+ * that clock, but it is throttled the same way
+ * (qdit_milestone_approval_incomplete_scans,
+ * 20261026110000_qdit_approval_incomplete_scans.sql): otherwise a
+ * milestone whose scans always run out, behind an RPC that caps the ledger
+ * range per request, would be scanned on every sighting for good. The
+ * receipt then falls back to the contract's page.
  *
  * The ship panel's re-check hands its approvals over through
  * deferredRecorder, so the scans run after its answer is sent (next/server
@@ -104,6 +111,14 @@ export function approvalFromEvents(
   return found;
 }
 
+/** The scan ran out of its page budget before covering RPC's window: not a miss. */
+export class IncompleteScanError extends Error {
+  constructor() {
+    super("The event scan ran out of its budget before covering RPC's window.");
+    this.name = "IncompleteScanError";
+  }
+}
+
 export type FindApprovalDeps = {
   /** The RPC to scan; defaults to the network's (qditChainRpcUrl). */
   events?: (network: QditChainNetwork) => EventSource;
@@ -114,8 +129,9 @@ export type FindApprovalDeps = {
  * Looks the approval of `key` up in RPC's event window. Null only when the
  * scan covered the whole window and it is not there (older than the
  * window). Throws when RPC could not be read, did not answer in time, or
- * the scan's page budget ran out before the window was covered: the event
- * may still be there, so that is not a miss.
+ * the scan's page budget ran out before the window was covered
+ * (IncompleteScanError): the event may still be there, so that is not a
+ * miss.
  */
 export async function findApprovalTx(key: ApprovalKey, deps: FindApprovalDeps = {}): Promise<ApprovalTx | null> {
   const source = deps.events?.(key.network) ?? new rpc.Server(qditChainRpcUrl(key.network));
@@ -132,7 +148,7 @@ export async function findApprovalTx(key: ApprovalKey, deps: FindApprovalDeps = 
       }),
     ]);
     const found = approvalFromEvents(events, key);
-    if (!found && !complete) throw new Error("The event scan ran out of its budget before covering RPC's window.");
+    if (!found && !complete) throw new IncompleteScanError();
     return found;
   } finally {
     clearTimeout(timer);
@@ -162,6 +178,10 @@ export type ApprovalStore = {
   miss(key: ApprovalKey): Promise<{ firstAt: number; lastAt: number } | null>;
   /** Records an empty lookup now: the first miss stands, the last attempt moves (`seen`: a miss is on record already). */
   recordMiss(key: ApprovalKey, seen: boolean): Promise<void>;
+  /** When a lookup of `key` last ran out of its page budget (epoch ms), or null when none has. */
+  incomplete(key: ApprovalKey): Promise<number | null>;
+  /** Records an incomplete lookup now (`seen`: one is on record already). Never a miss. */
+  recordIncomplete(key: ApprovalKey, seen: boolean): Promise<void>;
   /** The recorded approvals of these milestones, any version. */
   forMilestones(milestoneIds: string[]): Promise<ApprovalRow[]>;
 };
@@ -170,6 +190,7 @@ export type ApprovalStore = {
 export function supabaseApprovalStore(admin: SupabaseClient): ApprovalStore {
   const table = () => admin.from("qdit_milestone_approvals");
   const misses = () => admin.from("qdit_milestone_approval_misses");
+  const incompletes = () => admin.from("qdit_milestone_approval_incomplete_scans");
   const columns = (key: ApprovalKey) => ({
     network: key.network,
     contract_id: key.contractId,
@@ -202,6 +223,19 @@ export function supabaseApprovalStore(admin: SupabaseClient): ApprovalStore {
         : await misses().upsert(columns(key), ON_KEY);
       if (error) throw new Error(`Could not record the approval's lookup: ${error.message}`);
     },
+    async incomplete(key) {
+      const { data, error } = await incompletes().select("last_attempt_at").match(columns(key)).maybeSingle();
+      if (error) throw new Error(`Could not read the approval's incomplete lookups: ${error.message}`);
+      const at = data ? Date.parse(String(data.last_attempt_at)) : NaN;
+      return Number.isFinite(at) ? at : null;
+    },
+    async recordIncomplete(key, seen) {
+      // As for misses: the service role may update last_attempt_at and nothing else.
+      const { error } = seen
+        ? await incompletes().update({ last_attempt_at: new Date().toISOString() }).match(columns(key))
+        : await incompletes().upsert(columns(key), ON_KEY);
+      if (error) throw new Error(`Could not record the approval's incomplete lookup: ${error.message}`);
+    },
     async forMilestones(milestoneIds) {
       if (milestoneIds.length === 0) return [];
       const { data, error } = await table()
@@ -219,11 +253,12 @@ export function supabaseApprovalStore(admin: SupabaseClient): ApprovalStore {
 
 /**
  * Records the approval of `key` unless it already is, has been missed for
- * longer than RPC keeps events, or was missed within the last
- * RESCAN_AFTER_MS: what the webhook and the re-check call whenever the
- * chain says Approved. A recorded or recently missed approval costs one or
- * two indexed reads. Never throws; a failure only means the receipt links
- * to the contract instead, until a later sighting finds it.
+ * longer than RPC keeps events, or was missed or scanned incompletely
+ * within the last RESCAN_AFTER_MS: what the webhook and the re-check call
+ * whenever the chain says Approved. A recorded or recently looked-up
+ * approval costs one to three indexed reads. Never throws; a failure only
+ * means the receipt links to the contract instead, until a later sighting
+ * finds it.
  */
 export type RecordApproval = (key: ApprovalKey) => Promise<void>;
 
@@ -235,10 +270,18 @@ export function approvalRecorder(
   return async (key) => {
     try {
       if (await store.has(key)) return;
-      const missed = await store.miss(key);
+      const [missed, incompleteAt] = await Promise.all([store.miss(key), store.incomplete(key)]);
       if (missed && (now() - missed.firstAt > GIVE_UP_AFTER_MS || now() - missed.lastAt < RESCAN_AFTER_MS)) return;
+      if (incompleteAt !== null && now() - incompleteAt < RESCAN_AFTER_MS) return;
       // A failed lookup throws past this, so only a real "not there" counts as a miss.
-      const tx = await find(key);
+      let tx: ApprovalTx | null;
+      try {
+        tx = await find(key);
+      } catch (error) {
+        // Throttled like a miss, without starting the give-up clock.
+        if (error instanceof IncompleteScanError) await store.recordIncomplete(key, incompleteAt !== null);
+        throw error;
+      }
       if (tx) await store.record(key, tx);
       else await store.recordMiss(key, missed !== null);
     } catch (error) {

@@ -450,6 +450,8 @@ describe("recheckDocStatuses (R-09)", () => {
       record: async (k, tx) => void approvals.set(keyOf(k), tx),
       miss: async () => null,
       recordMiss: async () => {},
+      incomplete: async () => null,
+      recordIncomplete: async () => {},
       forMilestones: async () => [],
     };
     const TX = "5e1f0c3a9b7d2e4f6a8c0b1d3e5f7a9c2b4d6e8f0a1c3e5b7d9f1a3c5e7b9d0f";
@@ -486,6 +488,8 @@ describe("recheckDocStatuses (R-09)", () => {
       record: async () => {},
       miss: async () => null,
       recordMiss: async () => {},
+      incomplete: async () => null,
+      recordIncomplete: async () => {},
       forMilestones: async () => [],
     };
     const deferred: Array<() => Promise<void>> = [];

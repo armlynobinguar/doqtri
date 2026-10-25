@@ -7,6 +7,7 @@ import {
   deferredRecorder,
   findApprovalTx,
   GIVE_UP_AFTER_MS,
+  IncompleteScanError,
   RESCAN_AFTER_MS,
   supabaseApprovalStore,
   type ApprovalKey,
@@ -152,6 +153,8 @@ describe("findApprovalTx", () => {
   it("throws, rather than answering not there, when the budget runs out before the window is covered", async () => {
     const rpc = busy();
     await expect(findApprovalTx(KEY, { events: () => rpc })).rejects.toThrow(/budget/);
+    // Its own error, so the recorder throttles it without counting a miss.
+    await expect(findApprovalTx(KEY, { events: () => busy() })).rejects.toBeInstanceOf(IncompleteScanError);
     expect(rpc.getEvents.mock.calls.length).toBeLessThanOrEqual(4);
   });
 
@@ -173,13 +176,31 @@ describe("approvalRecorder", () => {
   function store(
     has = false,
     miss: { firstAt: number; lastAt: number } | null = null,
-  ): ApprovalStore & { record: ReturnType<typeof vi.fn>; recordMiss: ReturnType<typeof vi.fn> } {
+    incompleteAt: number | null = null,
+  ): ApprovalStore & {
+    record: ReturnType<typeof vi.fn>;
+    recordMiss: ReturnType<typeof vi.fn>;
+    recordIncomplete: ReturnType<typeof vi.fn>;
+  } {
     return {
       has: vi.fn(async () => has),
       record: vi.fn(async () => {}),
       miss: vi.fn(async () => miss),
       recordMiss: vi.fn(async () => {}),
+      incomplete: vi.fn(async () => incompleteAt),
+      recordIncomplete: vi.fn(async () => {}),
       forMilestones: async () => [],
+    };
+  }
+
+  /** An RPC that returns one ledger per page, so a scan always runs out of budget. */
+  function rangeCapped(): EventSource & { getEvents: ReturnType<typeof vi.fn> } {
+    return {
+      getHealth: async () => ({ oldestLedger: 1, latestLedger: 100_000 }),
+      getEvents: vi.fn(async (request) => {
+        const ledger = (request as { startLedger?: number }).startLedger ?? 11;
+        return { events: [event("m2_submit_v2", TX_B, ledger)], cursor: `${(BigInt(ledger) << BigInt(32)).toString()}-0` };
+      }),
     };
   }
 
@@ -258,6 +279,60 @@ describe("approvalRecorder", () => {
     await approvalRecorder(s, (key) => findApprovalTx(key, { events: () => exhausted }))(KEY);
     expect(s.recordMiss).not.toHaveBeenCalled();
     expect(s.record).not.toHaveBeenCalled();
+    // It is recorded as incomplete instead: throttled, but no give-up clock.
+    expect(s.recordIncomplete).toHaveBeenCalledWith(KEY, false);
+    quiet.mockRestore();
+  });
+
+  it("throttles incomplete scans: a second sighting within the hour does not scan again", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    let NOW = 1_800_000_000_000;
+    // A store that keeps what the recorder writes, as the table would.
+    let incompleteAt: number | null = null;
+    const s = store();
+    s.incomplete = vi.fn(async () => incompleteAt);
+    s.recordIncomplete = vi.fn(async () => void (incompleteAt = NOW));
+    const rpc = rangeCapped();
+    const record = approvalRecorder(s, (key) => findApprovalTx(key, { events: () => rpc }), () => NOW);
+
+    await record(KEY);
+    const scanned = rpc.getEvents.mock.calls.length;
+    expect(scanned).toBeGreaterThan(0);
+    expect(scanned).toBeLessThanOrEqual(4);
+    expect(s.recordIncomplete).toHaveBeenCalledWith(KEY, false);
+
+    // Two more sightings within the hour: no scan at all.
+    NOW += 15_000;
+    await record(KEY);
+    NOW += RESCAN_AFTER_MS - 15_001;
+    await record(KEY);
+    expect(rpc.getEvents).toHaveBeenCalledTimes(scanned);
+
+    // An hour on, it scans again and moves the last attempt only.
+    NOW += 1;
+    await record(KEY);
+    expect(rpc.getEvents.mock.calls.length).toBeGreaterThan(scanned);
+    expect(s.recordIncomplete).toHaveBeenLastCalledWith(KEY, true);
+    // Never a miss: the 8-day give-up clock has not started.
+    expect(s.recordMiss).not.toHaveBeenCalled();
+    quiet.mockRestore();
+  });
+
+  it("an incomplete scan on record does not stop a later complete scan from recording the approval", async () => {
+    const NOW = 1_800_000_000_000;
+    const s = store(false, null, NOW - RESCAN_AFTER_MS);
+    await approvalRecorder(s, async () => ({ txHash: TX_A, ledger: 120 }), () => NOW)(KEY);
+    expect(s.record).toHaveBeenCalledWith(KEY, { txHash: TX_A, ledger: 120 });
+    expect(s.recordIncomplete).not.toHaveBeenCalled();
+  });
+
+  it("a lookup that fails outright records no incomplete scan either", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    const s = store();
+    await approvalRecorder(s, async () => {
+      throw new Error("Stellar RPC did not answer in time.");
+    })(KEY);
+    expect(s.recordIncomplete).not.toHaveBeenCalled();
     quiet.mockRestore();
   });
 
@@ -334,6 +409,22 @@ describe("supabaseApprovalStore: misses", () => {
       lastAt: Date.parse("2026-10-02T00:00:00Z"),
     });
     expect(await supabaseApprovalStore(fakeAdmin(null).admin).miss(KEY)).toBeNull();
+  });
+
+  it("reads the last incomplete scan, and records one without touching the misses", async () => {
+    const { admin, calls } = fakeAdmin({ last_attempt_at: "2026-10-26T10:00:00Z" });
+    const s = supabaseApprovalStore(admin);
+    expect(await s.incomplete(KEY)).toBe(Date.parse("2026-10-26T10:00:00Z"));
+    expect(await supabaseApprovalStore(fakeAdmin(null).admin).incomplete(KEY)).toBeNull();
+    await s.recordIncomplete(KEY, false);
+    await s.recordIncomplete(KEY, true);
+    expect(calls.map((c) => [c.op, c.table])).toEqual([
+      ["upsert", "qdit_milestone_approval_incomplete_scans"],
+      ["update", "qdit_milestone_approval_incomplete_scans"],
+    ]);
+    expect(calls[0].values).not.toHaveProperty("last_attempt_at");
+    expect(Object.keys(calls[1].values as object)).toEqual(["last_attempt_at"]);
+    expect(calls[1].match).toMatchObject({ milestone_id: KEY.milestoneId, version: KEY.version });
   });
 
   it("inserts the first miss, and afterwards moves only last_attempt_at", async () => {
