@@ -326,10 +326,11 @@ insert into public.market_purchases (network, template_id, buyer_id, buyer_walle
 select lives_ok(
   $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c7' $$,
   'an account with a template it published and one it bought deletes itself (D-63)');
-select results_eq(
-  $$ select id, creator_id, creator_wallet, status from public.market_templates where id = 'bbbbbbbbbbbbbbbb' $$,
-  $$ values ('bbbbbbbbbbbbbbbb'::text, null::uuid, 'G' || repeat('M', 55), 'pending'::text) $$,
-  'its template stays as it was, credited to its wallet only');
+-- A draft never confirmed on chain goes with the account (D-89,
+-- 20261026120000); listed templates are covered in
+-- account_deletion_market_templates.test.sql.
+select is((select count(*)::int from public.market_templates where id = 'bbbbbbbbbbbbbbbb'),
+  0, 'its draft template, never confirmed on chain, is deleted');
 select results_eq(
   $$ select template_id, buyer_id, buyer_wallet from public.market_purchases where template_id = 'aaaaaaaaaaaaaaaa' $$,
   $$ values ('aaaaaaaaaaaaaaaa'::text, null::uuid, 'G' || repeat('M', 55)) $$,

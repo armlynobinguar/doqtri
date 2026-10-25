@@ -44,6 +44,7 @@ Migrations to apply, in order (none is applied to the remote project yet):
 20261025130000_chain_jobs_claim_token.sql
 20261026100000_account_deletion_anonymises.sql
 20261026100001_signer_removals_owner_handover.sql
+20261026120000_account_deletion_market_templates.sql
 ```
 
 `20261025130000` (WP-1.10) amends the chain job queue of `20261024150500`
@@ -65,6 +66,11 @@ deleting an account in the Supabase dashboard no longer fails for anchored
 notes or templates, so check what an account holds before deleting it for
 any other reason than the user's request. `20261026100001` gives an owner's
 removal the handover's time as `revoked_at` (no shape change).
+`20261026120000` (WP-1.12, D-89) narrows what stays of the account's
+templates: free ones stay listed, paid ones are hidden from the gallery (the
+admin hide; the contract listing stays and buyers still copy what they
+bought), and drafts never confirmed on chain (`pending`) are deleted. It
+redefines the deletion trigger only; apply it with `20261026100000`.
 
 ## 1. Dry-run on a Supabase branch
 
