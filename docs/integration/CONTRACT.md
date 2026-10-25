@@ -1,6 +1,6 @@
 # doqtri x qdit integration contract
 
-Status: v1.1.1, WP-2.0 (history in section 13, Changelog). This file is
+Status: v1.1.2, WP-2.0 (history in section 13, Changelog). This file is
 byte-identical in both repos (`qdit/docs/integration/CONTRACT.md`,
 `doqtri/docs/integration/CONTRACT.md`).
 Change it in both repos in the same phase, through the masterplan's decision
@@ -58,12 +58,16 @@ sides of one pair MUST agree on them:
   Unset, nothing counts as a doqtri connection, and qdit logs a `WARNING`
   saying so. The column, `integration_settings.doqtri_oauth_client_id`,
   stays a `uuid` (D-77), and qdit's `/api/v1` refuses a token whose
-  `client_id` is not a UUID (section 5).
-- doqtri origin in qdit's database (D-77). `public_milestone_proof()`
-  (section 12) runs in SQL and cannot read qdit's env, so the operator also
-  stores the origin once per environment in
+  `client_id` is not a UUID (section 5). On PostgREST writes,
+  `oauth_token_revoked()` treats such a token as revoked, so the D-75
+  guards fail closed for it too (D-96).
+- doqtri origin in qdit's database (D-77, D-95). SQL cannot read qdit's
+  env, so the operator also stores the origin once per environment in
   `integration_settings.doqtri_origin`, the same value as `DOQTRI_ORIGIN`.
-  Unset, the function returns no doc URL.
+  `link_project_doc()` uses it for a database-side copy of the D-72
+  `doc_url` check (section 8). `public_milestone_proof()` no longer returns
+  any doc URL (section 12). qdit warns when `DOQTRI_ORIGIN` and
+  `doqtri_origin` differ, an unset `doqtri_origin` included.
 - Client authentication (D-67). doqtri is registered with
   `token_endpoint_auth_method` = `client_secret_basic`: every call to
   `<issuer>/oauth/token` carries HTTP Basic credentials per RFC 6749
@@ -150,7 +154,8 @@ Rules that follow from the decisions:
   `create_linked_milestone()` and any later one), because RLS does not run
   inside those. So after a revoke the token cannot write through PostgREST,
   tables or RPCs; PostgREST reads keep the window in section 5's known
-  limit.
+  limit. A token whose `client_id` is not a UUID counts as revoked there
+  (D-96).
 - Within that, the caller's qdit project role decides (D-23): admins and
   owners link and unlink docs, members and above create and rename milestones
   and write links, viewers only read. Section 8 lists the role per endpoint.
@@ -250,6 +255,9 @@ it; doqtri's normal refresh-once handles that.
   inside those functions, so without that check a revoked token could still
   call them through `/rest/v1/rpc` until its `exp`. A revoked token's writes
   straight against PostgREST, tables or RPCs, are refused at once (D-75).
+  `oauth_token_revoked()` treats a `client_id` that is not a UUID as
+  revoked, so such a token is refused on those writes as well as at
+  `/api/v1` (D-96).
   Its reads are not: a revoked
   app's current access token may still read what the D-03 guards allow
   through qdit's PostgREST until its `exp` (Supabase's JWT expiry, 1 hour
@@ -283,9 +291,11 @@ whole `integration_connections` row (the qdit `subject` and
 `account_label`, the previous account's ones, scopes and tokens), not only
 the tokens, because the anonymised account is not removed from `auth.users`
 and so no cascade fires. The doc and milestone links stay with the doc, as on
-an account switch (D-66, D-82). Where a page shows that user as a signer, the
-wallet address stays (it is the on-chain identity) and any name shown for it
-reads "Former user".
+an account switch (D-66, D-82). As on Disconnect (D-65), doqtri calls qdit's
+`revocation_endpoint` if one is advertised; otherwise the grant stays in
+qdit until that qdit account revokes it in Authorized apps (D-93). Where a page
+shows that user as a signer, the wallet address stays (it is the on-chain
+identity) and any name shown for it reads "Former user".
 
 ## 6. Errors
 
@@ -505,6 +515,13 @@ Any refused value is `400 invalid_request` with `doc_url` in
 `details.fields`.
 Response: `{"data": DocLink}`. 409 reasons: `doc_linked_elsewhere` (the doc
 is linked to another project; unlink it there first).
+
+`link_project_doc()` repeats the same strict check in the database against
+`integration_settings.doqtri_origin` (section 1, D-95), so a `doc_url` off
+that origin is refused even if `DOQTRI_ORIGIN` has drifted; through
+`/api/v1` that is the same `400 invalid_request`. While `doqtri_origin` is
+unset the database check does not run, the API's check still does, and
+qdit warns that the two differ.
 
 ### DELETE /api/v1/projects/{id}/docs/{doc_id}
 
@@ -893,16 +910,22 @@ the state in these words, next to any icon and never by colour alone:
 | --- | --- | --- |
 | done | "Done" | the chain says it happened |
 | pending | "Pending" | the chain says it has not happened yet |
-| could not check | "Could not check" | a read failed or is not configured; never a pass |
+| could not check | "Could not check" | a read failed or is not configured; never a pass, and never a read the page chose not to make (D-93) |
 | does not match | "Does not match" | the records contradict each other (the inconsistent cases above, or a node-evidence mismatch below); the step says how |
 
 Step 3 (Approved) is keyed on the milestone's current on-chain record on both
 pages: it is "Done" when that record is `Approved`, and "Pending" while it is
 `Submitted` or `Rejected` (the step then says it was rejected). When the
-heading's `@vV` is older than the current record's `version`, the step adds
-a note that the heading was signed for `vV`, an older version of the
-milestone. That note does not change step 3's state; step 4 still needs
-fact 3 at the heading's own `V` (above).
+heading's `@vV` differs from the current record's `version`, older or newer,
+the step adds a note that the heading was signed for `vV`, another version
+of the milestone (D-93). That note does not change step 3's state; step 4
+still needs fact 3 at the heading's own `V` (above).
+
+A page that holds its own record of the decision (qdit, in its
+`milestone_anchors`) MAY show "Does not match" on step 3 when that record
+contradicts the current on-chain record, and says how. It checks against a
+fresh read of the chain, not a cached one, before it does (D-97). The other
+page (doqtri) shows the chain state as above (D-93).
 
 ### qdit's "Planned in doqtri" block (D-04, D-11)
 
@@ -966,7 +989,10 @@ doqtri's public doc page shows a receipt for each heading whose current
   With no linked project (never linked, unlinked, or doqtri's side dropped
   under D-68), no stored chain, or a ref that names another project, network
   or contract, the receipt shows the unverified state and doqtri does not
-  read the contract the ref names. This is stricter than the comparing rule
+  read the contract the ref names, nor link it (D-94). Not reading it is a
+  decision, not a failure: steps 1 to 3 show "Does not match", not "Could
+  not check", which stays reserved for a read that failed or is not
+  configured (D-93). This is stricter than the comparing rule
   above, which needs the chain to match only where the page knows it. The
   cost: after an unlink or a D-68 drop, headings that were Verified earlier
   show unverified until the note is linked again. Keeping them readable is
@@ -1082,13 +1108,11 @@ exactly:
 - `projectId`: `projects.id` for a project registered on `milestone_proof`,
   else `null`. A registered project's id is already public on chain (it keys
   every `MilestoneRecord` and is in every event and `artifact_ref`). The page
-  uses it for the checks and does not show it;
-- `docUrl`, if the function carries it at all, only when the stored
-  `doc_url` starts with `integration_settings.doqtri_origin` followed by `/`
-  (section 1), else `null`. The page still builds its doqtri link from
-  `doc_id` and does not show it.
+  uses it for the checks and does not show it.
 
-It never carries `doc_title`, a `doc_url` off that origin, an unregistered
+It carries no `docUrl` (D-95): the page builds its doqtri link from `docId`
+and `DOQTRI_ORIGIN` (above), so the stored `doc_url` never leaves the
+database. It never carries `doc_title`, `doc_url`, an unregistered
 project's id, the link ids, or who made the link.
 
 ## 13. Changelog
@@ -1096,6 +1120,34 @@ project's id, the link ids, or who made the link.
 Every change here is additive within v1 (section 3), except that v1.0.2
 narrows what `doc_url` accepts (D-45). Section 3 allows that because
 doqtri only ever sent its own URLs.
+
+- v1.1.2 (2026-10-25): writes down decisions D-93 to D-97 (masterplan rev
+  43). No request or response shape changes on `/api/v1`. D-95 and D-96
+  tighten server behaviour that a conforming client already meets: doqtri
+  only sends doc URLs on its own origin, and its client id is a UUID.
+  - Section 1: `integration_settings.doqtri_origin` now backs a
+    database-side D-72 check in `link_project_doc()`, and qdit warns when
+    it differs from `DOQTRI_ORIGIN` (D-95). `oauth_token_revoked()` treats
+    a non-UUID `client_id` as revoked (D-96).
+  - Section 2: a non-UUID `client_id` counts as revoked in the write guards
+    and the writing `SECURITY DEFINER` functions (D-96).
+  - Section 5: a non-UUID `client_id` is refused on PostgREST writes as
+    well as at `/api/v1` (D-96). Deleting a doqtri account calls qdit's
+    `revocation_endpoint` if one is advertised, as on Disconnect, and
+    otherwise the grant stays in qdit until that account revokes it in
+    Authorized apps (D-93, the wave-6 contract review's open minor).
+  - Section 8: `link_project_doc()` repeats the strict `doc_url` check
+    against `integration_settings.doqtri_origin`; while that is unset only
+    the API's check runs (D-95).
+  - Section 12: step 3's "signed for `vV`" note applies whenever `@vV`
+    differs from the current record's version, older or newer; a page that
+    holds its own record of the decision (qdit) may show "Does not match"
+    on step 3 when that record contradicts the chain, after a fresh read
+    (D-93, D-97); when doqtri deliberately does not read a mismatched ref
+    (D-79), steps 1 to 3 show "Does not match", and "Could not check" is
+    kept for a read that failed or is not configured (D-93); doqtri's
+    unverified receipt does not link the contract that ref names (D-94).
+    `public_milestone_proof()` no longer carries `docUrl` (D-95).
 
 - v1.1.1 (2026-10-25): writes down decisions D-73 to D-85 (masterplan rev
   40). No request or response shape changes on `/api/v1`. D-75 and D-77
