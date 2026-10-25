@@ -83,7 +83,11 @@ sides of one pair MUST agree on them:
     inactivity timeout). A row is resealed only when doqtri next writes it,
     which for most users is their next refresh, so a connection unused for
     longer still needs the old key. There is no key id yet: doqtri tries
-    both keys.
+    both keys. When qdit sets neither a session time-box nor an inactivity
+    timeout, its refresh tokens do not expire, so there is no finite
+    period: either keep `INTEGRATION_TOKEN_KEY_PREVIOUS` until every row has
+    been resealed, or accept that connections not used since the rotation
+    will need a reconnect.
   - Wrong key (D-81). A wrong or swapped key (for example another
     deployment's) cannot open the stored tokens it did not seal. doqtri then
     deletes that user's stored tokens on their next request and marks the
@@ -140,9 +144,13 @@ Rules that follow from the decisions:
   milestones, members or proofs, and no writes to anchors. qdit enforces this
   with RESTRICTIVE RLS on the `client_id` claim, so it holds even if the token
   is used against PostgREST directly. The restrictive write guards also
-  refuse a revoked token (D-75, `not public.oauth_token_revoked()`), so after
-  a revoke the token cannot write through PostgREST either; PostgREST reads
-  keep the window in section 5's known limit.
+  refuse a revoked token (D-75, `not public.oauth_token_revoked()`), and so
+  does every `SECURITY DEFINER` function an OAuth token may execute that
+  writes (`link_project_doc()`, `unlink_project_doc()`,
+  `create_linked_milestone()` and any later one), because RLS does not run
+  inside those. So after a revoke the token cannot write through PostgREST,
+  tables or RPCs; PostgREST reads keep the window in section 5's known
+  limit.
 - Within that, the caller's qdit project role decides (D-23): admins and
   owners link and unlink docs, members and above create and rename milestones
   and write links, viewers only read. Section 8 lists the role per endpoint.
@@ -201,14 +209,15 @@ Rules that follow from the decisions:
 
 Revocation (D-59). A user revokes an app under Authorized apps in qdit's
 settings. From that moment qdit MUST refuse, on every `/api/v1` endpoint
-and on every PostgREST write the D-03 guards cover (D-75; for PostgREST
-reads see the known limit below), each token of that app
+and on every PostgREST write, through the tables the D-03 guards cover or
+the writing RPCs listed below (D-75; for PostgREST reads see the known limit
+below), each token of that app
 for that user that was issued at or before the revoke, that is every token
 whose `iat` <= the revoke time recorded for its `(sub, client_id)`, even
 while its `exp` is still in the future. On `/api/v1` the answer is
 `401 unauthorized` with `WWW-Authenticate: Bearer error="invalid_token"`, the
-same as any other refused token (section 6); a PostgREST write is refused by
-RLS. qdit keeps the revoke time
+same as any other refused token (section 6); a PostgREST table write is
+refused by RLS and a writing RPC raises `42501`. qdit keeps the revoke time
 in a table no client can read, looks it up once per request, and fails
 closed: if the lookup itself fails it answers `503 unavailable`, never a
 pass. qdit's own record of which doqtri connections keep a plan doc linked
@@ -218,7 +227,10 @@ on qdit's side.
 
 Revoke order (D-76). qdit records the revoke time first and then revokes the
 grant in Supabase Auth, so a failure between the two steps leaves the app's
-tokens refused rather than accepted. The cost is a known, accepted edge: `iat` has whole seconds, so a
+current tokens refused. Its refresh token still works until the Supabase Auth
+revoke succeeds, and a refreshed token has an `iat` after the recorded revoke,
+so the app carries on; qdit therefore reports the disconnect as failed and the
+user retries. The cost is a known, accepted edge: `iat` has whole seconds, so a
 token issued in the same second as the recorded revoke (for example by a new
 consent in that second) is refused too, because its `iat` <= the revoke time.
 The next refresh or re-consent issues a token with a later `iat` and recovers
@@ -230,8 +242,15 @@ it; doqtri's normal refresh-once handles that.
   OAuth write guards (`milestones` `INSERT` and `UPDATE`,
   `milestone_external_links` `INSERT`, `UPDATE` and `DELETE`,
   `project_doc_links` `DELETE`) also require
-  `not public.oauth_token_revoked()`, so a revoked token's writes straight
-  against PostgREST are refused at once (D-75). Its reads are not: a revoked
+  `not public.oauth_token_revoked()`, and the writing `SECURITY DEFINER`
+  functions an OAuth token may execute (`link_project_doc()`,
+  `unlink_project_doc()`, `create_linked_milestone()` and any later one)
+  raise `42501` when it is true, right after their
+  `assert_oauth_client_session()` check where they have one. RLS does not run
+  inside those functions, so without that check a revoked token could still
+  call them through `/rest/v1/rpc` until its `exp`. A revoked token's writes
+  straight against PostgREST, tables or RPCs, are refused at once (D-75).
+  Its reads are not: a revoked
   app's current access token may still read what the D-03 guards allow
   through qdit's PostgREST until its `exp` (Supabase's JWT expiry, 1 hour
   by default, so at most about 1 h). qdit's connection record checks the
@@ -259,11 +278,14 @@ Y)"). The earlier account's grant stays in qdit until that account revokes it
 there.
 
 Deleting a doqtri account (D-63). doqtri anonymises the account and keeps its
-content. That user's qdit connection is dropped (doqtri deletes its stored
-tokens, as on Disconnect); the doc and milestone links stay with the doc, as
-on an account switch (D-66, D-82). Where a page shows that user as a signer,
-the wallet address stays (it is the on-chain identity) and any name shown for
-it reads "Former user".
+content. That user's qdit connection is dropped: doqtri deletes the user's
+whole `integration_connections` row (the qdit `subject` and
+`account_label`, the previous account's ones, scopes and tokens), not only
+the tokens, because the anonymised account is not removed from `auth.users`
+and so no cascade fires. The doc and milestone links stay with the doc, as on
+an account switch (D-66, D-82). Where a page shows that user as a signer, the
+wallet address stays (it is the on-chain identity) and any name shown for it
+reads "Former user".
 
 ## 6. Errors
 
@@ -1083,20 +1105,27 @@ doqtri only ever sent its own URLs.
     and the operator also stores the doqtri origin in
     `integration_settings.doqtri_origin` (D-77). Keep
     `INTEGRATION_TOKEN_KEY_PREVIOUS` for at least qdit's refresh-token
-    lifetime; a wrong or swapped key deletes each user's stored tokens on
+    lifetime, or, when qdit's refresh tokens never expire, until every row
+    is resealed; a wrong or swapped key deletes each user's stored tokens on
     their next request, and a `needs_reconnect` spike with the keys
     unchanged points at qdit's auth configuration (D-81). The
     `DoqtriRegistry` address per network (testnet set, mainnet by the
     operator) and both apps' env names for it, which name the network
     differently (D-84).
-  - Section 2: the restrictive write guards refuse a revoked token (D-75).
+  - Section 2: the restrictive write guards refuse a revoked token, and so
+    do the writing `SECURITY DEFINER` functions an OAuth token may execute
+    (`link_project_doc()`, `unlink_project_doc()`,
+    `create_linked_milestone()`), since RLS does not run inside them (D-75).
   - Section 5: a token whose `client_id` is not a UUID is refused (D-77). A
-    revoked token is refused on PostgREST writes too; PostgREST reads may
-    succeed until `exp`, at most about 1 h (D-75). Revoke order is
-    record-first, then Supabase Auth, and the same-second false refusal is
-    a known, accepted edge (D-76). Deleting a doqtri account drops its qdit
-    connection, keeps the links with the doc, and shows the signer's wallet
-    with the name "Former user" (D-63). Section 6's `401` row matches.
+    revoked token is refused on PostgREST writes too, tables and writing
+    RPCs alike; PostgREST reads may succeed until `exp`, at most about 1 h
+    (D-75). Revoke order is record-first, then Supabase Auth; a failure
+    between the two leaves current tokens refused but the refresh working,
+    so qdit reports the disconnect as failed, and the same-second false
+    refusal is a known, accepted edge (D-76). Deleting a doqtri account
+    deletes its whole qdit connection row, keeps the links with the doc,
+    and shows the signer's wallet with the name "Former user" (D-63).
+    Section 6's `401` row matches.
   - Section 12: link rows are pointers, never evidence (D-73, confirmed).
     Node evidence also needs the `artifact_ref`'s network and contract id to
     equal the project's stored chain; otherwise the inconsistent unverified
