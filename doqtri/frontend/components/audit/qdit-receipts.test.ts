@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { QditReceiptsSection } from "@/components/audit/qdit-receipts";
-import { parseQditArtifactRef } from "@/lib/integrations/qdit-chain";
+import { parseQditArtifactRef, type MilestoneChainStatus } from "@/lib/integrations/qdit-chain";
 import type { QditReceipt, QditReceipts } from "@/lib/integrations/qdit-receipts";
 
 /*
@@ -15,6 +15,18 @@ const REF = `qdit:testnet:${CONTRACT}:3f6c2a1e-8b4d-4c7e-9a10-2d5b7e9f1c34/c92f5
 const SIGNING_TX = "1".repeat(64);
 const APPROVAL_TX = "5e1f0c3a9b7d2e4f6a8c0b1d3e5f7a9c2b4d6e8f0a1c3e5b7d9f1a3c5e7b9d0f";
 const SIGNER = "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H";
+
+/** Fact 2, as the G2 fixture's m2 record holds it, at a real ledger time. */
+const PROOF_HASH = "02".repeat(32);
+const SUBMITTER = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M";
+const SUBMITTED_AT = 1_761_393_600; // 2025-10-25 12:00 UTC
+const onChain = (status: MilestoneChainStatus, version: number) => ({
+  status,
+  version,
+  proofHash: PROOF_HASH,
+  submitter: SUBMITTER,
+  timestamp: SUBMITTED_AT,
+});
 
 const CONFIRMED: QditReceipt = {
   nodeId: "h4",
@@ -31,7 +43,7 @@ const CONFIRMED: QditReceipt = {
     signer: SIGNER,
     signerFrom: "call",
   },
-  check: { state: "confirmed", chain: { status: "Approved", version: 2 }, ledger: 1234567 },
+  check: { state: "confirmed", chain: onChain("Approved", 2), ledger: 1234567 },
   approvalTxHash: APPROVAL_TX,
   qditPageUrl: null,
 };
@@ -91,7 +103,7 @@ describe("QditReceiptsSection", () => {
   it("chain ahead of a Verified record: a newer submission, never shown as approved", () => {
     // Signed Verified against v1; v1 was rejected and v2 approved since.
     const html = render([
-      { ...CONFIRMED, ...signedAt(1), check: { state: "differs", chain: { status: "Approved", version: 2 }, ledger: 10 } },
+      { ...CONFIRMED, ...signedAt(1), check: { state: "differs", chain: onChain("Approved", 2), ledger: 10 } },
     ]);
     expect(html).toContain('data-state="differs"');
     expect(html).toContain("Newer submission");
@@ -112,7 +124,7 @@ describe("QditReceiptsSection", () => {
       {
         ...CONFIRMED,
         ...signedAt(1),
-        check: { state: "differs", chain: { status: "Approved", version: 2 }, ledger: 10 },
+        check: { state: "differs", chain: onChain("Approved", 2), ledger: 10 },
         approvalTxHash: null,
       },
     ]);
@@ -124,7 +136,7 @@ describe("QditReceiptsSection", () => {
       {
         ...CONFIRMED,
         record: { ...CONFIRMED.record, status: "Built" },
-        check: { state: "confirmed", chain: { status: "Submitted", version: 2 }, ledger: 10 },
+        check: { state: "confirmed", chain: onChain("Submitted", 2), ledger: 10 },
         approvalTxHash: null,
       },
     ]);
@@ -136,7 +148,7 @@ describe("QditReceiptsSection", () => {
 
   it("differs: shows both sides and never claims approval", () => {
     const html = render([
-      { ...CONFIRMED, check: { state: "differs", chain: { status: "Submitted", version: 2 }, ledger: 10 }, approvalTxHash: null },
+      { ...CONFIRMED, check: { state: "differs", chain: onChain("Submitted", 2), ledger: 10 }, approvalTxHash: null },
     ]);
     expect(html).toContain('data-state="differs"');
     expect(html).toContain("Differs from the chain");
@@ -149,7 +161,7 @@ describe("QditReceiptsSection", () => {
 
   it("differs at the signed version: signed as Verified, the chain now says otherwise", () => {
     const html = render([
-      { ...CONFIRMED, check: { state: "differs", chain: { status: "Rejected", version: 2 }, ledger: 10 }, approvalTxHash: null },
+      { ...CONFIRMED, check: { state: "differs", chain: onChain("Rejected", 2), ledger: 10 }, approvalTxHash: null },
     ]);
     expect(html).toContain("Differs from the chain");
     expect(html).toContain("Signed as Verified; the chain now says <strong");
@@ -158,7 +170,7 @@ describe("QditReceiptsSection", () => {
 
   it("chain behind the signed version: unverified, naming the mismatch", () => {
     const html = render([
-      { ...CONFIRMED, ...signedAt(3), check: { state: "differs", chain: { status: "Submitted", version: 1 }, ledger: 10 }, approvalTxHash: null },
+      { ...CONFIRMED, ...signedAt(3), check: { state: "differs", chain: onChain("Submitted", 1), ledger: 10 }, approvalTxHash: null },
     ]);
     expect(html).toContain("Unverified</span>");
     expect(html).toContain('data-testid="receipt-mismatch"');
@@ -172,7 +184,7 @@ describe("QditReceiptsSection", () => {
         ...CONFIRMED,
         ...signedAt(3),
         record: { ...signedAt(3).record, status: "Built" },
-        check: { state: "differs", chain: { status: "Submitted", version: 1 }, ledger: 10 },
+        check: { state: "differs", chain: onChain("Submitted", 1), ledger: 10 },
         approvalTxHash: null,
       },
     ]);
@@ -216,7 +228,7 @@ describe("QditReceiptsSection", () => {
     expect(chain).toContain("Unverified</span>");
     expect(chain).toContain('data-testid="receipt-link-mismatch"');
     expect(chain).toContain(
-      "this record names a qdit project or contract other than the one registered in Doqtri for this note, so the contract it names was not read",
+      "this record does not match a qdit project and contract registered in Doqtri for this note, so the contract it names was not read",
     );
     expect(chain).toContain("This heading is not shown as approved.");
     expect(chain).not.toContain("Approved on chain");
@@ -224,9 +236,55 @@ describe("QditReceiptsSection", () => {
     expect(chain).not.toContain("Approval transaction");
     expect(chain).not.toContain("approval-unrecorded");
     expect(chain).not.toContain("as of ledger");
+    expect(chain).not.toContain("receipt-submission");
     // The link row's values never show, and every mismatch reads alike.
     for (const mismatch of ["unlinked", "project", "no_chain"] as const) expect(html(mismatch)).toBe(chain);
     expect(html("chain", "Built")).not.toContain("not shown as approved");
+  });
+
+  it("shows fact 2 in full: the submission's version, proof hash, submitter and time", () => {
+    const html = render([CONFIRMED]);
+    expect(html).toContain('data-testid="receipt-submission"');
+    expect(html).toContain("Submission v2");
+    expect(html).toContain(PROOF_HASH);
+    // The submitter on the ref's network: a contract address gets a contract page.
+    expect(html).toContain(`href="https://stellar.expert/explorer/testnet/contract/${SUBMITTER}"`);
+    expect(html).toContain(`title="${SUBMITTER}"`);
+    expect(html).toContain("· at 2025-10-25 12:00 UTC");
+
+    const mainnetRef = REF.replace("qdit:testnet:", "qdit:mainnet:");
+    const account = "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H";
+    const mainnet = render([
+      {
+        ...CONFIRMED,
+        record: { ...CONFIRMED.record, artifactRef: mainnetRef },
+        ref: parseQditArtifactRef(mainnetRef),
+        check: { state: "confirmed", chain: { ...onChain("Approved", 2), submitter: account }, ledger: 10 },
+      },
+    ]);
+    expect(mainnet).toContain(`href="https://stellar.expert/explorer/public/account/${account}"`);
+
+    // The test host's ledger time 0 is not shown as 1970.
+    const untimed = render([{ ...CONFIRMED, check: { state: "confirmed", chain: { ...onChain("Approved", 2), timestamp: 0 }, ledger: 10 } }]);
+    expect(untimed).toContain(PROOF_HASH);
+    expect(untimed).not.toContain("1970");
+  });
+
+  it("shows the submission the chain holds whether it is newer, older or other than the signed one", () => {
+    const newer = render([{ ...CONFIRMED, ...signedAt(1), check: { state: "differs", chain: onChain("Approved", 2), ledger: 10 } }]);
+    expect(newer).toContain("Submission v2");
+    expect(newer).toContain(PROOF_HASH);
+    const older = render([{ ...CONFIRMED, ...signedAt(3), check: { state: "differs", chain: onChain("Submitted", 1), ledger: 10 }, approvalTxHash: null }]);
+    expect(older).toContain("Submission v1");
+    const rejected = render([{ ...CONFIRMED, check: { state: "differs", chain: onChain("Rejected", 2), ledger: 10 }, approvalTxHash: null }]);
+    expect(rejected).toContain("Submission v2");
+    // Nothing read, nothing shown.
+    for (const check of [
+      { state: "differs", chain: null, ledger: 10 },
+      { state: "unreachable", reason: "rpc" },
+    ] as const) {
+      expect(render([{ ...CONFIRMED, check, approvalTxHash: null }])).not.toContain("receipt-submission");
+    }
   });
 
   it("links qdit's milestone page only when the loader confirmed qdit publishes it", () => {

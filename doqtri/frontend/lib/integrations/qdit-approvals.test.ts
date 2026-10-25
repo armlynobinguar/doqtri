@@ -130,6 +130,36 @@ describe("findApprovalTx", () => {
     expect(rpc.getEvents.mock.calls.length).toBeLessThanOrEqual(4);
   });
 
+  /**
+   * A busy window: every page is full and its cursor stops short of the
+   * slice's end, so the scan keeps bisecting until its page budget is gone.
+   * `match` puts the approval in the newest page.
+   */
+  function busy(match = false): EventSource & { getEvents: ReturnType<typeof vi.fn> } {
+    return {
+      getHealth: async () => ({ oldestLedger: 1, latestLedger: 100_000 }),
+      getEvents: vi.fn(async (request: { startLedger?: number }) => {
+        const ledger = request.startLedger ?? 11;
+        const first = match && ledger > 90_000;
+        return {
+          events: [first ? event("m2_approve_v2", TX_A, ledger) : event("m2_submit_v2", TX_B, ledger)],
+          cursor: `${(BigInt(ledger) << BigInt(32)).toString()}-0`,
+        };
+      }),
+    };
+  }
+
+  it("throws, rather than answering not there, when the budget runs out before the window is covered", async () => {
+    const rpc = busy();
+    await expect(findApprovalTx(KEY, { events: () => rpc })).rejects.toThrow(/budget/);
+    expect(rpc.getEvents.mock.calls.length).toBeLessThanOrEqual(4);
+  });
+
+  it("still returns a match found before the budget ran out", async () => {
+    const found = await findApprovalTx(KEY, { events: () => busy(true) });
+    expect(found?.txHash).toBe(TX_A);
+  });
+
   it("throws when RPC does not answer in time", async () => {
     const slow: EventSource = {
       getHealth: () => new Promise(() => {}),
@@ -210,6 +240,22 @@ describe("approvalRecorder", () => {
     await approvalRecorder(s, async () => {
       throw new Error("Stellar RPC did not answer in time.");
     })(KEY);
+    expect(s.recordMiss).not.toHaveBeenCalled();
+    expect(s.record).not.toHaveBeenCalled();
+    quiet.mockRestore();
+  });
+
+  it("a scan that ran out of budget is not a miss either", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    const s = store();
+    const exhausted: EventSource = {
+      getHealth: async () => ({ oldestLedger: 1, latestLedger: 100_000 }),
+      getEvents: async (request) => {
+        const ledger = (request as { startLedger?: number }).startLedger ?? 11;
+        return { events: [event("m2_submit_v2", TX_B, ledger)], cursor: `${(BigInt(ledger) << BigInt(32)).toString()}-0` };
+      },
+    };
+    await approvalRecorder(s, (key) => findApprovalTx(key, { events: () => exhausted }))(KEY);
     expect(s.recordMiss).not.toHaveBeenCalled();
     expect(s.record).not.toHaveBeenCalled();
     quiet.mockRestore();

@@ -5,7 +5,7 @@ import {
   QDIT_TOOL,
   QditChainError,
   type MilestoneChainRead,
-  type MilestoneChainStatus,
+  type MilestoneChainRecord,
   type ProjectChain,
   type QditArtifactRef,
   type QditChainNetwork,
@@ -25,7 +25,10 @@ import type { ChainNodeEvent, DocumentHistory } from "@/lib/stellar/history";
  * records, none from qdit (the page has no qdit token):
  *
  *   - what milestone_proof says about the milestone now
- *     (`get_milestone_status` on the ref's contract and network);
+ *     (`get_milestone_status` on the ref's contract and network): all of
+ *     section 12's fact 2 (version, proof hash, submitter, submission time,
+ *     status), so the receipt names the same submission qdit's page and
+ *     Stellar Expert show;
  *   - doqtri's own write that set the record, from the history read the
  *     page already made;
  *   - the transaction that approved the milestone, when doqtri found its
@@ -53,6 +56,15 @@ import type { ChainNodeEvent, DocumentHistory } from "@/lib/stellar/history";
  * names is not asked. The page words every mismatch the same way, so it
  * shows nothing from the link row beyond the fact that the ref does not
  * match it.
+ *
+ * That is stricter than section 12 as written in v1.1.0, which calls a
+ * contract or network mismatch unverified only "where the page knows the
+ * project's chain": here a note with no linked project (never linked,
+ * unlinked, or doqtri's side dropped under D-68) or no stored chain is
+ * unverified too, rather than read, since otherwise any contract a ref
+ * names would be read and a look-alike could show "Approved on chain".
+ * The cost: after an unlink, headings that were Verified against the real
+ * contract read Unverified until the note is linked again.
  *
  * Optionally (section 12, a MAY) the receipt links qdit's public milestone
  * page, `<qdit origin>/p/<slug>/<milestone id>`, built from the slug doqtri
@@ -88,8 +100,8 @@ export type LinkMismatch = "unlinked" | "project" | "no_chain" | "chain";
 export type ReceiptCheck =
   | {
       state: "confirmed" | "differs";
-      /** What milestone_proof holds now; null when it has no record (MilestoneNotFound). */
-      chain: { status: MilestoneChainStatus; version: number } | null;
+      /** What milestone_proof holds now (section 12's fact 2); null when it has no record (MilestoneNotFound). */
+      chain: MilestoneChainRecord | null;
       /** The ledger the read saw. */
       ledger: number;
       mismatch?: undefined;
@@ -106,7 +118,7 @@ export type ReceiptCheck =
     };
 
 /** What a check read from milestone_proof, or null when it read nothing. */
-export function chainRead(check: ReceiptCheck): { chain: { status: MilestoneChainStatus; version: number } | null; ledger: number } | null {
+export function chainRead(check: ReceiptCheck): { chain: MilestoneChainRecord | null; ledger: number } | null {
   return check.state === "unreachable" || check.mismatch ? null : check;
 }
 
@@ -159,7 +171,10 @@ export type QditReceipts = {
  * was rejected and resubmitted, not approved.
  */
 export function checkReceipt(record: { status: string }, ref: QditArtifactRef, read: MilestoneChainRead): ReceiptCheck {
-  const chain = read.record ? { status: read.record.status, version: read.record.version } : null;
+  const r = read.record;
+  const chain = r
+    ? { status: r.status, version: r.version, proofHash: r.proofHash, submitter: r.submitter, timestamp: r.timestamp }
+    : null;
   const backs = chain != null && chain.version === ref.version && nodeStatusForMilestone(chain.status) === record.status;
   return { state: backs ? "confirmed" : "differs", chain, ledger: read.ledger };
 }
@@ -416,7 +431,12 @@ async function attachQditPages(
   );
 }
 
-/** stellar.expert's page for a transaction or contract on a qdit network (`public` is its mainnet slug). */
-export function qditExplorerUrl(network: QditChainNetwork, kind: "tx" | "contract", id: string): string {
+/** stellar.expert's page for a transaction, contract or account on a qdit network (`public` is its mainnet slug). */
+export function qditExplorerUrl(network: QditChainNetwork, kind: "tx" | "contract" | "account", id: string): string {
   return `https://stellar.expert/explorer/${network === "mainnet" ? "public" : "testnet"}/${kind}/${id}`;
+}
+
+/** The page for any address on a qdit network: contract (`C…`) or account (`G…`). */
+export function qditAddressUrl(network: QditChainNetwork, address: string): string {
+  return qditExplorerUrl(network, address.startsWith("C") ? "contract" : "account", address);
 }

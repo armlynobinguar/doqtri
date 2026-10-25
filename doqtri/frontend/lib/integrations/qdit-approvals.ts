@@ -111,16 +111,18 @@ export type FindApprovalDeps = {
 };
 
 /**
- * Looks the approval of `key` up in RPC's event window. Null when it is not
- * there (older than the window, or the scan's budget ran out first).
- * Throws when RPC could not be read or did not answer in time.
+ * Looks the approval of `key` up in RPC's event window. Null only when the
+ * scan covered the whole window and it is not there (older than the
+ * window). Throws when RPC could not be read, did not answer in time, or
+ * the scan's page budget ran out before the window was covered: the event
+ * may still be there, so that is not a miss.
  */
 export async function findApprovalTx(key: ApprovalKey, deps: FindApprovalDeps = {}): Promise<ApprovalTx | null> {
   const source = deps.events?.(key.network) ?? new rpc.Server(qditChainRpcUrl(key.network));
   const chain = { network: key.network, contractId: key.contractId };
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const { events } = await Promise.race([
+    const { events, complete } = await Promise.race([
       scanRegistryEvents(source, [approvalEventFilter(chain, key.projectId)], {
         maxPages: LOOKUP_PAGES,
         slices: LOOKUP_SLICES,
@@ -129,7 +131,9 @@ export async function findApprovalTx(key: ApprovalKey, deps: FindApprovalDeps = 
         timer = setTimeout(() => reject(new Error("Stellar RPC did not answer in time.")), deps.timeoutMs ?? LOOKUP_TIMEOUT_MS);
       }),
     ]);
-    return approvalFromEvents(events, key);
+    const found = approvalFromEvents(events, key);
+    if (!found && !complete) throw new Error("The event scan ran out of its budget before covering RPC's window.");
+    return found;
   } finally {
     clearTimeout(timer);
   }

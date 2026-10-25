@@ -1,6 +1,12 @@
 import { SignerAddress } from "@/components/audit/signer-address";
 import { StatusTag } from "@/components/ui/status-tag";
-import { chainRead, qditExplorerUrl, type QditReceipt, type QditReceipts } from "@/lib/integrations/qdit-receipts";
+import {
+  chainRead,
+  qditAddressUrl,
+  qditExplorerUrl,
+  type QditReceipt,
+  type QditReceipts,
+} from "@/lib/integrations/qdit-receipts";
 import { expertTxUrl } from "@/lib/stellar/config";
 
 /**
@@ -15,9 +21,12 @@ import { expertTxUrl } from "@/lib/stellar/config";
  * with the version `vV` the heading was signed against. A newer record is a
  * resubmission and is shown as such; an older or missing one is an explicit
  * unverified state naming the mismatch; and a Verified heading is shown as
- * approved only when the chain says Approved at `vV` itself. A ref that
- * does not match the note's linked qdit project is unverified, in one
- * wording whatever the mismatch, so nothing about the link row shows.
+ * approved only when the chain says Approved at `vV` itself. Whatever the
+ * chain holds is shown in full (fact 2: version, proof hash, submitter,
+ * submission time), so a viewer can find the same submission on qdit's
+ * page and on Stellar Expert. A ref that does not match a qdit project and
+ * contract registered in doqtri for the note is unverified, in one wording
+ * whatever the mismatch, so nothing about the link row shows.
  */
 
 const LINK = "text-primary underline-offset-2 hover:underline";
@@ -66,8 +75,8 @@ function ChainLine({ receipt }: { receipt: QditReceipt }) {
   if (check.mismatch) {
     return (
       <span data-testid="receipt-link-mismatch">
-        Unverified: this record names a qdit project or contract other than the one registered in Doqtri for this
-        note, so the contract it names was not read.
+        Unverified: this record does not match a qdit project and contract registered in Doqtri for this note, so
+        the contract it names was not read.
         {record.status === "Verified" ? " This heading is not shown as approved." : null}
       </span>
     );
@@ -120,6 +129,33 @@ function ChainLine({ receipt }: { receipt: QditReceipt }) {
   return (
     <span>
       qdit&apos;s contract on {network} says {says}, as of ledger {ledger}.
+    </span>
+  );
+}
+
+/** UTC, to the minute: the same everywhere the page renders. */
+function formatLedgerTime(seconds: number): string {
+  return new Date(seconds * 1000).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+}
+
+/** Fact 2: the submission the chain holds now, whichever version it is. */
+function SubmissionLine({ receipt }: { receipt: QditReceipt }) {
+  const { ref } = receipt;
+  const chain = chainRead(receipt.check)?.chain;
+  if (!ref || !chain) return null;
+  return (
+    <span data-testid="receipt-submission" className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span>Submission v{chain.version}</span>
+      <span className="inline-flex min-w-0 items-center gap-1">
+        · proof hash <span className="text-foreground/85 font-mono break-all">{chain.proofHash}</span>
+      </span>
+      {chain.submitter ? (
+        <span className="inline-flex items-center gap-1">
+          · submitted by <SignerAddress address={chain.submitter} href={qditAddressUrl(ref.network, chain.submitter)} />
+        </span>
+      ) : null}
+      {/* Ledger time is never 0 on a real network; the Soroban test host leaves it there. */}
+      {chain.timestamp > 0 ? <span>· at {formatLedgerTime(chain.timestamp)}</span> : null}
     </span>
   );
 }
@@ -179,6 +215,7 @@ function Receipt({ receipt, label }: { receipt: QditReceipt; label: string | und
       </span>
       <span className="text-muted-foreground grid gap-1 text-[12px]">
         <ChainLine receipt={receipt} />
+        <SubmissionLine receipt={receipt} />
         <ApprovalLine receipt={receipt} />
         <span className="font-mono break-all">
           {record.artifactRef}

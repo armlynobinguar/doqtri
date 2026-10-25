@@ -150,6 +150,8 @@ describe("/d/[docId] and NEXT_PUBLIC_QDIT_INTEGRATION", () => {
     const on = await render();
     expect(on).toMatch(RECEIPTS_SECTION);
     expect(on).toContain("Approved on chain");
+    // Fact 2 as the contract returned it.
+    expect(on.match(RECEIPTS_SECTION)![0]).toContain(HASH);
     expect(on.replace(RECEIPTS_SECTION, "")).toBe(off);
     expect(mocks.readNode).toHaveBeenCalledTimes(1);
     expect(mocks.readNode).toHaveBeenCalledWith(DOC, "h2");

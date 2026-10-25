@@ -49,6 +49,20 @@ const SIGNER = "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H";
 const TX = (n: number) => n.toString(16).padStart(64, "0");
 const APPROVAL_TX = "5e1f0c3a9b7d2e4f6a8c0b1d3e5f7a9c2b4d6e8f0a1c3e5b7d9f1a3c5e7b9d0f";
 
+/**
+ * Fact 2 as the fixtures hold it: each milestone's proof hash, the test
+ * host's submitter contract, and ledger time 0 (the test host's clock).
+ */
+const SUBMITTER = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M";
+const PROOF_HASH: Record<string, string> = { [M1]: "ab".repeat(32), [M2]: "02".repeat(32), [M3]: "33".repeat(32) };
+const onChain = (milestone: string, status: string, version: number) => ({
+  status,
+  version,
+  proofHash: PROOF_HASH[milestone],
+  submitter: SUBMITTER,
+  timestamp: 0,
+});
+
 const ref = (milestone: string, version: number, network = "testnet") =>
   `qdit:${network}:${CONTRACT}:${PROJECT}/${milestone}@v${version}`;
 
@@ -160,7 +174,7 @@ describe("loadQditReceipts: states", () => {
     expect(result?.more).toBe(0);
     expect(result?.receipts).toHaveLength(1);
     const [r] = result!.receipts;
-    expect(r.check).toEqual({ state: "confirmed", chain: { status: "Approved", version: 2 }, ledger: 5000 });
+    expect(r.check).toEqual({ state: "confirmed", chain: onChain(M2, "Approved", 2), ledger: 5000 });
     expect(r.record).toEqual({ status: "Verified", artifactRef: ref(M2, 2) });
     expect(r.ref).toMatchObject({ network: "testnet", contractId: CONTRACT, projectId: PROJECT, milestoneId: M2, version: 2 });
     // doqtri's own write that set this record, not the earlier Built one.
@@ -182,7 +196,7 @@ describe("loadQditReceipts: states", () => {
     ];
     const h = setup([event("h1", "Verified", ref(M2, 1), 1)]);
     const [r] = (await loadQditReceipts(DOC, h, deps()))!.receipts;
-    expect(r.check).toEqual({ state: "differs", chain: { status: "Approved", version: 2 }, ledger: 5000 });
+    expect(r.check).toEqual({ state: "differs", chain: onChain(M2, "Approved", 2), ledger: 5000 });
     // The approval shown is v2's, which the component labels as such.
     expect(r.approvalTxHash).toBe(APPROVAL_TX);
   });
@@ -192,7 +206,7 @@ describe("loadQditReceipts: states", () => {
     answers[M2] = "m2_submitted_v2";
     const h = setup([event("h1", "Built", ref(M2, 1), 1)]);
     const [r] = (await loadQditReceipts(DOC, h, deps()))!.receipts;
-    expect(r.check).toEqual({ state: "differs", chain: { status: "Submitted", version: 2 }, ledger: 5000 });
+    expect(r.check).toEqual({ state: "differs", chain: onChain(M2, "Submitted", 2), ledger: 5000 });
   });
 
   it("confirmed for a status other than Verified when the chain backs it (Built and Submitted)", async () => {
@@ -213,8 +227,8 @@ describe("loadQditReceipts: states", () => {
     const d = deps();
     const result = (await loadQditReceipts(DOC, h, d))!;
     expect(result.receipts.map((r) => [r.nodeId, r.check])).toEqual([
-      ["h1", { state: "differs", chain: { status: "Submitted", version: 1 }, ledger: 5000 }],
-      ["h2", { state: "differs", chain: { status: "Rejected", version: 1 }, ledger: 5000 }],
+      ["h1", { state: "differs", chain: onChain(M1, "Submitted", 1), ledger: 5000 }],
+      ["h2", { state: "differs", chain: onChain(M3, "Rejected", 1), ledger: 5000 }],
       ["h3", { state: "differs", chain: null, ledger: 5000 }],
     ]);
     // Nothing is Approved, so no approval is looked for.
