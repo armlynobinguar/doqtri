@@ -7,8 +7,9 @@ import type { DocLockState } from "@/lib/doc-lock-client";
 
 /**
  * The strip above the editor that says why it is read-only (WP-1.6, D-17):
- * someone else holds the edit lock, the caller holds it in another tab, the
- * caller is a viewer, or a save was refused because the note changed
+ * someone else holds the edit lock, the caller holds it in another tab (or
+ * one just closed or reloaded whose release never arrived), the caller is a
+ * viewer, or a save was refused because the note changed
  * elsewhere. Renders nothing while the caller can edit.
  */
 export function EditLockBanner({
@@ -50,8 +51,8 @@ export function EditLockBanner({
       >
         <LockIcon className="size-3.5 shrink-0" strokeWidth={1.5} />
         <span className="min-w-0 flex-1">
-          <span className="text-foreground">{EDITING_ELSEWHERE}.</span> This copy is read-only; it
-          updates when that one saves.
+          <span className="text-foreground">{EDITING_ELSEWHERE} (or one you just closed).</span> This
+          copy is read-only; it updates when that one saves.
         </span>
         {lock.canEdit ? (
           <Button

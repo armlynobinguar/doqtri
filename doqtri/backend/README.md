@@ -161,7 +161,11 @@ Two supporting tables:
   `save_document(id, markdown, base_version, session)`, which refuses a
   caller without the lock in that session (`DQLCK`) or with a stale version
   (`DQVER`). A plain client UPDATE of `markdown` is refused. Removing or
-  demoting a member drops their locks.
+  demoting a member drops their locks. A tab that closes or reloads releases
+  its lock with a keepalive request; when that request never arrives, the old
+  session's lock stays live, and a reloaded tab shows the note as being
+  edited elsewhere (read-only) until that lock times out, up to ten minutes,
+  or the user clicks "Edit here", which any editor may.
 
 - `public.integration_connections` — a user's OAuth connection to their qdit
   account (WP-2.3, D-02): one row per user and provider, with the qdit user id,
