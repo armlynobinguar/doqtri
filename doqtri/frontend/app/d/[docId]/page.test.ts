@@ -236,3 +236,29 @@ describe("/d/[docId] and NEXT_PUBLIC_QDIT_INTEGRATION", () => {
     expect(html.replaceAll(url, "")).not.toContain("soroban-payroll");
   });
 });
+
+describe("/d/[docId]: the full proof chain (WP-3.3)", () => {
+  it("on: each receipt folds out the four steps, from the page's own reads", async () => {
+    vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "1");
+    const html = await render();
+    const section = html.match(RECEIPTS_SECTION)![0];
+    expect(section).toContain('data-testid="proof-chain"');
+    expect(section).toContain("Full proof chain: 4 of 4 steps done");
+    // Step 1 from the history the page read: h2 was signed while v3 was current.
+    expect(section).toContain("Signed at the current plan version");
+    expect(section).toContain(`href="https://stellar.expert/explorer/testnet/tx/${"f".repeat(64)}"`);
+    expect(section).toContain(`get_node(&quot;${DOC}&quot;, &quot;h2&quot;)`);
+    // No more reads than the receipt's own (milestone reads may come from the instance cache).
+    expect(mocks.readNode).toHaveBeenCalledTimes(1);
+    expect(mocks.readMilestoneRecord.mock.calls.length).toBeLessThanOrEqual(1);
+    // Still nothing from the link row.
+    expect(html).not.toContain("soroban-payroll");
+  });
+
+  it("off: no chain view", async () => {
+    vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "");
+    const html = await render();
+    expect(html).not.toContain("proof-chain");
+    expect(html).not.toContain("Full proof chain");
+  });
+});
