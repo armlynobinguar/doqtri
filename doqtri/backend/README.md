@@ -48,6 +48,8 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261025120000_qdit_webhook_events.sql        # NOT yet applied (WP-2.8)
 20261025130000_chain_jobs_claim_token.sql     # NOT yet applied (WP-1.10)
 20261025140000_integration_connections_previous_account.sql  # NOT yet applied (WP-2.11)
+20261026100000_account_deletion_anonymises.sql    # NOT yet applied (WP-1.11)
+20261026100001_signer_removals_owner_handover.sql # NOT yet applied (WP-1.11)
 ```
 
 The remote records its own version stamps (e.g. `20260929114657` for
@@ -140,13 +142,19 @@ Two supporting tables:
   demotion is in flight is still revoked. A job records when it was done
   (`done_at`). Deleting an account queues revocations for every
   role its wallets hold, deletes the invites to and from it, and then lets
-  its wallet records cascade (D-50, D-51). It refuses, with a hint, an
-  account whose personal workspace holds anchored notes or other people's
-  notes, the last owner of a team workspace with no admin (D-31), and, a
-  known limit until those rows can be anonymised, an account that has
-  published a community template or bought or claimed one
-  (`market_templates.creator_id`, `market_purchases.buyer_id` are
-  `on delete restrict`).
+  its wallet records cascade (D-50, D-51). It anonymises the account and
+  keeps the content (D-63, `20261026100000_account_deletion_anonymises.sql`,
+  which replaced D-51's refusals of anchored notes and templates and D-39's
+  of other people's notes): the account row (email, profile metadata,
+  sessions), its wallet records, qdit connection and tokens, invites, locks
+  and other per-user rows go; every note it wrote stays, author-less; its
+  personal workspace stays, renamed "Former user", with no owner and its
+  other members still in it, whenever it holds a note or another member
+  (an empty one is deleted); the imports behind kept notes stay with them;
+  its community templates stay listed and its purchases valid, credited to
+  their wallets (`creator_id`, `buyer_id` set null). The app shows "Former
+  user" where it would name the account (`lib/former-user.ts`). It still
+  refuses the last owner of a team workspace with no admin (D-31).
 - `public.workspace_member_removals` — when each member lost the right to
   sign in a workspace (removed, left, account deleted, or demoted to viewer),
   with the wallet addresses they had then, and when they got it back. Written
@@ -155,7 +163,10 @@ Two supporting tables:
   entries signed after the signer was removed (WP-1.8, risk R-05); with each
   removal it returns when that wallet's revocation was done (`revoked_at`),
   so the page reads a removed member's feed until the chain stopped
-  accepting them (WP-1.10).
+  accepting them (WP-1.10). An owner is never revoked: their removal (the
+  last owner of a team workspace deleting their account) takes the time the
+  workspace's `reassign_owner` handover was done
+  (`20261026100001_signer_removals_owner_handover.sql`).
 
 - `public.doc_locks` — who is editing a document (D-17). One editor holds a
   document's lock at a time, from one edit session (one open tab: every call
@@ -202,9 +213,9 @@ Two supporting tables:
   still write GitHub rows from the browser, and qdit rows are written by the
   routes only. Each save remaps moved headings through
   `apply_node_link_remap()` (R-03), and `qdit_state` says whether qdit has
-  been told yet. A note linked to a project cannot be deleted, by any path
-  (its owner's account deletion included), until an admin unlinks it: qdit
-  would keep links to it that nothing could remove. If qdit no longer shows
+  been told yet. A note linked to a project cannot be deleted, by any path,
+  until an admin unlinks it: qdit would keep links to it that nothing could
+  remove. Its author's account deletion keeps it, link and all (D-63). If qdit no longer shows
   the project, the admin can confirm forgetting the link in doqtri only
   (D-68; qdit may keep its doc link, milestone links and title locks, which
   are logged, and relinking that note to another project stays blocked until

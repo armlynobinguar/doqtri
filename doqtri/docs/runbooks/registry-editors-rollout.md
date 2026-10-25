@@ -42,6 +42,8 @@ Migrations to apply, in order (none is applied to the remote project yet):
 20261024160000_workspace_member_removals.sql
 20261025090000_chain_jobs_scheduler.sql
 20261025130000_chain_jobs_claim_token.sql
+20261026100000_account_deletion_anonymises.sql
+20261026100001_signer_removals_owner_handover.sql
 ```
 
 `20261025130000` (WP-1.10) amends the chain job queue of `20261024150500`
@@ -52,6 +54,17 @@ nothing else, so it goes with this set even though the integration
 migrations (`20261025100000` to `20261025120000`) sort before it. Apply it
 before the server that releases claim tokens on finish goes live: that
 server's finish writes `claim_token`, which only this migration adds.
+
+`20261026100000` (WP-1.11, D-63) replaces D-51's account-deletion refusals:
+deleting an account now anonymises it and keeps its notes (its personal
+workspace stays as "Former user" with no owner when it holds notes or other
+members), templates and purchases. It makes `market_templates.creator_id`,
+`market_purchases.buyer_id` and `ingests.user_id` nullable; an older server
+reads null there as "not mine", which is right. From the moment it is applied,
+deleting an account in the Supabase dashboard no longer fails for anchored
+notes or templates, so check what an account holds before deleting it for
+any other reason than the user's request. `20261026100001` gives an owner's
+removal the handover's time as `revoked_at` (no shape change).
 
 ## 1. Dry-run on a Supabase branch
 
@@ -273,7 +286,7 @@ needs a new deployment.
       deployment is **Ready** and its commit is the merge commit, and the
       live site's assigned domain points at it. Still the old build:
       wait, or stop. Do not migrate under the old build (step 1).
-   3. Straight away, apply the seven migrations to production, in order,
+   3. Straight away, apply the migrations above to production, in order,
       as in step 1.3, and read the same NOTICEs and WARNING.
    4. Run step 1.5's checks on production. A failed check: stop, and see
       Rollback.

@@ -227,8 +227,10 @@ the first draft of this section:
 - `smart_wallets` (owner select): `address` `C…`, `created_tx`. `on delete restrict`
   to `auth.users`: a user that owns an on-chain wallet is not silently deleted.
   (Since WP-1.5/WP-1.9, D-51: `on delete cascade`. The account-deletion trigger
-  first refuses an account with anchored personal notes and queues every
-  on-chain role the wallet holds for revocation; then the record cascades.)
+  queues every on-chain role the wallet holds for revocation; then the record
+  cascades. Since WP-1.11, D-63, an account with anchored personal notes is no
+  longer refused: the notes stay, author-less, and the wallet stays their
+  on-chain identity in `chain_writes`.)
 - `wallet_passkeys` (owner select): credential id, 65-byte uncompressed P-256
   key (checked), `rp_id`, `label`; FK to the wallet on the same network.
 - `chain_writes` (**public select**, no `user_id` column): what the audit page
