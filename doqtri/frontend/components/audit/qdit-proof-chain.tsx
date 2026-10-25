@@ -13,13 +13,14 @@ import type {
 import { qditAddressUrl, qditExplorerUrl } from "@/lib/integrations/qdit-receipts";
 import type { QditArtifactRef } from "@/lib/integrations/qdit-chain";
 import { CONTRACT_ID, expertContractUrl, expertTxUrl } from "@/lib/stellar/config";
+import { removalInEffect, type SignerRemoval } from "@/lib/stellar/signers";
 
 /**
  * The full proof chain under a qdit receipt (WP-3.3): CONTRACT.md section
  * 12's four facts as an ordered list, plan version, submitted, approved,
  * verified, each with its state in words (never colour alone), the ledger
  * or time where known, and the transaction or, where no transaction is on
- * record, the contract's page with the RPC window wording. Folded by default
+ * record, the contract's page and why it is not on record. Folded by default
  * inside the receipt; the data and its states are in
  * lib/integrations/qdit-proof-chain.ts. Rendered only inside the receipts,
  * so only with NEXT_PUBLIC_QDIT_INTEGRATION=1.
@@ -58,13 +59,26 @@ function Tx({ href, children }: { href: string; children: React.ReactNode }) {
   );
 }
 
-/** Where no transaction is on record: the contract's page, and why (section 12). */
-function NoTx({ what, milestone: ref }: { what: string; milestone: QditArtifactRef }) {
+/**
+ * Where no transaction is on record: the contract's page, and why (section
+ * 12). Doqtri never records submissions, so that one is a fact, not the
+ * window; an approval it records may have been missed, as WP-3.1 words it.
+ */
+function NoTx({ what, milestone: ref }: { what: "submission" | "approval"; milestone: QditArtifactRef }) {
+  const contract = (
+    <Tx href={qditExplorerUrl(ref.network, "contract", ref.contractId)}>contract&apos;s history on Stellar Expert</Tx>
+  );
+  if (what === "submission") {
+    return (
+      <span data-testid="chain-no-tx">
+        Doqtri does not record submission transactions; the {contract} lists it.
+      </span>
+    );
+  }
   return (
     <span data-testid="chain-no-tx">
-      Doqtri has no record of the {what} transaction: it may be older than Stellar RPC&apos;s event window (about 7
-      days). The <Tx href={qditExplorerUrl(ref.network, "contract", ref.contractId)}>contract&apos;s history on Stellar
-      Expert</Tx> lists it.
+      Doqtri has no record of the approval transaction: it may be older than Stellar RPC&apos;s event window (about 7
+      days), or Doqtri did not see it in time. The {contract} lists it.
     </span>
   );
 }
@@ -216,8 +230,18 @@ function ApprovedBody({ step, milestone: ref }: { step: ApprovedStep; milestone:
   );
 }
 
-function VerifiedBody({ step, approved }: { step: VerifiedStep; approved: ApprovedStep }) {
+function VerifiedBody({
+  step,
+  approved,
+  removals,
+}: {
+  step: VerifiedStep;
+  approved: ApprovedStep;
+  removals: readonly SignerRemoval[];
+}) {
   const { signing } = step;
+  // D-16: the same flag the version history shows for this signature.
+  const removal = signing?.signer ? removalInEffect(signing.signer, signing.closedAt, removals) : null;
   const what =
     step.state === "done" ? (
       <>
@@ -248,6 +272,15 @@ function VerifiedBody({ step, approved }: { step: VerifiedStep; approved: Approv
             Signed by <SignerAddress address={signing.signer} owner={signing.signerFrom === "owner"} />
           </span>
         ) : null}
+        {removal ? (
+          <StatusTag
+            tone="danger"
+            data-testid="chain-signed-after-removal"
+            title={`Doqtri removed this wallet from the note's workspace ${utc(removal.removedAt)}, before this was signed`}
+          >
+            Signed after removal
+          </StatusTag>
+        ) : null}
         {at ? <span>· recorded {at}</span> : null}
         {signing ? (
           <span>
@@ -266,6 +299,7 @@ export function ProofChainView({
   docId,
   milestone: ref,
   updatedAt,
+  removals,
 }: {
   chain: ProofChain;
   docId: string;
@@ -273,16 +307,17 @@ export function ProofChainView({
   milestone: QditArtifactRef | null;
   /** The Document's own update time (seconds). */
   updatedAt: number;
+  /** The note's signer removals (D-16), as the page read them. */
+  removals: readonly SignerRemoval[];
 }) {
   const [plan, submitted, approved, verified] = chain.steps;
-  // A ref that is not the note's linked project's names a contract nobody
-  // vouched for: it is not offered as qdit's.
-  const qditContract = ref && submitted.reason !== "mismatch" ? ref : null;
+  // Only a ref checked against the note's linked project is offered as qdit's.
+  const { qditContract } = chain;
   const bodies = [
     <PlanBody key="plan" step={plan} updatedAt={updatedAt} />,
     <SubmittedBody key="submitted" step={submitted} milestone={ref} />,
     <ApprovedBody key="approved" step={approved} milestone={ref} />,
-    <VerifiedBody key="verified" step={verified} approved={approved} />,
+    <VerifiedBody key="verified" step={verified} approved={approved} removals={removals} />,
   ];
   return (
     <details data-testid="proof-chain" className="text-[12px]">

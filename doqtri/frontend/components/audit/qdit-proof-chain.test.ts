@@ -5,6 +5,7 @@ import { QditReceiptsSection } from "@/components/audit/qdit-receipts";
 import { parseQditArtifactRef, type MilestoneChainStatus } from "@/lib/integrations/qdit-chain";
 import type { PlanContext } from "@/lib/integrations/qdit-proof-chain";
 import type { QditReceipt, ReceiptCheck } from "@/lib/integrations/qdit-receipts";
+import type { SignerRemoval } from "@/lib/stellar/signers";
 import type { DocumentHistory } from "@/lib/stellar/history";
 
 /*
@@ -75,14 +76,16 @@ const PLAN: PlanContext = {
   history: HISTORY,
 };
 
-const render = (r: QditReceipt, plan: PlanContext | null = PLAN) =>
+const render = (r: QditReceipt, plan: PlanContext | null = PLAN, removals: SignerRemoval[] = []) =>
   renderToStaticMarkup(
     createElement(QditReceiptsSection, {
       receipts: { receipts: [r], more: 0 },
       labels: null,
-      chain: plan ? { docId: DOC, ...plan } : undefined,
+      chain: plan ? { docId: DOC, removals, ...plan } : undefined,
     }),
   );
+
+const checkYourself = (html: string) => html.match(/<p data-testid="chain-check-yourself"[\s\S]*?<\/p>/)![0];
 
 /** One step's `<li>`, by its key. */
 function step(html: string, key: "plan" | "submitted" | "approved" | "verified"): string {
@@ -165,13 +168,14 @@ describe("ProofChainView: step 1, plan version", () => {
 });
 
 describe("ProofChainView: step 2, submitted", () => {
-  it("done: fact 2 in full, as of the ledger read, and the contract with the window wording", () => {
+  it("done: fact 2 in full, as of the ledger read, and the contract, since Doqtri records no submissions", () => {
     const li = step(render(receipt()), "submitted");
     expect(li).toContain(">v2</strong> submitted, now Approved as of ledger 5,000.");
     expect(li).toContain(`title="${"02".repeat(32)}"`);
     expect(li).toContain("at 2025-10-25 12:00 UTC");
-    expect(li).toContain("Doqtri has no record of the submission transaction");
-    expect(li).toContain("event window (about 7");
+    // A fact, not the RPC window: a submission minutes old is not on record either.
+    expect(li).toContain("Doqtri does not record submission transactions; the <a");
+    expect(li).not.toContain("event window");
     expect(li).toContain(`href="https://stellar.expert/explorer/testnet/contract/${CONTRACT}"`);
   });
 
@@ -217,6 +221,8 @@ describe("ProofChainView: step 3, approved", () => {
     expect(stateOf(li)).toBe("done");
     expect(li).toContain('data-testid="chain-no-tx"');
     expect(li).toContain("Doqtri has no record of the approval transaction");
+    expect(li).toContain("event window (about 7 days), or Doqtri did not see it in time.");
+    expect(li).not.toContain("does not record submission");
     expect(li).not.toContain(TX(30));
   });
 
@@ -283,17 +289,46 @@ describe("ProofChainView: step 4, verified", () => {
     expect(html).toContain("Full proof chain: 1 of 4 steps done");
   });
 
+  it("flags a signature made after Doqtri removed the wallet (D-16), as the version history does", () => {
+    const removed: SignerRemoval = { address: SIGNER, removedAt: "2026-10-23T08:00:00Z", restoredAt: null };
+    const li = step(render(receipt(), PLAN, [removed]), "verified");
+    expect(li).toContain('data-testid="chain-signed-after-removal"');
+    expect(li).toContain("Signed after removal");
+    expect(li).toContain("removed this wallet from the note&#x27;s workspace 2026-10-23 08:00 UTC");
+    // Removed after signing, or restored before it: no flag.
+    for (const r of [
+      { ...removed, removedAt: "2026-10-25T08:00:00Z" },
+      { ...removed, restoredAt: "2026-10-24T08:00:00Z" },
+      { ...removed, address: "GOTHER" },
+    ]) {
+      expect(step(render(receipt(), PLAN, [r]), "verified")).not.toContain("Signed after removal");
+    }
+  });
+
   it("names the missing transaction when the history did not have the signing write", () => {
     const li = step(render(receipt({ signing: null })), "verified");
     expect(li).toContain("its transaction was not in the history read just now");
   });
 });
 
-describe("ProofChainView: a ref that is not the linked project's", () => {
-  it("does not offer the contract it names as qdit's", () => {
-    const html = render(receipt({ check: { state: "differs", mismatch: "chain" } }));
-    const line = html.match(/<p data-testid="chain-check-yourself"[\s\S]*?<\/p>/)![0];
+describe("ProofChainView: a ref not checked against the linked project", () => {
+  it.each([
+    ["does not match it", { state: "differs", mismatch: "chain" }],
+    ["could not be compared: Doqtri's link rows were unreadable", { state: "unreachable", reason: "link" }],
+    ["does not parse", { state: "unreachable", reason: "invalid_ref" }],
+  ] as const)("does not offer the contract it names as qdit's when it %s", (_, check) => {
+    const r = receipt({ check: check as ReceiptCheck });
+    const invalid = check.state === "unreachable" && check.reason === "invalid_ref";
+    const line = checkYourself(render(invalid ? { ...r, ref: null } : r));
     expect(line).not.toContain("milestone_proof");
+    expect(line).not.toContain("get_milestone_status");
+    expect(line).not.toContain(CONTRACT);
     expect(line).toContain("DoqtriRegistry contract");
+  });
+
+  it.each(["rpc", "contract"] as const)("still offers it when the ref matched but the read failed (%s)", (reason) => {
+    const line = checkYourself(render(receipt({ check: { state: "unreachable", reason } })));
+    expect(line).toContain(`href="https://stellar.expert/explorer/testnet/contract/${CONTRACT}"`);
+    expect(line).toContain("qdit&#x27;s milestone_proof contract");
   });
 });

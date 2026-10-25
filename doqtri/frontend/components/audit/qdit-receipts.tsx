@@ -10,6 +10,7 @@ import {
 } from "@/lib/integrations/qdit-receipts";
 import { proofChain, type PlanContext } from "@/lib/integrations/qdit-proof-chain";
 import { expertTxUrl } from "@/lib/stellar/config";
+import type { SignerRemoval } from "@/lib/stellar/signers";
 
 /**
  * The public audit page's qdit receipts (WP-3.1): for each heading signed
@@ -30,7 +31,7 @@ import { expertTxUrl } from "@/lib/stellar/config";
  * contract registered in doqtri for the note is unverified, in one wording
  * whatever the mismatch, so nothing about the link row shows.
  *
- * Given the page's Document and history (`chain`), each receipt also folds
+ * Given the page's Document, history and removals (`chain`), each receipt also folds
  * out the full proof chain (WP-3.3, components/audit/qdit-proof-chain.tsx).
  */
 
@@ -192,8 +193,11 @@ function ApprovalLine({ receipt }: { receipt: QditReceipt }) {
   );
 }
 
-/** What the chain view needs from the page: the note's id, its Document and history. */
-export type ChainViewContext = { docId: string } & PlanContext;
+/**
+ * What the chain view needs from the page: the note's id, its Document and
+ * history, and its signer removals (D-16).
+ */
+export type ChainViewContext = { docId: string; removals: readonly SignerRemoval[] } & PlanContext;
 
 function Receipt({
   receipt,
@@ -259,6 +263,7 @@ function Receipt({
           docId={chain.docId}
           milestone={ref}
           updatedAt={chain.doc.updatedAt}
+          removals={chain.removals}
         />
       ) : null}
     </li>

@@ -93,6 +93,20 @@ describe("proofChain: the whole chain", () => {
     expect(approved).toMatchObject({ state: "done", txHash: TX(30), txLedger: 4990 });
     expect(verified).toMatchObject({ state: "done", status: "Verified", updatedAt: 1_792_800_000 });
     expect(verified.signing?.txHash).toBe(TX(20));
+    expect(chain.qditContract).toMatchObject({ contractId: CONTRACT, version: 2 });
+  });
+
+  it.each<[string, ReceiptCheck, boolean]>([
+    ["read", { state: "confirmed", chain: onChain("Approved", 2), ledger: 5000 }, true],
+    ["read, no record", { state: "differs", chain: null, ledger: 5000 }, true],
+    ["matched, Stellar did not answer", { state: "unreachable", reason: "rpc" }, true],
+    ["matched, not a milestone_proof", { state: "unreachable", reason: "contract" }, true],
+    ["link rows unreadable", { state: "unreachable", reason: "link" }, false],
+    ["not the linked project's", { state: "differs", mismatch: "project" }, false],
+    ["not the linked contract", { state: "differs", mismatch: "chain" }, false],
+  ])("offers the ref as qdit's contract only once it matched the linked project: %s", (_, check, offered) => {
+    const chain = proofChain(receipt({ check }), CONTEXT);
+    expect(chain.qditContract != null).toBe(offered);
   });
 });
 

@@ -1,4 +1,4 @@
-import type { MilestoneChainRecord } from "@/lib/integrations/qdit-chain";
+import type { MilestoneChainRecord, QditArtifactRef } from "@/lib/integrations/qdit-chain";
 import { chainRead, type QditReceipt } from "@/lib/integrations/qdit-receipts";
 import type { ChainDocument } from "@/lib/stellar/contract-client";
 import type { ChainNodeEvent, DocumentHistory } from "@/lib/stellar/history";
@@ -34,8 +34,8 @@ import type { ChainNodeEvent, DocumentHistory } from "@/lib/stellar/history";
  * Transactions: doqtri's own writes come from its history; the approval from
  * qdit_milestone_approvals when doqtri recorded it. Nothing records the
  * submission's transaction, so step 2 always names the contract instead
- * and says the transaction is older than RPC's event window or not
- * recorded (section 12: a page MUST still show the fact).
+ * and says doqtri does not record it (section 12: a page MUST still show
+ * the fact).
  */
 
 export type StepState = "done" | "pending" | "unchecked";
@@ -117,6 +117,13 @@ export type VerifiedStep = {
 
 export type ProofChain = {
   nodeId: string;
+  /**
+   * The ref, when it may be offered as qdit's milestone_proof: only once
+   * doqtri compared it with the note's linked project and it matched.
+   * Null when the link could not be read, did not match, or the ref does
+   * not parse, so a look-alike contract is never named as qdit's.
+   */
+  qditContract: QditArtifactRef | null;
   steps: [PlanStep, SubmittedStep, ApprovedStep, VerifiedStep];
   /** Steps done, out of four. */
   done: number;
@@ -147,6 +154,15 @@ export function planStep(receipt: QditReceipt, { doc, history }: PlanContext): P
   const at = receipt.signing?.docVersion;
   const signedAt = at && at >= 1 && at <= doc.version ? versionEntry(history, at) : null;
   return { key: "plan", state: signedAt ? "done" : "unchecked", current, signedAt };
+}
+
+/** The ref, when it was checked against the note's linked project and matched. */
+function vouchedRef({ ref, check }: QditReceipt): QditArtifactRef | null {
+  // A read (or a failed read: "rpc", "contract") happens only after the match.
+  const matched =
+    chainRead(check) != null ||
+    (check.state === "unreachable" && (check.reason === "rpc" || check.reason === "contract"));
+  return matched ? ref : null;
 }
 
 /** Why the chain could not speak for `V`, or null when it can. */
@@ -205,5 +221,10 @@ export function proofChain(receipt: QditReceipt, context: PlanContext): ProofCha
   };
 
   const steps: ProofChain["steps"] = [planStep(receipt, context), submitted, approved, verified];
-  return { nodeId: receipt.nodeId, steps, done: steps.filter((s) => s.state === "done").length };
+  return {
+    nodeId: receipt.nodeId,
+    qditContract: vouchedRef(receipt),
+    steps,
+    done: steps.filter((s) => s.state === "done").length,
+  };
 }

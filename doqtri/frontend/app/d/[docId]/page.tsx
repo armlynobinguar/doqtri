@@ -529,7 +529,7 @@ function Anchored({
       </section>
 
       {receipts ? (
-        <QditReceiptsSection receipts={receipts} labels={labels} chain={{ docId, doc, history }} />
+        <QditReceiptsSection receipts={receipts} labels={labels} chain={{ docId, doc, history, removals }} />
       ) : null}
 
       <section className="glass grid gap-5 rounded-2xl px-6 py-5 text-[13px] sm:grid-cols-2">
