@@ -21,9 +21,11 @@ import { NODE_STATUSES, type NodeStatus } from "@/lib/stellar/types";
  * that the ledger already says: an unchanged roll-up, or a Planned one where
  * there is no record yet (no record already reads as Planned).
  *
- * A parent somebody signed by hand (any other tool, such as "Mark mindmap
- * done" on the root) is left as signed: a roll-up never overwrites a
- * person's attestation. It counts with that record for its own parent.
+ * A parent whose current record has any tool other than exactly "rollup"
+ * (signed by hand, "Mark mindmap done" on the root, or a qdit record left
+ * from a link since removed) is attested (D-70): it is left as signed, since
+ * a roll-up never overwrites a person's attestation, and it counts with that
+ * record for its own parent (section 11).
  */
 
 export const ROLLUP_TOOL = "rollup";
