@@ -47,7 +47,12 @@ sides of one pair MUST agree on them:
 - `DOQTRI_OAUTH_CLIENT_ID` (D-61). qdit counts a write as doqtri's (for
   example when it records which doqtri connections keep a plan doc linked)
   only when the token's `client_id` equals this value. Other OAuth clients
-  stay bound by section 2 but are never shown as doqtri. qdit's database
+  stay bound by section 2, and qdit never presents their writes as doqtri's.
+  The link rows themselves (`project_doc_links`, `milestone_external_links`)
+  do not record which client wrote them, and a project member's own qdit
+  session may write `milestone_external_links` too, so a link row is never
+  evidence of what doqtri planned: qdit's public page shows a doqtri node
+  only on on-chain evidence (section 12). qdit's database
   needs the same value, so the operator stores it once per environment in
   qdit's hidden one-row integration settings (qdit's runbook has the SQL).
   Unset, nothing counts as a doqtri connection, and qdit logs a `WARNING`
@@ -416,6 +421,8 @@ refused:
 - `http://www.doqtri.xyz/d/...` (not `https`).
 
 doqtri always sends `<origin>/d/<doc_id>`, its public doc page (section 12).
+The check is a prefix check only, so qdit's public page does not link the
+stored `doc_url`; it builds the doc link from `doc_id` (section 12).
 Any refused value is `400 invalid_request` with `doc_url` in
 `details.fields`.
 Response: `{"data": DocLink}`. 409 reasons: `doc_linked_elsewhere` (the doc
@@ -770,7 +777,7 @@ For a node `N` of doc `D` linked to milestone `M` of project `P`, whose
 
 | # | Fact | Read from | Shown on |
 | --- | --- | --- | --- |
-| 1 | Plan version | `DoqtriRegistry.get_document(D)`: `version`, `content_hash`, `updated_at`. `DoqtriRegistry.get_node(D, N)`: `status`, `tool`, `artifact_ref`. | doqtri; qdit in its "Planned in doqtri" block |
+| 1 | Plan version | `DoqtriRegistry.get_document(D)`: `version`, `content_hash`, `updated_at`. `DoqtriRegistry.get_node(D, N)`: `status`, `tool`, `artifact_ref`. | doqtri; qdit in its "Planned in doqtri" block (node fields only under the evidence rule below) |
 | 2 | Submitted | `milestone_proof.get_milestone_status(P, M)` on `<contract-id>` over RPC on `<network>`: `version`, `proof_hash`, `submitter`, `timestamp`, `status` | qdit (anchor history); doqtri (receipt) |
 | 3 | Approved | the same record with `status = Approved` at version `V` | both |
 | 4 | Verified | `DoqtriRegistry.get_node(D, N)` with `tool = "qdit"`, `status = Verified` and the `artifact_ref` above | doqtri; qdit in its "Planned in doqtri" block |
@@ -798,26 +805,43 @@ record or, after a resubmission, from history. A node signed
 `Verified` whose milestone is not `Approved` at `V` is shown as "signed as
 Verified; the chain now says <status>", never as verified.
 
-### qdit's check of the plan version (D-04)
+### qdit's "Planned in doqtri" block (D-04, D-11)
 
-Before qdit shows "Planned in doqtri" as verified, it reads
-`DoqtriRegistry.get_document(link.doc_id)` on `DOQTRI_REGISTRY_CONTRACT_ID`
-over RPC on `DOQTRI_REGISTRY_NETWORK` (section 1). It is verified when the
-document exists and its on-chain `version` is at least `link.doc_version`
-(versions only go up). Otherwise qdit shows an explicit unverified state with
-its reason:
+qdit's link rows are not evidence of what doqtri planned. Any OAuth client
+with the role may write `project_doc_links` and `milestone_external_links`
+(section 2), and a project member's own qdit session may insert or re-point
+a `milestone_external_links` row, its `node_id` and `doc_version` included.
+The block therefore uses the link row only to know which doc and node to
+read, and takes every doqtri claim from `DoqtriRegistry` on
+`DOQTRI_REGISTRY_CONTRACT_ID` over RPC on `DOQTRI_REGISTRY_NETWORK`
+(section 1). It makes two separate checks:
 
-- `link.doc_version` is `null`: the doc was not anchored when it was linked;
-- the document is not on the registry;
-- the on-chain `version` is lower than `link.doc_version`;
-- the registry could not be read: said as a read failure, not as a mismatch.
+- Node evidence. It reads `get_node(link.doc_id, link.node_id)`. Only when
+  that record has `tool = "qdit"` and its `artifact_ref` names this project
+  and milestone (any `@vV`) may the block show the node id, the record's
+  `status` and `@vV`, or call the milestone "planned in node `N`" (fact 4
+  when `status` is `Verified` and fact 3 holds at `V`). Otherwise the block
+  shows only "linked to doqtri doc `D`", with no node id and no version,
+  and says the milestone is not signed in doqtri yet. That is not an error:
+  positional ids move (R-03), and a node is signed only after it is linked.
+- Doc anchor. It reads `get_document(link.doc_id)`. The result is labelled
+  "doc anchored at version >= `V`", where `V` is `link.doc_version`, and
+  holds when the document exists and its on-chain `version` is at least `V`
+  (versions only go up). The label speaks only for the doc: `V` comes from
+  the link row, so it does not show that doqtri linked this milestone.
+  Otherwise qdit shows an explicit unverified state with its reason:
+  - `link.doc_version` is `null`: the doc was not anchored when it was
+    linked;
+  - the document is not on the registry;
+  - the on-chain `version` is lower than `link.doc_version`;
+  - the registry could not be read: said as a read failure, not as a
+    mismatch.
 
-The block also reads `get_node(link.doc_id, link.node_id)`. When that record
-has `tool = "qdit"` and its `artifact_ref` names this project and milestone,
-qdit shows its `status` and `@vV` (fact 4 when it is `Verified`). Otherwise it
-says the milestone is not signed in doqtri yet. That is not an error:
-positional ids move (R-03). A milestone with no doqtri link renders exactly as
-it did before phase 3.
+qdit shows "Planned in doqtri" as verified only when both checks hold; the
+plan version it then names is the on-chain document `version` (fact 1), not
+`link.doc_version`. Any other combination is shown as unverified with its
+reason. A milestone with no doqtri link renders exactly as it did before
+phase 3.
 
 ### Transaction links
 
@@ -852,8 +876,11 @@ transaction is older than the RPC event window. It MUST NOT show nothing.
 
 ### Links between the pages
 
-- qdit to doqtri: the "Planned in doqtri" block links `doc_url`, and only
-  when it passes the D-72 check against the current `DOQTRI_ORIGIN`.
+- qdit to doqtri: the "Planned in doqtri" block links the doc whose record it
+  checked. qdit builds that link itself as `DOQTRI_ORIGIN` + `/d/` +
+  `encodeURIComponent(link.doc_id)` and does not link the stored `doc_url`,
+  which passed only the D-72 prefix check and may name another doqtri page.
+  With `DOQTRI_ORIGIN` unset the block shows no doqtri link.
 - doqtri to qdit: doqtri's receipt MAY link
   `<qdit origin>/p/<project slug>/<milestone id>`, built from the
   `project_slug` doqtri stored from the API and the milestone id in the
@@ -875,16 +902,19 @@ doqtri's page MAY show everything on chain (the `Document`, its
 events and signer addresses), heading labels under doqtri's existing rule
 (the owner opted in and the private note still hashes to the anchored hash;
 the root label is the doc title), and the qdit link above. It MUST NOT show
-the qdit project's name or slug, the milestone's title or qdit status, or
+the qdit project's name, its slug (except inside the confirmed qdit link
+above), the milestone's title or qdit status, or
 anything else taken from qdit's API or from doqtri's link rows
 (`doc_project_links`, `node_links`), and no member names.
 
 qdit's page MAY show what `public_milestone_proof()` returns today (project
 name and slug, milestone title, status, due date, chain fields, anchor
 history, review decisions with reasons) and, for a linked milestone, the
-link's `doc_id`, `node_id`, `doc_version` and `doc_url` (WP-3.2 adds these to
-`public_milestone_proof()`) plus what it read from `DoqtriRegistry`. It MUST
-NOT show `doc_title`, any heading text other than the milestone's own title
+link's `doc_id`, `node_id` and `doc_version` (WP-3.2 adds these to
+`public_milestone_proof()`; the node id only under the node-evidence rule
+above), the doqtri link it builds from `doc_id`, and what it read from
+`DoqtriRegistry`. It MUST NOT show the stored `doc_url`, `doc_title`, any
+heading text other than the milestone's own title
 (`node_label` equals it, D-12), who made the link, or anything about the
 doqtri workspace. A project that does not publish shows nothing at all.
 
@@ -904,7 +934,9 @@ doqtri only ever sent its own URLs.
     qdit warns (D-61). doqtri authenticates with `client_secret_basic`
     (D-67). Env names as implemented, plus `INTEGRATION_TOKEN_KEY` and the
     optional `INTEGRATION_TOKEN_KEY_PREVIOUS` key ring (D-67). qdit origin
-    and the `DoqtriRegistry` constants for section 12.
+    and the `DoqtriRegistry` constants for section 12. Link rows do not
+    record their writer's client, so they are never evidence of what doqtri
+    planned.
   - Section 5: after a revoke, qdit refuses that app's tokens for that user
     with `iat` <= the revoke time on every `/api/v1` endpoint
     (`401 unauthorized`, `invalid_token`), fails closed with `503` when it
@@ -929,8 +961,14 @@ doqtri only ever sent its own URLs.
     `"rollup"` is attested, is not rolled up, and counts with that record for
     its own parent (D-70).
   - Section 12 (new): the public proof chain for phase 3 (WP-3.1 to
-    WP-3.3): the four facts and their on-chain sources, qdit's plan-version
-    check against `DoqtriRegistry` with explicit unverified states, Stellar
+    WP-3.3): the four facts and their on-chain sources; qdit's "Planned in
+    doqtri" block, which treats its own link rows as pointers, not evidence
+    (any OAuth client and a member's own session can write
+    `milestone_external_links`), shows a node id and version only when the
+    on-chain node record names the milestone, labels the `DoqtriRegistry`
+    check "doc anchored at version >= V" with explicit unverified states, and
+    builds its doqtri link from `doc_id` instead of the stored `doc_url`
+    (D-04, D-11); Stellar
     Expert link formats, where transaction hashes come from and the fallback
     for transactions older than the RPC event window, the qdit public
     milestone URL and when doqtri may link it (encoded slug, redirects not
