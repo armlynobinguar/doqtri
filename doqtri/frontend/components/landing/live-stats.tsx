@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Coins, FileText, Link2, UserPlus, type LucideIcon } from "lucide-react";
 import type { SiteStats } from "@/lib/site-stats";
 import styles from "./landing-page.module.css";
 
@@ -8,10 +9,13 @@ import styles from "./landing-page.module.css";
 const POLL_MS = 30_000;
 
 const fmt = new Intl.NumberFormat("en-US");
+/** Fees are fractions of an XLM; four significant digits keep them readable. */
+const fmtXlm = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 4 });
 
 /**
- * Live sign-ups, documents, and testnet contract transactions. Polls
- * /api/stats while the tab is visible and refreshes as soon as it comes back.
+ * Live sign-ups, documents, testnet contract transactions, and what a
+ * transaction really costs. Polls /api/stats while the tab is visible and
+ * refreshes as soon as it comes back.
  * Renders nothing until the first read lands, so a failed read never shows
  * zeros as if they were real.
  */
@@ -41,10 +45,21 @@ export function LiveStats() {
 
   if (!stats) return null;
 
-  const items = [
-    { label: "Sign-ups", value: stats.users },
-    { label: "Documents created", value: stats.documents },
-    { label: "Testnet contract transactions", value: stats.transactions },
+  const items: { icon: LucideIcon; label: string; value: string; unit?: string; note?: string }[] = [
+    { icon: UserPlus, label: "Sign-ups", value: fmt.format(stats.users) },
+    { icon: FileText, label: "Documents created", value: fmt.format(stats.documents) },
+    { icon: Link2, label: "Testnet contract transactions", value: fmt.format(stats.transactions) },
+    ...(stats.fee
+      ? [
+          {
+            icon: Coins,
+            label: "Avg. fee per transaction",
+            value: fmtXlm.format(stats.fee.avgXlm),
+            unit: "XLM",
+            note: `Measured from the last ${stats.fee.sample} anchor writes on testnet`,
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -53,24 +68,24 @@ export function LiveStats() {
         <span className={styles.liveDot} aria-hidden /> Live on Doqtri
       </p>
       <dl className={styles.statGrid}>
-        {items.map((s) => (
-          <div key={s.label} className={styles.statCard}>
-            <dt>{s.label}</dt>
-            <dd>{fmt.format(s.value)}</dd>
+        {items.map(({ icon: Icon, label, value, unit, note }) => (
+          <div key={label} className={styles.statCard}>
+            <dt>
+              <span className={`icon-tile ${styles.statIcon}`} aria-hidden>
+                <Icon strokeWidth={1.5} />
+              </span>
+              {label}
+            </dt>
+            <dd>
+              <span className={styles.statValue}>
+                {value}
+                {unit && <span className={styles.statUnit}> {unit}</span>}
+              </span>
+              {note && <span className={styles.statNote}>{note}</span>}
+            </dd>
           </div>
         ))}
       </dl>
-      <p className={styles.statSource}>
-        On-chain activity from stellar.expert:{" "}
-        {stats.contracts.map((c, i) => (
-          <span key={c.id}>
-            {i > 0 && " · "}
-            <a href={c.url} target="_blank" rel="noreferrer">
-              {c.label} ({fmt.format(c.invocations)})
-            </a>
-          </span>
-        ))}
-      </p>
     </section>
   );
 }
