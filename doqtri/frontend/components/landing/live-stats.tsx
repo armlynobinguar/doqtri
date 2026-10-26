@@ -48,7 +48,7 @@ export function LiveStats() {
   const items: { icon: LucideIcon; label: string; value: string; unit?: string; note?: string }[] = [
     { icon: UserPlus, label: "Sign-ups", value: fmt.format(stats.users) },
     { icon: FileText, label: "Documents created", value: fmt.format(stats.documents) },
-    { icon: Link2, label: "Testnet contract transactions", value: fmt.format(stats.transactions) },
+    { icon: Link2, label: "Testnet transactions", value: fmt.format(stats.transactions) },
     ...(stats.fee
       ? [
           {
@@ -56,7 +56,10 @@ export function LiveStats() {
             label: "Avg. fee per transaction",
             value: fmtXlm.format(stats.fee.avgXlm),
             unit: "XLM",
-            note: `Measured from the last ${stats.fee.sample} anchor writes on testnet`,
+            note:
+              stats.fee.sample === 1
+                ? "Measured from the latest anchor write on testnet"
+                : `Measured from the last ${stats.fee.sample} anchor writes on testnet`,
           },
         ]
       : []),

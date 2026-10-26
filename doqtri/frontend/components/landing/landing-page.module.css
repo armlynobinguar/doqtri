@@ -433,7 +433,14 @@
   line-height: 1.4;
 }
 
+/* Each card spans the grid's label and value rows (subgrid), so a label that
+   wraps to two lines moves every card's number down together. */
 .statCard {
+  display: grid;
+  grid-row: span 2;
+  grid-template-rows: subgrid;
+  row-gap: 0;
+  align-content: start;
   padding: 1.2rem 1.4rem;
   border-radius: 20px;
   background: var(--glass);
@@ -447,6 +454,7 @@
 }
 
 .statCard dd {
+  align-self: start;
   margin: 0.3rem 0 0;
   font-size: clamp(1.6rem, 3.4vw, 2.2rem);
   font-weight: 800;
