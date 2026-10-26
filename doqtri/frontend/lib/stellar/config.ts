@@ -107,6 +107,11 @@ export function expertContractUrl(id: string) {
   return `${EXPERT_TX_BASE.replace(/\/tx$/, "")}/contract/${id}`;
 }
 
+/** stellar.expert's public API summary of a contract, including its invocation count. */
+export function expertApiContractUrl(id: string) {
+  return `https://api.stellar.expert/explorer/${EXPERT_NETWORK}/contract/${id}`;
+}
+
 /** Classic (`G…`) account pages: `.../explorer/<network>/account/<id>`. */
 export function expertAccountUrl(id: string) {
   return `${EXPERT_TX_BASE.replace(/\/tx$/, "")}/account/${id}`;
