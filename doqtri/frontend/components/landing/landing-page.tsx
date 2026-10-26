@@ -7,6 +7,7 @@ import { BlockChain } from "@/components/brand/block-chain";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { BlockGlyph, type Glyph } from "@/components/brand/glyphs";
 import { LandingMindmap } from "@/components/landing/landing-mindmap";
+import { LiveStats } from "@/components/landing/live-stats";
 import { MINDMAP_PROMO, PROMO_PATH } from "@/lib/promo";
 import styles from "./landing-page.module.css";
 
@@ -120,6 +121,8 @@ export function LandingPage() {
             </li>
           ))}
         </ul>
+
+        <LiveStats />
 
         <section className={styles.blocks} id="blocks" aria-labelledby="blocks-title">
           <p className={styles.eyebrow}>Three blocks</p>
