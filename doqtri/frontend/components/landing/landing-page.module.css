@@ -396,10 +396,41 @@
   margin: 0;
 }
 
-@media (min-width: 640px) {
+@media (min-width: 560px) {
   .statGrid {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
   }
+}
+
+@media (min-width: 960px) {
+  .statGrid {
+    /* One row of equal cards, three or four depending on whether a fee is measured. */
+    grid-template-columns: none;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+  }
+}
+
+.statCard .statIcon {
+  display: flex;
+  width: 2.25rem;
+  height: 2.25rem;
+  margin-bottom: 0.85rem;
+}
+
+.statIcon svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.statNote {
+  display: block;
+  margin-top: 0.35rem;
+  font-weight: 400;
+  letter-spacing: normal;
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+  line-height: 1.4;
 }
 
 .statCard {
@@ -417,22 +448,21 @@
 
 .statCard dd {
   margin: 0.3rem 0 0;
-  font-size: clamp(1.8rem, 4vw, 2.4rem);
+  font-size: clamp(1.6rem, 3.4vw, 2.2rem);
   font-weight: 800;
   letter-spacing: -0.045em;
   font-variant-numeric: tabular-nums;
 }
 
-.statSource {
-  margin-top: 0.9rem;
-  color: var(--muted-foreground);
-  font-size: 0.78rem;
-  line-height: 1.5;
+.statValue {
+  white-space: nowrap;
 }
 
-.statSource a {
-  text-decoration: underline;
-  text-underline-offset: 2px;
+.statUnit {
+  font-size: 0.5em;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--muted-foreground);
 }
 
 /* ------------------------------------------------------------- sections */
