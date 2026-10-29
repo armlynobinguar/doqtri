@@ -4,7 +4,7 @@ Turns on what phase 1 of the doqtri × qdit masterplan built (WP-1.1 to
 WP-1.9): team workspaces whose editors sign with their own wallets (D-14),
 an on-chain editor list per workspace (D-15), and removal that reaches the
 chain within a ledger (D-16). The code is already merged into
-`integration/suite`; nothing here is done by an agent. Every step is the
+`staging`; nothing here is done by an agent. Every step is the
 product owner's, in this order, and nothing reaches `main` before the live
 G1 sign-off (D-47).
 
@@ -158,7 +158,7 @@ Never on production first.
 
 Do **not** apply them to production now. Production gets them only in
 the release window of step 6.5, after the live G1 sign-off and right after
-`integration/suite` is merged into `main` and deployed, never ahead of
+`staging` is merged into `main` and deployed, never ahead of
 `main`'s code. The live app runs `main`, and `main` writes notes in ways
 these migrations refuse, flag or no flag:
 
@@ -194,8 +194,8 @@ kept. Only the contract admin can do it.
 cd contract
 stellar contract build
 shasum -a 256 ../target/wasm32v1-none/release/doqtri_registry.wasm
-# G1's build of integration/suite was ac258c87…d82c; a different hash means
-# different code: stop and find out why.
+# G1's build (of integration/suite, since folded into staging) was
+# ac258c87…d82c; a different hash means different code: stop and find out why.
 
 stellar contract upload \
   --wasm ../target/wasm32v1-none/release/doqtri_registry.wasm \
@@ -305,9 +305,9 @@ mean the runs are failing: read the route's logs on Vercel.
 `NEXT_PUBLIC_REGISTRY_EDITORS=1` is read at build time, so each change
 needs a new deployment.
 
-1. **Preview.** Branches other than `main` never deploy from git (D-58,
-   `git.deploymentEnabled` in `vercel.json`: never remove it). Make the
-   preview by hand from `integration/suite`: `vercel deploy` (CLI) with the
+1. **Preview.** Branches other than `main` and `staging` never deploy from
+   git (D-58, `git.deploymentEnabled` in `vercel.json`: never remove it). Make
+   the preview by hand from `staging`: `vercel deploy` (CLI) with the
    Preview environment, which has `NEXT_PUBLIC_REGISTRY_EDITORS=1`,
    `REVOKER_SECRET_KEY` and `CRON_SECRET`, and points at the Supabase branch
    of step 1 (its URL and keys in the Preview environment).
@@ -321,7 +321,7 @@ needs a new deployment.
    in Production for now. Before the window, enable pg_cron and pg_net on
    production (as in step 1.2) and take a database backup (or note the
    point-in-time-recovery time) for Rollback.
-   1. Merge `integration/suite` into `main`. That deploys production.
+   1. Merge `staging` into `main`. That deploys production.
    2. Check production is serving the new build before touching the
       database: in Vercel → Deployments, the current production
       deployment is **Ready** and its commit is the merge commit, and the

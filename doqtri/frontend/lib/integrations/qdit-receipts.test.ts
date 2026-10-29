@@ -18,7 +18,7 @@ import type { ChainNodeEvent, DocumentHistory } from "@/lib/stellar/history";
 
 /*
  * The public receipts' loader (WP-3.1). milestone_proof answers with the
- * exact ScVal XDR qdit's contract (integration/suite) returns from
+ * exact ScVal XDR qdit's contract (staging) returns from
  * get_milestone_status in the Soroban test host (G2 fixtures), decoded by
  * doqtri's own readMilestoneRecord; the registry and the approval store are
  * fakes.

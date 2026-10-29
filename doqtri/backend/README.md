@@ -62,7 +62,7 @@ These were applied through the Supabase MCP server, so the remote project is
 already in this state, except those marked "NOT yet applied". The workspace
 migrations (`20261024120000` through `20261025090000`) go out together with
 the on-chain editors rollout, in the same release window as the
-`integration/suite` merge into `main` and never ahead of it (`main`'s code
+`staging` merge into `main` and never ahead of it (`main`'s code
 cannot create or save notes on them): follow
 [docs/runbooks/registry-editors-rollout.md](../docs/runbooks/registry-editors-rollout.md),
 which covers the branch dry-run, the registry v3 upgrade, the revoker key,

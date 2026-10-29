@@ -17,7 +17,7 @@ import type { EventSource, LedgerEvent } from "@/lib/stellar/history";
 
 /*
  * The approval-transaction lookup (WP-3.1). The event bytes are what qdit's
- * milestone_proof (integration/suite) publishes, captured from the Soroban
+ * milestone_proof (staging) publishes, captured from the Soroban
  * test host: m2 submitted twice and then approved (version 2), m3 submitted
  * and rejected (version 1).
  */
