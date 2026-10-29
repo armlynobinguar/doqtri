@@ -540,22 +540,19 @@ async function pairDoqtri(ref, s) {
 }
 
 // What doqtri takes from qdit's staging: its branch and the OAuth client qdit's
-// own run registered. Only read; null while qdit's staging is not set up.
+// own run registered. Only read (Vault secrets need the regular query
+// endpoint: the read-only role cannot decrypt them). Null while qdit's
+// staging is not set up; any other failure stops the run.
 async function readQditPairing() {
   const branch = await findBranch("qdit");
   if (!branch || branch.preview_project_status !== "ACTIVE_HEALTHY") return null;
-  try {
-    const [row] = await supabase("POST", `/v1/projects/${branch.project_ref}/database/query/read-only`, {
-      query: `select s.doqtri_oauth_client_id::text as client_id,
-                     (select decrypted_secret from vault.decrypted_secrets where name = 'staging_doqtri_oauth_client_secret') as client_secret
-                from public.integration_settings s;`,
-    });
-    if (!row?.client_id || !row.client_secret) return null;
-    mask(row.client_secret);
-    return { ref: branch.project_ref, clientId: row.client_id, clientSecret: row.client_secret };
-  } catch {
-    return null;
-  }
+  const [row] = await sql(branch.project_ref, `
+    select s.doqtri_oauth_client_id::text as client_id,
+           (select decrypted_secret from vault.decrypted_secrets where name = 'staging_doqtri_oauth_client_secret') as client_secret
+      from public.integration_settings s;`);
+  if (!row?.client_id || !row.client_secret) return null;
+  mask(row.client_secret);
+  return { ref: branch.project_ref, clientId: row.client_id, clientSecret: row.client_secret };
 }
 
 // --- 5. vercel --------------------------------------------------------------
