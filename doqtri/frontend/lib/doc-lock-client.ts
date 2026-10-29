@@ -3,7 +3,7 @@ import {
   DOC_LOCK_IDLE_MS,
   DOC_LOCK_POLL_MS,
   newEditSession,
-  parseDocLockStatus,
+  readDocLockStatus,
   type DocLockStatus,
 } from "@/lib/doc-lock";
 
@@ -296,7 +296,7 @@ async function readLock(res: Response): Promise<DocLockStatus> {
   const payload: unknown = await res.json().catch(() => null);
   const lock =
     payload && typeof payload === "object" && "lock" in payload
-      ? parseDocLockStatus((payload as { lock: unknown }).lock)
+      ? readDocLockStatus((payload as { lock: unknown }).lock)
       : null;
   // 423 still carries the status: someone else holds it.
   if (lock && (res.ok || res.status === 423)) return lock;

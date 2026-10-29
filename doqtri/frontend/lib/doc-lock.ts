@@ -91,6 +91,31 @@ export function parseDocLockStatus(raw: unknown): DocLockStatus | null {
   };
 }
 
+/**
+ * Reads a status as the lock routes send it (`{ lock }`, already through
+ * parseDocLockStatus); null when it is not one.
+ */
+export function readDocLockStatus(raw: unknown): DocLockStatus | null {
+  if (!raw || typeof raw !== "object") return null;
+  const lock = raw as Record<string, unknown>;
+  const documentId = str(lock.documentId);
+  const version = lock.version;
+  if (!documentId || typeof version !== "number" || !Number.isSafeInteger(version)) return null;
+  return {
+    documentId,
+    holder: str(lock.holder),
+    holderName: str(lock.holderName),
+    acquiredAt: str(lock.acquiredAt),
+    heartbeatAt: str(lock.heartbeatAt),
+    expiresAt: str(lock.expiresAt),
+    mine: lock.mine === true,
+    mineElsewhere: lock.mineElsewhere === true,
+    canEdit: lock.canEdit === true,
+    canTakeOver: lock.canTakeOver === true,
+    version,
+  };
+}
+
 /** True while a lock last renewed at `heartbeatAt` still holds at `now`. */
 export function isLockLive(heartbeatAt: string | null | undefined, now: number = Date.now()): boolean {
   if (!heartbeatAt) return false;
