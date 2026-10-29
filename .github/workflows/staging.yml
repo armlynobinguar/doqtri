@@ -1,0 +1,47 @@
+# Sets up and deploys this repo's app on staging on every push to `staging`:
+# its Supabase branch, its Vercel staging deployment, and its side of the
+# qdit x doqtri pairing. The other repo deploys its own app the same way.
+# Byte-identical in both repos; the work is done by
+# .github/staging/suite-staging.mjs (see its header). Delete the Supabase
+# branches when done: `node .github/staging/suite-staging.mjs down --yes`.
+name: Staging
+
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+
+concurrency:
+  group: staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  up:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # The secrets live on this environment, which only the `staging` branch
+    # may use, so a workflow pushed to any other branch cannot read them.
+    environment: staging
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Set up staging
+        run: node .github/staging/suite-staging.mjs up --app "${{ github.event.repository.name }}"
+        env:
+          QDIT_DIR: ${{ github.workspace }}
+          DOQTRI_DIR: ${{ github.workspace }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          STAGING_MASTER_SECRET: ${{ secrets.STAGING_MASTER_SECRET }}
+          STAGING_CHANNELS_API_KEY: ${{ secrets.STAGING_CHANNELS_API_KEY }}
+          STAGING_DOQTRI_RELAYER_SECRET: ${{ secrets.STAGING_DOQTRI_RELAYER_SECRET }}
+          STAGING_OPENAI_API_KEY: ${{ secrets.STAGING_OPENAI_API_KEY }}
+          STAGING_GITHUB_TOKEN: ${{ secrets.STAGING_GITHUB_TOKEN }}
+          STAGING_DOQTRI_ADMINS: ${{ secrets.STAGING_DOQTRI_ADMINS }}
