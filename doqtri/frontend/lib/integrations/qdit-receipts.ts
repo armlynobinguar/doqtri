@@ -334,7 +334,7 @@ export type ReceiptDeps = {
    * qdit origin configured) and no receipt links qdit.
    */
   qditPage?: {
-    /** The qdit origin (section 1), e.g. https://qdit.atalusan.com. */
+    /** The qdit origin (section 1), e.g. https://qdit.app. */
     origin: string;
     /** Defaults to isQditPagePublished. */
     isPublished?: (url: string) => Promise<boolean>;

@@ -16,7 +16,7 @@ const MILESTONE: MilestonePreview = {
   title: "Escrow contract",
   status: "submitted",
   due_date: "2026-11-15",
-  url: "https://qdit.atalusan.com/projects/soroban-payroll/milestones",
+  url: "https://qdit.app/projects/soroban-payroll/milestones",
   project: { id: "3f6c2a1e-8b4d-4c7e-9a10-2d5b7e9f1c34", name: "Soroban payroll", slug: "soroban-payroll" },
   node: { id: "h4", label: "Escrow contract" },
   anchor: {
@@ -29,7 +29,7 @@ const MILESTONE: MilestonePreview = {
   updated_at: "2026-10-22T08:11:40.000Z",
 };
 
-const FALLBACK = "https://qdit.atalusan.com/projects/soroban-payroll/milestones";
+const FALLBACK = "https://qdit.app/projects/soroban-payroll/milestones";
 
 const view = (state: MilestoneCardState, extra: { showTitle?: boolean; fallbackUrl?: string | null } = {}) =>
   renderToStaticMarkup(createElement(QditMilestoneCardView, { state, ...extra }));
