@@ -28,7 +28,7 @@ const MILESTONE = {
   status: "submitted",
   due_date: "2026-11-15",
   order_index: 3,
-  url: "https://qdit.atalusan.com/projects/soroban-payroll/milestones",
+  url: "https://qdit.app/projects/soroban-payroll/milestones",
   link: {
     id: "0e9d4c3b-2a1f-4e5d-8c7b-6a5f4e3d2c1b",
     doc_id: "c2d1e0f9-8a7b-4c6d-9e5f-4a3b2c1d0e9f",
@@ -58,7 +58,7 @@ describe("toMilestonePreview", () => {
       title: "Escrow contract",
       status: "submitted",
       due_date: "2026-11-15",
-      url: "https://qdit.atalusan.com/projects/soroban-payroll/milestones",
+      url: "https://qdit.app/projects/soroban-payroll/milestones",
       project: MILESTONE.project,
       node: { id: "h4", label: "Escrow contract" },
       anchor: {

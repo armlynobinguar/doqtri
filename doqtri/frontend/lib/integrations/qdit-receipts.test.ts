@@ -630,12 +630,12 @@ describe("qditPublicOrigin", () => {
   it("is the origin of QDIT_API_BASE_URL, only with the integration on", () => {
     const env = (vars: Record<string, string>) => vars as unknown as NodeJS.ProcessEnv;
     const on = { NEXT_PUBLIC_QDIT_INTEGRATION: "1" };
-    expect(qditPublicOrigin(env({ ...on, QDIT_API_BASE_URL: "https://qdit.atalusan.com/api/v1" }))).toBe("https://qdit.atalusan.com");
+    expect(qditPublicOrigin(env({ ...on, QDIT_API_BASE_URL: "https://qdit.app/api/v1" }))).toBe("https://qdit.app");
     expect(qditPublicOrigin(env({ ...on, QDIT_API_BASE_URL: "http://localhost:3001/api/v1/" }))).toBe("http://localhost:3001");
     expect(qditPublicOrigin(env(on))).toBeNull();
     expect(qditPublicOrigin(env({ ...on, QDIT_API_BASE_URL: "not a url" }))).toBeNull();
     expect(qditPublicOrigin(env({ ...on, QDIT_API_BASE_URL: "ftp://qdit.example/api/v1" }))).toBeNull();
-    expect(qditPublicOrigin(env({ QDIT_API_BASE_URL: "https://qdit.atalusan.com/api/v1" }))).toBeNull();
+    expect(qditPublicOrigin(env({ QDIT_API_BASE_URL: "https://qdit.app/api/v1" }))).toBeNull();
   });
 });
 

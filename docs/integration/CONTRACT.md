@@ -1,6 +1,6 @@
 # doqtri x qdit integration contract
 
-Status: v1.1.2, WP-2.0 (history in section 13, Changelog). This file is
+Status: v1.1.3, WP-2.0 (history in section 13, Changelog). This file is
 byte-identical in both repos (`qdit/docs/integration/CONTRACT.md`,
 `doqtri/docs/integration/CONTRACT.md`).
 Change it in both repos in the same phase, through the masterplan's decision
@@ -23,11 +23,11 @@ Keywords MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 
 | Base URL or contract | Production |
 | --- | --- |
-| qdit API | `https://qdit.atalusan.com/api/v1` |
+| qdit API | `https://qdit.app/api/v1` |
 | qdit OAuth server | `https://bsxnjoviwtkbuvaqpfng.supabase.co/auth/v1` |
 | doqtri webhook | `https://www.doqtri.xyz/api/integrations/qdit/webhook` |
 | doqtri origin (doc URLs) | `https://www.doqtri.xyz` |
-| qdit origin (public pages) | `https://qdit.atalusan.com` |
+| qdit origin (public pages) | `https://qdit.app` |
 | `DoqtriRegistry` (doqtri's chain, D-84) | testnet `CCCIDUCFQMTMAGESMPTB3MFW4TURS62ORSZNICFOE6MNQZO3MI7F6QRJ`; mainnet: not deployed yet, set by the operator |
 
 Preview and local deployments configure their own base URLs through env vars.
@@ -194,7 +194,7 @@ Rules that follow from the decisions:
   authorization code grant with PKCE (`S256`) and a client secret
   (`client_secret_basic`, section 1). Authorize at
   `<issuer>/oauth/authorize`; exchange and refresh at `<issuer>/oauth/token`.
-  qdit's consent screen is `https://qdit.atalusan.com/oauth/consent`.
+  qdit's consent screen is `https://qdit.app/oauth/consent`.
 - qdit MUST accept a token only when all of these hold:
   - the signature verifies against `<issuer>/.well-known/jwks.json`;
   - `iss` equals the issuer above and `exp` is in the future;
@@ -348,7 +348,7 @@ Project:
   "status": "active",
   "role": "member",
   "chain": { "network": "testnet", "contract_id": "CBP3NKXCRUSOJLLUXDF5AIRNPAC6IL7TFJ2KCNL5A2GTKC2MB7M4OHVG" },
-  "url": "https://qdit.atalusan.com/projects/soroban-payroll",
+  "url": "https://qdit.app/projects/soroban-payroll",
   "created_at": "2026-10-01T09:30:00.000Z",
   "updated_at": "2026-10-20T14:02:11.000Z"
 }
@@ -370,7 +370,7 @@ Milestone:
   "status": "submitted",
   "due_date": "2026-11-15",
   "order_index": 3,
-  "url": "https://qdit.atalusan.com/projects/soroban-payroll/milestones",
+  "url": "https://qdit.app/projects/soroban-payroll/milestones",
   "link": {
     "id": "0e9d4c3b-2a1f-4e5d-8c7b-6a5f4e3d2c1b",
     "doc_id": "c2d1e0f9-8a7b-4c6d-9e5f-4a3b2c1d0e9f",
@@ -1121,6 +1121,10 @@ Every change here is additive within v1 (section 3), except that v1.0.2
 narrows what `doc_url` accepts (D-45). Section 3 allows that because
 doqtri only ever sent its own URLs.
 
+- v1.1.3 (2026-10-29): qdit's production origin moves from
+  `https://qdit.atalusan.com` to `https://qdit.app` (WP-2.15). Section 1's
+  qdit API and qdit origin, section 5's consent screen and the section 7
+  examples follow. Paths and shapes do not change.
 - v1.1.2 (2026-10-25): writes down decisions D-93 to D-97 (masterplan rev
   43). No request or response shape changes on `/api/v1`. D-95 and D-96
   tighten server behaviour that a conforming client already meets: doqtri

@@ -43,7 +43,7 @@ const MILESTONE = {
   status: "submitted",
   due_date: "2026-11-15",
   order_index: 3,
-  url: "https://qdit.atalusan.com/projects/soroban-payroll/milestones",
+  url: "https://qdit.app/projects/soroban-payroll/milestones",
   link: null,
   anchor: null,
   created_at: "2026-10-20T14:02:11.000Z",

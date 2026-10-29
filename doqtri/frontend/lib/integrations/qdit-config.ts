@@ -90,7 +90,7 @@ export function qditWebhookSecret(env: NodeJS.ProcessEnv = process.env): string 
 
 /**
  * The qdit origin (section 1: the origin of QDIT_API_BASE_URL), where qdit's
- * public pages live, e.g. https://qdit.atalusan.com. Null when the
+ * public pages live, e.g. https://qdit.app. Null when the
  * integration is off or the base is unset or not an http(s) URL: the public
  * receipts then link no qdit page (WP-3.1, section 12).
  */
