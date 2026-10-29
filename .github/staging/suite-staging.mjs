@@ -605,6 +605,9 @@ function envFor(app, ctx) {
     hidden("INTEGRATION_TOKEN_KEY", s.tokenKey),
     hidden("QDIT_WEBHOOK_SECRET", s.webhook),
     plain("QDIT_API_BASE_URL", `${origin("qdit")}/api/v1`),
+    // A new branch copies production's Auth settings, Turnstile captcha
+    // included, so sign-up needs the widget: production's public site key.
+    ...(ctx.turnstileSiteKey ? [plain("NEXT_PUBLIC_TURNSTILE_SITE_KEY", ctx.turnstileSiteKey)] : []),
     // Paired with qdit's staging when it is up; otherwise the integration is
     // off (its "1" check fails) and the qdit values below keep their last ones.
     plain("NEXT_PUBLIC_QDIT_INTEGRATION", ctx.qditPairing ? "1" : "0"),
@@ -646,6 +649,18 @@ async function pushEnv(app, wanted) {
   log(app, changed.length ? `vercel: changed ${changed.join(", ")}.` : "vercel: staging variables unchanged.");
   await assertNoProductionLeak(app);
   return changed.length > 0;
+}
+
+// A production variable that is public by design and that staging needs as
+// is, read from the app's Vercel project. Null when production has none.
+async function productionPublicValue(app, key) {
+  if (!key.startsWith("NEXT_PUBLIC_")) throw new Error(`${key} is not public; staging never copies production secrets.`);
+  const { vercelProject } = APPS[app];
+  const { envs = [] } = await vercel("GET", `/v10/projects/${vercelProject}/env`);
+  const prod = envs.find((e) => e.key === key && e.target?.includes("production") && !e.gitBranch);
+  if (!prod) return null;
+  const { value } = await vercel("GET", `/v1/projects/${vercelProject}/env/${prod.id}`);
+  return value || null;
 }
 
 // Every general Preview variable is production's value; staging must override
@@ -813,6 +828,7 @@ async function upApp(app) {
     await pairQdit(ref, ctx.qdit.keys, ctx.shared);
   } else {
     await pairDoqtri(ref, ctx.shared);
+    ctx.turnstileSiteKey = await productionPublicValue("doqtri", "NEXT_PUBLIC_TURNSTILE_SITE_KEY");
     ctx.qditPairing = await readQditPairing();
     log(app, ctx.qditPairing
       ? `pair: paired with qdit staging (${ctx.qditPairing.ref}).`
