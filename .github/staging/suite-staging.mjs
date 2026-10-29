@@ -52,6 +52,8 @@
 //   STAGING_MASTER_SECRET   the same in both repos: every shared secret is
 //                           derived from it, so the two apps agree
 //   STAGING_<NAME>          optional doqtri values (see DOQTRI_PASSTHROUGH)
+//   STAGING_TURNSTILE_SECRET_KEY  doqtri: the Turnstile widget's secret key, so
+//                           staging sign-ups pass production's captcha setting
 //   QDIT_DIR, DOQTRI_DIR    a checkout of the app's repo with origin/staging
 //                           and origin/main; default ~/Projects/qdit, ~/Projects/doqtri
 //
@@ -391,6 +393,16 @@ async function configureAuth(app, ref) {
     // Staging has no SMTP: accounts are usable as soon as they sign up.
     mailer_autoconfirm: true,
   };
+  // A new branch keeps production's "captcha required" but not a secret that
+  // verifies its tokens; doqtri's staging sets Turnstile's own secret key.
+  const turnstileSecret = app === "doqtri" ? setting("STAGING_TURNSTILE_SECRET_KEY") : "";
+  if (turnstileSecret) {
+    Object.assign(body, {
+      security_captcha_enabled: true,
+      security_captcha_provider: "turnstile",
+      security_captcha_secret: mask(turnstileSecret),
+    });
+  }
   if (app === "qdit") {
     // qdit is doqtri's OAuth 2.1 provider (qdit-oauth-setup.md steps 1 and 2).
     Object.assign(body, {
@@ -401,7 +413,7 @@ async function configureAuth(app, ref) {
     await ensureSigningKey(ref);
   }
   await supabase("PATCH", `/v1/projects/${ref}/config/auth`, body);
-  log(app, `auth: site ${site}${app === "qdit" ? ", OAuth server on at /oauth/consent" : ""}.`);
+  log(app, `auth: site ${site}${app === "qdit" ? ", OAuth server on at /oauth/consent" : ""}${turnstileSecret ? ", Turnstile secret set" : ""}.`);
 }
 
 // /api/v1 accepts only ES256 or RS256 tokens, and Supabase cannot sign an ID
