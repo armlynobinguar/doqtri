@@ -388,16 +388,18 @@ describe("createDocLockApi", () => {
   function respond(status: number, body: unknown) {
     return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
   }
+  // What the lock routes send: the row already through parseDocLockStatus.
   const row = {
-    document_id: DOC,
+    documentId: DOC,
     holder: ANA,
-    holder_name: "ana",
-    acquired_at: null,
-    heartbeat_at: null,
-    expires_at: null,
+    holderName: "ana",
+    acquiredAt: null,
+    heartbeatAt: null,
+    expiresAt: null,
     mine: false,
-    can_edit: true,
-    can_take_over: true,
+    mineElsewhere: false,
+    canEdit: true,
+    canTakeOver: true,
     version: 2,
   };
 
@@ -417,6 +419,12 @@ describe("createDocLockApi", () => {
       `DELETE /api/notes/${DOC}/lock?session=${TAB}`,
     ]);
     expect(calls[3][1].keepalive).toBe(true);
+  });
+
+  it("reads the status the route sends", async () => {
+    const fetchImpl = vi.fn(async () => respond(200, { lock: row }));
+    const api = createDocLockApi(DOC, fetchImpl as unknown as typeof fetch);
+    await expect(api.status()).resolves.toEqual(row);
   });
 
   it("makes a fresh session per API when none is given", () => {
