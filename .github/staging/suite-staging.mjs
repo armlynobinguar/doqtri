@@ -63,7 +63,7 @@
 // staging override.
 
 import { execFileSync } from "node:child_process";
-import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, createPrivateKey, createPublicKey, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -150,6 +150,53 @@ function need(key) {
 function mask(value) {
   if (CI && value) console.log(`::add-mask::${value}`);
   return value;
+}
+
+// The public account (G…) of a Stellar secret seed (S…), without the SDK:
+// strkey is base32 of a version byte, the payload and a CRC16-XModem.
+const BASE32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+function crc16(bytes) {
+  let crc = 0;
+  for (const byte of bytes) {
+    crc ^= byte << 8;
+    for (let i = 0; i < 8; i++) crc = crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+  }
+  return crc;
+}
+function strkeyDecode(key, version) {
+  let bits = 0, value = 0;
+  const out = [];
+  for (const ch of key) {
+    const i = BASE32.indexOf(ch);
+    if (i < 0) throw new Error("not a strkey");
+    value = (value << 5) | i;
+    bits += 5;
+    if (bits >= 8) { out.push((value >>> (bits - 8)) & 0xff); bits -= 8; }
+  }
+  const raw = Buffer.from(out);
+  const body = raw.subarray(0, -2);
+  if (raw.length !== 35 || body[0] !== version || raw.readUInt16LE(33) !== crc16(body)) throw new Error("not a valid strkey");
+  return body.subarray(1);
+}
+function strkeyEncode(payload, version) {
+  const body = Buffer.concat([Buffer.from([version]), payload]);
+  const crc = Buffer.alloc(2);
+  crc.writeUInt16LE(crc16(body));
+  const raw = Buffer.concat([body, crc]);
+  let bits = 0, value = 0, out = "";
+  for (const byte of raw) {
+    value = (value << 8) | byte;
+    bits += 8;
+    while (bits >= 5) { out += BASE32[(value >>> (bits - 5)) & 31]; bits -= 5; }
+  }
+  if (bits > 0) out += BASE32[(value << (5 - bits)) & 31];
+  return out;
+}
+function stellarPublicKey(secret) {
+  const seed = strkeyDecode(secret.trim(), 18 << 3);
+  const der = Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), seed]);
+  const spki = createPublicKey(createPrivateKey({ key: der, format: "der", type: "pkcs8" })).export({ format: "der", type: "spki" });
+  return strkeyEncode(spki.subarray(-32), 6 << 3);
 }
 
 // Every generated secret is an HMAC of the master secret, so a run from either
@@ -632,6 +679,11 @@ function envFor(app, ctx) {
     // whatever staging key it has, or gets a placeholder that fails closed.
     ...(setting("STAGING_OPENAI_API_KEY") ? [] : [{ ...hidden("OPENAI_API_KEY", "staging-placeholder"), onlyIfMissing: true }]),
     ...DOQTRI_PASSTHROUGH.filter((k) => setting(`STAGING_${k}`)).map((k) => hidden(k, mask(setting(`STAGING_${k}`)))),
+    // The browser names the relayer in every paid write and the server signs
+    // as it, so a staging relayer key needs its own address published too.
+    ...(setting("STAGING_DOQTRI_RELAYER_SECRET")
+      ? [plain("NEXT_PUBLIC_DOQTRI_RELAYER", stellarPublicKey(setting("STAGING_DOQTRI_RELAYER_SECRET")))]
+      : []),
   ];
 }
 
