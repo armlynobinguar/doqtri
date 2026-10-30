@@ -158,7 +158,7 @@ edges, so the view degrades rather than dropping them. Reuses
 
 ## What shipped
 
-Migration applied to project `omoalynhmtbqffogjvoy` (two nullable columns; the
+Migration applied to production (two nullable columns; the
 nine existing rows keep `mindmap` null and fall back to headings until rebuilt).
 
 New:

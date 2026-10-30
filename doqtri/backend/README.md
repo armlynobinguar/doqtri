@@ -6,10 +6,9 @@ version-controlled source of what lives in the remote project.
 | | |
 | --- | --- |
 | Project | `Doqtri` |
-| Ref | `omoalynhmtbqffogjvoy` |
-| URL | `https://omoalynhmtbqffogjvoy.supabase.co` |
-| Region | `ap-southeast-1` |
 | Postgres | 17 |
+
+The project URL comes from the deployment's `NEXT_PUBLIC_SUPABASE_URL`.
 
 ## Layout
 

@@ -1,4 +1,4 @@
--- Applied to Supabase project "Doqtri" (omoalynhmtbqffogjvoy).
+-- Applied to doqtri's production Supabase project.
 --
 -- Private bucket for the original uploaded files. Kept for reference only; the
 -- markdown in public.documents is what the app reads.
