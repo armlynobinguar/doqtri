@@ -1,4 +1,4 @@
--- Applied to Supabase project "Doqtri" (omoalynhmtbqffogjvoy).
+-- Applied to doqtri's production Supabase project.
 --
 -- v2, progress/001-document-mindmap.md.
 --

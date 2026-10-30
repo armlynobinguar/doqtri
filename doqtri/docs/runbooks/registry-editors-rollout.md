@@ -25,7 +25,7 @@ failed check means stop.
 
 - Stellar CLI and the contract admin's key (`GCLICUN2…GOGD7GS4`, the
   registry's admin on testnet) as a CLI identity, here called `doqtri-admin`.
-- Access to the Supabase project `Doqtri` (`omoalynhmtbqffogjvoy`) with
+- Access to doqtri's Supabase project with
   branching, and to the Vercel project.
 - This runbook targets **testnet** (`CCCIDUCF…F6QRJ`), which is what the
   live app runs on. Mainnet is the same steps against its own registry

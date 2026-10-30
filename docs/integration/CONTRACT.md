@@ -24,7 +24,7 @@ Keywords MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 | Base URL or contract | Production |
 | --- | --- |
 | qdit API | `https://qdit.app/api/v1` |
-| qdit OAuth server | `https://bsxnjoviwtkbuvaqpfng.supabase.co/auth/v1` |
+| qdit OAuth server | qdit's Supabase Auth URL, `https://<qdit-project-ref>.supabase.co/auth/v1` |
 | doqtri webhook | `https://www.doqtri.xyz/api/integrations/qdit/webhook` |
 | doqtri origin (doc URLs) | `https://www.doqtri.xyz` |
 | qdit origin (public pages) | `https://qdit.app` |

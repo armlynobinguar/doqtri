@@ -1,4 +1,4 @@
--- Applied to Supabase project "Doqtri" (omoalynhmtbqffogjvoy).
+-- Applied to doqtri's production Supabase project.
 --
 -- One table is the whole data model. The graph is never stored: it is parsed
 -- from `markdown` at render time, which is what makes staleness impossible.
