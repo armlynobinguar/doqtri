@@ -10,6 +10,7 @@ import {
   memberChainState,
   parseInviteIdentifier,
   pendingRemovals,
+  recentRemovals,
   transferCandidates,
   type ChainJobRow,
   type RosterMember,
@@ -24,7 +25,7 @@ function member(role: WorkspaceRole, userId: string = role, address: string | nu
 }
 
 function job(over: Partial<ChainJobRow>): ChainJobRow {
-  return { id: "j", kind: "revoke", userId: null, address: C("E"), status: "pending", lastError: null, attempts: 1, createdAt: "2026-10-24T00:00:00Z", ...over };
+  return { id: "j", kind: "revoke", userId: null, address: C("E"), status: "pending", lastError: null, attempts: 1, createdAt: "2026-10-24T00:00:00Z", txHash: null, doneAt: null, ...over };
 }
 
 const owner = member("owner");
@@ -149,6 +150,19 @@ describe("pending removals and handovers", () => {
     const stillHere = job({ id: "c", address: editor.address });
     const done = job({ id: "d", address: C("Z"), status: "done" });
     expect(pendingRemovals([gone, later, stillHere, done], [owner, editor]).map((j) => j.id)).toEqual(["b", "a"]);
+  });
+
+  it("lists removals that reached the chain in the last day, newest first, with their transaction", () => {
+    const now = Date.parse("2026-10-30T12:00:00Z");
+    const done = (id: string, doneAt: string, over: Partial<ChainJobRow> = {}) =>
+      job({ id, address: C(id.toUpperCase()), status: "done", txHash: "a".repeat(64), doneAt, ...over });
+    const recent = done("a", "2026-10-30T03:39:41Z");
+    const newer = done("b", "2026-10-30T11:00:00Z");
+    const old = done("c", "2026-10-29T11:59:00Z");
+    const noHash = done("d", "2026-10-30T10:00:00Z", { txHash: null });
+    const stillHere = done("e", "2026-10-30T10:00:00Z", { address: editor.address });
+    const pending = job({ id: "f", address: C("F") });
+    expect(recentRemovals([recent, newer, old, noHash, stillHere, pending], [owner, editor], now).map((j) => j.id)).toEqual(["b", "a"]);
   });
 
   it("finds a D-31 handover waiting for the product owner", () => {

@@ -34,6 +34,9 @@ export type ChainJobRow = {
   lastError: string | null;
   attempts: number;
   createdAt: string;
+  /** The removal's transaction, once it reached the chain. */
+  txHash: string | null;
+  doneAt: string | null;
 };
 
 export const ROLE_LABELS: Record<WorkspaceRole, string> = {
@@ -164,6 +167,29 @@ export function pendingRemovals(jobs: ChainJobRow[], roster: RosterMember[]): Ch
   return jobs
     .filter((j) => j.kind === "revoke" && j.status !== "done" && j.address && !listed.has(j.address))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+/** How long a finished removal stays on the members screen. */
+export const RECENT_REMOVAL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Removals that reached the chain in the last day for people no longer in
+ * the roster, newest first: the proof that they are cut off on-chain too.
+ */
+export function recentRemovals(jobs: ChainJobRow[], roster: RosterMember[], now: number = Date.now()): ChainJobRow[] {
+  const listed = new Set(roster.map((m) => m.address).filter(Boolean));
+  return jobs
+    .filter(
+      (j) =>
+        j.kind === "revoke" &&
+        j.status === "done" &&
+        j.txHash &&
+        j.doneAt &&
+        now - Date.parse(j.doneAt) < RECENT_REMOVAL_MS &&
+        j.address &&
+        !listed.has(j.address),
+    )
+    .sort((a, b) => (b.doneAt ?? "").localeCompare(a.doneAt ?? ""));
 }
 
 /** A D-31 handover the product owner has to sign, if one is waiting. */

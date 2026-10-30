@@ -6,6 +6,7 @@ import {
   ArrowRightLeftIcon,
   CheckIcon,
   CircleAlertIcon,
+  ExternalLinkIcon,
   Loader2Icon,
   LogOutIcon,
   MailPlusIcon,
@@ -24,7 +25,7 @@ import { StatusTag } from "@/components/ui/status-tag";
 import { useWallet } from "@/components/vault/wallet-provider";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { DoqtriRegistry } from "@/lib/stellar/contract-client";
-import { REGISTRY_EDITORS } from "@/lib/stellar/config";
+import { expertTxUrl, REGISTRY_EDITORS } from "@/lib/stellar/config";
 import { NETWORK } from "@/lib/stellar/smart-wallet-config";
 import { NEW_OWNER_APPROVAL_LEDGERS, OWNER_APPROVAL_LEDGERS } from "@/lib/stellar/transfer-approval";
 import type { ChainWorkspace } from "@/lib/stellar/workspace-chain";
@@ -44,6 +45,8 @@ import {
   memberChainState,
   parseInviteIdentifier,
   pendingRemovals,
+  RECENT_REMOVAL_MS,
+  recentRemovals,
   ROLE_HELP,
   ROLE_LABELS,
   transferCandidates,
@@ -97,9 +100,12 @@ async function loadAll(workspaceId: string): Promise<Loaded> {
       .maybeSingle(),
     supabase
       .from("workspace_chain_jobs")
-      .select("id, kind, user_id, address, status, last_error, attempts, created_at")
+      .select("id, kind, user_id, address, status, last_error, attempts, created_at, tx_hash, done_at")
       .eq("workspace_id", workspaceId)
-      .in("status", ["pending", "needs_product_owner", "failed"])
+      // Open jobs, and removals finished in the last day so their transaction shows.
+      .or(
+        `status.in.(pending,needs_product_owner,failed),and(status.eq.done,done_at.gte.${new Date(Date.now() - RECENT_REMOVAL_MS).toISOString()})`,
+      )
       .order("created_at", { ascending: false }),
     supabase.rpc("email_invites_enabled"),
   ]);
@@ -146,6 +152,8 @@ async function loadAll(workspaceId: string): Promise<Loaded> {
       lastError: (r.last_error as string | null) ?? null,
       attempts: Number(r.attempts ?? 0),
       createdAt: r.created_at as string,
+      txHash: (r.tx_hash as string | null) ?? null,
+      doneAt: (r.done_at as string | null) ?? null,
     })),
     emailInvites: emailInvites.data === true,
   };
@@ -213,6 +221,7 @@ export function MembersView({
   const myRole: WorkspaceRole | null = me?.role ?? workspace?.role ?? null;
   const roles = assignableRoles(myRole);
   const removals = useMemo(() => pendingRemovals(data.jobs, data.roster), [data.jobs, data.roster]);
+  const removed = useMemo(() => recentRemovals(data.jobs, data.roster), [data.jobs, data.roster]);
   const handover = handoverNeedingProductOwner(data.jobs);
   const candidates = transferCandidates(data.roster, userId);
   const labelOf = (id: string) => nameOf(data.roster.find((m) => m.userId === id)?.label ?? null);
@@ -596,6 +605,26 @@ export function MembersView({
                 </div>
               ))}
               <p className="text-muted-foreground text-[12px]">They can&apos;t sign anything in this workspace meanwhile: doqtri refuses it.</p>
+            </div>
+          ) : null}
+          {removed.length > 0 ? (
+            <div className="grid gap-1.5 pt-1" data-testid="recent-removals">
+              <p className="text-muted-foreground text-[12px]">Removed on-chain in the last day:</p>
+              {removed.map((job) => (
+                <div key={job.id} className="flex flex-wrap items-center gap-2 text-[12px]">
+                  <span className="font-mono">{job.address ? shortenAddress(job.address) : "—"}</span>
+                  <StatusTag tone="verified">Removed on-chain</StatusTag>
+                  <a
+                    href={expertTxUrl(job.txHash!)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 font-mono underline-offset-2 hover:underline"
+                  >
+                    {shortenAddress(job.txHash!)}
+                    <ExternalLinkIcon className="size-3" />
+                  </a>
+                </div>
+              ))}
             </div>
           ) : null}
         </Section>
