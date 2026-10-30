@@ -4,7 +4,8 @@ import { NETWORK } from "@/lib/stellar/smart-wallet-config";
 import { readChainTemplate, readHasPurchased } from "@/lib/stellar/market-reads";
 import { TEMPLATE_ID_PATTERN } from "@/lib/market";
 import { purchaseColumns, saleFor, userWallet } from "@/lib/market-server";
-import { uniqueTitle } from "@/lib/title";
+import { insertWorkspaceDocument } from "@/lib/workspace-docs";
+import { readActiveWorkspaceCookie, workspaceForCreate } from "@/lib/active-workspace";
 
 /**
  * "Use template" on a community template (progress/004): copies it into the
@@ -35,8 +36,10 @@ export async function POST(request: Request) {
 
   let templateId = "";
   let txHash: string | null = null;
+  let requestedWorkspace: unknown;
   try {
-    const body = (await request.json()) as { templateId?: unknown; txHash?: unknown };
+    const body = (await request.json()) as { templateId?: unknown; txHash?: unknown; workspaceId?: unknown };
+    requestedWorkspace = body.workspaceId;
     if (typeof body.templateId === "string") templateId = body.templateId;
     if (typeof body.txHash === "string" && /^[0-9a-f]{64}$/.test(body.txHash)) txHash = body.txHash;
   } catch {
@@ -45,6 +48,17 @@ export async function POST(request: Request) {
   if (!TEMPLATE_ID_PATTERN.test(templateId)) return fail("Invalid template id", 400);
 
   const admin = createSupabaseAdminClient();
+
+  // Where the copy goes: the workspace the request names (the one on
+  // screen), else the active one, else the personal one; editors and above
+  // only (WP-1.7, D-14). Settled first, so a viewer is refused before
+  // anything is read or recorded.
+  const target = await workspaceForCreate(admin, user.id, {
+    requested: requestedWorkspace,
+    cookie: await readActiveWorkspaceCookie(user.id),
+  });
+  if (!target.ok) return fail(target.error, target.status);
+
   const { data: row } = await admin
     .from("market_templates")
     .select("id, title, body, status, hidden, creator_id")
@@ -102,20 +116,19 @@ export async function POST(request: Request) {
     }
   }
 
-  const { data: existing, error: titlesError } = await admin.from("documents").select("title").eq("user_id", user.id);
-  if (titlesError) return fail(titlesError.message, 500);
-  const title = uniqueTitle(row.title, (existing ?? []).map((d: { title: string }) => d.title));
-
-  const { data: inserted, error } = await admin
-    .from("documents")
-    .insert({ user_id: user.id, title, markdown: `# ${title}\n\n${row.body}`, source_template_id: templateId })
-    .select("id")
-    .single();
-  if (error) return fail(error.message, 500);
+  const { workspaceId } = target;
+  const inserted = await insertWorkspaceDocument(admin, {
+    userId: user.id,
+    workspaceId,
+    title: row.title,
+    markdown: (title) => `# ${title}\n\n${row.body}`,
+    extra: { source_template_id: templateId },
+  });
+  if ("error" in inserted) return fail(inserted.error, 500);
 
   if (!own) {
     const { error: useError } = await admin.rpc("market_record_use", { p_template_id: templateId });
     if (useError) console.error(`[market/claim] use of ${templateId} not counted: ${useError.message}`);
   }
-  return Response.json({ id: inserted.id, title });
+  return Response.json({ id: inserted.id, title: inserted.title });
 }

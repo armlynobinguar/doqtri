@@ -21,6 +21,7 @@ import {
 } from "@stellar/stellar-sdk";
 import { HORIZON_URL, IS_MAINNET, NETWORK_PASSPHRASE, RPC_URL } from "@/lib/stellar/config";
 import { RelayRejection } from "@/lib/stellar/relay-validation";
+import { DOQTRI_RELAYER } from "@/lib/stellar/smart-wallet-config";
 
 /** Inclusion fee bid per transaction, in stroops (0.0001 XLM). */
 const INCLUSION_FEE = 1_000;
@@ -32,7 +33,14 @@ const RELAYER_AUTH_LEDGERS = 100;
 export function relayerKeypair(): Keypair {
   const secret = process.env.DOQTRI_RELAYER_SECRET?.trim();
   if (!secret) throw new RelayRejection("Paid writes are not configured", 503);
-  return Keypair.fromSecret(secret);
+  const kp = Keypair.fromSecret(secret);
+  // The browser names DOQTRI_RELAYER in the call it signs; a key for any other
+  // account cannot authorize it, and the simulation would only say "fails".
+  if (kp.publicKey() !== DOQTRI_RELAYER) {
+    console.error(`[chain/relay] DOQTRI_RELAYER_SECRET is ${kp.publicKey()}, but the app names ${DOQTRI_RELAYER} as the relayer`);
+    throw new RelayRejection("Paid writes are misconfigured on this server", 503);
+  }
+  return kp;
 }
 
 /** `func` with the forwarder's `fee_amount` (argument 1) replaced. */

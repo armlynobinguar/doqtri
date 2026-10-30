@@ -60,13 +60,18 @@ const FORWARDERS: Partial<Record<StellarNetwork, string>> = {
   testnet: "CCBBXJSS7DUT34QDJOMZLAYMYOT4Q73NUSY573G4STXFUBSYXDKUBUHV",
 };
 
-/** Doqtri's relayer account: approves each forwarded call and receives the fee. */
+/**
+ * Doqtri's relayer account: approves each forwarded call and receives the fee.
+ * The server signs as DOQTRI_RELAYER_SECRET, so a deployment with its own
+ * relayer key (staging) names that key's account in NEXT_PUBLIC_DOQTRI_RELAYER.
+ */
 const RELAYERS: Partial<Record<StellarNetwork, string>> = {
   testnet: "GCY3QATELG5SQGVV56UF3RIXAFELDQTHP2PFLGG3SFJJETCGBEFUDB5M",
 };
+const RELAYER_OVERRIDE = process.env.NEXT_PUBLIC_DOQTRI_RELAYER?.trim() || null;
 
 export const FEE_FORWARDER: string | null = FORWARDERS[NETWORK] ?? null;
-export const DOQTRI_RELAYER: string | null = RELAYERS[NETWORK] ?? null;
+export const DOQTRI_RELAYER: string | null = RELAYER_OVERRIDE ?? RELAYERS[NETWORK] ?? null;
 
 /** The native XLM token contract on this network: what users pay fees in. */
 export const NATIVE_XLM = Asset.native().contractId(NETWORK_PASSPHRASE);

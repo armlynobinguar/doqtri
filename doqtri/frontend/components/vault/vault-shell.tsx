@@ -33,6 +33,9 @@ import { deleteNote, DeleteNoteError } from "@/lib/delete-note";
 import { renameNote } from "@/lib/rename-note";
 import { anchoredDocIds } from "@/lib/stellar/anchored";
 import type { FailedImport, NoteSummary, VaultIdentity } from "@/lib/types";
+import type { WorkspaceChoice } from "@/lib/workspace-scope";
+import { ActiveWorkspaceProvider, useActiveWorkspace } from "@/components/vault/workspace-context";
+import { WorkspaceSwitcher } from "@/components/vault/workspace-switcher";
 import {
   NavigationOverlay,
   NavigationProvider,
@@ -44,27 +47,36 @@ export function VaultShell({
   failedImports,
   identity,
   isAdmin,
+  workspace,
+  workspaces,
   children,
 }: {
+  /** The active workspace's notes: the only ones the vault lists (WP-1.7). */
   notes: NoteSummary[];
   failedImports: FailedImport[];
   identity: VaultIdentity;
   /** Staff (DOQTRI_ADMINS) get a ribbon shortcut to the review screens. */
   isAdmin: boolean;
+  /** The workspace the vault shows, resolved on the server. */
+  workspace: WorkspaceChoice;
+  /** Every workspace the user belongs to, for the switcher. */
+  workspaces: WorkspaceChoice[];
   children: React.ReactNode;
 }) {
   return (
     <WalletProvider identity={identity}>
       <VaultStatusProvider>
         <NavigationProvider>
-          <VaultShellInner
-            notes={notes}
-            failedImports={failedImports}
-            identity={identity}
-            isAdmin={isAdmin}
-          >
-            {children}
-          </VaultShellInner>
+          <ActiveWorkspaceProvider active={workspace} workspaces={workspaces}>
+            <VaultShellInner
+              notes={notes}
+              failedImports={failedImports}
+              identity={identity}
+              isAdmin={isAdmin}
+            >
+              {children}
+            </VaultShellInner>
+          </ActiveWorkspaceProvider>
           <WalletSetupDialog />
         </NavigationProvider>
       </VaultStatusProvider>
@@ -90,6 +102,7 @@ function VaultShellInner({
   const router = useRouter();
   const navigate = useNavigate();
   const { wordCount, saveState } = useVaultStatus();
+  const { active: workspace, canCreate } = useActiveWorkspace();
 
   const isMobile = useIsCompactVault();
   const [explorerOpen, setExplorerOpen] = useState(true);
@@ -129,15 +142,22 @@ function VaultShellInner({
           ? "Templates"
           : segment === "profile"
             ? "Profile"
-            : (notes.find((note) => note.id === activeId)?.title ?? "Vault");
+            : // With no note open, the phone says which workspace it is showing.
+              (notes.find((note) => note.id === activeId)?.title ?? workspace.name);
 
-  // Blank by default; a template seeds the title and body instead.
+  // Blank by default; a template seeds the title and body instead. Into the
+  // workspace on screen, named explicitly so a switch in another tab cannot
+  // send it elsewhere.
   const handleNewNote = useCallback(async (template?: NoteTemplate) => {
     if (creating) return;
+    if (!canCreate) {
+      toast.error(`You're a viewer in ${workspace.name}, so you can't add notes to it.`);
+      return;
+    }
     setCreating(true);
     setDrawerOpen(false);
     try {
-      const { id, title } = await createBlankNote(template?.title, template?.body);
+      const { id, title } = await createBlankNote(template?.title, template?.body, workspace.id);
       toast.success(`Created “${title}”`);
       // Navigate first, then refresh: a refresh issued before the push is
       // superseded by it, and the push reuses the cached layout, so the
@@ -149,7 +169,7 @@ function VaultShellInner({
     } finally {
       setCreating(false);
     }
-  }, [creating, navigate, router]);
+  }, [canCreate, creating, navigate, router, workspace.id, workspace.name]);
 
   // Whether a note is anchored decides whether it can be deleted at all, and
   // only the ledger knows. One batched read covers the whole vault; the string
@@ -266,6 +286,8 @@ function VaultShellInner({
     <FileExplorer
       notes={notes}
       activeId={activeId}
+      header={<WorkspaceSwitcher />}
+      canCreate={canCreate}
       creating={creating}
       onNewNote={() => void handleNewNote()}
       onUploadClick={() => {
@@ -300,6 +322,7 @@ function VaultShellInner({
         // Desktop shows this in the status bar; one live "Saved" is enough.
         saveState={isMobile ? saveState : "idle"}
         creating={creating}
+        canCreate={canCreate}
         onNewNote={() => void handleNewNote()}
         profileActive={segment === "profile"}
       />
@@ -349,6 +372,7 @@ function VaultShellInner({
       <StatusBar
         className="max-lg:hidden"
         noteCount={notes.length}
+        workspaceName={workspace.name}
         wordCount={wordCount}
         saveState={saveState}
         trailing={
@@ -386,6 +410,7 @@ function VaultShellInner({
         onOpenChange={setSwitcherOpen}
       />
       <UploadDialog
+        workspaceId={workspace.id}
         open={uploadOpen}
         retry={retryTarget}
         onOpenChange={(next) => {

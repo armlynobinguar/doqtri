@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { HashCheck } from "@/components/audit/hash-check";
+import { QditReceiptsSection } from "@/components/audit/qdit-receipts";
+import { SignerAddress } from "@/components/audit/signer-address";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { StatusTag } from "@/components/ui/status-tag";
 import { DoqtriRegistry, type ChainDocument } from "@/lib/stellar/contract-client";
@@ -15,18 +17,40 @@ import {
 import {
   getDocumentHistory,
   getDocumentTtl,
+  type ChainNodeEvent,
   type DocumentHistory,
   type DocumentTtl,
 } from "@/lib/stellar/history";
 import { sha256Hex } from "@/lib/stellar/hash";
+import { parseSignerRemovals, removalInEffect, type SignerRemoval } from "@/lib/stellar/signers";
 import { buildMindmap, type MindmapNode } from "@/lib/mindmap";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { supabaseApprovalStore } from "@/lib/integrations/qdit-approvals";
+import { isProjectChain, readMilestoneRecord } from "@/lib/integrations/qdit-chain";
+import { qditIntegrationEnabled, qditPublicOrigin } from "@/lib/integrations/qdit-config";
+import { loadQditReceipts, type LinkedProject, type QditReceipts } from "@/lib/integrations/qdit-receipts";
 
 /*
  * Public, read-only audit page. Everything shown comes from the ledger through
- * a signer-less client; the one exception is heading labels, which the owner
- * must opt into and which are withheld unless the private note still hashes to
- * the anchored hash.
+ * a signer-less client, with two exceptions from doqtri's database: heading
+ * labels, which the owner must opt into and which are withheld unless the
+ * private note still hashes to the anchored hash; and when a signer was
+ * removed from the note's workspace, to flag entries signed after that
+ * (WP-1.8). Signers are shown by wallet address only, never by name.
+ *
+ * With NEXT_PUBLIC_QDIT_INTEGRATION=1, headings signed from a qdit milestone
+ * also get a receipt (WP-3.1): qdit's milestone_proof contract read on the
+ * record's own network, the approving transaction when doqtri recorded it,
+ * and qdit's public milestone page once qdit answers it anonymously. The
+ * note's doc_project_links row says which project and contract a record
+ * may name (a record naming any other is shown as unverified, without the
+ * row's values); its slug is shown only as part of a URL qdit itself
+ * publishes. Each receipt folds out the heading's full proof chain (WP-3.3,
+ * CONTRACT.md section 12: plan version, submitted, approved, verified),
+ * from the same reads. When Horizon history cannot be read, the headings to
+ * check are the note's qdit-linked ones (node_links), used only to choose
+ * which records to read (D-85). Without the flag, or with no such heading,
+ * the page is unchanged.
  */
 export const revalidate = 30;
 
@@ -51,6 +75,8 @@ type Audit =
       history: DocumentHistory | null;
       ttl: DocumentTtl | null;
       labels: Map<string, string> | null;
+      removals: SignerRemoval[];
+      receipts: QditReceipts | null;
     };
 
 async function loadAudit(docId: string): Promise<Audit> {
@@ -65,13 +91,93 @@ async function loadAudit(docId: string): Promise<Audit> {
   if (!doc) return { state: "not-anchored" };
 
   // History and TTL are enrichments: the page stands on get_document alone.
-  const [history, ttl, labels] = await Promise.all([
-    getDocumentHistory(docId).catch(() => null),
+  // History also reads removed signers' own feeds, so it waits for them.
+  const removalsLoaded = loadSignerRemovals(docId).catch(() => []);
+  const [history, ttl, labels, removals] = await Promise.all([
+    removalsLoaded.then((removals) =>
+      getDocumentHistory(docId, {
+        removedSigners: removals.map(({ address, removedAt, restoredAt, revokedAt }) => ({
+          address,
+          removedAt,
+          restoredAt,
+          revokedAt,
+        })),
+      }).catch(() => null),
+    ),
     getDocumentTtl(docId).catch(() => null),
     loadPublicHeadings(docId, doc.contentHash).catch(() => null),
+    removalsLoaded,
   ]);
 
-  return { state: "anchored", doc, history, ttl, labels };
+  const receipts = qditIntegrationEnabled() ? await loadReceipts(docId, history).catch(() => null) : null;
+  return { state: "anchored", doc, history, ttl, labels, removals, receipts };
+}
+
+/**
+ * The qdit receipts (WP-3.1): chain reads, plus approvals doqtri recorded
+ * and the qdit page link. The service-role client is made only when a
+ * receipt needs it, so a deployment without it still shows the chain's side.
+ */
+async function loadReceipts(docId: string, history: DocumentHistory | null): Promise<QditReceipts | null> {
+  const origin = qditPublicOrigin();
+  return loadQditReceipts(docId, history, {
+    enabled: true,
+    readNode: (id, nodeId) => DoqtriRegistry.readNode(id, nodeId),
+    readMilestone: (chain, projectId, milestoneId) => readMilestoneRecord(chain, projectId, milestoneId),
+    approvals: (milestoneIds) => supabaseApprovalStore(createSupabaseAdminClient()).forMilestones(milestoneIds),
+    linkedProject: () => loadLinkedProject(docId),
+    linkedNodeIds: () => loadLinkedNodeIds(docId),
+    qditPage: origin ? { origin } : undefined,
+  });
+}
+
+/**
+ * The qdit project the note is linked to (D-09) and its chain, as doqtri
+ * stored them. Only app notes can be linked.
+ */
+async function loadLinkedProject(docId: string): Promise<LinkedProject | null> {
+  if (!UUID.test(docId)) return null;
+  const { data, error } = await createSupabaseAdminClient()
+    .from("doc_project_links")
+    .select("project_id, project_slug, chain_network, chain_contract_id")
+    .eq("document_id", docId)
+    .maybeSingle();
+  if (error) throw new Error(`doc project link unavailable: ${error.message}`);
+  if (!data) return null;
+  const chain = { network: data.chain_network, contractId: data.chain_contract_id };
+  return {
+    projectId: String(data.project_id),
+    slug: String(data.project_slug),
+    chain: isProjectChain(chain) ? chain : null,
+  };
+}
+
+/**
+ * The note's headings linked to a qdit milestone, read only when history
+ * could not be (D-85): they choose which records to read and are never
+ * shown themselves.
+ */
+async function loadLinkedNodeIds(docId: string): Promise<string[]> {
+  if (!UUID.test(docId)) return [];
+  const { data, error } = await createSupabaseAdminClient()
+    .from("node_links")
+    .select("node_id")
+    .eq("document_id", docId)
+    .eq("provider", "qdit");
+  if (error) throw new Error(`node links unavailable: ${error.message}`);
+  return (data ?? []).map((row) => String(row.node_id));
+}
+
+/**
+ * When each wallet that has signed for the note's workspace lost the right
+ * to (workspace_member_removals). Only app notes have a workspace.
+ */
+async function loadSignerRemovals(docId: string): Promise<SignerRemoval[]> {
+  if (!UUID.test(docId)) return [];
+  const admin = createSupabaseAdminClient();
+  const { data, error } = await admin.rpc("signer_removals_for_document", { p_document_id: docId });
+  if (error) throw new Error(`signer removals unavailable: ${error.message}`);
+  return parseSignerRemovals(data);
 }
 
 /**
@@ -206,12 +312,16 @@ function Anchored({
   history,
   ttl,
   labels,
+  removals,
+  receipts,
 }: {
   docId: string;
   doc: ChainDocument;
   history: DocumentHistory | null;
   ttl: DocumentTtl | null;
   labels: Map<string, string> | null;
+  removals: SignerRemoval[];
+  receipts: QditReceipts | null;
 }) {
   // An incomplete history (passkey-wallet owners only) numbers versions by
   // what was found, which can be wrong, so it labels nothing here.
@@ -223,6 +333,17 @@ function Anchored({
     ...numbered.filter((v) => v.version !== doc.version),
     { version: doc.version, contentHash: doc.contentHash },
   ];
+  const lateSigned = (e: { signer: string | null; closedAt: string }) =>
+    e.signer != null && removalInEffect(e.signer, e.closedAt, removals) != null;
+  // nodeEvents holds every status, including ones a later status replaced.
+  const signedAfterRemoval =
+    history != null && [...history.versions, ...history.nodeEvents].some(lateSigned);
+  // Per node: replaced statuses a removed wallet signed, so they stay visible.
+  const lateReplaced = new Map<string, ChainNodeEvent[]>();
+  for (const event of history?.nodeEvents ?? []) {
+    if (!lateSigned(event) || history?.nodes.includes(event)) continue;
+    lateReplaced.set(event.nodeId, [...(lateReplaced.get(event.nodeId) ?? []), event]);
+  }
 
   return (
     <>
@@ -302,6 +423,22 @@ function Anchored({
             above is read directly from the contract.
           </p>
         ) : null}
+        {history?.partial ? (
+          <p data-testid="history-partial" className="text-muted-foreground text-[13px]">
+            Writes by the note&apos;s editors are found by reading bounded stretches of the
+            ledger, and one of those reads could not be finished just now, so a write by an
+            editor may be missing below.
+          </p>
+        ) : null}
+        {signedAfterRemoval ? (
+          <p data-testid="signed-after-removal" className="text-warning text-[13px]">
+            Some entries on this page were signed by a wallet after Doqtri had removed it from
+            this note&apos;s workspace. They are marked &quot;Signed after removal&quot;.{" "}
+            {history?.workspace
+              ? "The ledger accepted them because the removal had not yet reached the note's on-chain editor list."
+              : "This note has no on-chain editor list, so the ledger only checks that the note's owner signed; the removal is Doqtri's record."}
+          </p>
+        ) : null}
         {history && history.versions.length > 0 ? (
           <ol className="glass divide-y divide-[var(--glass-lo)] rounded-2xl text-[13px]">
             {[...history.versions].reverse().map((v) => (
@@ -310,8 +447,11 @@ function Anchored({
                 className="grid gap-1 px-4 py-2.5 sm:grid-cols-[3rem_1fr_auto] sm:items-center sm:gap-4"
               >
                 <span className="font-mono">{history.incomplete ? "·" : `v${v.version}`}</span>
-                <span className="text-muted-foreground font-mono break-all" title={v.contentHash}>
-                  {shortHash(v.contentHash)} · {formatDate(v.closedAt)}
+                <span className="grid min-w-0 gap-0.5">
+                  <span className="text-muted-foreground font-mono break-all" title={v.contentHash}>
+                    {shortHash(v.contentHash)} · {formatDate(v.closedAt)}
+                  </span>
+                  <Signer signer={v.signer} fromOwner={v.signerFrom === "owner"} closedAt={v.closedAt} removals={removals} />
                 </span>
                 <a
                   className="text-primary underline-offset-2 hover:underline"
@@ -352,6 +492,35 @@ function Anchored({
                       {node.tool || "—"}
                       {node.artifactRef ? ` · ${node.artifactRef}` : ""}
                     </span>
+                    <Signer
+                      signer={node.signer}
+                      fromOwner={node.signerFrom === "owner"}
+                      closedAt={node.closedAt}
+                      removals={removals}
+                    />
+                    {(lateReplaced.get(node.nodeId) ?? []).map((event) => (
+                      <span
+                        key={event.txHash}
+                        data-testid="replaced-after-removal"
+                        className="text-muted-foreground mt-1 block text-[12px]"
+                      >
+                        Earlier: {event.status} on {formatDate(event.closedAt)} ·{" "}
+                        <a
+                          className="text-primary underline-offset-2 hover:underline"
+                          href={expertTxUrl(event.txHash)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          tx →
+                        </a>
+                        <Signer
+                          signer={event.signer}
+                          fromOwner={event.signerFrom === "owner"}
+                          closedAt={event.closedAt}
+                          removals={removals}
+                        />
+                      </span>
+                    ))}
                   </span>
                   <span className="text-muted-foreground inline-flex items-center gap-2 text-[12px]">
                     <StatusTag tone={statusTone(node.status)}>{node.status}</StatusTag>
@@ -376,20 +545,33 @@ function Anchored({
               </p>
             )}
           </>
-        ) : (
+        ) : history ? (
           <p className="text-muted-foreground text-[14px]">
             No node statuses have been recorded for this document.
           </p>
+        ) : (
+          // Not "none recorded": the statuses are in the history that could not be read.
+          <p data-testid="build-status-unread" className="text-muted-foreground text-[14px]">
+            Node statuses could not be read from Horizon right now. Each heading&apos;s current
+            status is still on the contract.
+          </p>
         )}
       </section>
+
+      {receipts ? (
+        <QditReceiptsSection receipts={receipts} labels={labels} chain={{ docId, doc, history, removals }} />
+      ) : null}
 
       <section className="glass grid gap-5 rounded-2xl px-6 py-5 text-[13px] sm:grid-cols-2">
         <div className="grid content-start gap-1.5">
           <h2 className="eyebrow text-foreground/80">What this proves</h2>
           <ul className="text-muted-foreground list-disc space-y-1 pl-4">
-            <li>The owner&apos;s wallet signed this exact hash at the time shown.</li>
+            <li>
+              The wallet shown signed this exact hash at the time shown (where none is shown,
+              the note&apos;s owner at that time did).
+            </li>
             <li>A copy that matches has not changed by a single byte since.</li>
-            <li>Each build status was recorded by the owner, in order.</li>
+            <li>Each build status was recorded by the wallet shown, in order.</li>
           </ul>
         </div>
         <div className="grid content-start gap-1.5">
@@ -404,10 +586,57 @@ function Anchored({
               ledger attests to what the owner anchored, not that it is correct.
             </li>
             <li>That a &quot;Built&quot; status was independently checked.</li>
+            <li>
+              Who is behind a wallet: signers are shown by address only. Whether one
+              had been removed from the workspace comes from Doqtri&apos;s records,
+              not the ledger.
+            </li>
           </ul>
         </div>
       </section>
     </>
+  );
+}
+
+/**
+ * Who signed an entry, and a flag when Doqtri had removed that wallet from
+ * the note's workspace before the entry's ledger closed. An owner-only
+ * entry whose signing wallet could not be read (`signer` null) names the
+ * role, not the current owner, who may not have owned the note then.
+ */
+function Signer({
+  signer,
+  fromOwner,
+  closedAt,
+  removals,
+}: {
+  signer: string | null;
+  fromOwner: boolean;
+  closedAt: string;
+  removals: SignerRemoval[];
+}) {
+  const removal = signer ? removalInEffect(signer, closedAt, removals) : null;
+  return (
+    <span className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]">
+      <span className="inline-flex items-center gap-1">
+        {signer ? (
+          <>
+            signed by <SignerAddress address={signer} owner={fromOwner} />
+          </>
+        ) : (
+          <span data-testid="signer-owner-at-time">signed by the note&apos;s owner at the time</span>
+        )}
+      </span>
+      {removal ? (
+        <StatusTag
+          tone="danger"
+          data-testid="signed-after-removal-entry"
+          title={`Doqtri removed this wallet from the note's workspace ${formatDate(removal.removedAt)}, before this entry was signed`}
+        >
+          Signed after removal
+        </StatusTag>
+      ) : null}
+    </span>
   );
 }
 

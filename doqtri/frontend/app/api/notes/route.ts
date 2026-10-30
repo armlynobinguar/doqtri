@@ -3,11 +3,17 @@ import {
   createSupabaseServerClient,
   createSupabaseAdminClient,
 } from "@/lib/supabase/server";
-import { MAX_TITLE_LENGTH, uniqueTitle } from "@/lib/title";
+import { MAX_TITLE_LENGTH } from "@/lib/title";
+import { insertWorkspaceDocument } from "@/lib/workspace-docs";
+import { readActiveWorkspaceCookie, workspaceForCreate } from "@/lib/active-workspace";
 
 /**
  * Create an Obsidian-style note, blank or from a template body. Headings
  * become the mindmap live; [[wikilinks]] feed the graph. No upload / AI required.
+ *
+ * The note goes into the workspace the request names (the one the vault is
+ * showing), else the active one, else the personal one; editors and above
+ * only (WP-1.7, D-14). See workspaceForCreate().
  */
 /** Upper bound on a template body, in characters. */
 const MAX_TEMPLATE_BODY = 50_000;
@@ -24,8 +30,10 @@ export async function POST(request: Request) {
 
   let requestedTitle = "Untitled";
   let templateBody: string | null = null;
+  let requestedWorkspace: unknown;
   try {
-    const body = (await request.json()) as { title?: unknown; body?: unknown };
+    const body = (await request.json()) as { title?: unknown; body?: unknown; workspaceId?: unknown };
+    requestedWorkspace = body.workspaceId;
     if (typeof body.title === "string" && body.title.trim()) {
       requestedTitle = body.title.trim().slice(0, MAX_TITLE_LENGTH);
     }
@@ -40,43 +48,35 @@ export async function POST(request: Request) {
   }
 
   const admin = createSupabaseAdminClient();
-  const { data: existing, error: titlesError } = await admin
-    .from("documents")
-    .select("title")
-    .eq("user_id", user.id);
+  const target = await workspaceForCreate(admin, user.id, {
+    requested: requestedWorkspace,
+    cookie: await readActiveWorkspaceCookie(user.id),
+  });
+  if (!target.ok) return NextResponse.json({ error: target.error }, { status: target.status });
+  const { workspaceId } = target;
 
-  if (titlesError) {
-    return NextResponse.json({ error: titlesError.message }, { status: 500 });
+  const created = await insertWorkspaceDocument(admin, {
+    userId: user.id,
+    workspaceId,
+    title: requestedTitle,
+    markdown: (title) =>
+      templateBody !== null
+        ? `# ${title}\n\n${templateBody}`
+        : [
+            `# ${title}`,
+            "",
+            "## Overview",
+            "",
+            "Write like Obsidian. Headings become the mindmap. Link ideas with [[wikilinks]].",
+            "",
+            "## Next",
+            "",
+          ].join("\n"),
+  });
+
+  if ("error" in created) {
+    return NextResponse.json({ error: created.error }, { status: 500 });
   }
 
-  const title = uniqueTitle(
-    requestedTitle,
-    (existing ?? []).map((row: { title: string }) => row.title),
-  );
-
-  const markdown =
-    templateBody !== null
-      ? `# ${title}\n\n${templateBody}`
-      : [
-          `# ${title}`,
-          "",
-          "## Overview",
-          "",
-          "Write like Obsidian. Headings become the mindmap. Link ideas with [[wikilinks]].",
-          "",
-          "## Next",
-          "",
-        ].join("\n");
-
-  const { data: inserted, error: insertError } = await admin
-    .from("documents")
-    .insert({ user_id: user.id, title, markdown })
-    .select("id")
-    .single();
-
-  if (insertError) {
-    return NextResponse.json({ error: insertError.message }, { status: 500 });
-  }
-
-  return NextResponse.json({ id: inserted.id, title });
+  return NextResponse.json({ id: created.id, title: created.title });
 }

@@ -2,10 +2,17 @@
   "framework": "nextjs",
   "buildCommand": "npm run build",
   "installCommand": "npm ci",
+  "crons": [
+    {
+      "path": "/api/chain/jobs",
+      "schedule": "30 3 * * *"
+    }
+  ],
   "git": {
     "deploymentEnabled": {
       "**": false,
-      "main": true
+      "main": true,
+      "staging": true
     }
   }
 }

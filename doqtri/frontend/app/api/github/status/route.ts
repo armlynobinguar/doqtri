@@ -13,8 +13,10 @@ const CONCURRENCY = 5;
  * node status that suggests. Reads only; the owner signs any change in the
  * browser, because the contract requires the owner's signature.
  *
- * Uses the session client, not the service role: RLS limits the rows to the
- * caller's own links, so a docId that is not theirs simply returns nothing.
+ * Uses the session client, not the service role: RLS limits the rows to links
+ * on documents the caller can read, so any other docId simply returns nothing.
+ * Only GitHub links: a heading linked to a qdit milestone (WP-2.5) has no
+ * repo to ask about.
  */
 export async function POST(request: Request) {
   const supabase = await createSupabaseServerClient();
@@ -40,6 +42,7 @@ export async function POST(request: Request) {
     .from("node_links")
     .select("id, node_id, node_label, repo, number")
     .eq("document_id", docId)
+    .eq("provider", "github")
     .order("created_at")
     .limit(MAX_LINKS);
   if (error) {

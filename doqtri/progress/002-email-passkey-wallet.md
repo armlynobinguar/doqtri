@@ -209,6 +209,11 @@ Findings that change later sections:
       confirm email on, minimum password length 8, leaked-password protection
       on (security advisor flags it off), captcha → Turnstile secret.
 - [ ] Signed-in email vault checked end to end (needs the dashboard config).
+- [ ] Workspace invites by email (D-49, WP-1.5): only after "Confirm email" is
+      on, run `update public.invite_settings set email_invites = true;`. Until
+      then invites go to wallet addresses only. With confirmations off,
+      Supabase confirms an email at signup, so an email invite would go to
+      whoever registered the address first. Part of the G1 sign-off (D-47).
 
 ### 2. Wallet data model — **Done 2026-10-08, applied to production**
 
@@ -221,6 +226,11 @@ the first draft of this section:
   `(user_id, network)` and `(network, tx_hash)`.
 - `smart_wallets` (owner select): `address` `C…`, `created_tx`. `on delete restrict`
   to `auth.users`: a user that owns an on-chain wallet is not silently deleted.
+  (Since WP-1.5/WP-1.9, D-51: `on delete cascade`. The account-deletion trigger
+  queues every on-chain role the wallet holds for revocation; then the record
+  cascades. Since WP-1.11, D-63, an account with anchored personal notes is no
+  longer refused: the notes stay, author-less, and the wallet stays their
+  on-chain identity in `chain_writes`.)
 - `wallet_passkeys` (owner select): credential id, 65-byte uncompressed P-256
   key (checked), `rp_id`, `label`; FK to the wallet on the same network.
 - `chain_writes` (**public select**, no `user_id` column): what the audit page
@@ -310,7 +320,8 @@ authenticated cannot execute the function, RLS on all four tables.
   charged before simulation, to protect RPC as well as Channels).
 - Test data: 9 `e2e-passkey…@doqtri.test` users, 6 testnet wallets, 7 notes in
   the production project. `on delete restrict` means removing them needs the
-  wallet rows (testnet) deleted first.
+  wallet rows (testnet) deleted first. (No longer once WP-1.5's migration is
+  applied: the rows cascade, D-51.)
 
 ### 5. History for contract-account owners — **Done 2026-10-08 (testnet verified)**
 

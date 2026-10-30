@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { StatusTag } from "@/components/ui/status-tag";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PasskeysDialog } from "@/components/vault/passkeys-dialog";
+import { ConnectedApps, type ConnectedAppsData } from "@/components/vault/connected-apps";
 import { usePreferences } from "@/components/vault/preferences";
 import type { Preferences } from "@/lib/preferences";
 import { useWallet } from "@/components/vault/wallet-provider";
@@ -44,6 +45,12 @@ const WRITE_LABELS: Record<string, string> = {
   update_document: "Anchored a new version",
   anchor: "Anchored a note",
   set_node_status: "Synced a mindmap node",
+  // Team notes (WP-1.4): written as a workspace editor.
+  anchor_as: "Anchored a team note",
+  update_document_as: "Anchored a new version of a team note",
+  set_node_status_as: "Synced a team note's mindmap node",
+  assign_document: "Shared a note with its workspace",
+  unassign_document: "Took a note out of its workspace",
 };
 
 function formatDate(iso: string): string {
@@ -140,7 +147,7 @@ export type ReferralSummary = {
   via: { link: number; qr: number; code: number };
 };
 
-const PROFILE_TABS = ["account", "wallet", "preferences", "invite"] as const;
+const PROFILE_TABS = ["account", "wallet", "preferences", "apps", "invite"] as const;
 type ProfileTab = (typeof PROFILE_TABS)[number];
 const isProfileTab = (value: string | null): value is ProfileTab =>
   PROFILE_TABS.includes(value as ProfileTab);
@@ -152,7 +159,19 @@ type Attention = {
   action?: { label: string; icon: React.ComponentType; run: () => void; testId?: string };
 };
 
-export function ProfileView({ joinedAt, referral }: { joinedAt: string; referral: ReferralSummary | null }) {
+export function ProfileView({
+  joinedAt,
+  referral,
+  workspaceId,
+  connectedApps = null,
+}: {
+  joinedAt: string;
+  referral: ReferralSummary | null;
+  /** The active workspace, whose notes the vault shows and this page counts (WP-1.7). */
+  workspaceId: string;
+  /** Connected apps (WP-2.3); null hides the tab (NEXT_PUBLIC_QDIT_INTEGRATION unset). */
+  connectedApps?: ConnectedAppsData | null;
+}) {
   const wallet = useWallet();
   const { identity } = wallet;
   const smartWallet = identity.kind === "email" ? identity.smartWallet : null;
@@ -172,7 +191,11 @@ export function ProfileView({ joinedAt, referral }: { joinedAt: string; referral
   const router = useRouter();
   const requestedTab = useSearchParams().get("tab");
   const tab: ProfileTab =
-    isProfileTab(requestedTab) && (requestedTab !== "invite" || referral) ? requestedTab : "account";
+    isProfileTab(requestedTab) &&
+    (requestedTab !== "invite" || referral) &&
+    (requestedTab !== "apps" || connectedApps)
+      ? requestedTab
+      : "account";
   function setTab(next: ProfileTab) {
     router.replace(next === "account" ? "/vault/profile" : `/vault/profile?tab=${next}`, { scroll: false });
   }
@@ -225,6 +248,7 @@ export function ProfileView({ joinedAt, referral }: { joinedAt: string; referral
       void createSupabaseBrowserClient()
         .from("documents")
         .select("id", { count: "exact", head: true })
+        .eq("workspace_id", workspaceId)
         .then(({ count }) => {
           if (!cancelled) setNoteCount(count ?? 0);
         });
@@ -234,7 +258,7 @@ export function ProfileView({ joinedAt, referral }: { joinedAt: string; referral
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [refreshActivity]);
+  }, [refreshActivity, workspaceId]);
 
   async function act(name: string, task: () => Promise<void>, done?: string) {
     setBusy(name);
@@ -413,6 +437,15 @@ export function ProfileView({ joinedAt, referral }: { joinedAt: string; referral
               <Settings2Icon />
               Preferences
             </TabsTrigger>
+            {connectedApps ? (
+              <TabsTrigger value="apps" data-testid="profile-tab-apps">
+                <PlugIcon />
+                Apps
+                {connectedApps.qdit?.status === "needs_reconnect" ? (
+                  <span className="bg-warning size-1.5 rounded-full" aria-label="needs attention" />
+                ) : null}
+              </TabsTrigger>
+            ) : null}
             {referral ? (
               <TabsTrigger value="invite" data-testid="profile-tab-invite">
                 <GiftIcon />
@@ -706,6 +739,8 @@ export function ProfileView({ joinedAt, referral }: { joinedAt: string; referral
             </p>
           </Section>
         ) : null}
+
+        {tab === "apps" && connectedApps ? <ConnectedApps data={connectedApps} /> : null}
 
         {tab === "invite" && referral ? (
           <Section title="Invite friends" icon={GiftIcon}>

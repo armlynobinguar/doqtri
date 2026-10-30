@@ -10,20 +10,21 @@ import type { DocMindmap } from "@/lib/mindmap-types";
  * cannot drift on how the map and its hash are paired — a stored mindmap whose
  * hash came from different markdown would report itself fresh forever.
  *
- * `userId` is required and applied to the write even though `id` is unique:
- * this runs with the service role, so ownership is enforced here or nowhere.
+ * `workspaceId` is required and applied to the write even though `id` is
+ * unique: this runs with the service role, so callers must have checked the
+ * user's role in that workspace, and the write cannot reach another one.
  */
 export async function generateAndStoreMindmap(
   admin: SupabaseClient,
   params: {
     id: string;
-    userId: string;
+    workspaceId: string;
     title: string;
     markdown: string;
     signal?: AbortSignal;
   },
 ): Promise<DocMindmap> {
-  const { id, userId, title, markdown, signal } = params;
+  const { id, workspaceId, title, markdown, signal } = params;
 
   const mindmap = await extractMindmap({ title, markdown, signal });
 
@@ -31,7 +32,7 @@ export async function generateAndStoreMindmap(
     .from("documents")
     .update({ mindmap, mindmap_hash: hashMarkdown(markdown) })
     .eq("id", id)
-    .eq("user_id", userId);
+    .eq("workspace_id", workspaceId);
 
   if (error) throw new Error(error.message);
 

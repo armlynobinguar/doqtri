@@ -8,6 +8,16 @@
  *   call's auth entry; /api/chain/relay submits it. Where users pay their own
  *   fees (progress/003) the call is wrapped in the FeeForwarder and the wallet
  *   pays Doqtri's relayer in XLM; otherwise Channels pays.
+ *
+ * Two kinds of document, told apart by its workspace (WP-1.4, behind
+ * REGISTRY_EDITORS until the deployed registry is upgraded):
+ * - personal: the owner-only calls, as before.
+ * - team workspace: the `*_as` calls, naming the signer, since the document
+ *   is owned on-chain by the workspace's owner (D-28) and written by its
+ *   members. A new team document is registered by its first signer and then
+ *   handed to the workspace with `assign_document`, a second signature;
+ *   every team write checks `get_doc_workspace` and repeats that step if it
+ *   never landed (reconcileWorkspace).
  */
 import type { NodeStatus } from "@/lib/stellar/types";
 import {
@@ -17,14 +27,15 @@ import {
   type ContractNodeStatus,
   Buffer,
 } from "@/lib/bindings/doqtri-registry";
-import { CONTRACT_ID, NETWORK_PASSPHRASE, RPC_URL } from "@/lib/stellar/config";
+import { CONTRACT_ID, NETWORK_PASSPHRASE, REGISTRY_EDITORS, RPC_URL } from "@/lib/stellar/config";
 import { hexToBytes32 } from "@/lib/stellar/hash";
-import { signSorobanTx } from "@/lib/wallet";
-import { passkeyWalletFor, payAndRelay, signAndRelay } from "@/lib/passkey-wallet";
+import { signSorobanTx, signWalletAuthEntry } from "@/lib/wallet";
+import { passkeyWalletFor, payAndRelay, signAndRelay, signPasskeyAuthEntry } from "@/lib/passkey-wallet";
 import { USER_PAYS_FEES } from "@/lib/stellar/smart-wallet-config";
-import { rpc, scValToNative, StrKey, type contract } from "@stellar/stellar-sdk";
+import { Address, authorizeEntry, rpc, scValToNative, StrKey, type contract, type xdr } from "@stellar/stellar-sdk";
+import { parseChainWorkspace, type ChainWorkspace } from "@/lib/stellar/workspace-chain";
 import { assertBalanceCovers, getAccountBalance, type AccountBalance } from "@/lib/stellar/horizon";
-import { DoqtriError, mapWalletError } from "@/lib/stellar/errors";
+import { DoqtriError, mapWalletError, workspaceContractError } from "@/lib/stellar/errors";
 
 export type ChainDocument = {
   version: number;
@@ -34,12 +45,42 @@ export type ChainDocument = {
   owner?: string;
 };
 
+/**
+ * Where a team document stands after a write: in its workspace on-chain, so
+ * every editor can write it, or not yet, with why. `txHash` is set when this
+ * write is what assigned it.
+ */
+export type WorkspaceAssignment =
+  | { status: "assigned"; txHash?: string }
+  | { status: "unassigned"; reason: string };
+
 /** What a registry write leaves behind for the UI to show as a receipt. */
 export type WriteReceipt = {
   txHash: string;
   /** The document version after the write; absent for node-status writes. */
   version?: number;
+  /** Set for writes on a team workspace's document (editor mode). */
+  workspace?: WorkspaceAssignment;
 };
+
+/**
+ * The workspace a document belongs to, as doqtri's database has it. Its id
+ * is also the workspace's id on-chain.
+ */
+export type WriteTarget = { workspaceId: string; personal: boolean };
+
+/**
+ * Which registry calls a write on a document uses: the `*_as` calls for a
+ * team workspace's document once REGISTRY_EDITORS is on, else the owner-only
+ * ones. A personal workspace's documents keep the owner-only calls: only
+ * their creator writes them, and they are never assigned.
+ */
+export function writeMode(
+  target: WriteTarget | null | undefined,
+  enabled: boolean = REGISTRY_EDITORS,
+): "owner" | "editor" {
+  return enabled && target != null && !target.personal ? "editor" : "owner";
+}
 
 export type ChainNode = {
   status: string;
@@ -129,6 +170,9 @@ function unwrapResult<T>(
         err?.message ||
         (code ? Errors[Number(code) as keyof typeof Errors]?.message : undefined) ||
         fallbackMsg;
+      const named = Object.entries(Errors).find(([, e]) => e.message === msg)?.[0];
+      const workspaceError = workspaceContractError(Number(code ?? named));
+      if (workspaceError) throw workspaceError;
       if (msg.includes("DocumentAlreadyExists") || msg === Errors[1].message) {
         throw new DoqtriError("ALREADY_EXISTS", "Document already registered");
       }
@@ -243,6 +287,16 @@ function mapInvokeError(e: unknown): never {
   throw mapWalletError(e);
 }
 
+/** A team write's receipt, with where the document stands in its workspace. */
+async function withWorkspace(
+  source: string,
+  docId: string,
+  target: WriteTarget,
+  receipt: WriteReceipt,
+): Promise<WriteReceipt> {
+  return { ...receipt, workspace: await DoqtriRegistry.reconcileWorkspace(source, docId, target) };
+}
+
 export const DoqtriRegistry = {
   /** Best-effort read: null for "not anchored" and for any network failure. */
   async getDocument(docId: string): Promise<ChainDocument | null> {
@@ -282,34 +336,71 @@ export const DoqtriRegistry = {
     };
   },
 
+  /** Best-effort read: null for "no record" and for any network failure. */
   async getNode(docId: string, nodeId: string): Promise<ChainNode | null> {
     try {
-      const tx = await readClient().get_node({
-        doc_id: docId,
-        node_id: nodeId,
-      });
-      const node = unwrapResult<{
-        status: ContractNodeStatus;
-        tool: string;
-        artifact_ref: string;
-        updated_at: bigint | number;
-      }>(tx.result, "get_node failed", simulationError(tx));
-      return {
-        status: fromStatusTag(node.status),
-        tool: String(node.tool ?? ""),
-        artifactRef: String(node.artifact_ref ?? ""),
-        updatedAt: Number(node.updated_at),
-      };
+      return await DoqtriRegistry.readNode(docId, nodeId);
     } catch {
       return null;
     }
+  },
+
+  /**
+   * Strict read: null only when the contract says the node has no record.
+   * Transport and RPC failures throw, so a signature is never planned from a
+   * read that failed (D-04).
+   */
+  async readNode(docId: string, nodeId: string): Promise<ChainNode | null> {
+    const tx = await readClient().get_node({
+      doc_id: docId,
+      node_id: nodeId,
+    });
+    let node: {
+      status: ContractNodeStatus;
+      tool: string;
+      artifact_ref: string;
+      updated_at: bigint | number;
+    };
+    try {
+      node = unwrapResult(tx.result, "get_node failed", simulationError(tx));
+    } catch (e) {
+      if (e instanceof DoqtriError && (e.code === "NODE_NOT_FOUND" || e.code === "NOT_FOUND")) return null;
+      throw e;
+    }
+    return {
+      status: fromStatusTag(node.status),
+      tool: String(node.tool ?? ""),
+      artifactRef: String(node.artifact_ref ?? ""),
+      updatedAt: Number(node.updated_at),
+    };
+  },
+
+  /** A workspace's current owner on-chain, or null when there is no such workspace. Throws on transport errors. */
+  async readWorkspaceOwner(workspaceId: string): Promise<string | null> {
+    const tx = await readClient().get_workspace({ workspace_id: workspaceId });
+    try {
+      return String(unwrapResult<{ owner: string }>(tx.result, "get_workspace failed", simulationError(tx)).owner);
+    } catch (e) {
+      if (e instanceof DoqtriError && e.code === "WORKSPACE_NOT_FOUND") return null;
+      throw e;
+    }
+  },
+
+  /** The workspace a document is assigned to on-chain, or null. Throws on transport errors. */
+  async readDocWorkspace(docId: string): Promise<string | null> {
+    const tx = await readClient().get_doc_workspace({ doc_id: docId });
+    return tx.result ?? null;
   },
 
   async registerDocument(
     source: string,
     docId: string,
     contentHashHex: string,
+    target?: WriteTarget | null,
   ): Promise<WriteReceipt> {
+    // There is no register_document_as: anchor_as registers a new document
+    // with its signer as the owner, and assign_document then hands it on.
+    if (writeMode(target) === "editor") return DoqtriRegistry.anchor(source, docId, contentHashHex, [], target);
     try {
       const { tx, balance } = await buildChecked(source, () =>
         writeClient(source).register_document({
@@ -345,55 +436,71 @@ export const DoqtriRegistry = {
     source: string,
     docId: string,
     contentHashHex: string,
+    target?: WriteTarget | null,
   ): Promise<WriteReceipt> {
+    const editor = writeMode(target) === "editor";
+    let receipt: WriteReceipt;
     try {
       const { tx, balance } = await buildChecked(source, () =>
-        writeClient(source).update_document({
-          doc_id: docId,
-          new_hash: hexToBuffer(contentHashHex),
-        }),
+        editor
+          ? writeClient(source).update_document_as({
+              signer: source,
+              doc_id: docId,
+              new_hash: hexToBuffer(contentHashHex),
+            })
+          : writeClient(source).update_document({
+              doc_id: docId,
+              new_hash: hexToBuffer(contentHashHex),
+            }),
       );
+      if (editor) unwrapResult(tx.result, "update failed", simulationError(tx));
       preflight(balance, tx);
-      return await send(source, tx, true);
+      receipt = await send(source, tx, true);
     } catch (e) {
       mapInvokeError(e);
     }
+    return editor ? withWorkspace(source, docId, target!, receipt) : receipt;
   },
 
   /**
    * One transaction, one signature: registers the document if it is new,
    * anchors `contentHashHex` as a new version if it changed (the same text
-   * keeps its version), and writes every node status in `nodes`.
+   * keeps its version), and writes every node status in `nodes`. On a team
+   * document it is `anchor_as`, followed, for a new document, by the
+   * `assign_document` that puts it in its workspace.
    */
   async anchor(
     source: string,
     docId: string,
     contentHashHex: string,
     nodes: { nodeId: string; status: NodeStatus; tool: string; artifactRef: string }[],
+    target?: WriteTarget | null,
   ): Promise<WriteReceipt> {
     if (nodes.length > MAX_NODES_PER_CALL) {
       throw new DoqtriError("TOO_MANY_NODES", `At most ${MAX_NODES_PER_CALL} nodes can be anchored at once.`);
     }
+    const editor = writeMode(target) === "editor";
+    const updates = nodes.map((n) => ({
+      node_id: n.nodeId,
+      status: toStatusTag(n.status),
+      tool: n.tool,
+      artifact_ref: n.artifactRef,
+    }));
+    const contentHash = hexToBuffer(contentHashHex);
+    let receipt: WriteReceipt;
     try {
       const { tx, balance } = await buildChecked(source, () =>
-        writeClient(source).anchor({
-          owner: source,
-          doc_id: docId,
-          content_hash: hexToBuffer(contentHashHex),
-          nodes: nodes.map((n) => ({
-            node_id: n.nodeId,
-            status: toStatusTag(n.status),
-            tool: n.tool,
-            artifact_ref: n.artifactRef,
-          })),
-        }),
+        editor
+          ? writeClient(source).anchor_as({ signer: source, doc_id: docId, content_hash: contentHash, nodes: updates })
+          : writeClient(source).anchor({ owner: source, doc_id: docId, content_hash: contentHash, nodes: updates }),
       );
       unwrapResult(tx.result, "anchor failed", simulationError(tx));
       preflight(balance, tx);
-      return await send(source, tx, true);
+      receipt = await send(source, tx, true);
     } catch (e) {
       mapInvokeError(e);
     }
+    return editor ? withWorkspace(source, docId, target!, receipt) : receipt;
   },
 
   async setNodeStatus(
@@ -403,21 +510,225 @@ export const DoqtriRegistry = {
     status: NodeStatus,
     tool: string,
     artifactRef: string,
+    target?: WriteTarget | null,
   ): Promise<WriteReceipt> {
+    const editor = writeMode(target) === "editor";
+    let receipt: WriteReceipt;
     try {
       const { tx, balance } = await buildChecked(source, () =>
-        writeClient(source).set_node_status({
-          doc_id: docId,
-          node_id: nodeId,
-          status: toStatusTag(status),
-          tool,
-          artifact_ref: artifactRef,
-        }),
+        editor
+          ? writeClient(source).set_node_status_as({
+              signer: source,
+              doc_id: docId,
+              node_id: nodeId,
+              status: toStatusTag(status),
+              tool,
+              artifact_ref: artifactRef,
+            })
+          : writeClient(source).set_node_status({
+              doc_id: docId,
+              node_id: nodeId,
+              status: toStatusTag(status),
+              tool,
+              artifact_ref: artifactRef,
+            }),
       );
+      if (editor) unwrapResult(tx.result, "set_node_status failed", simulationError(tx));
+      preflight(balance, tx);
+      receipt = await send(source, tx, false);
+    } catch (e) {
+      mapInvokeError(e);
+    }
+    return editor ? withWorkspace(source, docId, target!, receipt) : receipt;
+  },
+
+  /**
+   * Puts a document in a workspace on-chain, so its members may write it.
+   * The document's current on-chain owner signs (for a new document, the
+   * wallet that registered it). Only with REGISTRY_EDITORS.
+   */
+  async assignDocument(source: string, docId: string, workspaceId: string): Promise<WriteReceipt> {
+    if (!REGISTRY_EDITORS) {
+      throw new DoqtriError("NOT_ENABLED", "Workspace calls aren't enabled on this registry yet.");
+    }
+    try {
+      const { tx, balance } = await buildChecked(source, () =>
+        writeClient(source).assign_document({ doc_id: docId, workspace_id: workspaceId }),
+      );
+      unwrapResult(tx.result, "assign_document failed", simulationError(tx));
       preflight(balance, tx);
       return await send(source, tx, false);
     } catch (e) {
       mapInvokeError(e);
     }
+  },
+
+  /**
+   * Makes `admin` an admin of `workspaceId` on-chain. Only the workspace's
+   * owner (`source`) can sign it. After a transfer the former owner holds no
+   * role on-chain, and when the database kept them as an admin this is the
+   * follow-up that makes the chain agree (D-35; formerOwnerFollowUp() in
+   * ownership-transfer.ts says when). Only with REGISTRY_EDITORS.
+   */
+  async addAdmin(source: string, workspaceId: string, admin: string): Promise<WriteReceipt> {
+    if (!REGISTRY_EDITORS) {
+      throw new DoqtriError("NOT_ENABLED", "Workspace calls aren't enabled on this registry yet.");
+    }
+    try {
+      const { tx, balance } = await buildChecked(source, () =>
+        writeClient(source).add_admin({ workspace_id: workspaceId, owner: source, admin }),
+      );
+      unwrapResult(tx.result, "add_admin failed", simulationError(tx));
+      preflight(balance, tx);
+      return await send(source, tx, false);
+    } catch (e) {
+      mapInvokeError(e);
+    }
+  },
+
+  /**
+   * Makes `editor` an editor of `workspaceId` on-chain: the grant that
+   * follows promoting a member to editor in the app. A workspace admin or
+   * its owner (`source`) signs; in a personal workspace only its owner
+   * (D-44), which the relay enforces. Only with REGISTRY_EDITORS.
+   */
+  async addEditor(source: string, workspaceId: string, editor: string): Promise<WriteReceipt> {
+    if (!REGISTRY_EDITORS) {
+      throw new DoqtriError("NOT_ENABLED", "Workspace calls aren't enabled on this registry yet.");
+    }
+    try {
+      const { tx, balance } = await buildChecked(source, () =>
+        writeClient(source).add_editor({ workspace_id: workspaceId, admin: source, editor }),
+      );
+      unwrapResult(tx.result, "add_editor failed", simulationError(tx));
+      preflight(balance, tx);
+      return await send(source, tx, false);
+    } catch (e) {
+      mapInvokeError(e);
+    }
+  },
+
+  /**
+   * Puts the workspace on-chain, owned by `source`, so its members can be
+   * given roles there. Its id is the app's workspace id. Owner only.
+   */
+  async createWorkspace(source: string, workspaceId: string): Promise<WriteReceipt> {
+    if (!REGISTRY_EDITORS) {
+      throw new DoqtriError("NOT_ENABLED", "Workspace calls aren't enabled on this registry yet.");
+    }
+    try {
+      const { tx, balance } = await buildChecked(source, () =>
+        writeClient(source).create_workspace({ workspace_id: workspaceId, owner: source }),
+      );
+      unwrapResult(tx.result, "create_workspace failed", simulationError(tx));
+      preflight(balance, tx);
+      return await send(source, tx, false);
+    } catch (e) {
+      mapInvokeError(e);
+    }
+  },
+
+  /** The workspace as the registry holds it, or null when it is not on-chain. Throws on transport errors. */
+  async readWorkspace(workspaceId: string): Promise<ChainWorkspace | null> {
+    const tx = await readClient().get_workspace({ workspace_id: workspaceId });
+    try {
+      return parseChainWorkspace(unwrapResult(tx.result, "get_workspace failed", simulationError(tx)));
+    } catch (e) {
+      if (e instanceof DoqtriError && e.code === "WORKSPACE_NOT_FOUND") return null;
+      throw e;
+    }
+  },
+
+  /**
+   * `source`'s signed approval of `transfer_workspace(workspaceId, owner,
+   * newOwner)`, valid for `ledgers` ledgers, as base64 XDR (D-29). Both
+   * owners sign one each: the owner when proposing, the new owner when
+   * accepting; the server submits the pair (transfer-approval.ts). Nothing is
+   * sent from here.
+   */
+  async signTransferApproval(
+    source: string,
+    workspaceId: string,
+    owner: string,
+    newOwner: string,
+    ledgers: number,
+  ): Promise<string> {
+    if (!REGISTRY_EDITORS) {
+      throw new DoqtriError("NOT_ENABLED", "Workspace calls aren't enabled on this registry yet.");
+    }
+    try {
+      const tx = await readClient().transfer_workspace({ workspace_id: workspaceId, owner, new_owner: newOwner });
+      unwrapResult(tx.result, "transfer_workspace failed", simulationError(tx));
+      const entry = tx.simulationData.result.auth.find((candidate: xdr.SorobanAuthorizationEntry) => {
+        const credentials = candidate.credentials();
+        return (
+          credentials.switch().name === "sorobanCredentialsAddress" &&
+          Address.fromScAddress(credentials.address().address()).toString() === source
+        );
+      });
+      if (!entry) throw new DoqtriError("NOT_SIGNER", "This wallet isn't one of the two owners of this transfer.");
+      const { sequence } = await new rpc.Server(RPC_URL).getLatestLedger();
+      const validUntil = sequence + ledgers;
+      const signed = isSmartWallet(source)
+        ? await signPasskeyAuthEntry(passkeyWalletFor(source), entry, validUntil)
+        : await authorizeEntry(
+            entry,
+            async (preimage) => Buffer.from(await signWalletAuthEntry(preimage.toXDR("base64"), source), "base64"),
+            validUntil,
+            NETWORK_PASSPHRASE,
+          );
+      return signed.toXDR("base64");
+    } catch (e) {
+      mapInvokeError(e);
+    }
+  },
+
+  /**
+   * The second step of creating a team document, and its repair: when the
+   * chain does not have the document in `target`'s workspace, and `source`
+   * is the document's on-chain owner, assigns it there and reads
+   * `get_doc_workspace` back to confirm. Never throws: the write before it
+   * already landed, so a failure here is reported, not raised.
+   */
+  async reconcileWorkspace(source: string, docId: string, target: WriteTarget): Promise<WorkspaceAssignment> {
+    const unreachable: WorkspaceAssignment = {
+      status: "unassigned",
+      reason: "The ledger couldn't be reached to check this note's workspace.",
+    };
+    const current = await DoqtriRegistry.readDocWorkspace(docId).catch(() => undefined);
+    if (current === target.workspaceId) return { status: "assigned" };
+    if (current === undefined) return unreachable;
+    // Who assign_document makes sign: for a note in no workspace, its stored
+    // owner; for one already in another workspace (moved in the app), that
+    // workspace's CURRENT owner, which the stored owner can lag behind after
+    // transfer_workspace or admin_reassign_owner. A read that fails is the
+    // ledger being out of reach, not a different owner: strict reads, so
+    // the two are told apart.
+    let signer: string | null;
+    try {
+      signer = current
+        ? await DoqtriRegistry.readWorkspaceOwner(current)
+        : ((await DoqtriRegistry.readDocument(docId))?.owner ?? null);
+    } catch {
+      return unreachable;
+    }
+    if (signer !== source) {
+      return {
+        status: "unassigned",
+        reason: current
+          ? "This note is still in its old workspace on-chain; only that workspace's owner can move it."
+          : "Only the wallet that owns this note on-chain can put it in the workspace.",
+      };
+    }
+    let assigned: WriteReceipt;
+    try {
+      assigned = await DoqtriRegistry.assignDocument(source, docId, target.workspaceId);
+    } catch (e) {
+      return { status: "unassigned", reason: mapWalletError(e).message };
+    }
+    const after = await DoqtriRegistry.readDocWorkspace(docId).catch(() => undefined);
+    return after === target.workspaceId
+      ? { status: "assigned", txHash: assigned.txHash }
+      : { status: "unassigned", reason: "The ledger doesn't show this note in the workspace yet." };
   },
 };

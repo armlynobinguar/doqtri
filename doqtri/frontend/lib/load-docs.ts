@@ -12,12 +12,18 @@ import type { Doc } from "@/lib/types";
  * hash — a page that skipped the comparison would silently show a map of text
  * the note no longer contains.
  *
- * Pass a session-bound client: RLS is what scopes this to the caller.
+ * Pass a session-bound client: RLS is what limits this to documents the
+ * caller may read. Of those, only `workspaceId`'s are loaded: RLS also lets
+ * in every other workspace they belong to, and the vault shows one workspace
+ * at a time (WP-1.7). Pass the active workspace (getActiveWorkspace()), so
+ * the graph, the mindmaps and [[wikilink]] resolution never reach across
+ * workspaces.
  */
-export async function loadVaultDocs(supabase: SupabaseClient): Promise<Doc[]> {
+export async function loadVaultDocs(supabase: SupabaseClient, workspaceId: string): Promise<Doc[]> {
   const { data, error } = await supabase
     .from("documents")
-    .select("id, title, markdown, mindmap, mindmap_hash")
+    .select("id, title, markdown, mindmap, mindmap_hash, version")
+    .eq("workspace_id", workspaceId)
     .order("title", { ascending: true });
 
   if (error) throw new Error(`Failed to load vault: ${error.message}`);
@@ -28,6 +34,7 @@ export async function loadVaultDocs(supabase: SupabaseClient): Promise<Doc[]> {
       id: row.id,
       title: row.title,
       markdown: row.markdown,
+      version: Number(row.version),
       mindmap,
       // A note with no map is not "stale" — it has nothing to be stale against.
       mindmapStale: mindmap !== null && isMindmapStale(row.markdown, row.mindmap_hash),

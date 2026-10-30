@@ -3,12 +3,17 @@ import type { DocMindmap } from "@/lib/mindmap-types";
 /** A row of public.documents. */
 export type DocumentRow = {
   id: string;
-  user_id: string;
+  /** The author; null once their account is deleted. Does not decide access. */
+  user_id: string | null;
+  /** Who may read and change it: members of this workspace, by role. */
+  workspace_id: string;
   title: string;
   markdown: string;
   updated_at: string;
   mindmap: DocMindmap | null;
   mindmap_hash: string | null;
+  /** Save counter, bumped on every markdown change; saves are checked against it (D-17). */
+  version: number;
 };
 
 /**
@@ -64,4 +69,6 @@ export type Doc = {
   markdown: string;
   mindmap?: DocMindmap | null;
   mindmapStale?: boolean;
+  /** The save version `markdown` was read at; absent in the demo vault. */
+  version?: number;
 };

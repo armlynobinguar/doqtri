@@ -452,3 +452,26 @@ export async function payAndRelay<T>(
   }
   return { hash: body.data.hash, feeStroops: BigInt(body.data.feeStroops ?? "0") };
 }
+
+/**
+ * Has the wallet's passkey sign one auth entry, valid until `validUntilLedger`,
+ * for a call someone else submits: a workspace transfer needs both owners'
+ * approvals in one transaction (D-29), so neither can be relayed alone.
+ */
+export async function signPasskeyAuthEntry(
+  wallet: PasskeyWalletRef,
+  entry: xdr.SorobanAuthorizationEntry,
+  validUntilLedger: number,
+): Promise<xdr.SorobanAuthorizationEntry> {
+  const k = await kit();
+  const credentialId = await connectWith(k, wallet);
+  try {
+    return await k.signAuthEntry(entry, {
+      credentialId,
+      expiration: validUntilLedger,
+      contextRuleIds: Array(callsIn(entry.rootInvocation())).fill(0),
+    });
+  } catch (error) {
+    throw new Error(passkeyErrorMessage(error, "Signing with your passkey failed."));
+  }
+}

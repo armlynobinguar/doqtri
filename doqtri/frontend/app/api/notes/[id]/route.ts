@@ -4,19 +4,171 @@ import {
   createSupabaseAdminClient,
 } from "@/lib/supabase/server";
 import { DoqtriRegistry } from "@/lib/stellar/contract-client";
+import {
+  EDITING_ELSEWHERE,
+  editingMessage,
+  lockErrorAnswer,
+  parseDocLockStatus,
+  parseEditSession,
+} from "@/lib/doc-lock";
+import { liveLockHolder } from "@/lib/doc-lock-server";
+import { afterNoteSaved, noteBeforeSave } from "@/lib/integrations/qdit-save-hook";
+import { qditIntegrationEnabled } from "@/lib/integrations/qdit-config";
 import { isTitleTaken, MAX_TITLE_LENGTH } from "@/lib/title";
+import {
+  loadMemberDocument,
+  UNIQUE_VIOLATION,
+  workspaceTitles,
+  type MemberDocumentRefusal,
+} from "@/lib/workspace-docs";
 
 export const runtime = "nodejs";
 
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** The response for a note the caller cannot change. */
+function refusal(result: MemberDocumentRefusal) {
+  if (result.reason === "error") {
+    return NextResponse.json({ error: result.message }, { status: 500 });
+  }
+  if (result.reason === "forbidden") {
+    return NextResponse.json(
+      { error: "You can read this note but not change it.", code: "READ_ONLY" },
+      { status: 403 },
+    );
+  }
+  return NextResponse.json({ error: "Note not found" }, { status: 404 });
+}
+
+/**
+ * Refuses a change to a note while someone other than the caller holds its
+ * edit lock (D-17): they are typing into it and would not see the change.
+ * The caller's own lock does not stop them. Null when the change may go on.
+ */
+async function refuseIfLockedByOther(
+  admin: ReturnType<typeof createSupabaseAdminClient>,
+  docId: string,
+  userId: string,
+) {
+  const { holder, error } = await liveLockHolder(admin, docId);
+  if (error) return NextResponse.json({ error }, { status: 500 });
+  if (holder && holder !== userId) {
+    return NextResponse.json(
+      {
+        error: `${editingMessage(null)}. Try again when they are done.`,
+        code: "LOCKED",
+      },
+      { status: 423 },
+    );
+  }
+  return null;
+}
+
+/**
+ * Saves a note's text (WP-1.6, D-17). Body: `{ markdown, version, session }`,
+ * where `version` is the save version the caller's copy is based on and
+ * `session` the editor's edit session (lib/doc-lock.ts). Answers
+ * `{ id, version }` with the new version.
+ *
+ * Runs on the session client: save_document() checks, as the caller, that
+ * they are an editor or above, that they hold a live edit lock from this
+ * session, not another tab (else 423
+ * NOT_LOCK_HOLDER, with the lock's status so the editor can name the
+ * holder), and that nobody saved since their copy was loaded (else 409
+ * STALE_VERSION, with the current version). Nothing is written unless all
+ * three hold, so no save overwrites another.
+ */
+export async function PUT(
+  request: Request,
+  context: RouteContext<"/api/notes/[id]">,
+) {
+  const { id } = await context.params;
+
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+  }
+
+  if (!UUID.test(id)) {
+    return NextResponse.json({ error: "Note not found" }, { status: 404 });
+  }
+
+  let markdown: string | null = null;
+  let version: number | null = null;
+  let editSession: string | null = null;
+  try {
+    const body = (await request.json()) as { markdown?: unknown; version?: unknown; session?: unknown };
+    if (typeof body.markdown === "string") markdown = body.markdown;
+    editSession = parseEditSession(body.session);
+    if (typeof body.version === "number" && Number.isSafeInteger(body.version) && body.version >= 1) {
+      version = body.version;
+    }
+  } catch {
+    // falls through to the refusal below
+  }
+
+  if (markdown === null || version === null || editSession === null) {
+    return NextResponse.json(
+      { error: "A save needs the note's markdown, the version it is based on and the editor's session" },
+      { status: 400 },
+    );
+  }
+
+  // With the qdit integration on, the text being replaced, so the save can
+  // work out which linked headings moved (WP-2.5). Null otherwise.
+  const before = await noteBeforeSave(supabase, id);
+
+  const { data, error } = await supabase.rpc("save_document", {
+    p_document_id: id,
+    p_markdown: markdown,
+    p_base_version: version,
+    p_session: editSession,
+  });
+
+  if (error) {
+    const answer = lockErrorAnswer(error);
+    const body: Record<string, unknown> = { error: answer.error, code: answer.code };
+    if (answer.code === "STALE_VERSION") {
+      const current = Number(error.details);
+      if (Number.isSafeInteger(current)) body.version = current;
+    }
+    if (answer.code === "NOT_LOCK_HOLDER") {
+      const { data: status } = await supabase.rpc("doc_lock_status_for", {
+        p_document_id: id,
+        p_session: editSession,
+      });
+      const lock = parseDocLockStatus(status);
+      if (lock) {
+        body.lock = lock;
+        if (lock.mineElsewhere) body.error = `${EDITING_ELSEWHERE}, so this copy was not saved.`;
+        else if (lock.holder && !lock.mine) body.error = editingMessage(lock.holderName);
+      }
+    }
+    return NextResponse.json(body, { status: answer.status });
+  }
+
+  const saved = typeof data === "number" ? data : Number(data);
+  if (!Number.isSafeInteger(saved)) {
+    return NextResponse.json({ error: "Unexpected save result" }, { status: 500 });
+  }
+  await afterNoteSaved({ userId: user.id, docId: id, baseVersion: version, savedVersion: saved, markdown, before });
+  return NextResponse.json({ id, version: saved });
+}
+
 /**
  * Renames a note. Only the `title` column changes: the markdown is left alone,
  * so an anchored note's content hash still matches the ledger and stays
- * renameable. Titles are the graph's join key, so a clash with another of the
- * user's notes is refused rather than silently suffixed — the user picked this
- * name and should see that it did not stick.
+ * renameable. Titles are the graph's join key, so a clash with another note
+ * in the same workspace is refused rather than silently suffixed — the user
+ * picked this name and should see that it did not stick. Editors and above
+ * of the note's workspace may rename it.
+ *
+ * Refused with 423 while someone else holds the note's edit lock (D-17).
  *
  * Other notes' [[wikilinks]] to the old title are not rewritten. Editing their
  * markdown would un-anchor any of them that are on the ledger.
@@ -60,37 +212,42 @@ export async function PATCH(
 
   const admin = createSupabaseAdminClient();
 
-  // Scoped by user_id: the service role would otherwise reach anyone's note.
-  const { data: rows, error: titlesError } = await admin
-    .from("documents")
-    .select("id, title")
-    .eq("user_id", user.id);
+  // The service role skips RLS, so the workspace role is checked here.
+  const found = await loadMemberDocument<{ title: string }>(admin, {
+    userId: user.id,
+    docId: id,
+    columns: "title",
+    minRole: "editor",
+  });
+  if (!found.ok) return refusal(found);
+  const note = found.doc;
 
+  const locked = await refuseIfLockedByOther(admin, id, user.id);
+  if (locked) return locked;
+
+  const { titles: others, error: titlesError } = await workspaceTitles(admin, note.workspace_id, {
+    excludeId: id,
+  });
   if (titlesError) {
-    return NextResponse.json({ error: titlesError.message }, { status: 500 });
+    return NextResponse.json({ error: titlesError }, { status: 500 });
   }
 
-  const notes = (rows ?? []) as { id: string; title: string }[];
-  const note = notes.find((row) => row.id === id);
-  if (!note) {
-    return NextResponse.json({ error: "Note not found" }, { status: 404 });
-  }
-
-  const others = notes.filter((row) => row.id !== id).map((row) => row.title);
-  if (isTitleTaken(title, others)) {
-    return NextResponse.json(
+  const taken = () =>
+    NextResponse.json(
       { error: `Another note is already called “${title}”`, code: "TITLE_TAKEN" },
       { status: 409 },
     );
-  }
+  if (isTitleTaken(title, others)) return taken();
 
   if (title !== note.title) {
     const { error: updateError } = await admin
       .from("documents")
       .update({ title })
       .eq("id", id)
-      .eq("user_id", user.id);
+      .eq("workspace_id", note.workspace_id);
 
+    // A teammate took the title between the check and the write.
+    if (updateError?.code === UNIQUE_VIOLATION) return taken();
     if (updateError) {
       return NextResponse.json({ error: updateError.message }, { status: 500 });
     }
@@ -110,6 +267,10 @@ export async function PATCH(
  * silently vanished from that page. The explorer greys those notes out; this
  * check is what actually enforces it, including when the ledger moved after
  * the explorer last looked.
+ *
+ * Editors and above of the note's workspace may delete it; its ingest
+ * attempts go with it whoever uploaded them. Not while someone else holds
+ * its edit lock (D-17): 423, as for a rename.
  *
  * The uploads are purged before the row is deleted: a Storage failure leaves
  * the note intact and the delete retryable, rather than orphaning private
@@ -136,19 +297,45 @@ export async function DELETE(
 
   const admin = createSupabaseAdminClient();
 
-  // Scoped by user_id: the service role would otherwise reach anyone's note.
-  const { data: note, error: lookupError } = await admin
-    .from("documents")
-    .select("id, title")
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .maybeSingle();
+  // The service role skips RLS, so the workspace role is checked here.
+  const found = await loadMemberDocument<{ title: string }>(admin, {
+    userId: user.id,
+    docId: id,
+    columns: "title",
+    minRole: "editor",
+  });
+  if (!found.ok) return refusal(found);
+  const note = found.doc;
 
-  if (lookupError) {
-    return NextResponse.json({ error: lookupError.message }, { status: 500 });
+  const locked = await refuseIfLockedByOther(admin, id, user.id);
+  if (locked) return locked;
+
+  // A note linked to a qdit project is kept until an admin unlinks it
+  // (D-10): deleting it here would leave qdit's links pointing at nothing,
+  // with no way left to remove them (WP-2.5). The database refuses it too
+  // (20261025110000_qdit_linking.sql); this says why first. No row exists
+  // unless the qdit integration was used.
+  const { data: qditProject, error: qditProjectError } = await admin
+    .from("doc_project_links")
+    .select("project_name")
+    .eq("document_id", id)
+    .maybeSingle();
+  if (qditProjectError) {
+    return NextResponse.json({ error: qditProjectError.message }, { status: 500 });
   }
-  if (!note) {
-    return NextResponse.json({ error: "Note not found" }, { status: 404 });
+  if (qditProject) {
+    const name = (qditProject as { project_name: string }).project_name;
+    // With the integration off the ship panel shows no qdit section, so
+    // there is nothing to point the user at (an operator turns it back on).
+    return NextResponse.json(
+      {
+        error: qditIntegrationEnabled()
+          ? `This note is linked to the qdit project ${name}. A workspace admin must unlink it in the ship panel first, so qdit drops its links too (or forget the link there, if qdit no longer has the project).`
+          : `This note is linked to the qdit project ${name}, and the qdit integration is turned off on this site, so the link can't be removed for now. The note is kept until it is.`,
+        code: "QDIT_LINKED",
+      },
+      { status: 409 },
+    );
   }
 
   // Strict read: it tells "not anchored" apart from "the ledger is down", and
@@ -181,8 +368,7 @@ export async function DELETE(
   const { data: attempts, error: attemptsError } = await admin
     .from("ingests")
     .select("id, object_path")
-    .eq("document_id", id)
-    .eq("user_id", user.id);
+    .eq("document_id", id);
 
   if (attemptsError) {
     return NextResponse.json({ error: attemptsError.message }, { status: 500 });
@@ -210,8 +396,7 @@ export async function DELETE(
     const { error: ingestsError } = await admin
       .from("ingests")
       .delete()
-      .eq("document_id", id)
-      .eq("user_id", user.id);
+      .eq("document_id", id);
     if (ingestsError) {
       return NextResponse.json({ error: ingestsError.message }, { status: 500 });
     }
@@ -221,9 +406,19 @@ export async function DELETE(
     .from("documents")
     .delete()
     .eq("id", id)
-    .eq("user_id", user.id);
+    .eq("workspace_id", note.workspace_id);
 
   if (deleteError) {
+    // 23001: linked to qdit since the check above (the database's guard).
+    if (deleteError.code === "23001") {
+      return NextResponse.json(
+        {
+          error: "This note was just linked to a qdit project. A workspace admin must unlink it first.",
+          code: "QDIT_LINKED",
+        },
+        { status: 409 },
+      );
+    }
     return NextResponse.json({ error: deleteError.message }, { status: 500 });
   }
 

@@ -41,12 +41,14 @@ import {
 import { cn } from "@/lib/utils";
 import { expertContractUrl, expertTxUrl, MARKET_CONTRACT_ID } from "@/lib/stellar/config";
 import { TemplateMarket } from "@/lib/stellar/market-client";
-import { formatAmount, parseAmount, shortAddress, type CommunityTemplate } from "@/lib/market";
+import { formatAmount, parseAmount, type CommunityTemplate } from "@/lib/market";
+import { templateAuthor } from "@/lib/former-user";
 import { useWallet } from "@/components/vault/wallet-provider";
 import { BuyTemplateDialog } from "@/components/vault/buy-template-dialog";
 import { ReportTemplateDialog } from "@/components/vault/report-template-dialog";
 import { EarningsView } from "@/components/vault/earnings-view";
 import { createBlankNote } from "@/lib/create-note";
+import { useActiveWorkspace } from "@/components/vault/workspace-context";
 
 /** Rough label width at the preview's 11px type, for laying out columns. */
 function labelWidth(label: string): number {
@@ -189,6 +191,9 @@ export function TemplatesView() {
   const tab: PageTab = isTab(requested) ? requested : "starter";
   const [category, setCategory] = useState<TemplateCategory | "All">("All");
   const [creating, setCreating] = useState(false);
+  // Template copies go into the workspace on screen (WP-1.7); a viewer
+  // there can browse but not copy (D-14).
+  const { active: workspace, canCreate } = useActiveWorkspace();
 
   function setTab(next: PageTab) {
     router.replace(next === "starter" ? "/vault/templates" : `/vault/templates?tab=${next}`, { scroll: false });
@@ -203,10 +208,10 @@ export function TemplatesView() {
   }
 
   async function startFromTemplate(template: NoteTemplate) {
-    if (creating) return;
+    if (creating || !canCreate) return;
     setCreating(true);
     try {
-      opened(await createBlankNote(template.title, template.body));
+      opened(await createBlankNote(template.title, template.body, workspace.id));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not create note");
     } finally {
@@ -278,7 +283,12 @@ export function TemplatesView() {
               {tab === "community" ? (
                 <CommunityGallery category={category} active onCreated={opened} />
               ) : (
-                <StarterGallery category={category} creating={creating} onUse={(t) => void startFromTemplate(t)} />
+                <StarterGallery
+                  category={category}
+                  creating={creating}
+                  viewerIn={canCreate ? null : workspace.name}
+                  onUse={(t) => void startFromTemplate(t)}
+                />
               )}
             </div>
           </>
@@ -288,14 +298,31 @@ export function TemplatesView() {
   );
 }
 
+/**
+ * Why "Use template" is disabled for a viewer: the copy would go into the
+ * workspace on screen, where they cannot add notes (D-14). Worded as the buy
+ * dialog words it.
+ */
+function ViewerCopyNote({ workspaceName }: { workspaceName: string }) {
+  return (
+    <p className="text-muted-foreground text-[12px]" data-testid="template-viewer">
+      You&apos;re a viewer in {workspaceName}, so a copy can&apos;t be added to it. Switch to a workspace you edit
+      first.
+    </p>
+  );
+}
+
 /** Doqtri's own starter templates: pick on the left, preview on the right. */
 function StarterGallery({
   category,
   creating,
+  viewerIn,
   onUse,
 }: {
   category: TemplateCategory | "All";
   creating: boolean;
+  /** The workspace's name when the user is a viewer there: copying is then disabled. */
+  viewerIn: string | null;
   onUse: (template: NoteTemplate) => void;
 }) {
   const [selectedId, setSelectedId] = useState(TEMPLATES[0].id);
@@ -351,7 +378,7 @@ function StarterGallery({
           </div>
           <Button
             size="sm"
-            disabled={creating}
+            disabled={creating || viewerIn !== null}
             onClick={() => onUse(selected)}
             data-testid="use-template"
             className="shrink-0 rounded-full"
@@ -360,6 +387,7 @@ function StarterGallery({
             {creating ? "Creating…" : "Use template"}
           </Button>
         </div>
+        {viewerIn !== null ? <ViewerCopyNote workspaceName={viewerIn} /> : null}
         <div className="bg-background relative h-56 shrink-0 overflow-hidden rounded-lg border border-[var(--glass-lo)] p-2 md:h-64">
           <TemplateMapPreview tree={tree} />
         </div>
@@ -393,6 +421,7 @@ function CommunityGallery({
   onCreated: (note: { id: string; title: string }) => void;
 }) {
   const [sort, setSort] = useState<Sort>("popular");
+  const { active: workspace, canCreate } = useActiveWorkspace();
   // Results remember the query they answer; a newer query reads as loading
   // until its own response lands, without resetting state inside the effect.
   const query = `${sort}|${category}`;
@@ -442,12 +471,13 @@ function CommunityGallery({
   const selected = templates.find((t) => t.id === selectedId) ?? templates[0] ?? null;
 
   async function claim(template: CommunityTemplate) {
+    if (!canCreate) return;
     setClaiming(true);
     try {
       const res = await fetch("/api/market/claim", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ templateId: template.id }),
+        body: JSON.stringify({ templateId: template.id, workspaceId: workspace.id }),
       });
       const body = (await res.json().catch(() => ({}))) as { id?: string; title?: string; error?: string };
       if (!res.ok || !body.id) throw new Error(body.error || "The template could not be copied.");
@@ -548,7 +578,7 @@ function CommunityGallery({
                       <span className="text-muted-foreground mt-1 block text-[12px] leading-snug">{t.description}</span>
                     ) : null}
                     <span className="text-label mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
-                      <span className="font-mono">{shortAddress(t.creatorWallet)}</span>
+                      <span className="font-mono">{templateAuthor(t)}</span>
                       <span>
                         {t.uses} {t.uses === 1 ? "use" : "uses"}
                       </span>
@@ -578,6 +608,7 @@ function CommunityGallery({
               template={selected}
               candidates={templates}
               claiming={claiming}
+              viewerIn={canCreate ? null : workspace.name}
               onClaim={() => void claim(selected)}
               onCreated={onCreated}
             />
@@ -592,6 +623,7 @@ function CommunityPreview({
   template,
   candidates,
   claiming,
+  viewerIn,
   onClaim,
   onCreated,
 }: {
@@ -599,6 +631,8 @@ function CommunityPreview({
   /** The loaded gallery, to pick an original from when reporting a copy. */
   candidates: CommunityTemplate[];
   claiming: boolean;
+  /** The workspace's name when the user is a viewer there: copying is then disabled. */
+  viewerIn: string | null;
   onClaim: () => void;
   onCreated: (note: { id: string; title: string }) => void;
 }) {
@@ -617,12 +651,12 @@ function CommunityPreview({
         <div className="min-w-0">
           <p className="text-foreground truncate text-[14px] font-semibold">{template.title}</p>
           <p className="text-muted-foreground text-[12px]">
-            by <span className="font-mono">{shortAddress(template.creatorWallet)}</span> · {priceLabel(template)}
+            by <span className="font-mono">{templateAuthor(template)}</span> · {priceLabel(template)}
           </p>
           {template.parent ? (
             <p className="text-muted-foreground text-[11px]">
               Derived from “{template.parent.title}” by{" "}
-              <span className="font-mono">{shortAddress(template.parent.creatorWallet)}</span>
+              <span className="font-mono">{templateAuthor(template.parent)}</span>
             </p>
           ) : null}
         </div>
@@ -639,7 +673,7 @@ function CommunityPreview({
         ) : (
           <Button
             size="sm"
-            disabled={claiming}
+            disabled={claiming || viewerIn !== null}
             onClick={onClaim}
             data-testid="use-community-template"
             className="shrink-0 rounded-full"
@@ -649,6 +683,7 @@ function CommunityPreview({
           </Button>
         )}
       </div>
+      {viewerIn !== null && !mustBuy ? <ViewerCopyNote workspaceName={viewerIn} /> : null}
       <div className="bg-background relative h-56 shrink-0 overflow-hidden rounded-lg border border-[var(--glass-lo)] p-2 md:h-64">
         <TemplateMapPreview tree={tree} />
       </div>

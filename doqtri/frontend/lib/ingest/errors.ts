@@ -10,6 +10,7 @@ export const INGEST_ERROR_CODES = [
   "TOO_LARGE",
   "UNSUPPORTED",
   "NOT_FOUND",
+  "WORKSPACE_REFUSED",
   "EXTRACT_FAILED",
   "EXTRACT_TIMEOUT",
   "NO_TEXT",
@@ -37,6 +38,11 @@ export const INGEST_ERRORS: Record<IngestErrorCode, ErrorCopy> = {
   TOO_LARGE: { message: "That file is larger than 20 MB.", retryable: false },
   UNSUPPORTED: { message: "Unsupported file type. Use PDF, DOCX, PPTX, or text.", retryable: false },
   NOT_FOUND: { message: "That upload is no longer available. Upload the file again.", retryable: false },
+  // The route's own message says why (a viewer, or not a member).
+  WORKSPACE_REFUSED: {
+    message: "You can't add notes to this workspace. Switch to one you edit and try again.",
+    retryable: false,
+  },
   EXTRACT_FAILED: { message: "The file could not be read. It may be corrupt or password-protected.", retryable: true },
   EXTRACT_TIMEOUT: { message: "Reading the file took too long.", retryable: true },
   NO_TEXT: { message: "No text could be found in that document. Scanned pages are not supported yet.", retryable: false },

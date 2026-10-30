@@ -15,6 +15,7 @@ version-controlled source of what lives in the remote project.
 
 ```
 migrations/   SQL already applied to the remote project, in order
+tests/        pgTAP tests for the migrations (run with pg_prove, see each file)
 prompts/      The two AI prompts, mirrored from lib/openai.ts
 ```
 
@@ -35,13 +36,37 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261019000000_chain_writes_anchor.sql    # NOT yet applied: apply before deploying
 20261021000000_create_mindmap_styles.sql
 20261024000000_add_promo_submission_rating.sql
+20261024120000_create_workspaces.sql      # NOT yet applied: dry-run on a branch first
+20261024130000_workspace_document_ownership.sql  # NOT yet applied (WP-1.2)
+20261024140000_chain_writes_editor_calls.sql     # NOT yet applied (WP-1.4)
+20261024150000_doc_locks.sql              # NOT yet applied: dry-run on a branch first
+20261024150500_workspace_members_management.sql  # NOT yet applied (WP-1.5)
+20261024160000_workspace_member_removals.sql  # NOT yet applied (WP-1.8)
+20261025090000_chain_jobs_scheduler.sql   # NOT yet applied (WP-1.9)
+20261025100000_integration_connections.sql    # NOT yet applied (WP-2.3)
+20261025110000_qdit_linking.sql               # NOT yet applied (WP-2.5)
+20261025120000_qdit_webhook_events.sql        # NOT yet applied (WP-2.8)
+20261025130000_chain_jobs_claim_token.sql     # NOT yet applied (WP-1.10)
+20261025140000_integration_connections_previous_account.sql  # NOT yet applied (WP-2.11)
+20261026100000_account_deletion_anonymises.sql    # NOT yet applied (WP-1.11)
+20261026100001_signer_removals_owner_handover.sql # NOT yet applied (WP-1.11)
+20261026110000_qdit_approval_incomplete_scans.sql # NOT yet applied (WP-2.13)
+20261026120000_account_deletion_market_templates.sql # NOT yet applied (WP-1.12)
+20261026120001_qdit_approval_incomplete_first_at.sql # NOT yet applied (WP-1.12)
 ```
 
 The remote records its own version stamps (e.g. `20260929114657` for
 `create_ingests`); match on the name, not the number.
 
 These were applied through the Supabase MCP server, so the remote project is
-already in this state. The files exist so the schema is reviewable in git and
+already in this state, except those marked "NOT yet applied". The workspace
+migrations (`20261024120000` through `20261025090000`) go out together with
+the on-chain editors rollout, in the same release window as the
+`staging` merge into `main` and never ahead of it (`main`'s code
+cannot create or save notes on them): follow
+[docs/runbooks/registry-editors-rollout.md](../docs/runbooks/registry-editors-rollout.md),
+which covers the branch dry-run, the registry v3 upgrade, the revoker key,
+the scheduler's Vault secrets and the `NEXT_PUBLIC_REGISTRY_EDITORS` flag. The files exist so the schema is reviewable in git and
 replayable into a fresh project.
 
 ## Data model
@@ -89,6 +114,153 @@ Two supporting tables:
   localStorage and resent on the next visit. `updated_at` is set by a trigger
   and acts as the row's version. The demo vault's styles stay in the browser.
 
+- `public.workspaces` / `public.workspace_members` — team workspaces and who
+  is in them, as viewer, editor, admin or owner. Every account has one
+  personal workspace (`is_personal`) that it owns: existing accounts through
+  the migration's backfill, new ones through the `on_auth_user_created_workspace`
+  trigger on `auth.users`. Members read their workspaces and rosters; owners
+  manage members, admins manage everyone but owners, anyone may leave, and a
+  trigger keeps at least one owner per workspace and keeps each personal
+  workspace's creator as its owner. Any user may create a team workspace
+  through the `create_workspace(name, slug)` RPC and becomes its owner; there
+  is no direct insert. Members are still added without their consent, so
+  WP-1.5 must replace that with an invite the invitee accepts. Documents do
+  not belong to workspaces yet;
+  WP-1.2 adds `documents.workspace_id` and moves the policies over to
+  `is_workspace_member()`.
+- `public.workspace_invites`, `public.workspace_transfers`,
+  `public.workspace_chain_jobs` — invites the invitee accepts (by wallet
+  address, or by confirmed email once switched on), ownership transfers the
+  new owner accepts, and the work the server owes the chain after a
+  membership change (revocations by the revoke-only key, D-16, and D-31
+  handovers). Written only through their RPCs and the service role. The
+  queue is worked at once by the app, every minute by the `doqtri-chain-jobs`
+  pg_cron job and daily by Vercel Cron
+  (`20261025090000_chain_jobs_scheduler.sql`, which says how to store its
+  Vault secrets); `chain_jobs_scheduler_health()` reports whether the
+  minutely job can run. Each claim stamps a job with a `claim_token`, which
+  re-pointing a handover or queueing a removal onto an open revocation
+  clears (keeping the claim's two-minute lease, as its call may still be in
+  flight), and the server records an outcome only while the job still holds
+  its token, releasing it as it does
+  (`20261025130000_chain_jobs_claim_token.sql`), so a handover re-pointed
+  mid-call stays open for the new heir and a member removed while their
+  demotion is in flight is still revoked. A job records when it was done
+  (`done_at`). Deleting an account queues revocations for every
+  role its wallets hold, deletes the invites to and from it, and then lets
+  its wallet records cascade (D-50, D-51). It anonymises the account and
+  keeps the content (D-63, `20261026100000_account_deletion_anonymises.sql`,
+  which replaced D-51's refusals of anchored notes and templates and D-39's
+  of other people's notes): the account row (email, profile metadata,
+  sessions), its wallet records, qdit connection and tokens, invites, locks
+  and other per-user rows go; every note it wrote stays, author-less; its
+  personal workspace stays, renamed "Former user", with no owner and its
+  other members still in it, whenever it holds a note or another member
+  (an empty one is deleted); the imports behind kept notes stay with them;
+  its free community templates stay listed and its purchases valid, credited
+  to their wallets (`creator_id`, `buyer_id` set null); its paid templates are
+  hidden from the gallery (the admin hide; the contract listing stays, and
+  buyers still copy what they bought) and its drafts never confirmed on chain
+  (`pending`) are deleted (D-89,
+  `20261026120000_account_deletion_market_templates.sql`). The app shows "Former
+  user" where it would name the account (`lib/former-user.ts`). It still
+  refuses the last owner of a team workspace with no admin (D-31). SQL does
+  not remove the account's uploads in Storage or its grant in qdit, and a
+  soft delete runs none of this: see the known limits in
+  `docs/runbooks/registry-editors-rollout.md` (D-90, D-91).
+- `public.workspace_member_removals` — when each member lost the right to
+  sign in a workspace (removed, left, account deleted, or demoted to viewer),
+  with the wallet addresses they had then, and when they got it back. Written
+  only by triggers; RLS on with no policies. The public audit page reads it
+  through `signer_removals_for_document()` (service role) to flag history
+  entries signed after the signer was removed (WP-1.8, risk R-05); with each
+  removal it returns when that wallet's revocation was done (`revoked_at`),
+  so the page reads a removed member's feed until the chain stopped
+  accepting them (WP-1.10). An owner is never revoked: their removal (the
+  last owner of a team workspace deleting their account) takes the time the
+  workspace's `reassign_owner` handover was done
+  (`20261026100001_signer_removals_owner_handover.sql`).
+
+- `public.doc_locks` — who is editing a document (D-17). One editor holds a
+  document's lock at a time, from one edit session (one open tab: every call
+  names it, so a user's second tab is read-only and cannot release the
+  first's); it frees after ten minutes without a heartbeat, and an admin or
+  owner may take it over (anyone may take over their own lock from another
+  tab). Written only by `take_doc_lock()`, `release_doc_lock()` and
+  `save_document()`; workspace members read who holds it, and only editors
+  and above are told the holder's name. `documents.version` counts saves,
+  and the browser saves text only through
+  `save_document(id, markdown, base_version, session)`, which refuses a
+  caller without the lock in that session (`DQLCK`) or with a stale version
+  (`DQVER`). A plain client UPDATE of `markdown` is refused. Removing or
+  demoting a member drops their locks. A tab that closes or reloads releases
+  its lock with a keepalive request; when that request never arrives, the old
+  session's lock stays live, and a reloaded tab shows the note as being
+  edited elsewhere (read-only) until that lock times out, up to ten minutes,
+  or the user clicks "Edit here", which any editor may.
+
+- `public.integration_connections` — a user's OAuth connection to their qdit
+  account (WP-2.3, D-02): one row per user and provider, with the qdit user id,
+  the granted scopes and the access and refresh tokens as AES-256-GCM
+  ciphertext (encrypted by the app with `INTEGRATION_TOKEN_KEY`). Service role
+  only: RLS on with no policies, and no privileges for anon or authenticated.
+  The browser reads its own connection's status, never a token, through
+  `my_integration_connections()`. `generation` goes up on every token write,
+  so concurrent refreshes on different server instances cannot overwrite each
+  other's rotated refresh token. A key rotation keeps the old key in
+  `INTEGRATION_TOKEN_KEY_PREVIOUS` until refreshes have resealed the tokens
+  (D-67): keep it for at least qdit's refresh-token lifetime (D-81), since an
+  idle connection is resealed only on its next refresh. A wrong or swapped
+  `INTEGRATION_TOKEN_KEY` deletes each user's stored tokens on their next
+  qdit request (the row turns `needs_reconnect` and its ciphertext is
+  cleared), and putting the old env back does not bring them back, so set
+  `INTEGRATION_TOKEN_KEY_PREVIOUS` in the same deploy that changes the key
+  (the runbook below has the steps). A reconnect to another qdit account is allowed and the row keeps
+  the replaced one in `previous_subject`/`previous_account_label`, so the
+  profile can say "Now connected as X (was Y)" (D-66).
+  Disconnect is best effort on qdit's side (D-65): doqtri always drops its
+  tokens, but the grant in qdit is revoked only where qdit's OAuth server
+  advertises a revocation endpoint, so users may still need to revoke Doqtri
+  under Authorized apps in qdit.
+
+- `public.doc_project_links` — the qdit project a note is linked to (WP-2.5,
+  D-09: one per note), with qdit's name, slug and link id cached. Viewers of
+  the note's workspace read it; only the integration routes write it, with
+  the service role, after checking the caller is an admin (D-10) and with
+  what qdit answered. `node_links` gained a `provider` (`github`, the default
+  for every existing row, or `qdit`) and the qdit milestone's ids; editors
+  still write GitHub rows from the browser, and qdit rows are written by the
+  routes only. Each save remaps moved headings through
+  `apply_node_link_remap()` (R-03), and `qdit_state` says whether qdit has
+  been told yet. A note linked to a project cannot be deleted, by any path,
+  until an admin unlinks it: qdit would keep links to it that nothing could
+  remove. Its author's account deletion keeps it, link and all (D-63). If qdit no longer shows
+  the project, the admin can confirm forgetting the link in doqtri only
+  (D-68; qdit may keep its doc link, milestone links and title locks, which
+  are logged, and relinking that note to another project stays blocked until
+  qdit cleans up). Known limit: with the integration turned off, a
+  qdit-linked note can only be deleted after SQL on the database removes its
+  `doc_project_links` row.
+
+- `public.qdit_webhook_events` and `public.qdit_milestone_states` — qdit's
+  status webhook and what doqtri made of it (WP-2.8). Events are kept by id
+  for 30 days so a retried delivery is not acted on twice (R-09); service role
+  only. A milestone's state holds qdit's last word (a preview) and the last
+  read of its record on qdit's `milestone_proof` contract (D-04), which is
+  what the ship panel suggests a status from (D-19). Viewers of a note that
+  links the milestone read it; `record_qdit_milestone_state()` writes it,
+  keeping the newest event and the newest ledger whatever order they arrive
+  in (D-25), and unlinking forgets it. `doc_project_links` gained the
+  project's chain, so the webhook knows which contract to read.
+
+- `public.qdit_milestone_approvals`, `public.qdit_milestone_approval_misses`
+  and `public.qdit_milestone_approval_incomplete_scans` — the transactions
+  that approved qdit milestones, found in Stellar RPC's event window for the
+  public receipts (WP-3.1), and when a lookup found nothing (a miss, which
+  starts the 8-day give-up clock) or ran out of its page budget (an
+  incomplete scan, which only throttles the next lookup to one an hour,
+  WP-2.13). Service role only; an approval found is never changed.
+
 The notes table itself is still the only content store. There are deliberately **no** graph tables: nodes and
 edges are parsed from `markdown` at render time by `lib/wikilinks.ts`, so the
 graph cannot drift from the text.
@@ -96,8 +268,9 @@ graph cannot drift from the text.
 ## Trust boundary
 
 - The **browser** uses the anon key and is always subject to RLS. It reads the
-  vault and writes editor changes directly, which is safe because the policies
-  scope both to the caller's own rows.
+  vault directly, scoped by the policies. Note text is saved through
+  `/api/notes/[id]` (PUT), which calls `save_document()` as the user, so the
+  edit lock and version are checked in the database.
 - The **API routes** (`/api/ingest`, `/api/regenerate`) use the service role,
   which bypasses RLS. They therefore resolve the user from the verified session
   first and scope every statement by that `user_id`. A `user_id` from a request
@@ -122,6 +295,14 @@ The trade-offs, stated plainly:
 
 - Unverified addresses can register. Anyone can sign up as
   `someone-elses@address` without proving they own it.
+- Workspace invites by email stay off. An invite can wait for an address
+  nobody has signed up with, and with confirmations off Supabase marks a new
+  account's email confirmed at signup, so whoever registered
+  `colleague@corp.com` first would take an invite sent there, at its role
+  (admin, even). While `public.invite_settings.email_invites` is false (as the
+  WP-1.5 migration ships it), the database refuses email invites and delivers
+  none, and the members screen asks for a wallet address. Members who only
+  have an email cannot be invited until a wallet is set up or the switch is on.
 - There is no password reset, because that also sends mail.
 
 That is acceptable while the vault is private and single-user. It is **not**
@@ -157,6 +338,14 @@ sign-up that returns a user but no session, showing a "check your inbox" toast.
    sender's reputation. Adjust it under *Authentication → Rate Limits*.
 5. **Re-enable Confirm email**, then sign up with a real address and confirm
    the mail arrives.
+6. **Then switch email invites on** (D-49), in the SQL editor, and not before:
+
+   ```sql
+   update public.invite_settings set email_invites = true;
+   ```
+
+   Turning confirmations off again later means setting it back to `false`
+   first; open email invites are then held back until it is on again.
 
 Equivalent Management API call, if you would rather script it than click
 (requires a personal access token with account-wide scope):
@@ -185,6 +374,59 @@ as a pre-existing user, and users are created via the Admin API
 (`POST /auth/v1/admin/users` with `email_confirm: true`), which bypasses
 confirmation by design. Keep it that way — an e2e suite that waits on real mail
 is a flaky suite.
+
+## qdit integration operations
+
+### Runbook: rotating `INTEGRATION_TOKEN_KEY` (D-67, D-81)
+
+The stored qdit tokens are sealed with `INTEGRATION_TOKEN_KEY`. A connected
+row whose tokens open under neither the current nor the previous key is
+treated as broken: on that user's next qdit request it is marked
+`needs_reconnect` and its ciphertext is cleared. That cannot be undone, so a
+wrong key, a key set without the previous one, or the two values swapped
+deletes every user's tokens one request at a time, and restoring the old env
+afterwards does not bring them back. To rotate:
+
+1. Generate the new key (`openssl rand -base64 32`).
+2. In **one** deploy, set `INTEGRATION_TOKEN_KEY` to the new key and
+   `INTEGRATION_TOKEN_KEY_PREVIOUS` to the key it replaces. Check the two are
+   not swapped before deploying.
+3. Keep `INTEGRATION_TOKEN_KEY_PREVIOUS` for at least qdit's refresh-token
+   lifetime (its Supabase session time-box or inactivity timeout). Each
+   connection is resealed under the new key on its next refresh, so an idle
+   one still needs the previous key until then; once it is removed, a
+   connection still sealed under it needs a reconnect. If qdit sets neither,
+   its refresh tokens do not expire and there is no finite period: keep the
+   previous key until every row has been resealed, or accept that
+   connections unused since the rotation will need a reconnect (contract
+   section 1, D-81).
+4. Then remove `INTEGRATION_TOKEN_KEY_PREVIOUS` in a later deploy.
+
+An invalid value in either variable turns the integration off rather than
+deleting anything.
+
+### A spike of `needs_reconnect`
+
+One user turning `needs_reconnect` is that user: they revoked Doqtri in qdit,
+or their grant expired. Many at once is not users. Look first at:
+
+- **This deploy's `INTEGRATION_TOKEN_KEY`** (above), if it just changed.
+- **qdit's auth configuration**, with the keys unchanged: its OAuth server's
+  JWKS, issuer or signing algorithm, or its token settings. Doqtri marks a
+  connection `needs_reconnect` when qdit refuses a token it has just
+  refreshed with a second `401`, or refuses the refresh token itself
+  (`invalid_grant`), so if qdit's API stops accepting the tokens its own
+  OAuth server issues, or a shortened session limit expires every grant,
+  every active user is marked in turn. Fix it on qdit's side; users then
+  have to reconnect, since their tokens were dropped. (A refused client id
+  or secret is different: requests fail as not configured and no
+  connection is marked.)
+
+```sql
+-- How many connections turned needs_reconnect in the last hour.
+select count(*) from public.integration_connections
+ where provider = 'qdit' and status = 'needs_reconnect' and updated_at > now() - interval '1 hour';
+```
 
 ## Known advisory
 

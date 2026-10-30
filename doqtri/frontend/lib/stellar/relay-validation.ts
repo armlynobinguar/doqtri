@@ -11,6 +11,7 @@
  * is the session (the route) plus the passkey signature (the contract).
  */
 import { Address, hash, Keypair, nativeToScVal, scValToBigInt, StrKey, xdr } from "@stellar/stellar-sdk";
+import { roleAtLeast, type WorkspaceRole } from "@/lib/workspace-roles";
 
 export class RelayRejection extends Error {
   constructor(
@@ -192,7 +193,46 @@ export function deployedContractAddress(deployer: string, salt: Buffer, networkP
   return StrKey.encodeContract(hash(preimage.toXDR()));
 }
 
-export const REGISTRY_FUNCTIONS = ["register_document", "update_document", "set_node_status", "anchor"] as const;
+/** The live (v2) registry's writes: only the document's owner signs them. */
+export const OWNER_FUNCTIONS = ["register_document", "update_document", "set_node_status", "anchor"] as const;
+
+/**
+ * v3 document writes (WP-1.3): the `*_as` calls, which name their signer and
+ * let any writer of a workspace document make them, and moving a document
+ * into or out of its workspace.
+ */
+export const EDITOR_DOCUMENT_FUNCTIONS = [
+  "anchor_as",
+  "update_document_as",
+  "set_node_status_as",
+  "assign_document",
+  "unassign_document",
+] as const;
+
+/**
+ * v3 membership writes, signed by the workspace's owner or an admin.
+ * `transfer_workspace` is not relayed: both owners must sign it, and a relay
+ * submission carries one wallet's approval. The calls only the contract admin
+ * or the revoker makes (upgrade, import_*, set_revoker, admin_reassign_owner,
+ * revocations) are signed by server keys and never pass through here. The
+ * server builds both ownership calls with buildOwnershipTransfer()
+ * (ownership-transfer.ts), which refuses a personal workspace (D-37).
+ */
+export const WORKSPACE_FUNCTIONS = ["create_workspace", "add_editor", "remove_editor", "add_admin", "remove_admin"] as const;
+
+export const REGISTRY_FUNCTIONS = [...OWNER_FUNCTIONS, ...EDITOR_DOCUMENT_FUNCTIONS, ...WORKSPACE_FUNCTIONS] as const;
+
+export type OwnerFunction = (typeof OWNER_FUNCTIONS)[number];
+export type EditorDocumentFunction = (typeof EDITOR_DOCUMENT_FUNCTIONS)[number];
+export type WorkspaceFunction = (typeof WORKSPACE_FUNCTIONS)[number];
+export type RegistryFunction = (typeof REGISTRY_FUNCTIONS)[number];
+
+/**
+ * Functions only the v3 registry has. Until the deployed registry is
+ * upgraded (REGISTRY_EDITORS) the relay refuses them rather than paying to
+ * simulate a call the contract does not have.
+ */
+export const V3_FUNCTIONS: readonly RegistryFunction[] = [...EDITOR_DOCUMENT_FUNCTIONS, ...WORKSPACE_FUNCTIONS];
 
 /** The same cap as the registry's MAX_NODES_PER_CALL. */
 export const MAX_ANCHOR_NODES = 32;
@@ -211,9 +251,18 @@ function isNodeUpdate(value: xdr.ScVal): boolean {
     return NODE_UPDATE_FIELDS[i] === "status" ? field.switch().name === "scvVec" : isString(field);
   });
 }
-export type RegistryFunction = (typeof REGISTRY_FUNCTIONS)[number];
 
-export type RegistryWrite = { fn: RegistryFunction; docId: string };
+/** A write on one document; `workspaceId` is set for `assign_document`. */
+export type DocumentWrite = { fn: OwnerFunction | EditorDocumentFunction; docId: string; workspaceId?: string };
+
+/** A membership write; `subject` is the member added or removed (null for create_workspace). */
+export type WorkspaceWrite = { fn: WorkspaceFunction; workspaceId: string; subject: string | null };
+
+export type RegistryWrite = DocumentWrite | WorkspaceWrite;
+
+export function isDocumentWrite(write: RegistryWrite): write is DocumentWrite {
+  return "docId" in write;
+}
 
 /** The address an auth entry signs for, for V1 and V2 address credentials. */
 function credentialAddress(entry: xdr.SorobanAuthorizationEntry): string | null {
@@ -237,12 +286,26 @@ function isHash(value: xdr.ScVal | undefined): boolean {
 }
 
 /**
+ * On-chain workspace ids are the app's workspace ids (workspaces.id), so the
+ * relay only ever pays for calls on a workspace the database knows.
+ */
+const WORKSPACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function workspaceIdOf(value: xdr.ScVal | undefined): string | null {
+  if (!isString(value)) return null;
+  const id = value.str().toString();
+  return WORKSPACE_ID.test(id) ? id : null;
+}
+
+/**
  * A DoqtriRegistry write signed by the caller's own smart wallet: one
  * invocation of one registry function on exactly `registry`, with the
  * argument shapes the contract declares, and one auth entry from `wallet`
  * authorizing exactly that invocation and nothing nested.
  *
- * The caller still has to check that `docId` is one of the user's notes.
+ * The caller still has to authorize it against the database
+ * (authorizeRegistryWrite): that the note or workspace is one the user may
+ * write.
  */
 export function validateRegistryWrite(
   { func, auth }: RelaySubmission,
@@ -255,7 +318,7 @@ export function validateRegistryWrite(
   if (Address.fromScAddress(invoke.contractAddress()).toString() !== expected.registry) {
     throw new RelayRejection("Only the Doqtri registry can be called");
   }
-  const { fn, docId } = validateRegistryCall(invoke.functionName().toString(), invoke.args(), expected.wallet);
+  const write = validateRegistryCall(invoke.functionName().toString(), invoke.args(), expected.wallet);
 
   if (auth.length !== 1) {
     throw new RelayRejection("A registry write must carry exactly one auth entry");
@@ -270,66 +333,272 @@ export function validateRegistryWrite(
     throw new RelayRejection("The signature must come from your wallet for exactly this call");
   }
 
-  return { fn, docId };
+  return write;
 }
 
 /**
  * One of the registry's write functions with the argument shapes the contract
- * declares; `register_document` and `anchor` must name `wallet` as the owner,
- * and `anchor` takes at most MAX_ANCHOR_NODES well-formed node updates.
- * Shared by direct and forwarded writes.
+ * declares. Every argument that names who acts (`owner`, `signer`, `admin`,
+ * `caller`) must be `wallet`; `anchor` and `anchor_as` take at most
+ * MAX_ANCHOR_NODES well-formed node updates; workspace ids must be app
+ * workspace ids. `assign_document` and `unassign_document` name nobody: the
+ * single auth entry from `wallet` is their signer. Shared by direct and
+ * forwarded writes.
  */
 export function validateRegistryCall(fnName: string, args: xdr.ScVal[], wallet: string): RegistryWrite {
   const fn = fnName as RegistryFunction;
   if (!REGISTRY_FUNCTIONS.includes(fn)) {
     throw new RelayRejection("That registry function is not allowed");
   }
-  let docArg: xdr.ScVal | undefined;
-  if (fn === "register_document") {
-    if (
-      args.length !== 3 ||
-      args[0].switch().name !== "scvAddress" ||
-      Address.fromScAddress(args[0].address()).toString() !== wallet ||
-      !isString(args[1]) ||
-      !isHash(args[2])
-    ) {
-      throw new RelayRejection("register_document must name your wallet as the owner");
+  const isWallet = (value: xdr.ScVal | undefined) => addressOf(value) === wallet;
+  const bad = () => new RelayRejection(`${fn} has an invalid argument shape`);
+
+  switch (fn) {
+    case "register_document":
+      if (args.length !== 3 || !isWallet(args[0]) || !isString(args[1]) || !isHash(args[2])) {
+        throw new RelayRejection("register_document must name your wallet as the owner");
+      }
+      return { fn, docId: args[1].str().toString() };
+    case "anchor":
+    case "anchor_as": {
+      const nodes = args[3]?.switch().name === "scvVec" ? (args[3].vec() ?? []) : null;
+      if (
+        args.length !== 4 ||
+        !isWallet(args[0]) ||
+        !isString(args[1]) ||
+        !isHash(args[2]) ||
+        nodes === null ||
+        nodes.length > MAX_ANCHOR_NODES ||
+        !nodes.every(isNodeUpdate)
+      ) {
+        const who = fn === "anchor" ? "owner" : "signer";
+        throw new RelayRejection(`${fn} must name your wallet as the ${who}, with at most 32 node updates`);
+      }
+      return { fn, docId: args[1].str().toString() };
     }
-    docArg = args[1];
-  } else if (fn === "anchor") {
-    const nodes = args[3]?.switch().name === "scvVec" ? (args[3].vec() ?? []) : null;
-    if (
-      args.length !== 4 ||
-      args[0].switch().name !== "scvAddress" ||
-      Address.fromScAddress(args[0].address()).toString() !== wallet ||
-      !isString(args[1]) ||
-      !isHash(args[2]) ||
-      nodes === null ||
-      nodes.length > MAX_ANCHOR_NODES ||
-      !nodes.every(isNodeUpdate)
-    ) {
-      throw new RelayRejection("anchor must name your wallet as the owner, with at most 32 node updates");
+    case "update_document":
+      if (args.length !== 2 || !isString(args[0]) || !isHash(args[1])) throw bad();
+      return { fn, docId: args[0].str().toString() };
+    case "update_document_as":
+      if (args.length !== 3 || !isString(args[1]) || !isHash(args[2])) throw bad();
+      if (!isWallet(args[0])) throw new RelayRejection("update_document_as must name your wallet as the signer");
+      return { fn, docId: args[1].str().toString() };
+    case "set_node_status":
+      if (
+        args.length !== 5 ||
+        !isString(args[0]) ||
+        !isString(args[1]) ||
+        args[2].switch().name !== "scvVec" ||
+        !isString(args[3]) ||
+        !isString(args[4])
+      ) {
+        throw bad();
+      }
+      return { fn, docId: args[0].str().toString() };
+    case "set_node_status_as":
+      if (
+        args.length !== 6 ||
+        !isString(args[1]) ||
+        !isString(args[2]) ||
+        args[3].switch().name !== "scvVec" ||
+        !isString(args[4]) ||
+        !isString(args[5])
+      ) {
+        throw bad();
+      }
+      if (!isWallet(args[0])) throw new RelayRejection("set_node_status_as must name your wallet as the signer");
+      return { fn, docId: args[1].str().toString() };
+    case "assign_document": {
+      const workspaceId = workspaceIdOf(args[1]);
+      if (args.length !== 2 || !isString(args[0]) || !workspaceId) throw bad();
+      return { fn, docId: args[0].str().toString(), workspaceId };
     }
-    docArg = args[1];
-  } else if (fn === "update_document") {
-    if (args.length !== 2 || !isString(args[0]) || !isHash(args[1])) {
-      throw new RelayRejection("update_document has an invalid argument shape");
+    case "unassign_document":
+      if (args.length !== 1 || !isString(args[0])) throw bad();
+      return { fn, docId: args[0].str().toString() };
+    case "create_workspace": {
+      const workspaceId = workspaceIdOf(args[0]);
+      if (args.length !== 2 || !workspaceId) throw bad();
+      if (!isWallet(args[1])) throw new RelayRejection("create_workspace must name your wallet as the owner");
+      return { fn, workspaceId, subject: null };
     }
-    docArg = args[0];
-  } else {
-    if (
-      args.length !== 5 ||
-      !isString(args[0]) ||
-      !isString(args[1]) ||
-      args[2].switch().name !== "scvVec" ||
-      !isString(args[3]) ||
-      !isString(args[4])
-    ) {
-      throw new RelayRejection("set_node_status has an invalid argument shape");
+    case "add_editor":
+    case "remove_editor":
+    case "add_admin":
+    case "remove_admin": {
+      const workspaceId = workspaceIdOf(args[0]);
+      const subject = addressOf(args[2]);
+      if (args.length !== 3 || !workspaceId || addressOf(args[1]) === null || subject === null) throw bad();
+      if (!isWallet(args[1])) {
+        const who = fn === "add_admin" ? "owner" : fn === "add_editor" ? "admin" : "caller";
+        throw new RelayRejection(`${fn} must name your wallet as the ${who}`);
+      }
+      return { fn, workspaceId, subject };
     }
-    docArg = args[0];
   }
-  return { fn, docId: docArg.str().toString() };
+}
+
+/** Where a note sits in doqtri's database, for the relay's checks. */
+export type NoteWorkspace = {
+  workspaceId: string;
+  /**
+   * A personal workspace: only its creator owns it (D-30) and signs its
+   * notes, through the owner-only calls or, with REGISTRY_EDITORS on, the
+   * `*_as` calls; its notes are never assigned to a workspace on-chain.
+   */
+  personal: boolean;
+  /** The note's creator (documents.user_id); null once their account is deleted. */
+  creatorId: string | null;
+};
+
+/**
+ * What authorizeRegistryWrite reads from doqtri's database. The relay route
+ * backs it with the service role (registry-access.ts); tests with fixtures.
+ */
+export type RegistryAccess = {
+  /** The workspace a note belongs to, or null when there is no such note. */
+  documentWorkspace(docId: string): Promise<NoteWorkspace | null>;
+  /** Whether a workspace is personal (D-30), or null when there is no such workspace. */
+  workspace(workspaceId: string): Promise<{ personal: boolean } | null>;
+  /** The user's current role in a workspace, or null when they are not (or no longer) a member. */
+  memberRole(workspaceId: string, userId: string): Promise<WorkspaceRole | null>;
+  /** The role of the account holding `address` (a passkey or Freighter wallet), or null. */
+  addressRole(workspaceId: string, address: string): Promise<WorkspaceRole | null>;
+};
+
+/** Below these, a member may not sign the call (D-10, D-14, D-23). */
+const MIN_ROLE: Record<RegistryFunction, WorkspaceRole> = {
+  register_document: "editor",
+  update_document: "editor",
+  set_node_status: "editor",
+  anchor: "editor",
+  anchor_as: "editor",
+  update_document_as: "editor",
+  set_node_status_as: "editor",
+  assign_document: "editor",
+  // The contract makes the workspace's owner sign it.
+  unassign_document: "owner",
+  create_workspace: "owner",
+  add_editor: "admin",
+  remove_editor: "admin",
+  add_admin: "owner",
+  remove_admin: "owner",
+};
+
+const NOT_IN_VAULT = "That note isn't in your vault.";
+
+function isOwnerFunction(fn: RegistryFunction): fn is OwnerFunction {
+  return (OWNER_FUNCTIONS as readonly string[]).includes(fn);
+}
+
+/**
+ * The relay pays only for writes the user may make right now, as doqtri's
+ * database has it: the contract checks signatures and its own member list,
+ * this checks the workspace roles. Membership is read at the moment of the
+ * request, so a member removed in the app is refused from the next request
+ * on (D-16), whatever the chain still says.
+ *
+ * `editors` is REGISTRY_EDITORS: whether the deployed registry has the v3
+ * calls. Without it they are refused outright, rather than paying to
+ * simulate a call the contract does not have.
+ *
+ * - A note write needs an editor or above of the note's workspace (viewers
+ *   read, D-14); taking a note out of its workspace needs an owner, and a
+ *   note can only be assigned to the workspace it belongs to.
+ * - A personal workspace's note is written by that workspace's owner only,
+ *   whatever role its other members hold (D-30), through whichever calls
+ *   the registry has (the owner-only ones, or the `*_as` ones with `editors`
+ *   on; the signer is the owner either way). It is never assigned to a
+ *   workspace on-chain.
+ * - A team note's owner-only writes (`register_document`, `anchor`, …) would
+ *   leave the note owned on-chain by whoever signed first. With `editors`
+ *   on they are refused: team notes go through `anchor_as` and then
+ *   `assign_document` (D-28). With it off they are the only calls there are,
+ *   and only the note's creator or the workspace's owner may make them, as
+ *   before workspaces had editors.
+ * - Creating the on-chain workspace needs an owner, and is refused for a
+ *   personal workspace (D-52): it stays off-chain, its notes owned by its
+ *   owner's wallet. (A Freighter owner can still call the contract
+ *   directly, paying their own fee; that is a known limit.) Adding or
+ *   removing an editor needs an admin or above; adding or removing an admin
+ *   an owner. In a personal workspace every one of them needs its owner,
+ *   since only the owner signs there (D-44). Only an
+ *   editor (or above) may be given chain write access, and only an admin
+ *   (or above) made an on-chain admin, so the chain never holds a role the
+ *   database does not.
+ *
+ * The panel hides what this would refuse with noteSigningRefusal()
+ * (note-signing.ts), whose tests hold it to these rules.
+ *
+ * Throws RelayRejection when refused.
+ */
+export async function authorizeRegistryWrite(
+  write: RegistryWrite,
+  userId: string,
+  access: RegistryAccess,
+  editors: boolean,
+): Promise<void> {
+  if (!editors && V3_FUNCTIONS.includes(write.fn)) {
+    throw new RelayRejection("Workspace calls aren't enabled on this registry yet.");
+  }
+  const min = MIN_ROLE[write.fn];
+  if (isDocumentWrite(write)) {
+    const note = await access.documentWorkspace(write.docId);
+    // An outsider and a removed member get the same answer as a missing note.
+    const role = note ? await access.memberRole(note.workspaceId, userId) : null;
+    if (!note || !role) throw new RelayRejection(NOT_IN_VAULT);
+    if (!roleAtLeast(role, min)) {
+      throw new RelayRejection(
+        min === "owner"
+          ? "Only an owner of this note's workspace can do that."
+          : "Viewers can read this note but not sign changes to it.",
+      );
+    }
+    if (note.personal) {
+      if (role !== "owner") {
+        throw new RelayRejection("Only the owner of a personal workspace can sign changes to its notes.");
+      }
+      if (write.fn === "assign_document") {
+        throw new RelayRejection("A personal workspace's notes aren't put in a workspace on-chain.");
+      }
+    } else if (isOwnerFunction(write.fn)) {
+      if (editors) {
+        throw new RelayRejection("Team notes are written through the workspace calls. Reload and try again.");
+      }
+      if (note.creatorId !== userId && role !== "owner") {
+        throw new RelayRejection("Only this note's author or its workspace owner can anchor it for now.");
+      }
+    }
+    if (write.fn === "assign_document" && write.workspaceId !== note.workspaceId) {
+      throw new RelayRejection("A note can only be assigned to the workspace it belongs to.");
+    }
+    return;
+  }
+
+  const role = await access.memberRole(write.workspaceId, userId);
+  if (!role) throw new RelayRejection("You aren't a member of that workspace.");
+  if (!roleAtLeast(role, min)) {
+    throw new RelayRejection(min === "owner" ? "Only a workspace owner can do that." : "Only a workspace admin can do that.");
+  }
+  const workspace = await access.workspace(write.workspaceId);
+  if (!workspace) throw new RelayRejection("You aren't a member of that workspace.");
+  if (workspace.personal && role !== "owner") {
+    throw new RelayRejection("Only the owner of a personal workspace can sign changes to it.");
+  }
+  if (write.fn === "create_workspace" && workspace.personal) {
+    throw new RelayRejection("A personal workspace isn't created on-chain. Create a team workspace to share signing.");
+  }
+  if (write.fn === "add_editor" || write.fn === "add_admin") {
+    const needed: WorkspaceRole = write.fn === "add_admin" ? "admin" : "editor";
+    const subjectRole = write.subject ? await access.addressRole(write.workspaceId, write.subject) : null;
+    if (!roleAtLeast(subjectRole, needed)) {
+      throw new RelayRejection(
+        write.fn === "add_admin"
+          ? "Only a workspace admin can be made an admin on-chain."
+          : "Only a workspace editor can be given write access on-chain.",
+      );
+    }
+  }
 }
 
 export type WalletAdminCall =
