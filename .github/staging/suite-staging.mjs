@@ -109,8 +109,11 @@ const PROD_REFS = new Set(Object.values(APPS).map((a) => a.prodRef));
 const origin = (app) => `https://${APPS[app].host}`;
 
 // Values the settings may carry as STAGING_<NAME>, pushed to doqtri's staging
-// scope as <NAME>. Each must be a staging-only value, never production's.
-const DOQTRI_PASSTHROUGH = ["CHANNELS_API_KEY", "DOQTRI_RELAYER_SECRET", "OPENAI_API_KEY", "GITHUB_TOKEN", "DOQTRI_ADMINS"];
+// scope as <NAME>. Each must be a staging-only value, never production's, with
+// one exception: REVOKER_SECRET_KEY. The registry has a single revoker (D-16)
+// and staging shares the testnet registry with production, so both hold the
+// key `set_revoker` named.
+const DOQTRI_PASSTHROUGH = ["CHANNELS_API_KEY", "DOQTRI_RELAYER_SECRET", "OPENAI_API_KEY", "GITHUB_TOKEN", "DOQTRI_ADMINS", "REVOKER_SECRET_KEY"];
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(`--${name}`);
@@ -679,6 +682,9 @@ function envFor(app, ctx) {
     // whatever staging key it has, or gets a placeholder that fails closed.
     ...(setting("STAGING_OPENAI_API_KEY") ? [] : [{ ...hidden("OPENAI_API_KEY", "staging-placeholder"), onlyIfMissing: true }]),
     ...DOQTRI_PASSTHROUGH.filter((k) => setting(`STAGING_${k}`)).map((k) => hidden(k, mask(setting(`STAGING_${k}`)))),
+    // On-chain editors (WP-1.3) need the v3 registry and the revoke-only key:
+    // without the key a removal never reaches the chain, so the flag follows it.
+    plain("NEXT_PUBLIC_REGISTRY_EDITORS", setting("STAGING_REVOKER_SECRET_KEY") ? "1" : "0"),
     // The browser names the relayer in every paid write and the server signs
     // as it, so a staging relayer key needs its own address published too.
     ...(setting("STAGING_DOQTRI_RELAYER_SECRET")
