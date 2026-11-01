@@ -41,7 +41,7 @@ import { marketCallPlan, purchaseColumns, syncTemplate, type SaleRecord } from "
 import { simulateWithinCap, submitAndConfirm } from "@/lib/stellar/channels";
 import { readWalletPasskeys } from "@/lib/stellar/wallet-signers";
 import { submitPaidWrite } from "@/lib/stellar/direct-submit";
-import { topUpWallet } from "@/lib/stellar/friendbot-topup";
+import { topUpNewWalletOrQueue } from "@/lib/stellar/wallet-topups";
 
 /**
  * Fee-sponsored submission for passkey smart wallets (progress/002).
@@ -473,16 +473,16 @@ async function deployWallet(userId: string, submission: RelaySubmission, rpId: s
   // test XLM. The address is known before the deploy lands and the native token
   // accepts transfers to it, so the top-up (Friendbot, then a transfer: ~10s)
   // runs alongside the deploy instead of after it, and `after` lets it finish
-  // once the response is sent. Best effort: Top up in the app covers a failure.
+  // once the response is sent. When Friendbot refuses and the deploy lands,
+  // the chain jobs run retries it (wallet-topups.ts, DOQ-6).
   const address = deployedContractAddress(deploy.deployer, deploy.salt, NETWORK_PASSPHRASE);
+  const deployed = submitAndConfirm(submission.func, submission.auth);
   if (USER_PAYS_FEES && !IS_MAINNET) {
-    const topUp = topUpWallet(address).catch((error: Error) =>
-      console.error(`[chain/relay] first top-up for ${address} failed: ${error.message}`),
-    );
+    const topUp = topUpNewWalletOrQueue(admin, { userId, address }, deployed);
     after(() => topUp);
   }
 
-  const sent = await submitAndConfirm(submission.func, submission.auth);
+  const sent = await deployed;
 
   const { error: walletError } = await admin.from("smart_wallets").insert({
     user_id: userId,

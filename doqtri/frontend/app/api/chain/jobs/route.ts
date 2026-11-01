@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { runChainJobs } from "@/lib/stellar/chain-jobs";
+import { runWalletTopUps } from "@/lib/stellar/wallet-topups";
 import { readSchedulerHealth, schedulerWarning } from "@/lib/stellar/chain-jobs-scheduler";
 
 export const runtime = "nodejs";
@@ -25,6 +26,11 @@ function authorized(request: Request): boolean {
  * Every response carries `scheduler`, whether the pg_cron job can run
  * (chain-jobs-scheduler.ts), and a run logs a warning when it cannot, so
  * the daily backstop's log says when it is all there is.
+ *
+ * The same run retries new wallets' failed Friendbot top-ups
+ * (wallet-topups.ts, DOQ-6; testnet only) alongside the chain jobs, and
+ * reports them as `topUps`, null when that queue could not run. Neither
+ * queue's failure stops the other.
  */
 export async function GET(request: Request) {
   if (!authorized(request)) return Response.json({ error: "Not allowed." }, { status: 401 });
@@ -32,10 +38,15 @@ export async function GET(request: Request) {
   const scheduler = await readSchedulerHealth(admin);
   const warning = schedulerWarning(scheduler);
   if (warning) console.warn(`[chain/jobs] ${warning}`);
+  const topUps = runWalletTopUps(admin).catch((error) => {
+    console.error("[chain/jobs] wallet top-ups failed", error);
+    return null;
+  });
   try {
-    return Response.json({ ...(await runChainJobs(admin, { limit: 50 })), scheduler });
+    const summary = await runChainJobs(admin, { limit: 50 });
+    return Response.json({ ...summary, topUps: await topUps, scheduler });
   } catch (error) {
     console.error("[chain/jobs] failed", error);
-    return Response.json({ error: "The queue couldn't run.", scheduler }, { status: 503 });
+    return Response.json({ error: "The queue couldn't run.", topUps: await topUps, scheduler }, { status: 503 });
   }
 }
