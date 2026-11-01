@@ -5,7 +5,6 @@ import {
   AnchorIcon,
   CircleCheckIcon,
   FlagIcon,
-  CopyIcon,
   DownloadIcon,
   LinkIcon,
   Loader2Icon,
@@ -22,12 +21,16 @@ import {
   DoqtriRegistry,
   type ChainDocument,
   type ChainNode,
-  type WriteReceipt,
 } from "@/lib/stellar/contract-client";
-import { expertTxUrl, REGISTRY_EDITORS } from "@/lib/stellar/config";
+import { REGISTRY_EDITORS } from "@/lib/stellar/config";
 import { sha256Hex } from "@/lib/stellar/hash";
 import { DoqtriError } from "@/lib/stellar/errors";
-import { getDocumentHistory, type DocumentHistory } from "@/lib/stellar/history";
+import {
+  getDocumentHistory,
+  readPendingWrites,
+  type DocumentHistory,
+  type PendingChainWrite,
+} from "@/lib/stellar/history";
 import { loadNoteSigner, NOTE_SIGNING_NOTICE, noteSigningRefusal, type NoteSigner } from "@/lib/stellar/note-signing";
 import { loadWriteTarget, reportWorkspaceAssignment } from "@/lib/stellar/write-target";
 import { NODE_STATUSES, type NodeStatus } from "@/lib/stellar/types";
@@ -36,7 +39,8 @@ import { useWallet } from "@/components/vault/wallet-provider";
 import { NodeLinks } from "@/components/vault/node-links";
 import { IS_MAINNET, MARKET_CONTRACT_ID } from "@/lib/stellar/config";
 import { PublishTemplateDialog } from "@/components/vault/publish-template-dialog";
-import { hasVersionHistory, shortHash, VersionHistory } from "@/components/vault/version-history";
+import { hasVersionHistory, pendingVersions, VersionHistory, type VersionList } from "@/components/vault/version-history";
+import { announceWrite, ReceiptCard, type Receipt } from "@/components/vault/receipt-card";
 import { buildMindmap } from "@/lib/mindmap";
 
 type Props = {
@@ -45,12 +49,6 @@ type Props = {
   markdown: string;
   /** Saves the note now and resolves with the exact text stored. */
   onSave: () => Promise<string>;
-};
-
-type Receipt = WriteReceipt & {
-  kind: "register" | "update" | "node" | "done";
-  contentHash?: string;
-  nodeId?: string;
 };
 
 /**
@@ -62,13 +60,16 @@ const DONE_NODE = "root";
 const DONE_TOOL = "doqtri-done";
 const doneRef = (version: number) => `v${version}`;
 
-/** What a write the relay took but no ledger has confirmed yet says (DOQ-5). */
-const PENDING_TOAST = "Sent. The network hasn't confirmed it yet, so it shows as pending until it does.";
+/** Why Save & anchor and Mark done wait while a note's first anchor is pending. */
+const REGISTRATION_PENDING =
+  "This note's first anchor is still pending. Anchor again once the network confirms it, or once it has failed.";
 
-/** A confirmed write's toast, or the pending one: a 202 is not a failure. */
-function announceWrite(receipt: WriteReceipt, confirmed: string) {
-  if (receipt.pending) toast.info(PENDING_TOAST);
-  else toast.success(confirmed);
+/**
+ * The note's pending first anchor, from the write index. Only writes that
+ * make a version count; an unreadable index holds nothing back.
+ */
+async function readFirstAnchor(docId: string): Promise<PendingChainWrite[]> {
+  return pendingVersions(await readPendingWrites(docId).catch(() => []));
 }
 
 async function copy(text: string, what: string) {
@@ -84,6 +85,9 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
   const [chainDoc, setChainDoc] = useState<ChainDocument | null>(null);
   const [localHash, setLocalHash] = useState<string | null>(null);
   const [history, setHistory] = useState<DocumentHistory | null>(null);
+  // A note the ledger doesn't have yet: its first anchor, if the relay
+  // answered 202 for it and the chain-jobs run hasn't settled it (DOQ-5).
+  const [firstAnchor, setFirstAnchor] = useState<PendingChainWrite[]>([]);
   const [busy, setBusy] = useState(false);
   // Which half of Save & anchor is running, for the button label.
   const [anchorStep, setAnchorStep] = useState<"saving" | "signing" | null>(null);
@@ -172,6 +176,14 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
   const tree = buildMindmap(title, markdown);
   const flatNodes = flattenNodes(tree);
   const chainVersion = chainDoc?.version ?? null;
+  // A second register while the first may still land would be a second fee,
+  // and one of the two would fail on-chain.
+  const registrationPending = chainDoc == null && firstAnchor.length > 0;
+  const versionList: VersionList | null = chainDoc
+    ? history
+    : registrationPending
+      ? { versions: [], pending: firstAnchor }
+      : null;
   const unanchored =
     chainDoc != null && localHash != null && localHash !== chainDoc.contentHash;
   // The contract bumps the version even for an unchanged hash, so re-anchoring
@@ -191,8 +203,10 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
     if (!doc) {
       setHistory(null);
       setRootNode(null);
+      setFirstAnchor(await readFirstAnchor(docId));
       return;
     }
+    setFirstAnchor([]);
     setRootNode(await DoqtriRegistry.getNode(docId, DONE_NODE).catch(() => null));
     try {
       setHistory(await getDocumentHistory(docId));
@@ -208,7 +222,11 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
       const doc = await DoqtriRegistry.getDocument(docId);
       if (cancelled) return;
       setChainDoc(doc);
-      if (!doc) return;
+      if (!doc) {
+        const first = await readFirstAnchor(docId);
+        if (!cancelled) setFirstAnchor(first);
+        return;
+      }
       const root = await DoqtriRegistry.getNode(docId, DONE_NODE).catch(() => null);
       if (cancelled) return;
       setRootNode(root);
@@ -307,6 +325,11 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
         return;
       }
       const registering = chainVersion == null;
+      if (registering && registrationPending) {
+        toast.info(`Saved. ${REGISTRATION_PENDING}`);
+        await refreshChain();
+        return;
+      }
       setAnchorStep("signing");
       const result = await withWallet(async (address) => {
         const target = await loadWriteTarget(docId);
@@ -381,6 +404,11 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
     try {
       setDoneStep("saving");
       const saved = await onSave();
+      if (registrationPending) {
+        toast.info(`Saved. ${REGISTRATION_PENDING}`);
+        await refreshChain();
+        return;
+      }
       const contentHash = await sha256Hex(saved);
       const address = await wallet.ensureWallet();
       const target = await loadWriteTarget(docId);
@@ -646,7 +674,15 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
         </p>
       ) : null}
 
-      {receipt ? <ReceiptCard receipt={receipt} /> : null}
+      {registrationPending ? (
+        <p data-testid="registration-pending" className="glass text-muted-foreground rounded-xl px-2.5 py-2 text-[11px]">
+          {REGISTRATION_PENDING}
+        </p>
+      ) : null}
+
+      {receipt ? (
+        <ReceiptCard receipt={receipt} onCopyHash={(hash) => void copy(hash, "Transaction hash")} />
+      ) : null}
 
       {chainVersion != null ? (
         <div className="flex gap-1.5">
@@ -725,7 +761,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
         </label>
       ) : null}
 
-      {hasVersionHistory(history) ? <VersionHistory history={history} /> : null}
+      {hasVersionHistory(versionList) ? <VersionHistory history={versionList} /> : null}
 
       {canSign ? (
         <>
@@ -840,61 +876,6 @@ function VersionBadge({
         <StatusTag tone="verified">anchored</StatusTag>
       )}
     </span>
-  );
-}
-
-function ReceiptCard({ receipt }: { receipt: Receipt }) {
-  const label =
-    receipt.kind === "register"
-      ? "Registered"
-      : receipt.kind === "update"
-        ? "Updated"
-        : receipt.kind === "done"
-          ? "Marked done"
-          : `Node “${receipt.nodeId}” synced`;
-
-  return (
-    <div className="glass grid gap-1 rounded-xl px-2.5 py-2 text-[11px]">
-      <div className="flex items-center justify-between gap-2">
-        <span className="flex items-center gap-1.5 font-medium">
-          {receipt.pending ? null : <CircleCheckIcon className="text-success size-3.5" strokeWidth={2} aria-hidden />}
-          {receipt.pending ? `${label}: sent` : label}
-        </span>
-        {receipt.pending ? (
-          <StatusTag tone="warning" data-testid="receipt-pending" title="Sent; waiting for a ledger to confirm it">
-            Pending
-          </StatusTag>
-        ) : receipt.version != null ? (
-          <span className="text-muted-foreground font-mono">v{receipt.version}</span>
-        ) : null}
-      </div>
-      <div className="flex items-center justify-between gap-2 font-mono">
-        <a
-          className="text-foreground underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground"
-          href={expertTxUrl(receipt.txHash)}
-          target="_blank"
-          rel="noreferrer"
-        >
-          tx {shortHash(receipt.txHash)} →
-        </a>
-        <button
-          type="button"
-          aria-label="Copy transaction hash"
-          className="text-muted-foreground hover:text-foreground"
-          onClick={() => void copy(receipt.txHash, "Transaction hash")}
-        >
-          <CopyIcon className="size-3" />
-        </button>
-      </div>
-      {receipt.contentHash ? (
-        <div
-          className="text-muted-foreground truncate font-mono"
-          title={receipt.contentHash}
-        >
-          sha256 {shortHash(receipt.contentHash)}
-        </div>
-      ) : null}
-    </div>
   );
 }
 

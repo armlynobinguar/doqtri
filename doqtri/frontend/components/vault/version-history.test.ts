@@ -40,9 +40,22 @@ describe("VersionHistory", () => {
     expect(html).toContain("Version history (2)");
   });
 
-  it("is shown for a note whose only news is a pending write", () => {
-    expect(hasVersionHistory({ ...base, versions: [], pending: [sent] })).toBe(true);
-    expect(hasVersionHistory({ ...base, versions: [] })).toBe(false);
+  it("is shown for a note the ledger doesn't have yet, whose first anchor is pending", () => {
+    // What the ship panel passes when get_document is null (readPendingWrites).
+    const first = { versions: [], pending: [{ ...sent, fn: "register_document" }] };
+    expect(hasVersionHistory(first)).toBe(true);
+    const html = renderToStaticMarkup(createElement(VersionHistory, { history: first }));
+    expect(html).toContain('data-testid="version-pending"');
+    expect(html).toContain("Version history (0, 1 pending)");
+    expect(hasVersionHistory({ versions: [] })).toBe(false);
     expect(hasVersionHistory(null)).toBe(false);
+  });
+
+  it("lists only pending writes that make a version, not a pending node status", () => {
+    const node = { txHash: "cc".repeat(32), fn: "set_node_status", createdAt: sent.createdAt };
+    const html = render({ ...base, pending: [node] });
+    expect(html).not.toContain("version-pending");
+    expect(html).toContain("Version history (1)");
+    expect(hasVersionHistory({ versions: [], pending: [node] })).toBe(false);
   });
 });

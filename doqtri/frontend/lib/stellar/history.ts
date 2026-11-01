@@ -550,14 +550,7 @@ async function fetchTransactionOperations(hashes: readonly string[]): Promise<Ho
  */
 async function fetchIndexedOperations(docId: string): Promise<{ ops: HorizonOperation[]; pending: PendingChainWrite[] }> {
   if (!UUID.test(docId)) return { ops: [], pending: [] };
-  // chain_writes is publicly readable (it mirrors ledger data), so the anon
-  // key works the same on the public audit page and in the vault.
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { auth: { persistSession: false, autoRefreshToken: false } },
-  );
-  const { data, error } = await supabase
+  const { data, error } = await writeIndex()
     .from("chain_writes")
     .select("tx_hash, fn, status, created_at")
     .eq("network", NETWORK)
@@ -573,6 +566,42 @@ async function fetchIndexedOperations(docId: string): Promise<{ ops: HorizonOper
     .filter((row) => row.status === "pending" && !landed.has(row.tx_hash))
     .map((row) => ({ txHash: row.tx_hash, fn: row.fn ?? "", createdAt: row.created_at ?? "" }));
   return { ops, pending };
+}
+
+/**
+ * The write index (chain_writes). It is publicly readable, since it mirrors
+ * ledger data, so the anon key works the same on the public audit page and
+ * in the vault.
+ */
+function writeIndex() {
+  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+
+/**
+ * The note's writes the index holds as pending, oldest first, without asking
+ * the ledger. getDocumentHistory reads nothing for a note the ledger doesn't
+ * have, so this is how the ship panel finds a first anchor the relay answered
+ * 202 for (DOQ-5): it shows it as pending, and holds back a second paid
+ * registration while the first may still land.
+ */
+export async function readPendingWrites(docId: string): Promise<PendingChainWrite[]> {
+  if (!UUID.test(docId)) return [];
+  const { data, error } = await writeIndex()
+    .from("chain_writes")
+    .select("tx_hash, fn, created_at")
+    .eq("network", NETWORK)
+    .eq("document_id", docId)
+    .eq("status", "pending")
+    .order("created_at", { ascending: true })
+    .limit(MAX_INDEXED_WRITES);
+  if (error) throw new Error(`Write index unavailable: ${error.message}`);
+  return ((data ?? []) as IndexedRow[]).map((row) => ({
+    txHash: row.tx_hash,
+    fn: row.fn ?? "",
+    createdAt: row.created_at ?? "",
+  }));
 }
 
 /** `history` with the index's pending writes, when there are any. */

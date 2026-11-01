@@ -38,11 +38,16 @@ vi.mock("@/lib/stellar/contract-client", () => ({
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: () => {
+    // Only a status filter narrows the rows; the network and note are this file's.
+    let status: string | null = null;
     const query = {
       select: () => query,
-      eq: () => query,
+      eq: (column: string, value: string) => {
+        if (column === "status") status = value;
+        return query;
+      },
       order: () => query,
-      limit: async () => ({ data: state.indexed, error: null }),
+      limit: async () => ({ data: state.indexed.filter((row) => !status || row.status === status), error: null }),
     };
     return { from: () => query };
   },
@@ -65,7 +70,7 @@ vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
 });
 
 const { CONTRACT_ID, HORIZON_URL, LEGACY_CONTRACT_IDS } = await import("@/lib/stellar/config");
-const { getDocumentHistory, MAX_REMOVED_FEEDS } = await import("@/lib/stellar/history");
+const { getDocumentHistory, MAX_REMOVED_FEEDS, readPendingWrites } = await import("@/lib/stellar/history");
 type HorizonOperation = import("@/lib/stellar/history").HorizonOperation;
 
 const DOC = "1b4e28ba-2fa1-11d2-883f-0016d3cca427";
@@ -232,6 +237,20 @@ describe("getDocumentHistory for a workspace note", () => {
         [2, "paid-1", EDITOR],
       ]);
       expect(history?.pending).toBeUndefined();
+    });
+
+    it("as a note's first write: history has nothing to read, but the index still lists it as pending", async () => {
+      state.document = null;
+      state.indexed = [
+        { tx_hash: "first", fn: "register_document", status: "pending", created_at: sentAt },
+        { tx_hash: "earlier", fn: "register_document", status: "failed", created_at: sentAt },
+      ];
+      expect(await getDocumentHistory(DOC)).toBeNull();
+      expect(await readPendingWrites(DOC)).toEqual([{ txHash: "first", fn: "register_document", createdAt: sentAt }]);
+
+      state.indexed = [{ tx_hash: "first", fn: "register_document", status: "confirmed", created_at: sentAt }];
+      expect(await readPendingWrites(DOC)).toEqual([]);
+      expect(await readPendingWrites("not-a-note-id")).toEqual([]);
     });
 
     it("is a version like any other once confirmed", async () => {
