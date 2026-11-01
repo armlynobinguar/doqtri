@@ -15,6 +15,21 @@
  * lease lasts 90 s, longer than the 60 s time bound on every paid write, so
  * a lease that runs out (a server that died mid-write) can't hand an account
  * to a second write while the first one's transaction could still land.
+ * That holds while the transaction is built within LEASE_BUILD_BUDGET_SECONDS
+ * of the lease, counting clock skew: its time bound comes from this server's
+ * clock at build time, the lease's end from the database's.
+ *
+ * Releasing (for DOQ-4). The holder builds with the larger of the RPC's
+ * sequence number and the lease's nextSeq, and releases with the sequence
+ * number the channel's next transaction carries. The stored value is
+ * replaced, not raised, so pass:
+ * - used + 1 once the transaction was accepted for submission (landed, or
+ *   failed on-chain: both consume the sequence number, and so may a pending
+ *   one that later lands);
+ * - null when it was refused before it could consume anything (simulation
+ *   or a submit error such as TRY_AGAIN_LATER): the stored floor stands;
+ * - the RPC's account sequence + 1, read after the failure, on txBadSeq: the
+ *   stored floor was wrong, and this is how it comes down again.
  *
  * Keys come from RELAY_CHANNEL_SEED and the channel's index
  * (channel-accounts.mjs); the database holds public keys only. Nothing calls
@@ -34,6 +49,11 @@ export const LEASE_TTL_SECONDS = 90;
  * source, and lease_relay_channel() refuses a TTL of 60 s or less.
  */
 export const PAID_WRITE_TIMEOUT_SECONDS = 60;
+/**
+ * How long after leasing a transaction may still be built: the lease must end
+ * after the transaction's time bound, which starts at build time.
+ */
+export const LEASE_BUILD_BUDGET_SECONDS = LEASE_TTL_SECONDS - PAID_WRITE_TIMEOUT_SECONDS;
 /** How long a request waits for a free channel before it is refused. */
 export const LEASE_WAIT_MS = 20_000;
 /** How often a waiting request asks again. */
@@ -48,7 +68,7 @@ export type LeasedRow = { idx: number; lease_id: string; next_seq: string | null
 export type ChannelPoolStore = {
   /** Claims a free channel on `network` for `ttlSeconds`, or null when all are leased. */
   lease(network: StellarNetwork, ttlSeconds: number): Promise<LeasedRow | null>;
-  /** Gives a lease back with the channel's next sequence number; false when the lease had already passed on. */
+  /** Gives a lease back with the channel's next sequence number (null keeps the stored one); false when the lease had already passed on. */
   release(idx: number, leaseId: string, nextSeq: bigint | null): Promise<boolean>;
 };
 
@@ -78,13 +98,20 @@ export type LeaseOptions = {
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+const MISCONFIGURED = "Paid writes are misconfigured on this server";
+
 /** RELAY_CHANNEL_SEED, or a 503 when it is missing or too short to guard the channels' keys. */
 export function relayChannelSeed(): string {
   const seed = process.env.RELAY_CHANNEL_SEED?.trim();
   if (!seed) throw new RelayRejection("Paid writes are not configured", 503);
-  if (seed.length < MIN_SEED_LENGTH) {
-    console.error(`[channel-pool] RELAY_CHANNEL_SEED is shorter than ${MIN_SEED_LENGTH} characters`);
-    throw new RelayRejection("Paid writes are misconfigured on this server", 503);
+  return checkedSeed(seed);
+}
+
+/** The seed as given, or a 503 when it is too short to guard the channels' keys. */
+function checkedSeed(seed: string | undefined): string {
+  if (!seed || seed.length < MIN_SEED_LENGTH) {
+    console.error(`[channel-pool] RELAY_CHANNEL_SEED is missing or shorter than ${MIN_SEED_LENGTH} characters`);
+    throw new RelayRejection(MISCONFIGURED, 503);
   }
   return seed;
 }
@@ -92,13 +119,21 @@ export function relayChannelSeed(): string {
 /**
  * Leases a channel, waiting for one while the pool is full. Throws a 503
  * RelayRejection with Retry-After once `waitMs` has passed without one.
+ *
+ * The seed is checked before anything is leased, so a bad one never strands
+ * a lease. A channel whose stored key the seed doesn't derive is skipped and
+ * its lease kept, not released: it lapses in 90 s, and until then the next
+ * lease can't hand the same bad row straight back.
  */
 export async function leaseChannel(store: ChannelPoolStore, options: LeaseOptions): Promise<ChannelLease> {
   const { now = Date.now, sleep = defaultSleep, waitMs = LEASE_WAIT_MS, pollMs = LEASE_POLL_MS } = options;
+  const seed = checkedSeed(options.seed);
   const deadline = now() + waitMs;
   for (;;) {
     const row = await store.lease(options.network, LEASE_TTL_SECONDS);
-    if (row) return await toLease(store, row, options);
+    const lease = row && toLease(row, seed, options.network);
+    if (lease) return lease;
+    if (row) continue;
     if (now() + pollMs > deadline) {
       console.warn(`[channel-pool] no free ${options.network} channel after ${waitMs} ms`);
       throw new RelayRejection(
@@ -112,18 +147,17 @@ export async function leaseChannel(store: ChannelPoolStore, options: LeaseOption
 }
 
 /**
- * The lease with its keypair. A row whose public key isn't the one the seed
- * derives (the seed changed and the pool wasn't seeded again) is given back
- * and refused: the transaction would fail on-chain with a bad signature.
+ * The lease with its keypair, or null when the row's public key isn't the one
+ * the seed derives (the seed changed and the pool wasn't seeded again): a
+ * transaction from it would fail on-chain with a bad signature.
  */
-async function toLease(store: ChannelPoolStore, row: LeasedRow, options: LeaseOptions): Promise<ChannelLease> {
-  const keypair = channelKeypair(options.seed, options.network, row.idx);
+function toLease(row: LeasedRow, seed: string, network: StellarNetwork): ChannelLease | null {
+  const keypair = channelKeypair(seed, network, row.idx);
   if (keypair.publicKey() !== row.public_key) {
     console.error(
-      `[channel-pool] channel ${row.idx} is ${row.public_key} in the database, but RELAY_CHANNEL_SEED derives ${keypair.publicKey()}; run scripts/seed-relay-channels.mjs`,
+      `[channel-pool] channel ${row.idx} is ${row.public_key} in the database, but RELAY_CHANNEL_SEED derives ${keypair.publicKey()}; skipping it until its lease lapses. Run scripts/seed-relay-channels.mjs`,
     );
-    await releaseChannel(store, { idx: row.idx, leaseId: row.lease_id }, null);
-    throw new RelayRejection("Paid writes are misconfigured on this server", 503);
+    return null;
   }
   return {
     idx: row.idx,
@@ -136,7 +170,8 @@ async function toLease(store: ChannelPoolStore, row: LeasedRow, options: LeaseOp
 
 /**
  * Gives a lease back with the sequence number the channel's next transaction
- * carries (null when unknown: the stored one is kept). Never throws: by now
+ * carries, which replaces the stored one; null keeps it (see the header for
+ * which to pass). Never throws: by now
  * the write has landed or failed, and a lease that isn't released runs out
  * by itself. False when it wasn't released.
  */

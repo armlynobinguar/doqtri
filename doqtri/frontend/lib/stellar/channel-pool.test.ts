@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { channelKeypair } from "@/lib/stellar/channel-accounts.mjs";
 import {
+  LEASE_BUILD_BUDGET_SECONDS,
   LEASE_POLL_MS,
   LEASE_TTL_SECONDS,
   LEASE_WAIT_MS,
@@ -57,6 +58,11 @@ afterEach(() => {
 });
 
 describe("the lease TTL", () => {
+  it("leaves a 30 s budget between leasing and building the transaction", () => {
+    expect(LEASE_BUILD_BUDGET_SECONDS).toBe(LEASE_TTL_SECONDS - PAID_WRITE_TIMEOUT_SECONDS);
+    expect(LEASE_BUILD_BUDGET_SECONDS).toBe(30);
+  });
+
   const directSubmit = readFileSync(fileURLToPath(new URL("./direct-submit.ts", import.meta.url)), "utf8");
   const migration = readFileSync(
     fileURLToPath(new URL("../../../backend/migrations/20261101100000_relay_channels.sql", import.meta.url)),
@@ -132,14 +138,46 @@ describe("leaseChannel", () => {
     await outcome;
   });
 
-  it("gives back and refuses a channel whose stored key the seed doesn't derive", async () => {
+  it("skips a channel whose stored key the seed doesn't derive, keeping its lease, and takes the next one", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const clock = fakeClock();
+    const stale = rowFor(3, { public_key: channelKeypair(`${seed}-old`, "testnet", 3).publicKey() });
+    const store = memoryPool([stale, rowFor(4)]);
+    const lease = await leaseChannel(store, { network: "testnet", seed, now: clock.now, sleep: clock.sleep });
+    expect(lease.idx).toBe(4);
+    expect(lease.keypair.publicKey()).toBe(channelKeypair(seed, "testnet", 4).publicKey());
+    // Not released: released, it would sort first and come straight back.
+    // Kept, it lapses in 90 s, out of the way.
+    expect(store.released).toEqual([]);
+    expect(store.leases).toBe(2);
+    expect(clock.t).toBe(0);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("channel 3 is"));
+  });
+
+  it("waits as usual when every free channel has a stale key", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    const store = memoryPool([rowFor(3, { public_key: channelKeypair(seed, "testnet", 4).publicKey() })]);
-    await expect(leaseChannel(store, { network: "testnet", seed })).rejects.toMatchObject({
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const clock = fakeClock();
+    const stale = (idx: number) => rowFor(idx, { public_key: channelKeypair(`${seed}-old`, "testnet", idx).publicKey() });
+    const store = memoryPool([stale(0), stale(1)]);
+    await expect(leaseChannel(store, { network: "testnet", seed, now: clock.now, sleep: clock.sleep })).rejects.toMatchObject({
       status: 503,
-      message: "Paid writes are misconfigured on this server",
+      retryAfterSeconds: POOL_BUSY_RETRY_AFTER_SECONDS,
     });
-    expect(store.released).toEqual([{ idx: 3, leaseId, nextSeq: null }]);
+    expect(store.released).toEqual([]);
+  });
+
+  it("checks the seed before leasing, so a bad one never strands a lease", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const bad of ["", "too-short"]) {
+      const store = memoryPool([rowFor(0)]);
+      await expect(leaseChannel(store, { network: "testnet", seed: bad })).rejects.toMatchObject({
+        name: "RelayRejection",
+        status: 503,
+        message: "Paid writes are misconfigured on this server",
+      });
+      expect(store.leases).toBe(0);
+    }
   });
 });
 
