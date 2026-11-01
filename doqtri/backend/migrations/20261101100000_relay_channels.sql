@@ -21,20 +21,32 @@
 -- Leasing. lease_relay_channel() claims the free row whose lease ended
 -- longest ago with `for update skip locked`, so two requests leasing at the
 -- same moment never get the same account: the second skips the row the
--- first has locked and takes the next one. A lease is free once
--- leased_until has passed, so a server that died mid-write gives its
--- account back by itself.
+-- first has locked and takes the next one. A row is free when nobody holds
+-- it (lease_id null, as release leaves it) or its lease has run out
+-- (leased_until passed), so a server that died mid-write gives its account
+-- back by itself. Release keeps leased_until as the time the lease ended,
+-- so the pool rotates: a channel used a moment ago goes behind one that has
+-- been idle longer, instead of channel 0 taking every write under light
+-- load.
 --
 -- The lease outlives the transaction. Every paid write is built with a 60 s
--- time bound (setTimeout(60) in direct-submit.ts), so once a lease runs out
--- the transaction it covered has either landed or can no longer land, and
--- the next holder cannot race it for the account's sequence number. The
--- default TTL is 90 s, and a TTL of 60 s or less is refused.
+-- time bound (setTimeout(60) in direct-submit.ts), and the default TTL is
+-- 90 s; a TTL of 60 s or less is refused. That leaves a 30 s budget between
+-- the lease and the transaction's build: the time bound is set from the app
+-- server's clock when the transaction is built, after simulation, while the
+-- lease ends by the database's now(). As long as build delay plus clock
+-- skew stays under 30 s, a lease that runs out covered a transaction that
+-- has either landed or can no longer land, so the next holder cannot race
+-- it for the account's sequence number. (DOQ-4 can make this independent of
+-- clocks by deriving the transaction's maxTime from the lease.)
 --
 -- next_seq is the sequence number the channel's next transaction carries,
--- as the last holder saw it. An RPC node that lags a ledger behind would
--- hand out a sequence number already used; the stored value is the floor.
--- release_relay_channel() writes it back only while the caller still holds
+-- as the last holder reported it. An RPC node that lags a ledger behind
+-- would hand out a sequence number already used, so the caller builds with
+-- the larger of the RPC's value and this one. release_relay_channel()
+-- stores what it is given (null keeps the stored value), so a caller that
+-- knows better, such as one whose transaction never consumed its sequence
+-- number, can also lower it. It writes only while the caller still holds
 -- the lease (same lease_id), so a holder whose lease expired and was taken
 -- by someone else changes nothing.
 --
@@ -47,13 +59,14 @@ create table public.relay_channels (
   idx          integer primary key check (idx >= 0),
   network      text not null check (network in ('testnet', 'mainnet')),
   public_key   text not null unique check (public_key ~ '^G[A-Z2-7]{55}$'),
-  -- Null or past: free.
+  -- When the lease ends, or ended; null for a channel never leased.
   leased_until timestamptz,
-  -- Who holds (or last held) the lease; release matches on it.
+  -- Who holds the lease; null once released. Release matches on it.
   lease_id     uuid,
   -- The sequence number the channel's next transaction carries, as last seen.
   next_seq     bigint check (next_seq >= 0),
-  check ((leased_until is null) = (lease_id is null))
+  -- A held lease always has an end.
+  check (lease_id is null or leased_until is not null)
 );
 
 comment on table public.relay_channels is
@@ -100,7 +113,7 @@ begin
    where c.idx = (
      select f.idx from public.relay_channels f
       where f.network = p_network
-        and (f.leased_until is null or f.leased_until < now())
+        and (f.lease_id is null or f.leased_until < now())
       order by f.leased_until nulls first, f.idx
       limit 1
         for update skip locked
@@ -111,9 +124,10 @@ $$;
 
 -- Gives a lease back and records the channel's next sequence number, only
 -- while p_lease_id still holds it. True when it did; false when the lease
--- had already passed to someone else (nothing changes then). A null
--- p_next_seq keeps the stored one, and the stored one never goes down: the
--- chain's sequence numbers only climb.
+-- had already passed to someone else (nothing changes then). p_next_seq is
+-- stored as given, lower or higher than before; null keeps the stored one.
+-- leased_until becomes the time the lease ended (now, or earlier if it had
+-- already run out), which is what lease_relay_channel() rotates on.
 create function public.release_relay_channel(p_idx integer, p_lease_id uuid, p_next_seq bigint)
 returns boolean
 language sql
@@ -121,9 +135,9 @@ set search_path = ''
 as $$
   with released as (
     update public.relay_channels c
-       set leased_until = null,
+       set leased_until = least(c.leased_until, now()),
            lease_id = null,
-           next_seq = greatest(c.next_seq, p_next_seq)
+           next_seq = coalesce(p_next_seq, c.next_seq)
      where c.idx = p_idx
        and c.lease_id = p_lease_id
     returning 1

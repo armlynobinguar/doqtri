@@ -7,16 +7,17 @@
 --
 -- One transaction, rolled back, so now() is fixed: an expired lease is stood
 -- in for by moving leased_until into the past. Everything runs in one
--- session, so "at the same moment" is two leases with nothing released in
--- between; across sessions the same guarantee rests on `for update skip
--- locked`, as in claim_workspace_chain_jobs().
+-- session, so "at the same moment" here is two leases with nothing released
+-- in between. Leases from two sessions at once, which rest on `for update
+-- skip locked`, are tested in relay_channels_concurrency.test.sql, which
+-- needs a real Postgres with dblink.
 --
 -- Pool: three testnet channels (0, 1, 2) and one mainnet channel (3).
 
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(36);
+select plan(38);
 
 select has_table('public', 'relay_channels', 'the pool table exists');
 select ok((select relrowsecurity from pg_class where oid = 'public.relay_channels'::regclass),
@@ -108,22 +109,27 @@ select is(public.release_relay_channel(1, (select lease_id from relet), 41), tru
   'the current holder releases it');
 select results_eq(
   $$ select lease_id, leased_until, next_seq from public.relay_channels where idx = 1 $$,
-  $$ values (null::uuid, null::timestamptz, 41::bigint) $$,
-  'which frees the channel and stores its next sequence number');
+  $$ values (null::uuid, now(), 41::bigint) $$,
+  'which frees the channel, records when its lease ended, and stores its next sequence number');
 select is(public.release_relay_channel(1, (select lease_id from relet), 42), false,
   'a second release of the same lease changes nothing');
 
 create temp table again as select * from public.lease_relay_channel('testnet');
-select is((select idx from again), 1, 'the released channel is leased again');
-select is((select next_seq from again), '41', 'and the lease hands out the stored sequence number');
-select is(public.release_relay_channel(1, (select lease_id from public.relay_channels where idx = 1), null), true,
+-- Channel 2's lease ran out 5 s ago; channel 1 was released just now.
+select is((select idx from again), 2,
+  'a channel released just now goes behind one that has been free longer, so the pool rotates');
+create temp table again1 as select * from public.lease_relay_channel('testnet');
+select is((select idx from again1), 1, 'the released channel is leased again');
+select is((select next_seq from again1), '41', 'and the lease hands out the stored sequence number');
+select is(public.release_relay_channel(1, (select lease_id from again1), null), true,
   'a release without a sequence number');
 select is((select next_seq from public.relay_channels where idx = 1), 41::bigint, 'keeps the stored one');
 create temp table lower_seq as select * from public.lease_relay_channel('testnet');
-select is(public.release_relay_channel((select idx from lower_seq), (select lease_id from lower_seq), 7), true,
-  'a release with a lower sequence number frees the channel');
-select is((select next_seq from public.relay_channels where idx = 1), 41::bigint,
-  'but never lowers the stored one');
+select is((select idx from lower_seq), 1, 'with every other testnet channel held, channel 1 is leased once more');
+select is(public.release_relay_channel(1, (select lease_id from lower_seq), 7), true,
+  'a release with a lower sequence number (its transaction never used the stored one)');
+select is((select next_seq from public.relay_channels where idx = 1), 7::bigint,
+  'stores it as given, so a floor set too high can be corrected');
 
 -- Sequence numbers run past 2^53; the lease returns them as text, digit for digit.
 create temp table big as select * from public.lease_relay_channel('testnet');
