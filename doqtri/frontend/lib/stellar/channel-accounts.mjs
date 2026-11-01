@@ -63,13 +63,15 @@ export function fundingNeeded(balanceXlm) {
  * @typedef {object} SeedDb
  * @property {() => Promise<ChannelRow[]>} rows every relay_channels row
  * @property {(rows: ChannelRow[]) => Promise<void>} insert adds new rows
- * @property {(row: ChannelRow) => Promise<void>} replaceKey points an existing idx at a new public key, forgetting its next_seq
+ * @property {(row: ChannelRow) => Promise<void>} replaceKey points an existing idx at a new public key, forgetting its next_seq and lease
+ * @property {(row: ChannelRow) => Promise<void>} remove deletes the row for this idx and network
  *
  * @typedef {object} SeedSummary
  * @property {number} created accounts created on-chain
  * @property {number} toppedUp accounts topped up
  * @property {number} inserted rows added
  * @property {number} rekeyed rows whose public key changed (a new RELAY_CHANNEL_SEED)
+ * @property {number} removed rows deleted because they hold a key the seed no longer derives
  * @property {string[]} skipped one line per channel left out, and why
  */
 
@@ -78,8 +80,12 @@ export function fundingNeeded(balanceXlm) {
  * in relay_channels. Safe to run again: an account with enough XLM is left
  * alone, a row already there is not written twice, and a channel whose
  * funding failed gets no row (so it is never leased) until a later run funds
- * it. Rows past `count` are left as they are. With `dryRun`, it reads and
- * reports but neither funds nor writes.
+ * it. Afterwards no row on this network holds a key the seed doesn't derive:
+ * the server skips such a row, and enough of them would starve the pool. So
+ * after a seed change, a row whose new account couldn't be funded is
+ * deleted, as is a row past `count` still on an old key; rows past `count`
+ * on the current seed are kept. With `dryRun`, it reads and reports but
+ * neither funds nor writes.
  *
  * @param {{ seed: string, network: "testnet" | "mainnet", count: number, chain: SeedChain, db: SeedDb, dryRun?: boolean, log?: (line: string) => void }} options
  * @returns {Promise<SeedSummary>}
@@ -87,7 +93,7 @@ export function fundingNeeded(balanceXlm) {
 export async function seedRelayChannels({ seed, network, count, chain, db, dryRun = false, log = () => {} }) {
   if (network !== "testnet") throw new Error("Channel accounts are funded from Friendbot, which is testnet only.");
   /** @type {SeedSummary} */
-  const summary = { created: 0, toppedUp: 0, inserted: 0, rekeyed: 0, skipped: [] };
+  const summary = { created: 0, toppedUp: 0, inserted: 0, rekeyed: 0, removed: 0, skipped: [] };
   const existing = new Map((await db.rows()).map((row) => [row.idx, row]));
 
   /** @type {ChannelRow[]} */
@@ -112,7 +118,14 @@ export async function seedRelayChannels({ seed, network, count, chain, db, dryRu
         log(`${idx} ${publicKey}: topped up`);
       }
     } catch (error) {
-      summary.skipped.push(`${idx}: funding failed (${error instanceof Error ? error.message : String(error)}); no row until it is funded`);
+      const why = `${idx}: funding failed (${error instanceof Error ? error.message : String(error)})`;
+      if (row && row.public_key !== publicKey) {
+        if (!dryRun) await db.remove(row);
+        summary.removed++;
+        summary.skipped.push(`${why}; its row, still on the old key, was removed until it is funded`);
+      } else {
+        summary.skipped.push(`${why}; ${row ? "its row stays, on the funds it has" : "no row until it is funded"}`);
+      }
       continue;
     }
 
@@ -123,6 +136,14 @@ export async function seedRelayChannels({ seed, network, count, chain, db, dryRu
       summary.rekeyed++;
       log(`${idx}: public key changed from ${row.public_key} to ${publicKey}`);
     }
+  }
+
+  for (const row of existing.values()) {
+    if (row.idx < count || row.network !== network) continue;
+    if (row.public_key === channelKeypair(seed, network, row.idx).publicKey()) continue;
+    if (!dryRun) await db.remove(row);
+    summary.removed++;
+    log(`${row.idx}: past --count and on a key the seed no longer derives; row removed`);
   }
 
   if (fresh.length && !dryRun) await db.insert(fresh);

@@ -15,7 +15,9 @@
  *   One whose funding failed gets none, so it is never leased; run again.
  * - Safe to run again: funded accounts are left alone, existing rows are
  *   not written twice, and rows past --count are kept. After a seed change,
- *   each row is pointed at its new key and its next_seq is forgotten.
+ *   each row is pointed at its new key and its next_seq and lease are
+ *   forgotten; a row whose new account couldn't be funded, and a row past
+ *   --count, are deleted instead, so no row is left on an old key.
  * - --dry-run reads Horizon and the table and reports; it funds and writes
  *   nothing.
  *
@@ -93,14 +95,19 @@ const table = {
   async replaceKey(row) {
     const { error } = await db
       .from("relay_channels")
-      .update({ public_key: row.public_key, next_seq: null })
+      // A holder still on the old key then can't release onto the new account.
+      .update({ public_key: row.public_key, next_seq: null, lease_id: null, leased_until: null })
       .eq("idx", row.idx)
       .eq("network", row.network);
     if (error) throw new Error(`re-keying channel ${row.idx} failed: ${error.message}`);
   },
+  async remove(row) {
+    const { error } = await db.from("relay_channels").delete().eq("idx", row.idx).eq("network", row.network);
+    if (error) throw new Error(`removing channel ${row.idx} failed: ${error.message}`);
+  },
 };
 
 const summary = await seedRelayChannels({ seed, network: "testnet", count, chain, db: table, dryRun, log: console.log });
-console.log(`${dryRun ? "[dry run] would have: " : ""}created ${summary.created}, topped up ${summary.toppedUp}, inserted ${summary.inserted}, re-keyed ${summary.rekeyed}`);
+console.log(`${dryRun ? "[dry run] would have: " : ""}created ${summary.created}, topped up ${summary.toppedUp}, inserted ${summary.inserted}, re-keyed ${summary.rekeyed}, removed ${summary.removed}`);
 for (const line of summary.skipped) console.warn(`skipped ${line}`);
 if (summary.skipped.length) process.exitCode = 1;

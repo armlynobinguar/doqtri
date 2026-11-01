@@ -80,6 +80,9 @@ function fakes(balances: Record<string, number> = {}, failing = new Set<string>(
     async replaceKey(row: ChannelRow) {
       rows.set(row.idx, { ...row });
     },
+    async remove(row: ChannelRow) {
+      rows.delete(row.idx);
+    },
   };
   return { chain, db, rows, balances, calls };
 }
@@ -128,6 +131,58 @@ describe("seedRelayChannels", () => {
     const summary = await seedRelayChannels({ seed, network: "testnet", count: 2, chain: f.chain, db: f.db });
     expect(summary).toMatchObject({ created: 2, inserted: 0, rekeyed: 2 });
     expect([...f.rows.values()].map((r) => r.public_key)).toEqual([key(0), key(1)]);
+  });
+
+  it("removes a row it couldn't re-key, so no row is left on the old key", async () => {
+    const f = fakes();
+    await seedRelayChannels({ seed: `${seed}-old`, network: "testnet", count: 3, chain: f.chain, db: f.db });
+    const failing = new Set([key(1)]);
+    const g = fakes(f.balances, failing);
+    for (const row of f.rows.values()) g.rows.set(row.idx, row);
+
+    const summary = await seedRelayChannels({ seed, network: "testnet", count: 3, chain: g.chain, db: g.db });
+    expect(summary).toMatchObject({ rekeyed: 2, removed: 1 });
+    expect(summary.skipped).toEqual([expect.stringMatching(/^1: funding failed .*old key, was removed/)]);
+    expect([...g.rows.values()].map((r) => [r.idx, r.public_key])).toEqual([
+      [0, key(0)],
+      [2, key(2)],
+    ]);
+
+    failing.clear();
+    const again = await seedRelayChannels({ seed, network: "testnet", count: 3, chain: g.chain, db: g.db });
+    expect(again).toMatchObject({ created: 1, inserted: 1, removed: 0 });
+    expect(g.rows.get(1)?.public_key).toBe(key(1));
+  });
+
+  it("keeps a row whose top-up failed when its key is current", async () => {
+    const f = fakes();
+    await seedRelayChannels({ seed, network: "testnet", count: 2, chain: f.chain, db: f.db });
+    f.balances[key(1)] = 5;
+    const g = fakes(f.balances, new Set([key(1)]));
+    for (const row of f.rows.values()) g.rows.set(row.idx, row);
+    const summary = await seedRelayChannels({ seed, network: "testnet", count: 2, chain: g.chain, db: g.db });
+    expect(summary).toMatchObject({ removed: 0 });
+    expect(summary.skipped).toEqual([expect.stringMatching(/^1: funding failed .*its row stays/)]);
+    expect(g.rows.get(1)?.public_key).toBe(key(1));
+  });
+
+  it("removes rows past count on an old key, and keeps those on the current one", async () => {
+    const f = fakes();
+    await seedRelayChannels({ seed: `${seed}-old`, network: "testnet", count: 4, chain: f.chain, db: f.db });
+    f.rows.set(3, { idx: 3, network: "testnet", public_key: key(3) });
+    const summary = await seedRelayChannels({ seed, network: "testnet", count: 2, chain: f.chain, db: f.db });
+    expect(summary).toMatchObject({ rekeyed: 2, removed: 1 });
+    expect([...f.rows.keys()].sort()).toEqual([0, 1, 3]);
+    expect(f.rows.get(3)?.public_key).toBe(key(3));
+  });
+
+  it("with dryRun, removes nothing either", async () => {
+    const f = fakes();
+    await seedRelayChannels({ seed: `${seed}-old`, network: "testnet", count: 3, chain: f.chain, db: f.db });
+    const summary = await seedRelayChannels({ seed, network: "testnet", count: 1, chain: f.chain, db: f.db, dryRun: true });
+    expect(summary).toMatchObject({ rekeyed: 1, removed: 2 });
+    expect(f.rows.size).toBe(3);
+    expect(f.rows.get(0)?.public_key).toBe(channelKeypair(`${seed}-old`, "testnet", 0).publicKey());
   });
 
   it("leaves a row seeded for the other network alone", async () => {
