@@ -28,6 +28,7 @@ import { StatusTag } from "@/components/ui/status-tag";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PasskeysDialog } from "@/components/vault/passkeys-dialog";
 import { ConnectedApps, type ConnectedAppsData } from "@/components/vault/connected-apps";
+import { ActivityList, formatDate, writeActivity, type Activity } from "@/components/vault/activity-list";
 import { usePreferences } from "@/components/vault/preferences";
 import type { Preferences } from "@/lib/preferences";
 import { useWallet } from "@/components/vault/wallet-provider";
@@ -37,25 +38,6 @@ import { MAX_USER_FEE_STROOPS, NETWORK, USER_PAYS_FEES } from "@/lib/stellar/sma
 import { formatXlm } from "@/lib/stellar/wallet-balance";
 import { shortenAddress } from "@/lib/wallet";
 import { cn } from "@/lib/utils";
-
-type Activity = { hash: string; label: string; detail: string | null; at: string; ok: boolean };
-
-const WRITE_LABELS: Record<string, string> = {
-  register_document: "Registered a note",
-  update_document: "Anchored a new version",
-  anchor: "Anchored a note",
-  set_node_status: "Synced a mindmap node",
-  // Team notes (WP-1.4): written as a workspace editor.
-  anchor_as: "Anchored a team note",
-  update_document_as: "Anchored a new version of a team note",
-  set_node_status_as: "Synced a team note's mindmap node",
-  assign_document: "Shared a note with its workspace",
-  unassign_document: "Took a note out of its workspace",
-};
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-}
 
 function formatLumens(value: number): string {
   return value.toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 2 });
@@ -73,15 +55,16 @@ async function copy(text: string, what: string) {
 /**
  * Recent on-chain writes. A passkey wallet's writes are sent from shared
  * relay accounts, so Horizon can't list them by owner; they come from
- * chain_writes (public, like the ledger itself). A Freighter account is the
- * transaction source, so Horizon lists them directly.
+ * chain_writes (public, like the ledger itself), with a paid write still
+ * pending marked as such (DOQ-5). A Freighter account is the transaction
+ * source, so Horizon lists them directly.
  */
 async function loadActivity(address: string): Promise<Activity[]> {
   if (address.startsWith("C")) {
     const supabase = createSupabaseBrowserClient();
     const { data, error } = await supabase
       .from("chain_writes")
-      .select("tx_hash, fn, created_at, document_id")
+      .select("tx_hash, fn, created_at, document_id, status")
       .eq("network", NETWORK)
       .eq("owner", address)
       .order("created_at", { ascending: false })
@@ -93,13 +76,12 @@ async function loadActivity(address: string): Promise<Activity[]> {
       ? await supabase.from("documents").select("id, title").in("id", ids)
       : { data: [] as { id: string; title: string }[] };
     const titles = new Map((docs ?? []).map((d) => [d.id as string, d.title as string]));
-    return rows.map((r) => ({
-      hash: r.tx_hash as string,
-      label: WRITE_LABELS[r.fn as string] ?? "Wrote on-chain",
-      detail: titles.get(r.document_id as string) ?? null,
-      at: r.created_at as string,
-      ok: true,
-    }));
+    return rows.map((r) =>
+      writeActivity(
+        { tx_hash: r.tx_hash as string, fn: r.fn as string, created_at: r.created_at as string, status: r.status as string | null },
+        titles.get(r.document_id as string) ?? null,
+      ),
+    );
   }
   const res = await fetch(`${HORIZON_URL}/accounts/${address}/transactions?order=desc&limit=10`);
   if (res.status === 404) return [];
@@ -659,27 +641,7 @@ export function ProfileView({
                     Nothing yet. Save &amp; anchor a note and its receipt shows up here.
                   </p>
                 ) : (
-                  <ul className="divide-border -my-1 divide-y text-[13px]" data-testid="activity-list">
-                    {activity.map((a) => (
-                      <li key={a.hash} className="flex items-center gap-3 py-2">
-                        <span className="grid min-w-0 flex-1">
-                          <span className={cn(!a.ok && "text-warning")}>{a.label}</span>
-                          <span className="text-muted-foreground truncate text-[12px]">
-                            {a.detail ? `${a.detail} · ` : ""}
-                            {formatDate(a.at)}
-                          </span>
-                        </span>
-                        <a
-                          href={expertTxUrl(a.hash)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-muted-foreground hover:text-foreground font-mono text-[12px]"
-                        >
-                          {a.hash.slice(0, 6)}…{a.hash.slice(-4)}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
+                  <ActivityList activity={activity} />
                 )}
               </Section>
             ) : null}

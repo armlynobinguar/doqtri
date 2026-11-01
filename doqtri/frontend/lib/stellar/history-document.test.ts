@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Address, Keypair, nativeToScVal, xdr } from "@stellar/stellar-sdk";
+import { Address, Keypair, nativeToScVal, StrKey, xdr } from "@stellar/stellar-sdk";
 import { Buffer } from "buffer";
 import type { ChainWorkspace } from "@/lib/stellar/workspace-chain";
 
@@ -15,7 +15,7 @@ const state = vi.hoisted(() => ({
   workspace: null as string | null,
   chainWorkspace: (async () => null) as () => Promise<ChainWorkspace | null>,
   readWorkspaceCalls: 0,
-  indexed: [] as { tx_hash: string }[],
+  indexed: [] as { tx_hash: string; fn?: string; status?: string; created_at?: string }[],
   rpcHealth: (async () => ({ oldestLedger: 1, latestLedger: 1 })) as () => Promise<{ oldestLedger: number; latestLedger: number }>,
   events: [] as unknown[],
 }));
@@ -201,6 +201,46 @@ describe("getDocumentHistory for a workspace note", () => {
     expect(history?.incomplete).toBeUndefined();
     // The window has not closed yet: the chain's editor list is not needed.
     expect(state.readWorkspaceCalls).toBe(0);
+  });
+
+  describe("a paid write the relay answered 202 for (DOQ-5)", () => {
+    const EDITOR = StrKey.encodeContract(Buffer.alloc(32, 4));
+    const sentAt = new Date(Date.now() - 30_000).toISOString();
+    const landed = call("update_document_as", [as(EDITOR), str(DOC), bytes(3)], LATEST - 2, "paid-1");
+
+    beforeEach(() => {
+      state.indexed = [
+        { tx_hash: "paid-1", fn: "update_document_as", status: "pending", created_at: sentAt },
+        { tx_hash: "paid-0", fn: "update_document_as", status: "failed", created_at: sentAt },
+      ];
+    });
+
+    it("is listed as pending while no ledger has it, and a failed one not at all", async () => {
+      state.document = { version: 1, owner: OWNER };
+      horizon({ [OWNER]: [register] });
+      const history = await getDocumentHistory(DOC);
+      expect(history?.versions.map((v) => v.txHash)).toEqual(["reg"]);
+      expect(history?.pending).toEqual([{ txHash: "paid-1", fn: "update_document_as", createdAt: sentAt }]);
+      expect(history?.incomplete).toBeUndefined();
+    });
+
+    it("becomes a version once it lands, even before the chain-jobs run marks it confirmed", async () => {
+      horizon({ [OWNER]: [register] }, { "paid-1": [landed] });
+      const history = await getDocumentHistory(DOC);
+      expect(history?.versions.map((v) => [v.version, v.txHash, v.signer])).toEqual([
+        [1, "reg", OWNER],
+        [2, "paid-1", EDITOR],
+      ]);
+      expect(history?.pending).toBeUndefined();
+    });
+
+    it("is a version like any other once confirmed", async () => {
+      state.indexed = [{ tx_hash: "paid-1", fn: "update_document_as", status: "confirmed", created_at: sentAt }];
+      horizon({ [OWNER]: [register] }, { "paid-1": [landed] });
+      const history = await getDocumentHistory(DOC);
+      expect(history?.versions.map((v) => v.txHash)).toEqual(["reg", "paid-1"]);
+      expect(history?.pending).toBeUndefined();
+    });
   });
 
   it("is partial when the event scan is unreachable", async () => {

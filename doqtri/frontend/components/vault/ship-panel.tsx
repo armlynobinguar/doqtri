@@ -36,6 +36,7 @@ import { useWallet } from "@/components/vault/wallet-provider";
 import { NodeLinks } from "@/components/vault/node-links";
 import { IS_MAINNET, MARKET_CONTRACT_ID } from "@/lib/stellar/config";
 import { PublishTemplateDialog } from "@/components/vault/publish-template-dialog";
+import { hasVersionHistory, shortHash, VersionHistory } from "@/components/vault/version-history";
 import { buildMindmap } from "@/lib/mindmap";
 
 type Props = {
@@ -61,8 +62,13 @@ const DONE_NODE = "root";
 const DONE_TOOL = "doqtri-done";
 const doneRef = (version: number) => `v${version}`;
 
-function shortHash(hash: string): string {
-  return `${hash.slice(0, 6)}…${hash.slice(-6)}`;
+/** What a write the relay took but no ledger has confirmed yet says (DOQ-5). */
+const PENDING_TOAST = "Sent. The network hasn't confirmed it yet, so it shows as pending until it does.";
+
+/** A confirmed write's toast, or the pending one: a 202 is not a failure. */
+function announceWrite(receipt: WriteReceipt, confirmed: string) {
+  if (receipt.pending) toast.info(PENDING_TOAST);
+  else toast.success(confirmed);
 }
 
 async function copy(text: string, what: string) {
@@ -315,7 +321,8 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
         kind: registering ? "register" : "update",
         contentHash,
       });
-      toast.success(
+      announceWrite(
+        result,
         registering
           ? `Saved & registered as v${result.version ?? 1}`
           : `Saved & updated to v${result.version ?? "?"}`,
@@ -351,7 +358,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
       );
       reportWorkspaceAssignment(result);
       setReceipt({ ...result, kind: "node", nodeId, version: chainVersion });
-      toast.success(`Node “${nodeId}” synced on-chain`);
+      announceWrite(result, `Node “${nodeId}” synced on-chain`);
       await refreshChain();
       void wallet.refreshBalance();
     } catch (e) {
@@ -394,7 +401,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
       );
       reportWorkspaceAssignment(anchored);
       setReceipt({ ...anchored, kind: "done", version: anchored.version ?? version, contentHash });
-      toast.success(`Mindmap marked done and anchored as v${version}`);
+      announceWrite(anchored, `Mindmap marked done and anchored as v${version}`);
       await refreshChain();
       void wallet.refreshBalance();
     } catch (e) {
@@ -718,9 +725,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
         </label>
       ) : null}
 
-      {history && history.versions.length > 0 ? (
-        <VersionHistory history={history} />
-      ) : null}
+      {hasVersionHistory(history) ? <VersionHistory history={history} /> : null}
 
       {canSign ? (
         <>
@@ -852,10 +857,14 @@ function ReceiptCard({ receipt }: { receipt: Receipt }) {
     <div className="glass grid gap-1 rounded-xl px-2.5 py-2 text-[11px]">
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-1.5 font-medium">
-          <CircleCheckIcon className="text-success size-3.5" strokeWidth={2} aria-hidden />
-          {label}
+          {receipt.pending ? null : <CircleCheckIcon className="text-success size-3.5" strokeWidth={2} aria-hidden />}
+          {receipt.pending ? `${label}: sent` : label}
         </span>
-        {receipt.version != null ? (
+        {receipt.pending ? (
+          <StatusTag tone="warning" data-testid="receipt-pending" title="Sent; waiting for a ledger to confirm it">
+            Pending
+          </StatusTag>
+        ) : receipt.version != null ? (
           <span className="text-muted-foreground font-mono">v{receipt.version}</span>
         ) : null}
       </div>
@@ -886,36 +895,6 @@ function ReceiptCard({ receipt }: { receipt: Receipt }) {
         </div>
       ) : null}
     </div>
-  );
-}
-
-function VersionHistory({ history }: { history: DocumentHistory }) {
-  const versions = [...history.versions].reverse();
-  return (
-    <details className="text-[11px]">
-      <summary className="text-muted-foreground cursor-pointer select-none">
-        Version history ({history.versions.length})
-      </summary>
-      <ol className="mt-1.5 grid gap-1">
-        {versions.map((v) => (
-          <li key={v.txHash} className="flex items-center justify-between gap-2 font-mono">
-            <span>v{v.version}</span>
-            <span className="text-muted-foreground" title={v.contentHash}>
-              {shortHash(v.contentHash)}
-            </span>
-            <a
-              className="text-foreground underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground"
-              href={expertTxUrl(v.txHash)}
-              target="_blank"
-              rel="noreferrer"
-              title={new Date(v.closedAt).toLocaleString()}
-            >
-              tx →
-            </a>
-          </li>
-        ))}
-      </ol>
-    </details>
   );
 }
 

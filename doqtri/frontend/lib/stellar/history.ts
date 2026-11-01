@@ -117,7 +117,19 @@ export type DocumentHistory = {
   partial?: true;
   /** The note's on-chain workspace, when it is in one (registry v3). */
   workspace?: string;
+  /**
+   * Paid writes the relay answered 202 for (DOQ-5) that no ledger has yet,
+   * oldest first. Each is shown as pending until it lands, when it becomes
+   * a version or node event like any other; one that failed is left out.
+   */
+  pending?: PendingChainWrite[];
 };
+
+/** A write doqtri's index holds as pending, not yet on the ledger. */
+export type PendingChainWrite = { txHash: string; fn: string; createdAt: string };
+
+/** chain_writes.status; rows from before DOQ-5 carry none and are confirmed. */
+type IndexedRow = { tx_hash: string; fn?: string; status?: string; created_at?: string };
 
 /** The subset of a Horizon operation record this module reads. */
 export type HorizonOperation = {
@@ -530,9 +542,14 @@ async function fetchTransactionOperations(hashes: readonly string[]): Promise<Ho
   return inLedgerOrder(ops);
 }
 
-/** Relayed writes for a passkey-wallet document: index lookup, then Horizon. */
-async function fetchIndexedOperations(docId: string): Promise<HorizonOperation[]> {
-  if (!UUID.test(docId)) return [];
+/**
+ * Relayed writes for a passkey-wallet document: index lookup, then Horizon.
+ * A failed write changed nothing and is not read. A pending one is read
+ * like the rest, since it may have landed since the relay answered; one
+ * Horizon doesn't have yet comes back in `pending`.
+ */
+async function fetchIndexedOperations(docId: string): Promise<{ ops: HorizonOperation[]; pending: PendingChainWrite[] }> {
+  if (!UUID.test(docId)) return { ops: [], pending: [] };
   // chain_writes is publicly readable (it mirrors ledger data), so the anon
   // key works the same on the public audit page and in the vault.
   const supabase = createClient(
@@ -542,14 +559,25 @@ async function fetchIndexedOperations(docId: string): Promise<HorizonOperation[]
   );
   const { data, error } = await supabase
     .from("chain_writes")
-    .select("tx_hash")
+    .select("tx_hash, fn, status, created_at")
     .eq("network", NETWORK)
     .eq("document_id", docId)
     .order("created_at", { ascending: true })
     .limit(MAX_INDEXED_WRITES);
   if (error) throw new Error(`Write index unavailable: ${error.message}`);
 
-  return fetchTransactionOperations((data ?? []).map((row) => row.tx_hash as string));
+  const rows = ((data ?? []) as IndexedRow[]).filter((row) => row.status !== "failed");
+  const ops = await fetchTransactionOperations(rows.map((row) => row.tx_hash));
+  const landed = new Set(ops.map((op) => op.transaction_hash));
+  const pending = rows
+    .filter((row) => row.status === "pending" && !landed.has(row.tx_hash))
+    .map((row) => ({ txHash: row.tx_hash, fn: row.fn ?? "", createdAt: row.created_at ?? "" }));
+  return { ops, pending };
+}
+
+/** `history` with the index's pending writes, when there are any. */
+function withPending(history: DocumentHistory, pending: PendingChainWrite[]): DocumentHistory {
+  return pending.length ? { ...history, pending } : history;
 }
 
 /** The subset of an RPC contract event this module reads. */
@@ -896,8 +924,8 @@ export async function getDocumentHistory(
   const workspace = REGISTRY_EDITORS ? await DoqtriRegistry.readDocWorkspace(docId).catch(() => null) : null;
   if (!workspace) {
     if (passkeyOwner) {
-      const ops = await fetchIndexedOperations(docId);
-      return withCompleteness(build(ops), doc.version);
+      const { ops, pending } = await fetchIndexedOperations(docId);
+      return withPending(withCompleteness(build(ops), doc.version), pending);
     }
     const ops = await fetchOwnerOperations(owner);
     return build(ops);
@@ -920,14 +948,17 @@ export async function getDocumentHistory(
       .slice(0, MAX_REMOVED_FEEDS)
       .map((r) => removedSignerWrites(r, docId, onChain, now).catch(() => unreachable)),
   ]);
-  const ops = mergeOperations(ownerOps, indexed, evented.ops, ...removed.map((r) => r.ops));
+  const ops = mergeOperations(ownerOps, indexed.ops, evented.ops, ...removed.map((r) => r.ops));
   const partial =
     !evented.complete || removed.some((r) => !r.complete) || removedFeeds.length > MAX_REMOVED_FEEDS;
-  return {
-    ...withCompleteness(build(ops), doc.version),
-    workspace,
-    ...(partial ? { partial: true as const } : {}),
-  };
+  return withPending(
+    {
+      ...withCompleteness(build(ops), doc.version),
+      workspace,
+      ...(partial ? { partial: true as const } : {}),
+    },
+    indexed.pending,
+  );
 }
 
 export type DocumentTtl = {
