@@ -224,6 +224,16 @@ describe("RELAY_POOL", () => {
     expect(sent.tx.source).toBe(relayer.publicKey());
     expect(signedBy(sent.tx, relayer)).toBe(true);
     expect(result.feeStroops).toBe(BigInt(RESOURCE_FEE + INCLUSION_FEE));
+    expect(result.status).toBe("confirmed");
+  });
+
+  it("off: a write not confirmed within the poll window comes back pending, not 502", async () => {
+    vi.stubEnv("RELAY_POOL", "");
+    const chain = fakeChain();
+    chain.server.pollTransaction = async () => ({ status: "NOT_FOUND" });
+    const result = await submit(chain, memoryPool());
+    expect(result.status).toBe("pending");
+    expect(result.hash).toBe("hash-9001");
   });
 });
 
@@ -245,7 +255,7 @@ describe("submitPaidWrite from a leased channel", () => {
     expect(op.auth.map(authAddress)).toEqual([wallet, relayer.publicKey()]);
     const fee = op.func.invokeContract().args()[1];
     expect(fee.i128().lo().toBigInt()).toBe(BigInt(RESOURCE_FEE + INCLUSION_FEE));
-    expect(result).toEqual({ hash: "hash-501", feeStroops: BigInt(RESOURCE_FEE + INCLUSION_FEE) });
+    expect(result).toEqual({ hash: "hash-501", feeStroops: BigInt(RESOURCE_FEE + INCLUSION_FEE), status: "confirmed" });
 
     expect(pool.released).toEqual([{ idx: channelIdx, leaseId, nextSeq: BigInt(502) }]);
   });
@@ -331,6 +341,22 @@ describe("the lease is released", () => {
     chain.server.pollTransaction = async () => ({ status: "FAILED" });
     const pool = memoryPool();
     await expect(submit(chain, pool)).rejects.toMatchObject({ status: 502 });
+    expect(pool.released).toEqual([{ idx: channelIdx, leaseId, nextSeq: BigInt(502) }]);
+  });
+
+  it("when the transaction was accepted but not confirmed within the poll window: pending, with the spent sequence number + 1", async () => {
+    const chain = fakeChain();
+    const polled: { hash: string; attempts?: number }[] = [];
+    // The fake's own pollTransaction takes no arguments; this one records them.
+    chain.server.pollTransaction = (async (hash: string, opts?: { attempts?: number }) => {
+      polled.push({ hash, attempts: opts?.attempts });
+      return { status: "NOT_FOUND" };
+    }) as never;
+    const pool = memoryPool();
+    const result = await submit(chain, pool);
+    expect(polled).toEqual([{ hash: "hash-501", attempts: 20 }]);
+    expect(result).toEqual({ hash: "hash-501", feeStroops: BigInt(RESOURCE_FEE + INCLUSION_FEE), status: "pending" });
+    // The next holder builds from 502, as the pending write may still take 501.
     expect(pool.released).toEqual([{ idx: channelIdx, leaseId, nextSeq: BigInt(502) }]);
   });
 

@@ -5,6 +5,8 @@ const health = vi.hoisted(() => ({ value: { status: "configured", job: true, mis
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseAdminClient: () => ({}) }));
 const runChainJobs = vi.fn();
 vi.mock("@/lib/stellar/chain-jobs", () => ({ runChainJobs: (...args: unknown[]) => runChainJobs(...args) }));
+const runPendingWrites = vi.fn();
+vi.mock("@/lib/stellar/pending-writes", () => ({ runPendingWrites: (...args: unknown[]) => runPendingWrites(...args) }));
 vi.mock("@/lib/stellar/chain-jobs-scheduler", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/stellar/chain-jobs-scheduler")>()),
   readSchedulerHealth: async () => health.value,
@@ -20,6 +22,8 @@ beforeEach(() => {
   health.value = { status: "configured", job: true, missingSecrets: [] };
   runChainJobs.mockReset();
   runChainJobs.mockResolvedValue({ done: 2, pending: 0, failed: 0, needsProductOwner: 0 });
+  runPendingWrites.mockReset();
+  runPendingWrites.mockResolvedValue({ confirmed: 1, failed: 0, pending: 2 });
 });
 
 describe("GET /api/chain/jobs", () => {
@@ -31,9 +35,26 @@ describe("GET /api/chain/jobs", () => {
       pending: 0,
       failed: 0,
       needsProductOwner: 0,
+      pendingWrites: { confirmed: 1, failed: 0, pending: 2 },
       scheduler: { status: "configured", job: true, missingSecrets: [] },
     });
     expect(runChainJobs).toHaveBeenCalledWith(expect.anything(), { limit: 50 });
+    expect(runPendingWrites).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles pending paid writes even when the queue fails, and works the queue when they can't be read", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    runChainJobs.mockRejectedValueOnce(new Error("claim failed"));
+    const failedQueue = await run("Bearer s3cret");
+    expect(failedQueue.status).toBe(503);
+    expect((await failedQueue.json()).pendingWrites).toEqual({ confirmed: 1, failed: 0, pending: 2 });
+
+    runPendingWrites.mockRejectedValueOnce(new Error("RPC down"));
+    const res = await run("Bearer s3cret");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ done: 2, pendingWrites: null });
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/pending writes not settled: RPC down/));
+    error.mockRestore();
   });
 
   it("logs a warning when the pg_cron job cannot run, and still works the queue", async () => {
@@ -52,5 +73,6 @@ describe("GET /api/chain/jobs", () => {
     vi.stubEnv("CRON_SECRET", "");
     expect((await run("Bearer ")).status).toBe(401);
     expect(runChainJobs).not.toHaveBeenCalled();
+    expect(runPendingWrites).not.toHaveBeenCalled();
   });
 });

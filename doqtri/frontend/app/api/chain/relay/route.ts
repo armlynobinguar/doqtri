@@ -40,7 +40,7 @@ import { MAX_MARKET_FEE_STROOPS } from "@/lib/stellar/market-config";
 import { marketCallPlan, purchaseColumns, syncTemplate, type SaleRecord } from "@/lib/market-server";
 import { simulateWithinCap, submitAndConfirm } from "@/lib/stellar/channels";
 import { readWalletPasskeys } from "@/lib/stellar/wallet-signers";
-import { submitPaidWrite } from "@/lib/stellar/direct-submit";
+import { submitPaidWrite, type PaidWriteStatus } from "@/lib/stellar/direct-submit";
 import { topUpWallet } from "@/lib/stellar/friendbot-topup";
 
 /**
@@ -61,6 +61,11 @@ import { topUpWallet } from "@/lib/stellar/friendbot-topup";
  * wallet. Each relayed
  * note write is indexed in chain_writes, because Horizon cannot list a
  * contract account's writes by owner.
+ *
+ * A paid note write the network accepted but hadn't confirmed within the
+ * relay's ~20 s poll answers 202 with `status: "pending"` and is indexed as
+ * pending; the chain-jobs run settles it (lib/stellar/pending-writes.ts,
+ * DOQ-5).
  */
 
 const DEPLOYS_PER_USER = positive(process.env.CHAIN_DEPLOYS_PER_USER_DAILY, 3);
@@ -204,9 +209,15 @@ async function authorizeWrite(userId: string, write: RegistryWrite): Promise<voi
  * Note writes go into chain_writes, keyed by the wallet that signed them.
  * The write is on-chain either way; a missing index row only hides it from
  * the history list until reconciled, so report success and log loudly.
- * Membership writes belong to no note and are not indexed.
+ * Membership writes belong to no note and are not indexed. A pending write
+ * is indexed as pending, for the chain-jobs run to settle.
  */
-async function indexWrite(write: RegistryWrite, hash: string, wallet: string): Promise<void> {
+async function indexWrite(
+  write: RegistryWrite,
+  hash: string,
+  wallet: string,
+  status: PaidWriteStatus = "confirmed",
+): Promise<void> {
   if (!isDocumentWrite(write)) return;
   const { error } = await createSupabaseAdminClient().from("chain_writes").insert({
     network: NETWORK,
@@ -214,6 +225,7 @@ async function indexWrite(write: RegistryWrite, hash: string, wallet: string): P
     document_id: write.docId,
     fn: write.fn,
     owner: wallet,
+    status,
   });
   if (error) console.error(`[chain/relay] ${write.fn} ${hash} not indexed: ${error.message}`);
 }
@@ -249,10 +261,18 @@ async function relayPaidWrite(userId: string, submission: RelaySubmission) {
   const refused = await chargeQuota(userId, "write", WRITES_PER_USER, WRITES_GLOBAL);
   if (refused) return refused;
 
-  const { hash, feeStroops } = await submitPaidWrite(submission.func, walletAuthEntry(submission, wallet.address), write.maxFee);
-  await indexWrite(write, hash, wallet.address);
+  const { hash, feeStroops, status } = await submitPaidWrite(
+    submission.func,
+    walletAuthEntry(submission, wallet.address),
+    write.maxFee,
+  );
+  await indexWrite(write, hash, wallet.address, status);
 
-  return Response.json({ success: true, data: { hash, status: "confirmed", feeStroops: feeStroops.toString() } });
+  // 202: accepted, not yet confirmed. The browser shows it as pending.
+  return Response.json(
+    { success: true, data: { hash, status, feeStroops: feeStroops.toString() } },
+    { status: status === "pending" ? 202 : 200 },
+  );
 }
 
 /** The wallet's own (validated) approval among a submission's auth entries. */
@@ -358,7 +378,18 @@ async function relayPaidMarketWrite(userId: string, submission: RelaySubmission)
   const refused = await chargeQuota(userId, "market", MARKET_PER_USER, MARKET_GLOBAL);
   if (refused) return refused;
 
-  const { hash, feeStroops } = await submitPaidWrite(submission.func, walletAuthEntry(submission, wallet.address), write.maxFee);
+  const { hash, feeStroops, status } = await submitPaidWrite(
+    submission.func,
+    walletAuthEntry(submission, wallet.address),
+    write.maxFee,
+  );
+  if (status === "pending") {
+    // Market writes have no pending record to settle later (a buy would be
+    // recorded before it landed), so they keep answering as before: not
+    // confirmed is a refusal the buyer can check and retry.
+    console.error(`[chain/relay] market ${call.fn} ${hash} not confirmed within the poll window`);
+    throw new RelayRejection("The network hasn't confirmed this transaction yet. Check again in a minute before retrying.", 502);
+  }
   await recordPurchase(userId, wallet.address, call, plan.sale, hash);
   return Response.json({ success: true, data: { hash, status: "confirmed", feeStroops: feeStroops.toString() } });
 }

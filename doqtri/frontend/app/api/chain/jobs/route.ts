@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { runChainJobs } from "@/lib/stellar/chain-jobs";
 import { readSchedulerHealth, schedulerWarning } from "@/lib/stellar/chain-jobs-scheduler";
+import { runPendingWrites } from "@/lib/stellar/pending-writes";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -25,6 +26,10 @@ function authorized(request: Request): boolean {
  * Every response carries `scheduler`, whether the pg_cron job can run
  * (chain-jobs-scheduler.ts), and a run logs a warning when it cannot, so
  * the daily backstop's log says when it is all there is.
+ *
+ * Each run also settles paid writes the relay answered 202 for
+ * (pending-writes.ts, DOQ-5), reported as `pendingWrites`, or null when the
+ * ledger or the database couldn't be read; the queue runs either way.
  */
 export async function GET(request: Request) {
   if (!authorized(request)) return Response.json({ error: "Not allowed." }, { status: 401 });
@@ -32,10 +37,14 @@ export async function GET(request: Request) {
   const scheduler = await readSchedulerHealth(admin);
   const warning = schedulerWarning(scheduler);
   if (warning) console.warn(`[chain/jobs] ${warning}`);
+  const pendingWrites = await runPendingWrites(admin).catch((error: Error) => {
+    console.error(`[chain/jobs] pending writes not settled: ${error.message}`);
+    return null;
+  });
   try {
-    return Response.json({ ...(await runChainJobs(admin, { limit: 50 })), scheduler });
+    return Response.json({ ...(await runChainJobs(admin, { limit: 50 })), pendingWrites, scheduler });
   } catch (error) {
     console.error("[chain/jobs] failed", error);
-    return Response.json({ error: "The queue couldn't run.", scheduler }, { status: 503 });
+    return Response.json({ error: "The queue couldn't run.", pendingWrites, scheduler }, { status: 503 });
   }
 }

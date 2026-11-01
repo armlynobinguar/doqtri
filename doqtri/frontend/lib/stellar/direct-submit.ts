@@ -16,6 +16,11 @@
  * fee_amount, so the FeeForwarder doesn't change. A single source account
  * takes about one transaction per ledger; a pool of them takes one each.
  * With the flag off the relayer path below runs exactly as before.
+ *
+ * Either way a write is polled for about 20 s once the network accepts it.
+ * One still not found by then may yet land, so it comes back pending rather
+ * than failed (DOQ-5): the relay answers 202 and records it, and the
+ * chain-jobs run settles it later (pending-writes.ts).
  */
 import {
   Account,
@@ -118,7 +123,36 @@ async function ensureRelayerFunded(publicKey: string): Promise<void> {
   await fetch(`https://friendbot.stellar.org/?addr=${publicKey}`).catch(() => undefined);
 }
 
-export type PaidWriteResult = { hash: string; feeStroops: bigint };
+/**
+ * confirmed: a ledger has it. pending: accepted, but not found within the
+ * poll window; it may still land until its 60 s time bound passes.
+ */
+export type PaidWriteStatus = "confirmed" | "pending";
+
+export type PaidWriteResult = { hash: string; feeStroops: bigint; status: PaidWriteStatus };
+
+/** One-second checks for an accepted write before it is reported pending (~20 s). */
+const POLL_ATTEMPTS = 20;
+
+/**
+ * What polling an accepted write came to. Still NOT_FOUND after the poll
+ * window is pending, not a failure: the network took it and may yet include
+ * it. FAILED is final, and the caller hears 502 as before.
+ */
+async function pollPaidWrite(
+  server: Pick<rpc.Server, "pollTransaction">,
+  hash: string,
+  feeStroops: bigint,
+): Promise<PaidWriteResult> {
+  const result = await server.pollTransaction(hash, { attempts: POLL_ATTEMPTS });
+  if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) return { hash, feeStroops, status: "confirmed" };
+  if (result.status === rpc.Api.GetTransactionStatus.NOT_FOUND) {
+    console.warn(`[chain/relay] paid write ${hash} not confirmed within the poll window; reporting it pending`);
+    return { hash, feeStroops, status: "pending" };
+  }
+  console.error(`[chain/relay] paid write ${hash} ended ${result.status}`);
+  throw new RelayRejection("The transaction failed on-chain.", 502);
+}
 
 /**
  * Prices, signs and submits one forwarded write. `walletEntry` is the wallet's
@@ -201,12 +235,7 @@ async function submitFromRelayer(
       console.error(`[chain/relay] paid write rejected: ${code}`);
       throw new RelayRejection("The network rejected this transaction. Try again.", 502);
     }
-    const result = await server.pollTransaction(sent.hash, { attempts: 20 });
-    if (result.status !== rpc.Api.GetTransactionStatus.SUCCESS) {
-      console.error(`[chain/relay] paid write ${sent.hash} ended ${result.status}`);
-      throw new RelayRejection("The transaction failed on-chain.", 502);
-    }
-    return { hash: sent.hash, feeStroops: fee };
+    return pollPaidWrite(server, sent.hash, fee);
   }
 }
 
@@ -343,14 +372,10 @@ async function sendFromChannel(
       console.error(`[chain/relay] paid write from channel ${lease.idx} rejected: ${code}`);
       throw new RelayRejection("The network rejected this transaction. Try again.", 502);
     }
-    // Accepted: the sequence number is spent, or will be if it lands later.
+    // Accepted: the sequence number is spent, or will be if it lands later,
+    // so a pending write releases the channel with seq + 1 too.
     write.releaseSeq = seq + BigInt(1);
-    const result = await server.pollTransaction(sent.hash, { attempts: 20 });
-    if (result.status !== rpc.Api.GetTransactionStatus.SUCCESS) {
-      console.error(`[chain/relay] paid write ${sent.hash} ended ${result.status}`);
-      throw new RelayRejection("The transaction failed on-chain.", 502);
-    }
-    return { hash: sent.hash, feeStroops: fee };
+    return pollPaidWrite(server, sent.hash, fee);
   }
 }
 
