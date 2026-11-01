@@ -14,8 +14,11 @@ const wallet = StrKey.encodeContract(Buffer.alloc(32, 9));
 const docId = "51000000-0000-4000-8000-000000000001";
 const hash = "ab".repeat(32);
 
+const noteWrite = { fn: "anchor", docId: "51000000-0000-4000-8000-000000000001", maxFee: BigInt(100_000), expirationLedger: 1 };
+
 const state = vi.hoisted(() => ({
   submitted: null as unknown as PaidWriteResult,
+  write: null as unknown as Record<string, unknown>,
   inserts: [] as { table: string; row: Record<string, unknown> }[],
 }));
 
@@ -63,7 +66,7 @@ vi.mock("@/lib/stellar/relay-validation", async (importOriginal) => {
       auth: [],
     }),
     forwardedTarget: () => null,
-    validateForwardedWrite: () => ({ fn: "anchor", docId: "51000000-0000-4000-8000-000000000001", maxFee: BigInt(100_000), expirationLedger: 1 }),
+    validateForwardedWrite: () => state.write,
     authorizeRegistryWrite: async () => {},
   };
 });
@@ -78,6 +81,7 @@ const post = () => POST(new Request("https://doqtri.test/api/chain/relay", { met
 
 beforeEach(() => {
   state.inserts = [];
+  state.write = noteWrite;
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -101,5 +105,36 @@ describe("POST /api/chain/relay, a paid note write", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ success: true, data: { hash, status: "confirmed", feeStroops: "51000" } });
     expect(state.inserts.map((i) => i.row.status)).toEqual(["confirmed"]);
+  });
+});
+
+describe("POST /api/chain/relay, a paid membership write", () => {
+  const addEditor = {
+    fn: "add_editor",
+    workspaceId: "7a000000-0000-4000-8000-0000000000b1",
+    subject: StrKey.encodeContract(Buffer.alloc(32, 5)),
+    maxFee: BigInt(100_000),
+    expirationLedger: 1,
+  };
+
+  it("not confirmed within the poll window: still a 502 to check before retrying, since nothing settles it", async () => {
+    state.write = addEditor;
+    state.submitted = { hash, feeStroops: BigInt(51_000), status: "pending" };
+    const res = await post();
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({
+      success: false,
+      error: "The network hasn't confirmed this transaction yet. Check again in a minute before retrying.",
+    });
+    expect(state.inserts).toEqual([]);
+  });
+
+  it("confirmed: answers 200, and is not indexed", async () => {
+    state.write = addEditor;
+    state.submitted = { hash, feeStroops: BigInt(51_000), status: "confirmed" };
+    const res = await post();
+    expect(res.status).toBe(200);
+    expect((await res.json()).data.status).toBe("confirmed");
+    expect(state.inserts).toEqual([]);
   });
 });

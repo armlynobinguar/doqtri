@@ -65,8 +65,12 @@ import { topUpWallet } from "@/lib/stellar/friendbot-topup";
  * A paid note write the network accepted but hadn't confirmed within the
  * relay's ~20 s poll answers 202 with `status: "pending"` and is indexed as
  * pending; the chain-jobs run settles it (lib/stellar/pending-writes.ts,
- * DOQ-5).
+ * DOQ-5). Paid membership and market writes have no such record, so for
+ * them it stays a 502 that says to check before retrying.
  */
+
+/** A paid write with nothing to settle it later that the poll window ran out on (DOQ-5). */
+const NOT_CONFIRMED_YET = "The network hasn't confirmed this transaction yet. Check again in a minute before retrying.";
 
 const DEPLOYS_PER_USER = positive(process.env.CHAIN_DEPLOYS_PER_USER_DAILY, 3);
 const DEPLOYS_GLOBAL = positive(process.env.CHAIN_DEPLOYS_GLOBAL_DAILY, 200);
@@ -266,6 +270,13 @@ async function relayPaidWrite(userId: string, submission: RelaySubmission) {
     walletAuthEntry(submission, wallet.address),
     write.maxFee,
   );
+  if (status === "pending" && !isDocumentWrite(write)) {
+    // A membership write has no chain_writes row for the chain-jobs run to
+    // settle, and its caller would report a role as in place, so it keeps
+    // answering as before: not confirmed is a refusal to check before retrying.
+    console.error(`[chain/relay] ${write.fn} ${hash} not confirmed within the poll window`);
+    throw new RelayRejection(NOT_CONFIRMED_YET, 502);
+  }
   await indexWrite(write, hash, wallet.address, status);
 
   // 202: accepted, not yet confirmed. The browser shows it as pending.
@@ -388,7 +399,7 @@ async function relayPaidMarketWrite(userId: string, submission: RelaySubmission)
     // recorded before it landed), so they keep answering as before: not
     // confirmed is a refusal the buyer can check and retry.
     console.error(`[chain/relay] market ${call.fn} ${hash} not confirmed within the poll window`);
-    throw new RelayRejection("The network hasn't confirmed this transaction yet. Check again in a minute before retrying.", 502);
+    throw new RelayRejection(NOT_CONFIRMED_YET, 502);
   }
   await recordPurchase(userId, wallet.address, call, plan.sale, hash);
   return Response.json({ success: true, data: { hash, status: "confirmed", feeStroops: feeStroops.toString() } });
