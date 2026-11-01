@@ -131,6 +131,28 @@ describe("reconcilePendingWrites", () => {
     expect(asked).toEqual([tx(2)]);
     expect(store.rows[tx(3)].status).toBe("pending");
   });
+
+  it("reads 25 rows by default", async () => {
+    const store = memoryStore(row(1, 30_000));
+    await reconcilePendingWrites(store, ledger({}), { now: () => now });
+    expect(store.asked).toEqual([25]);
+  });
+
+  it("starts no new lookup once its time budget is spent, and leaves the rest for the next run", async () => {
+    const store = memoryStore({ ...row(1, 30_000), ...row(2, 20_000), ...row(3, 10_000) });
+    let clock = now;
+    const asked: string[] = [];
+    // Each lookup takes 25 s of a 50 s budget: two start, the third waits.
+    const slow = async (hash: string) => {
+      asked.push(hash);
+      clock += 25_000;
+      return "SUCCESS" as const;
+    };
+    const summary = await reconcilePendingWrites(store, slow, { now: () => clock, budgetMs: 50_000 });
+    expect(asked).toEqual([tx(1), tx(2)]);
+    expect(summary).toEqual({ confirmed: 2, failed: 0, pending: 1 });
+    expect(store.rows[tx(3)].status).toBe("pending");
+  });
 });
 
 describe("ledgerLookup", () => {
@@ -159,6 +181,11 @@ describe("ledgerLookup", () => {
     expect(await lookup(tx(2))).toBe("FAILED");
     expect(await lookup(tx(3))).toBe("NOT_FOUND");
     expect(urls[0]).toBe(`${HORIZON_URL}/transactions/${tx(1)}`);
+  });
+
+  it("gives up on an RPC that doesn't answer, so the row waits for the next run", async () => {
+    const hung = { getTransaction: () => new Promise(() => {}) } as never;
+    await expect(ledgerLookup(hung, vi.fn(), 20)(tx(1))).rejects.toThrow("the RPC didn't answer within 0.02 s");
   });
 
   it("throws when Horizon can't answer, so the row waits for the next run", async () => {

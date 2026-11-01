@@ -22,6 +22,11 @@
  * it is checked against Horizon, which keeps them all, before a row is
  * failed: a run that comes back after a long outage still confirms a write
  * that landed in the meantime.
+ *
+ * Rows pile up exactly when the network is slow, which is also when lookups
+ * are slow, and the jobs route has 300 s for everything. So each lookup has
+ * a timeout, and a run starts no new lookup once PENDING_WRITES_BUDGET_MS
+ * has gone by: what is left waits for the next run, a minute later.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { rpc } from "@stellar/stellar-sdk";
@@ -30,6 +35,18 @@ import { NETWORK } from "@/lib/stellar/smart-wallet-config";
 
 /** How long after its row was written a write not found anywhere is taken as failed. */
 export const PENDING_WRITE_EXPIRY_MS = 10 * 60_000;
+
+/** How many pending rows one run reads. */
+const PENDING_WRITES_PER_RUN = 25;
+
+/**
+ * After this long a run starts no new lookup. One already started still ends
+ * within two LOOKUP_TIMEOUT_MS (the RPC, then Horizon).
+ */
+export const PENDING_WRITES_BUDGET_MS = 60_000;
+
+/** The longest one RPC or Horizon request of a lookup may take. */
+const LOOKUP_TIMEOUT_MS = 8_000;
 
 /** A pending row, as chain_writes holds it. */
 export type PendingWrite = { tx_hash: string; created_at: string };
@@ -49,15 +66,25 @@ export type PendingWriteSummary = { confirmed: number; failed: number; pending: 
 
 /**
  * Asks the ledger about each pending write and settles the ones it can.
- * Never throws for a single write: a failed lookup leaves it pending.
+ * Never throws for a single write: a failed lookup leaves it pending. Once
+ * `budgetMs` has gone by the rest are left pending for the next run.
  */
 export async function reconcilePendingWrites(
   store: PendingWriteStore,
   lookup: (txHash: string) => Promise<LedgerStatus>,
-  { now = () => Date.now(), limit = 50 }: { now?: () => number; limit?: number } = {},
+  {
+    now = () => Date.now(),
+    limit = PENDING_WRITES_PER_RUN,
+    budgetMs = PENDING_WRITES_BUDGET_MS,
+  }: { now?: () => number; limit?: number; budgetMs?: number } = {},
 ): Promise<PendingWriteSummary> {
   const summary: PendingWriteSummary = { confirmed: 0, failed: 0, pending: 0 };
+  const startedAt = now();
   for (const write of await store.pending(limit)) {
+    if (now() - startedAt >= budgetMs) {
+      summary.pending++;
+      continue;
+    }
     const outcome = await settleOne(write, lookup, now());
     if (outcome === "pending" || !(await store.settle(write.tx_hash, outcome))) {
       summary.pending++;
@@ -126,25 +153,43 @@ export function supabasePendingWriteStore(admin: SupabaseClient, network: string
 
 /**
  * The RPC's getTransaction, with a NOT_FOUND checked against Horizon, whose
- * history has no retention window. `server` and `fetchImpl` stand in for the
- * network in tests.
+ * history has no retention window. Each request gives up after `timeoutMs`.
+ * `server` and `fetchImpl` stand in for the network in tests.
  */
 export function ledgerLookup(
   server: Pick<rpc.Server, "getTransaction"> = new rpc.Server(RPC_URL),
   fetchImpl: typeof fetch = fetch,
+  timeoutMs = LOOKUP_TIMEOUT_MS,
 ): (txHash: string) => Promise<LedgerStatus> {
   return async (txHash) => {
-    const result = await server.getTransaction(txHash);
+    const result = await withTimeout(server.getTransaction(txHash), timeoutMs, "the RPC");
     if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) return "SUCCESS";
     if (result.status === rpc.Api.GetTransactionStatus.FAILED) return "FAILED";
-    const res = await fetchImpl(`${HORIZON_URL}/transactions/${txHash}`, { signal: AbortSignal.timeout(8000) });
+    const res = await fetchImpl(`${HORIZON_URL}/transactions/${txHash}`, { signal: AbortSignal.timeout(timeoutMs) });
     if (res.status === 404) return "NOT_FOUND";
     if (!res.ok) throw new Error(`Horizon answered ${res.status}`);
     return ((await res.json()) as { successful?: boolean }).successful ? "SUCCESS" : "FAILED";
   };
 }
 
-/** One reconciliation with this deployment's network, RPC and Horizon. `admin` is the service-role client. */
-export function runPendingWrites(admin: SupabaseClient): Promise<PendingWriteSummary> {
+/** `promise`, or a rejection once `ms` have passed; the RPC client takes no abort signal. */
+async function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} didn't answer within ${ms / 1000} s`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * One reconciliation with this deployment's network, RPC and Horizon. `admin`
+ * is the service-role client. Async, so that even setting up the RPC client
+ * fails as a rejection the jobs route catches.
+ */
+export async function runPendingWrites(admin: SupabaseClient): Promise<PendingWriteSummary> {
   return reconcilePendingWrites(supabasePendingWriteStore(admin, NETWORK), ledgerLookup());
 }

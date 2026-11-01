@@ -57,6 +57,15 @@ describe("GET /api/chain/jobs", () => {
     error.mockRestore();
   });
 
+  it("works the queue alongside settling pending writes, not after it", async () => {
+    let settle: (summary: unknown) => void = () => {};
+    runPendingWrites.mockReturnValueOnce(new Promise((resolve) => (settle = resolve)));
+    const response = run("Bearer s3cret");
+    await vi.waitFor(() => expect(runChainJobs).toHaveBeenCalledTimes(1));
+    settle({ confirmed: 0, failed: 0, pending: 0 });
+    expect((await (await response).json()).pendingWrites).toEqual({ confirmed: 0, failed: 0, pending: 0 });
+  });
+
   it("logs a warning when the pg_cron job cannot run, and still works the queue", async () => {
     health.value = { status: "missing", job: true, missingSecrets: ["doqtri_cron_secret"] };
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

@@ -29,7 +29,9 @@ function authorized(request: Request): boolean {
  *
  * Each run also settles paid writes the relay answered 202 for
  * (pending-writes.ts, DOQ-5), reported as `pendingWrites`, or null when the
- * ledger or the database couldn't be read; the queue runs either way.
+ * ledger or the database couldn't be read. It runs alongside the queue, not
+ * before it, and within its own time budget, so a slow ledger never holds up
+ * the queue's on-chain revocations; the queue runs either way.
  */
 export async function GET(request: Request) {
   if (!authorized(request)) return Response.json({ error: "Not allowed." }, { status: 401 });
@@ -37,14 +39,15 @@ export async function GET(request: Request) {
   const scheduler = await readSchedulerHealth(admin);
   const warning = schedulerWarning(scheduler);
   if (warning) console.warn(`[chain/jobs] ${warning}`);
-  const pendingWrites = await runPendingWrites(admin).catch((error: Error) => {
+  const settling = runPendingWrites(admin).catch((error: Error) => {
     console.error(`[chain/jobs] pending writes not settled: ${error.message}`);
     return null;
   });
   try {
-    return Response.json({ ...(await runChainJobs(admin, { limit: 50 })), pendingWrites, scheduler });
+    const queue = await runChainJobs(admin, { limit: 50 });
+    return Response.json({ ...queue, pendingWrites: await settling, scheduler });
   } catch (error) {
     console.error("[chain/jobs] failed", error);
-    return Response.json({ error: "The queue couldn't run.", pendingWrites, scheduler }, { status: 503 });
+    return Response.json({ error: "The queue couldn't run.", pendingWrites: await settling, scheduler }, { status: 503 });
   }
 }
