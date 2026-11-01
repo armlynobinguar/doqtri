@@ -7,6 +7,15 @@
  * wallet to the relayer. `fee_amount` is set here, from a simulation that
  * already includes the wallet's passkey signature (verifying it costs extra),
  * and is never above the maximum the user signed.
+ *
+ * With RELAY_POOL=on (WP-4.1, DOQ-4) the transaction source is instead a
+ * channel account leased from channel-pool.ts, which signs the envelope and
+ * pays the network fee from its own balance (self-funded: it must already
+ * hold XLM, see scripts/seed-relay-channels.mjs). The relayer is no longer
+ * the source but still signs its own forward() approval and still receives
+ * fee_amount, so the FeeForwarder doesn't change. A single source account
+ * takes about one transaction per ledger; a pool of them takes one each.
+ * With the flag off the relayer path below runs exactly as before.
  */
 import {
   Account,
@@ -20,8 +29,20 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import { HORIZON_URL, IS_MAINNET, NETWORK_PASSPHRASE, RPC_URL } from "@/lib/stellar/config";
+import {
+  LEASE_BUILD_BUDGET_SECONDS,
+  leaseChannel,
+  PAID_WRITE_TIMEOUT_SECONDS,
+  relayChannelSeed,
+  relayPoolEnabled,
+  releaseChannel,
+  supabaseChannelPoolStore,
+  type ChannelLease,
+  type ChannelPoolStore,
+} from "@/lib/stellar/channel-pool";
 import { RelayRejection } from "@/lib/stellar/relay-validation";
-import { DOQTRI_RELAYER } from "@/lib/stellar/smart-wallet-config";
+import { DOQTRI_RELAYER, NETWORK } from "@/lib/stellar/smart-wallet-config";
+import { createSupabaseAdminClient } from "@/lib/supabase/server";
 
 /** Inclusion fee bid per transaction, in stroops (0.0001 XLM). */
 const INCLUSION_FEE = 1_000;
@@ -102,9 +123,22 @@ export type PaidWriteResult = { hash: string; feeStroops: bigint };
 /**
  * Prices, signs and submits one forwarded write. `walletEntry` is the wallet's
  * passkey-signed approval; `maxFee` is what the user signed as the most they
- * will pay.
+ * will pay. From a leased channel when RELAY_POOL is on, else from the relayer.
+ * `deps` stand in for the network and the pool in tests; the relayer path
+ * takes none.
  */
 export async function submitPaidWrite(
+  func: xdr.HostFunction,
+  walletEntry: xdr.SorobanAuthorizationEntry,
+  maxFee: bigint,
+  deps: ChannelWriteDeps = {},
+): Promise<PaidWriteResult> {
+  if (relayPoolEnabled()) return submitFromChannel(func, walletEntry, maxFee, deps);
+  return submitFromRelayer(func, walletEntry, maxFee);
+}
+
+/** The relayer as the transaction source: one write per ledger at most (RELAY_POOL off). */
+async function submitFromRelayer(
   func: xdr.HostFunction,
   walletEntry: xdr.SorobanAuthorizationEntry,
   maxFee: bigint,
@@ -174,4 +208,222 @@ export async function submitPaidWrite(
     }
     return { hash: sent.hash, feeStroops: fee };
   }
+}
+
+// --- RELAY_POOL=on: a leased channel account as the source (DOQ-4) ---
+
+/** Submission attempts per write, as on the relayer path. */
+const CHANNEL_SUBMIT_ATTEMPTS = 3;
+/** How often a retry asks the RPC whether the next ledger has closed. */
+const NEXT_LEDGER_POLL_MS = 1_000;
+/** A ledger closes about every 5 s; a retry waits for the next one no longer than this. */
+const NEXT_LEDGER_WAIT_MS = 12_000;
+/**
+ * Room for the database's clock running ahead of this server's: the lease's
+ * end comes from the one, the transaction's time bound from the other.
+ */
+const LEASE_CLOCK_SKEW_MS = 5_000;
+/** What a write that ran out of lease time is told to wait before trying again. */
+const SLOW_NETWORK_RETRY_AFTER_SECONDS = 5;
+
+/** The RPC calls a channel write makes; the real server, or a fake in tests. */
+export type PaidWriteRpc = Pick<
+  rpc.Server,
+  "getLatestLedger" | "getAccount" | "simulateTransaction" | "sendTransaction" | "pollTransaction"
+>;
+
+export type ChannelWriteDeps = {
+  server?: PaidWriteRpc;
+  pool?: ChannelPoolStore;
+  ensureFunded?: (publicKey: string) => Promise<void>;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+};
+
+/** One write's hold on its channel. */
+type ChannelWrite = {
+  server: PaidWriteRpc;
+  lease: ChannelLease;
+  relayer: Keypair;
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+  /** When the lease was granted, by this server's clock. */
+  leasedAt: number;
+  /** What the lease is given back with: see "Releasing" in channel-pool.ts. */
+  releaseSeq: bigint | null;
+};
+
+const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Leases a channel, submits from it, and gives it back whatever happened:
+ * the finally runs on a refused simulation, a fee over the maximum and a
+ * failed submission alike.
+ */
+async function submitFromChannel(
+  func: xdr.HostFunction,
+  walletEntry: xdr.SorobanAuthorizationEntry,
+  maxFee: bigint,
+  deps: ChannelWriteDeps,
+): Promise<PaidWriteResult> {
+  const relayer = relayerKeypair();
+  const seed = relayChannelSeed();
+  const server = deps.server ?? new rpc.Server(RPC_URL);
+  const now = deps.now ?? Date.now;
+  const sleep = deps.sleep ?? defaultSleep;
+  // The relayer still collects fee_amount and is still kept topped up on
+  // testnet; channels pay their network fees from what they were seeded with.
+  await (deps.ensureFunded ?? ensureRelayerFunded)(relayer.publicKey());
+
+  const pool = deps.pool ?? supabaseChannelPoolStore(createSupabaseAdminClient());
+  const lease = await leaseChannel(pool, { network: NETWORK, seed, now, sleep });
+  const write: ChannelWrite = { server, lease, relayer, now, sleep, leasedAt: now(), releaseSeq: null };
+  try {
+    return await sendFromChannel(write, func, walletEntry, maxFee);
+  } finally {
+    await releaseChannel(pool, lease, write.releaseSeq);
+  }
+}
+
+/** The relayer path's two simulations and submit loop, with the channel as source and signer. */
+async function sendFromChannel(
+  write: ChannelWrite,
+  func: xdr.HostFunction,
+  walletEntry: xdr.SorobanAuthorizationEntry,
+  maxFee: bigint,
+): Promise<PaidWriteResult> {
+  const { server, lease } = write;
+  // The lease's nextSeq is a floor under the RPC's read, which can lag a ledger.
+  let floor = lease.nextSeq;
+  let state = await channelState(write);
+
+  const build = async (fee: bigint) => {
+    const priced = withFee(func, fee);
+    const auth = [walletEntry, await relayerAuth(priced, write.relayer, state.latestLedger)];
+    const seq = nextSequence(state.accountSequence, floor);
+    // TransactionBuilder takes the account's current sequence and bumps it.
+    const source = new Account(lease.publicKey, (seq - BigInt(1)).toString());
+    const tx = new TransactionBuilder(source, { fee: String(INCLUSION_FEE), networkPassphrase: NETWORK_PASSPHRASE })
+      .addOperation(Operation.invokeHostFunction({ func: priced, auth }))
+      .setTimeout(PAID_WRITE_TIMEOUT_SECONDS)
+      .build();
+    const simulation = await server.simulateTransaction(tx);
+    checkSimulation(simulation);
+    return { tx, simulation, seq };
+  };
+
+  const measured = await build(BigInt(1));
+  const fee = BigInt(measured.simulation.minResourceFee) + BigInt(INCLUSION_FEE);
+  if (fee > maxFee) {
+    throw new RelayRejection("This write costs more than the most you approved. Try again.", 409);
+  }
+
+  for (let attempt = 1; ; attempt++) {
+    checkLeaseTime(write);
+    const { tx, simulation, seq } = await build(fee);
+    const prepared = rpc.assembleTransaction(tx, simulation).build();
+    prepared.sign(lease.keypair);
+    const sent = await server.sendTransaction(prepared);
+    if (sent.status === "ERROR" || sent.status === "TRY_AGAIN_LATER") {
+      const code = sent.errorResult?.result().switch().name ?? sent.status;
+      const badSeq = code === "txBadSeq";
+      if (attempt < CHANNEL_SUBMIT_ATTEMPTS && (badSeq || sent.status === "TRY_AGAIN_LATER")) {
+        // The sequence number just used was wrong. If the floor chose it, the
+        // floor is wrong (a write counted as sent never landed); if the RPC
+        // chose it, the floor was already below the RPC's read. Either way the
+        // fresh read after the next ledger decides from here.
+        if (badSeq) floor = null;
+        // Retrying in the same ledger only meets the same refusal.
+        await waitForNextLedger(write);
+        state = await channelState(write);
+        if (badSeq) write.releaseSeq = state.accountSequence + BigInt(1);
+        continue;
+      }
+      if (badSeq) write.releaseSeq = (await rpcNextSequence(write)) ?? write.releaseSeq;
+      console.error(`[chain/relay] paid write from channel ${lease.idx} rejected: ${code}`);
+      throw new RelayRejection("The network rejected this transaction. Try again.", 502);
+    }
+    // Accepted: the sequence number is spent, or will be if it lands later.
+    write.releaseSeq = seq + BigInt(1);
+    const result = await server.pollTransaction(sent.hash, { attempts: 20 });
+    if (result.status !== rpc.Api.GetTransactionStatus.SUCCESS) {
+      console.error(`[chain/relay] paid write ${sent.hash} ended ${result.status}`);
+      throw new RelayRejection("The transaction failed on-chain.", 502);
+    }
+    return { hash: sent.hash, feeStroops: fee };
+  }
+}
+
+/** The sequence number the next transaction carries: the larger of the RPC's and the stored floor. */
+function nextSequence(accountSequence: bigint, floor: bigint | null): bigint {
+  const fromRpc = accountSequence + BigInt(1);
+  return floor !== null && floor > fromRpc ? floor : fromRpc;
+}
+
+/** Throws the relayer path's refusal for a simulation that failed or needs a restore. */
+function checkSimulation(
+  simulation: rpc.Api.SimulateTransactionResponse,
+): asserts simulation is rpc.Api.SimulateTransactionSuccessResponse {
+  if (rpc.Api.isSimulationSuccess(simulation) && !rpc.Api.isSimulationRestore(simulation)) return;
+  const detail = rpc.Api.isSimulationError(simulation) ? simulation.error : "needs a restore";
+  console.error(`[chain/relay] paid write simulation failed: ${String(detail).slice(0, 300)}`);
+  if (/balance|insufficient|#10\b/i.test(String(detail))) {
+    throw new RelayRejection("Your wallet doesn't have enough XLM for this. Top it up and try again.", 402);
+  }
+  throw new RelayRejection("The transaction would fail on-chain", 422);
+}
+
+/**
+ * Refuses to build once the lease could end inside the transaction's time
+ * bound: past that, an expired lease could hand the channel to another write
+ * while this one might still land.
+ */
+function checkLeaseTime(write: ChannelWrite): void {
+  const elapsed = write.now() - write.leasedAt;
+  if (elapsed <= LEASE_BUILD_BUDGET_SECONDS * 1000 - LEASE_CLOCK_SKEW_MS) return;
+  console.error(`[chain/relay] channel ${write.lease.idx} held ${elapsed} ms without a submission; giving up`);
+  throw new RelayRejection("The network is slow right now. Try again in a few seconds.", 503, SLOW_NETWORK_RETRY_AFTER_SECONDS);
+}
+
+/** The latest ledger and the channel's sequence number, read together. */
+async function channelState(write: ChannelWrite) {
+  const [{ sequence }, account] = await Promise.all([write.server.getLatestLedger(), loadChannel(write)]);
+  return { latestLedger: sequence, accountSequence: BigInt(account.sequenceNumber()) };
+}
+
+/** The channel's account; a 503 when it was never created (the pool wasn't seeded on this network). */
+async function loadChannel(write: ChannelWrite) {
+  const { idx, publicKey } = write.lease;
+  try {
+    return await write.server.getAccount(publicKey);
+  } catch (error) {
+    if (!(error instanceof Error) || !/not found/i.test(error.message)) throw error;
+    console.error(`[chain/relay] channel ${idx} (${publicKey}) has no account on-chain. Run scripts/seed-relay-channels.mjs`);
+    throw new RelayRejection("Paid writes are misconfigured on this server", 503);
+  }
+}
+
+/** The RPC's next sequence number for the channel, read after a refusal; null when it can't be read. */
+async function rpcNextSequence(write: ChannelWrite): Promise<bigint | null> {
+  try {
+    const account = await write.server.getAccount(write.lease.publicKey);
+    return BigInt(account.sequenceNumber()) + BigInt(1);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Waits until the RPC has closed a ledger past the one it is on now, so the
+ * rebuilt transaction reads a sequence number that counts whatever the network
+ * just refused it over. Bounded: after NEXT_LEDGER_WAIT_MS the retry runs anyway.
+ */
+async function waitForNextLedger(write: ChannelWrite): Promise<void> {
+  const from = (await write.server.getLatestLedger()).sequence;
+  const deadline = write.now() + NEXT_LEDGER_WAIT_MS;
+  while (write.now() < deadline) {
+    await write.sleep(NEXT_LEDGER_POLL_MS);
+    if ((await write.server.getLatestLedger()).sequence > from) return;
+  }
+  console.warn(`[chain/relay] no ledger after ${from} within ${NEXT_LEDGER_WAIT_MS} ms; retrying anyway`);
 }

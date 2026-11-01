@@ -32,8 +32,9 @@
  *   stored floor was wrong, and this is how it comes down again.
  *
  * Keys come from RELAY_CHANNEL_SEED and the channel's index
- * (channel-accounts.mjs); the database holds public keys only. Nothing calls
- * this yet: direct-submit.ts moves onto it in DOQ-4.
+ * (channel-accounts.mjs); the database holds public keys only.
+ * direct-submit.ts leases from here when RELAY_POOL is on (DOQ-4); with it
+ * off, paid writes still go out from the relayer alone.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Keypair } from "@stellar/stellar-sdk";
@@ -99,6 +100,15 @@ export type LeaseOptions = {
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 const MISCONFIGURED = "Paid writes are misconfigured on this server";
+
+/**
+ * RELAY_POOL=on sends paid writes from leased channels. Anything else, unset
+ * included, keeps the relayer as the only source, so the pool can be switched
+ * off from the dashboard without a deploy of different code.
+ */
+export function relayPoolEnabled(): boolean {
+  return process.env.RELAY_POOL?.trim().replace(/^["']|["']$/g, "").toLowerCase() === "on";
+}
 
 /** RELAY_CHANNEL_SEED, or a 503 when it is missing or too short to guard the channels' keys. */
 export function relayChannelSeed(): string {
