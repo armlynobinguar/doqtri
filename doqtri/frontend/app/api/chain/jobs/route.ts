@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { runChainJobs } from "@/lib/stellar/chain-jobs";
 import { readSchedulerHealth, schedulerWarning } from "@/lib/stellar/chain-jobs-scheduler";
+import { logError } from "@/lib/log-error";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -35,7 +36,7 @@ export async function GET(request: Request) {
   try {
     return Response.json({ ...(await runChainJobs(admin, { limit: 50 })), scheduler });
   } catch (error) {
-    console.error("[chain/jobs] failed", error);
+    logError("[chain/jobs] failed", error);
     return Response.json({ error: "The queue couldn't run.", scheduler }, { status: 503 });
   }
 }

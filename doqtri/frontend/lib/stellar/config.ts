@@ -80,7 +80,9 @@ export function serverRpcUrl(serverValue: string | undefined, publicUrl: string)
  * `typeof window` test to a constant, so the server branch is dropped from
  * client bundles, and even where it is not, the unprefixed var reads as
  * undefined in the browser. Never pass RPC_URL to a Client Component or put
- * it in a response: on the server it may hold that key.
+ * it in a response: on the server it may hold that key. The SDK's HTTP
+ * errors carry it too, so log a caught RPC error with logError
+ * (lib/log-error.ts), never as a raw object.
  */
 export const RPC_URL =
   typeof window === "undefined" ? serverRpcUrl(process.env.SOROBAN_RPC_URL, PUBLIC_RPC_URL) : PUBLIC_RPC_URL;
