@@ -42,9 +42,13 @@ describe("RPC endpoint", () => {
   const KEYED = "https://rpc.provider.test/v1/secret-key";
   const PUBLIC = "https://rpc.public.test";
 
-  async function loadRpc(env: { server?: string; public?: string }) {
+  const MAINNET = "Public Global Stellar Network ; September 2015";
+
+  async function loadRpc(env: { server?: string; public?: string; mainnet?: boolean }) {
     vi.resetModules();
-    vi.stubEnv("NEXT_PUBLIC_NETWORK_PASSPHRASE", "");
+    vi.stubEnv("NEXT_PUBLIC_NETWORK_PASSPHRASE", env.mainnet ? MAINNET : "");
+    // Mainnet refuses to load without its own registry id.
+    vi.stubEnv("NEXT_PUBLIC_CONTRACT_ID", env.mainnet ? "CA6YPRXQ2IFGACBFLKWEFETGLZ2C5R7DG5TTBKTTP4AVYOF3HFOSBCC2" : "");
     vi.stubEnv("SOROBAN_RPC_URL", env.server ?? "");
     vi.stubEnv("NEXT_PUBLIC_SOROBAN_RPC_URL", env.public ?? "");
     return import("./config");
@@ -65,6 +69,13 @@ describe("RPC endpoint", () => {
   it("falls back to the public testnet default when neither is set", async () => {
     const config = await loadRpc({});
     expect(config.RPC_URL).toBe("https://soroban-testnet.stellar.org");
+  });
+
+  it("falls back to the public mainnet default on mainnet", async () => {
+    const config = await loadRpc({ mainnet: true });
+    expect(config.IS_MAINNET).toBe(true);
+    expect(config.RPC_URL).toBe("https://mainnet.sorobanrpc.com");
+    expect((await loadRpc({ mainnet: true, server: KEYED })).RPC_URL).toBe(KEYED);
   });
 
   it("never uses the server-only URL in the browser", async () => {
