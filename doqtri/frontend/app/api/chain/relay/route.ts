@@ -77,8 +77,14 @@ function positive(raw: string | undefined, fallback: number): number {
   return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
-function fail(error: string, status: number, extra: Record<string, unknown> = {}) {
-  return Response.json({ success: false, error, ...extra }, { status });
+function fail(error: string, status: number, extra: Record<string, unknown> = {}, headers?: HeadersInit) {
+  return Response.json({ success: false, error, ...extra }, { status, headers });
+}
+
+/** A refusal from the checks or the submission, with Retry-After when it says when to come back. */
+function rejected(error: RelayRejection) {
+  const retryAfter = error.retryAfterSeconds;
+  return fail(error.message, error.status, {}, retryAfter ? { "Retry-After": String(retryAfter) } : undefined);
 }
 
 export async function POST(request: Request) {
@@ -123,7 +129,7 @@ export async function POST(request: Request) {
     }
     return await relayWalletAdmin(user.id, submission, new URL(request.url).hostname);
   } catch (error) {
-    if (error instanceof RelayRejection) return fail(error.message, error.status);
+    if (error instanceof RelayRejection) return rejected(error);
     console.error("[chain/relay] unexpected error", error);
     return fail("Something went wrong submitting this transaction.", 500);
   }
