@@ -29,8 +29,12 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20260928000200_add_documents_publish_headings.sql
 20261002000000_create_ai_usage.sql        # NOT yet applied: apply before deploying
 20261006000000_create_node_links.sql      # NOT yet applied: apply before deploying
+20261007000000_backfill_wallet_accounts.sql  # NOT recorded: confirm on the remote before deploying
+20261008000000_create_passkey_wallets.sql  # NOT recorded: confirm on the remote before deploying
 20261009000000_create_promo_submissions.sql
 20261009000100_add_promo_submission_status.sql
+20261013000000_create_market.sql          # NOT recorded: confirm on the remote before deploying
+20261014000000_market_reports_and_cuts.sql  # NOT recorded: confirm on the remote before deploying
 20261018000000_create_referrals.sql
 20261019000000_chain_writes_anchor.sql    # NOT yet applied: apply before deploying
 20261021000000_create_mindmap_styles.sql
@@ -46,13 +50,24 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261025110000_qdit_linking.sql               # NOT yet applied (WP-2.5)
 20261025120000_qdit_webhook_events.sql        # NOT yet applied (WP-2.8)
 20261025130000_chain_jobs_claim_token.sql     # NOT yet applied (WP-1.10)
+20261025131000_qdit_milestone_approvals.sql  # NOT recorded: confirm on the remote before deploying
 20261025140000_integration_connections_previous_account.sql  # NOT yet applied (WP-2.11)
 20261026100000_account_deletion_anonymises.sql    # NOT yet applied (WP-1.11)
 20261026100001_signer_removals_owner_handover.sql # NOT yet applied (WP-1.11)
 20261026110000_qdit_approval_incomplete_scans.sql # NOT yet applied (WP-2.13)
 20261026120000_account_deletion_market_templates.sql # NOT yet applied (WP-1.12)
 20261026120001_qdit_approval_incomplete_first_at.sql # NOT yet applied (WP-1.12)
+20261101100000_relay_channels.sql         # NOT recorded (WP-4.1, DOQ-3): confirm on the remote before deploying
+20261101110000_chain_writes_status.sql    # NOT recorded (WP-4.1, DOQ-5): confirm on the remote before deploying
+20261101120000_wallet_topups.sql          # NOT recorded (WP-4.1, DOQ-6): confirm on the remote before deploying
 ```
+
+Files marked "NOT recorded" were added without updating this list, so whether they are
+on the remote is unknown: check each by name on the remote and replace the marker with
+its real state. `20261101110000_chain_writes_status.sql` matters most: the relay
+(`app/api/chain/relay/route.ts`) writes `chain_writes.status` on every paid write,
+with or without `RELAY_POOL`, so every passkey write fails to index while that column
+is missing.
 
 The remote records its own version stamps (e.g. `20260929114657` for
 `create_ingests`); match on the name, not the number.
