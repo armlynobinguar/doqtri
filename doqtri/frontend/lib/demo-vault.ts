@@ -60,7 +60,7 @@ Anyone can open a note's audit page and check its history against the ledger, wi
 A passkey (Face ID, fingerprint or PIN) creates your Stellar wallet. No extension needed.
 
 ### Or connect a wallet
-Freighter and other Stellar wallets sign in with a signed challenge.
+Varial and other Stellar wallets sign in with a signed challenge.
 `,
 };
 

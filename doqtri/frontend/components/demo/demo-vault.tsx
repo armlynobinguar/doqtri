@@ -122,7 +122,7 @@ export function DemoVault({ notes, active }: { notes: readonly DemoNote[]; activ
               <p className="font-medium">Save &amp; anchor is turned off in the demo</p>
               <p className="text-muted-foreground mt-1">
                 In your own vault, one click writes this note&apos;s hash to Stellar and gives it a public audit page.
-                Sign up with email to get a passkey wallet, or connect Freighter.
+                Sign up with email to get a passkey wallet, or connect Varial.
               </p>
               <div className="mt-3 flex gap-2">
                 <Link href="/signup" className={primary}>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2Icon, WalletIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -15,6 +15,8 @@ type Props = {
   size?: "default" | "lg" | "sm";
   variant?: "default" | "ghost" | "outline";
   label?: string;
+  /** Shown in place of the generic wallet icon, e.g. a wallet's own mark. */
+  icon?: ReactNode;
   /** Same-site path to open once signed in. */
   next?: string;
 };
@@ -24,6 +26,7 @@ export function ConnectWalletButton({
   size = "default",
   variant = "default",
   label = "Connect wallet",
+  icon,
   next = "/vault",
 }: Props) {
   const router = useRouter();
@@ -55,7 +58,7 @@ export function ConnectWalletButton({
       className={cn(className)}
       onClick={() => void handleConnect()}
     >
-      {busy ? <Loader2Icon className="animate-spin" /> : <WalletIcon />}
+      {busy ? <Loader2Icon className="animate-spin" /> : (icon ?? <WalletIcon />)}
       {busy ? "Connecting…" : label}
     </Button>
   );

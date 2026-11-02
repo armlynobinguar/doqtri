@@ -166,7 +166,7 @@ export function LandingPage() {
                 <strong>Open your vault</strong>
                 <p>
                   <Link href="/signup">Sign up with email</Link> and start writing. No extension needed. Already on
-                  Stellar? Freighter and other Stellar wallets open the same private vault.
+                  Stellar? Varial and other Stellar wallets open the same private vault.
                 </p>
               </div>
             </li>

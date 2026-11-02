@@ -41,7 +41,7 @@ export function EmailAuthForm({ mode, next = "/vault" }: { mode: Mode; next?: st
     const problem = signUp
       ? signUpProblem(email, password)
       : isReservedEmail(email)
-        ? "Wallet accounts sign in with Use Freighter wallet, below."
+        ? "Wallet accounts sign in with Use Varial wallet, below."
         : null;
     if (problem) {
       setError(problem);

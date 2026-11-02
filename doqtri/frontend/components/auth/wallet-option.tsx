@@ -1,4 +1,5 @@
 import { ConnectWalletButton } from "@/components/auth/connect-wallet-button";
+import { VarialMark } from "@/components/brand/varial-mark";
 
 /** The wallet path on the auth screens: below email, and deliberately quiet. */
 export function WalletOption({ next }: { next?: string }) {
@@ -12,7 +13,8 @@ export function WalletOption({ next }: { next?: string }) {
       <ConnectWalletButton
         variant="ghost"
         size="lg"
-        label="Use Freighter wallet"
+        label="Use Varial wallet"
+        icon={<VarialMark className="size-4" />}
         next={next}
         className="w-full rounded-full"
       />

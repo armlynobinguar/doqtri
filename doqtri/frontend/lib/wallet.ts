@@ -108,7 +108,7 @@ export async function signWalletMessage(message: string, address: string): Promi
   } catch (err) {
     const text = (err as { message?: string })?.message ?? String(err);
     if (/does not support/i.test(text)) {
-      throw new Error("This wallet can't sign messages. Connect with Freighter or another wallet that supports message signing.");
+      throw new Error("This wallet can't sign messages. Connect with Varial or another wallet that supports message signing.");
     }
     throw err instanceof Error ? err : new Error(text || "Signing was cancelled.");
   }
