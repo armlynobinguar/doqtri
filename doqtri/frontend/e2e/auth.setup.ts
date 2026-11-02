@@ -20,7 +20,7 @@ setup("wallet login surface + session seed", async ({ page }) => {
   await page.goto("/login");
   await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
   await expect(
-    page.getByRole("button", { name: /Use Freighter wallet/i }),
+    page.getByRole("button", { name: /Use Varial wallet/i }),
   ).toBeVisible();
 
   // An address alone must not open a session.

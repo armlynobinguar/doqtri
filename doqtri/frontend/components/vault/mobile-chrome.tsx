@@ -9,10 +9,9 @@ import {
   Loader2Icon,
   NetworkIcon,
   SearchIcon,
-  SettingsIcon,
-  UserRoundIcon,
 } from "lucide-react";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
+import { AccountMenu, type AccountPage } from "@/components/vault/account-menu";
 import type { RibbonAction } from "@/components/vault/ribbon";
 import type { SaveState } from "@/components/vault/status-bar";
 import { cn } from "@/lib/utils";
@@ -31,7 +30,7 @@ export function MobileTopBar({
   creating,
   canCreate = true,
   onNewNote,
-  profileActive,
+  accountPage,
 }: {
   title: string;
   saveState: SaveState;
@@ -39,8 +38,8 @@ export function MobileTopBar({
   /** False for a viewer of the active workspace (D-14): nothing to add to. */
   canCreate?: boolean;
   onNewNote: () => void;
-  /** On the profile page: the profile button shows as current. */
-  profileActive: boolean;
+  /** On an account page (profile, members): the avatar shows as current. */
+  accountPage?: AccountPage;
 }) {
   return (
     <header className="bg-sidebar border-border flex h-[calc(3rem+env(safe-area-inset-top))] shrink-0 items-center gap-2 border-b pt-[env(safe-area-inset-top)] pr-1.5 pl-2 lg:hidden">
@@ -73,26 +72,9 @@ export function MobileTopBar({
         )}
       </button>
 
-      {/* The way to the profile and wallet on a phone. A ringed avatar, so it
-          reads as "you" rather than as one more tool icon. */}
-      <Link
-        href="/vault/profile"
-        aria-label="Profile & wallet"
-        aria-current={profileActive ? "page" : undefined}
-        data-testid="mobile-profile"
-        className="group focus-visible:ring-ring flex size-10 shrink-0 items-center justify-center rounded-lg focus-visible:ring-1 focus-visible:outline-hidden"
-      >
-        <span
-          className={cn(
-            "flex size-8 items-center justify-center rounded-full border transition-colors",
-            profileActive
-              ? "text-foreground border-[var(--glass-hi)] bg-[var(--glass-strong)] shadow-[inset_0_1px_0_0_var(--glass-hi)]"
-              : "text-sidebar-foreground group-active:text-foreground border-[var(--glass-lo)] bg-[var(--glass)] group-hover:text-foreground",
-          )}
-        >
-          <UserRoundIcon className="size-[18px]" strokeWidth={1.5} />
-        </span>
-      </Link>
+      {/* The account popover on a phone (profile, members, apps, wallet,
+          Log out): the desktop ribbon's profile button is hidden here. */}
+      <AccountMenu variant="avatar" side="bottom" align="end" current={accountPage} />
     </header>
   );
 }
@@ -122,12 +104,13 @@ function SaveIndicator({ state }: { state: SaveState }) {
   );
 }
 
+// No Settings tab: on a phone the top bar's profile button opens the account
+// popover, which reaches the profile, preferences and Log out.
 const TABS: { id: RibbonAction; label: string; Icon: typeof FilesIcon }[] = [
   { id: "files", label: "Notes", Icon: FilesIcon },
   { id: "search", label: "Search", Icon: SearchIcon },
   { id: "graph", label: "Graph", Icon: NetworkIcon },
   { id: "mindmap", label: "Mindmap", Icon: BrainIcon },
-  { id: "settings", label: "Settings", Icon: SettingsIcon },
 ];
 
 export function MobileTabBar({
@@ -140,7 +123,7 @@ export function MobileTabBar({
   return (
     <nav
       aria-label="Primary"
-      className="bg-sidebar border-border grid shrink-0 grid-cols-5 border-t pb-[env(safe-area-inset-bottom)] lg:hidden"
+      className="bg-sidebar border-border grid shrink-0 grid-cols-4 border-t pb-[env(safe-area-inset-bottom)] lg:hidden"
     >
       {TABS.map(({ id, label, Icon }) => {
         const isActive = active === id;

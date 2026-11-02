@@ -114,7 +114,7 @@ export default function DocsPage() {
             <h2>Quick start</h2>
             <ol className={styles.steps}>
               <li>
-                <strong>Install a Stellar wallet.</strong> <a href="https://www.freighter.app/" target="_blank" rel="noreferrer">Freighter</a>{" "}
+                <strong>Install a Stellar wallet.</strong> <a href="https://www.freighter.app/" target="_blank" rel="noreferrer">Varial</a>{" "}
                 works best; xBull, Lobstr, Hana, Klever, OneKey and HOT are also supported. Switch it to{" "}
                 <b>Stellar {NETWORK}</b>.
               </li>
@@ -334,7 +334,7 @@ export default function DocsPage() {
               <dt>Does signing in cost anything?</dt>
               <dd>No. The sign-in message is not a transaction. Only anchoring and node updates are transactions.</dd>
               <dt>My wallet says it can&rsquo;t sign messages.</dt>
-              <dd>Albedo and Rabet don&rsquo;t support message signing yet. Use Freighter or another supported wallet.</dd>
+              <dd>Albedo and Rabet don&rsquo;t support message signing yet. Use Varial or another supported wallet.</dd>
               <dt>Can I delete an anchored version?</dt>
               <dd>
                 You can delete the note from your vault, but the hash and statuses already on the ledger stay there —

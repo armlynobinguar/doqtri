@@ -488,7 +488,7 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
     <div className="border-border flex flex-col gap-3 border-t px-3 py-3.5 text-[12px]">
       <div className="flex items-center justify-between gap-2">
         <span className="eyebrow">Stellar proof</span>
-        <VersionBadge version={chainVersion} unanchored={unanchored} />
+        <ProofStatus version={chainVersion} unanchored={unanchored} />
       </div>
 
       {noWallet ? (
@@ -761,7 +761,18 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
         </label>
       ) : null}
 
-      {hasVersionHistory(versionList) ? <VersionHistory history={versionList} /> : null}
+      {/* The version number lives with its history rather than in the header,
+          where it crowded the status and wrapped the "Stellar proof" label. */}
+      {hasVersionHistory(versionList) ? (
+        <VersionHistory history={versionList} current={chainVersion} />
+      ) : chainVersion != null ? (
+        <div className="text-muted-foreground flex items-center justify-between gap-2 text-[11px]">
+          On-chain version
+          <StatusTag tone="onchain" className="font-mono">
+            v{chainVersion}
+          </StatusTag>
+        </div>
+      ) : null}
 
       {canSign ? (
         <>
@@ -850,7 +861,8 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
   );
 }
 
-function VersionBadge({
+/** One pill for the header: is this note's current text on the ledger? */
+function ProofStatus({
   version,
   unanchored,
 }: {
@@ -860,22 +872,14 @@ function VersionBadge({
   if (version == null) {
     return <StatusTag tone="planned">local</StatusTag>;
   }
-  return (
-    <span className="flex flex-wrap items-center justify-end gap-1">
-      <StatusTag tone="onchain" className="font-mono">
-        v{version}
-      </StatusTag>
-      {unanchored ? (
-        <StatusTag
-          tone="warning"
-          title="The note has changed since this version was anchored"
-        >
-          unanchored changes
-        </StatusTag>
-      ) : (
-        <StatusTag tone="verified">anchored</StatusTag>
-      )}
-    </span>
+  return unanchored ? (
+    <StatusTag tone="warning" title={`The note has changed since v${version} was anchored`}>
+      unanchored changes
+    </StatusTag>
+  ) : (
+    <StatusTag tone="verified" title={`v${version} is anchored on Stellar`}>
+      anchored
+    </StatusTag>
   );
 }
 

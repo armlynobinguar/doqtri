@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useOptimistic, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -23,6 +23,7 @@ import {
   WalletIcon,
 } from "lucide-react";
 import { toast } from "sonner";
+import { VarialMark } from "@/components/brand/varial-mark";
 import { Button } from "@/components/ui/button";
 import { StatusTag } from "@/components/ui/status-tag";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -172,14 +173,22 @@ export function ProfileView({
   // The tab lives in the URL (`?tab=`), so other screens can link to it.
   const router = useRouter();
   const requestedTab = useSearchParams().get("tab");
-  const tab: ProfileTab =
+  const urlTab: ProfileTab =
     isProfileTab(requestedTab) &&
     (requestedTab !== "invite" || referral) &&
     (requestedTab !== "apps" || connectedApps)
       ? requestedTab
       : "account";
+  // A tab change re-renders the server page before the URL settles, which
+  // left the click with no visible answer for a moment. The tab switches at
+  // once; the URL catches up inside the transition.
+  const [tab, showTab] = useOptimistic(urlTab);
+  const [switchingTab, startTabSwitch] = useTransition();
   function setTab(next: ProfileTab) {
-    router.replace(next === "account" ? "/vault/profile" : `/vault/profile?tab=${next}`, { scroll: false });
+    startTabSwitch(() => {
+      showTab(next);
+      router.replace(next === "account" ? "/vault/profile" : `/vault/profile?tab=${next}`, { scroll: false });
+    });
   }
 
   /** Applies a preference and briefly shows that it was saved. */
@@ -305,12 +314,12 @@ export function ProfileView({
           action: { label: "Create passkey wallet", icon: KeyRoundIcon, run: createWallet, testId: "attention-create-wallet" },
         }
       : identity.kind === "wallet" && wallet.mismatch
-        ? { tone: "warning", text: "Freighter is set to a different account than this vault. Switch it back in Freighter to anchor." }
+        ? { tone: "warning", text: "Varial is set to a different account than this vault. Switch it back in Varial to anchor." }
         : identity.kind === "wallet" && wallet.walletAddress === null
           ? {
               tone: "info",
-              text: "Freighter isn't connected in this browser, so anchoring is paused.",
-              action: { label: "Reconnect Freighter", icon: PlugIcon, run: reconnect },
+              text: "Varial isn't connected in this browser, so anchoring is paused.",
+              action: { label: "Reconnect Varial", icon: PlugIcon, run: reconnect },
             }
           : lowOrEmpty
             ? {
@@ -365,10 +374,11 @@ export function ProfileView({
               variant="outline"
               className="text-destructive"
               disabled={busy !== null}
-              onClick={() => void act("Sign out", identity.kind === "wallet" ? wallet.disconnect : wallet.signOut)}
+              data-testid="profile-log-out"
+              onClick={() => void act("Log out", identity.kind === "wallet" ? wallet.disconnect : wallet.signOut)}
             >
-              <LogOutIcon />
-              {identity.kind === "wallet" ? "Disconnect" : "Sign out"}
+              {busy === "Log out" ? <Loader2Icon className="animate-spin" /> : <LogOutIcon />}
+              {busy === "Log out" ? "Logging out…" : "Log out"}
             </Button>
           </div>
         </section>
@@ -403,9 +413,14 @@ export function ProfileView({
           </div>
         ) : null}
 
-        <Tabs value={tab} onValueChange={(value) => setTab(value as ProfileTab)}>
-          {/* On phones the labels alone fit; the icons come back from sm up. */}
-          <TabsList className="h-9 w-full sm:w-fit max-sm:[&_svg]:hidden">
+        <Tabs
+          value={tab}
+          onValueChange={(value) => setTab(value as ProfileTab)}
+          aria-busy={switchingTab || undefined}
+        >
+          {/* Five icon-and-label tabs don't fit a phone side by side, so there
+              each icon sits above its label. */}
+          <TabsList className="w-full max-sm:h-auto! sm:h-9 sm:w-fit max-sm:[&_[data-slot=tabs-trigger]]:h-auto max-sm:[&_[data-slot=tabs-trigger]]:flex-col max-sm:[&_[data-slot=tabs-trigger]]:gap-1 max-sm:[&_[data-slot=tabs-trigger]]:px-1 max-sm:[&_[data-slot=tabs-trigger]]:py-1.5 max-sm:[&_[data-slot=tabs-trigger]]:text-[11px] max-sm:[&_[data-slot=tabs-trigger]]:leading-none">
             <TabsTrigger value="account" data-testid="profile-tab-account">
               <UserRoundIcon />
               Account
@@ -413,7 +428,7 @@ export function ProfileView({
             <TabsTrigger value="wallet" data-testid="profile-tab-wallet">
               <WalletIcon />
               Wallet
-              {attention ? <span className="bg-warning size-1.5 rounded-full" aria-label="needs attention" /> : null}
+              {attention ? <span className="bg-warning size-1.5 rounded-full max-sm:absolute max-sm:top-1.5 max-sm:right-[calc(50%-14px)]" aria-label="needs attention" /> : null}
             </TabsTrigger>
             <TabsTrigger value="preferences" data-testid="profile-tab-preferences">
               <Settings2Icon />
@@ -424,7 +439,7 @@ export function ProfileView({
                 <PlugIcon />
                 Apps
                 {connectedApps.qdit?.status === "needs_reconnect" ? (
-                  <span className="bg-warning size-1.5 rounded-full" aria-label="needs attention" />
+                  <span className="bg-warning size-1.5 rounded-full max-sm:absolute max-sm:top-1.5 max-sm:right-[calc(50%-14px)]" aria-label="needs attention" />
                 ) : null}
               </TabsTrigger>
             ) : null}
@@ -441,7 +456,7 @@ export function ProfileView({
           <>
             <Section title="Account" icon={identity.kind === "email" ? MailIcon : WalletIcon}>
               <Row label="Signed in with">
-                {identity.kind === "email" ? "Email and passkey" : "Freighter wallet"}
+                {identity.kind === "email" ? "Email and passkey" : "Varial wallet"}
               </Row>
               {identity.kind === "email" ? (
                 <Row label="Email">
@@ -505,10 +520,17 @@ export function ProfileView({
                     help={
                       identity.kind === "email"
                         ? "Opens with your passkey: your fingerprint, face or device PIN. No seed phrase."
-                        : "An account you control in the Freighter browser extension."
+                        : "An account you control in the Varial browser extension."
                     }
                   >
-                    {identity.kind === "email" ? "Passkey wallet" : "Freighter account"}
+                    {identity.kind === "email" ? (
+                      "Passkey wallet"
+                    ) : (
+                      <span className="flex items-center gap-2">
+                        <VarialMark className="size-4" />
+                        Varial account
+                      </span>
+                    )}
                   </Row>
                   <Row label="Address">
                     <span className="flex min-w-0 items-center gap-1.5">
@@ -527,7 +549,7 @@ export function ProfileView({
                     </span>
                   </Row>
                   {identity.kind === "wallet" ? (
-                    <Row label="Freighter">
+                    <Row label="Varial">
                       {wallet.walletAddress === null
                         ? "Not connected in this browser"
                         : wallet.mismatch
@@ -569,7 +591,7 @@ export function ProfileView({
                         onClick={topUp}
                       >
                         {busy === "Top up" ? <Loader2Icon className="animate-spin" /> : <DropletIcon />}
-                        Top up with test XLM
+                        {busy === "Top up" ? "Topping up…" : "Top up with test XLM"}
                       </Button>
                     ) : null}
                     {!IS_MAINNET && identity.kind === "wallet" ? (
@@ -581,13 +603,13 @@ export function ProfileView({
                         onClick={fund}
                       >
                         {busy === "Friendbot" ? <Loader2Icon className="animate-spin" /> : <DropletIcon />}
-                        Fund with Friendbot
+                        {busy === "Friendbot" ? "Funding…" : "Fund with Friendbot"}
                       </Button>
                     ) : null}
                     {identity.kind === "wallet" && wallet.walletAddress === null ? (
                       <Button type="button" size="sm" variant="outline" disabled={busy !== null} onClick={reconnect}>
                         <PlugIcon />
-                        Reconnect Freighter
+                        Reconnect Varial
                       </Button>
                     ) : null}
                     <Button
@@ -602,7 +624,7 @@ export function ProfileView({
                       })}
                     >
                       {busy === "Refresh" ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
-                      Refresh
+                      {busy === "Refresh" ? "Refreshing…" : "Refresh"}
                     </Button>
                     <a
                       href={expertAddressUrl(address)}

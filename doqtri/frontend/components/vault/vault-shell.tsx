@@ -16,8 +16,7 @@ import { UploadDialog, type RetryTarget } from "@/components/vault/upload-dialog
 import { DeleteNoteDialog } from "@/components/vault/delete-note-dialog";
 import { RenameNoteDialog } from "@/components/vault/rename-note-dialog";
 import { SettingsDialog } from "@/components/vault/settings-dialog";
-import { AccountMenu } from "@/components/vault/account-menu";
-import { LogOutButton } from "@/components/vault/log-out-button";
+import type { AccountPage } from "@/components/vault/account-menu";
 import type { NoteTemplate } from "@/lib/templates";
 import { MobileTabBar, MobileTopBar } from "@/components/vault/mobile-chrome";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -114,7 +113,9 @@ function VaultShellInner({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ribbonActive, setRibbonActive] = useState<RibbonAction>("files");
   const [creating, setCreating] = useState(false);
-  const [anchored, setAnchored] = useState<ReadonlySet<string>>(new Set());
+  // Null until the ledger answers, or if it cannot: the explorer then lists
+  // notes in one group instead of guessing which are on-chain.
+  const [anchored, setAnchored] = useState<ReadonlySet<string> | null>(null);
   const [pendingDelete, setPendingDelete] = useState<NoteSummary | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [pendingRename, setPendingRename] = useState<NoteSummary | null>(null);
@@ -122,13 +123,16 @@ function VaultShellInner({
   // The shell lives in the layout, so the active note comes from the URL
   // rather than from props. `/vault/mindmap`, `/vault/graph` and
   // `/vault/templates` are vault-wide views, not notes; `/vault/profile` and
-  // `/vault/earnings` are account pages, not notes either.
+  // `/vault/earnings` and `/vault/workspace/members` are account pages, not
+  // notes either.
   const segment = pathname.startsWith("/vault/")
     ? pathname.split("/")[2] || undefined
     : undefined;
   const routeAction: RibbonAction | undefined =
     segment === "mindmap" || segment === "graph" || segment === "templates" ? segment : undefined;
-  const accountPage = segment === "profile" || segment === "earnings";
+  const accountPage = segment === "profile" || segment === "earnings" || segment === "workspace";
+  const currentAccountPage: AccountPage | undefined =
+    segment === "profile" ? "profile" : segment === "workspace" ? "members" : undefined;
   const activeId = routeAction || accountPage ? undefined : segment;
 
   // What the mobile top bar calls the current pane. The desktop layout has no
@@ -142,7 +146,9 @@ function VaultShellInner({
           ? "Templates"
           : segment === "profile"
             ? "Profile"
-            : // With no note open, the phone says which workspace it is showing.
+            : segment === "workspace"
+              ? "Members"
+              : // With no note open, the phone says which workspace it is showing.
               (notes.find((note) => note.id === activeId)?.title ?? workspace.name);
 
   // Blank by default; a template seeds the title and body instead. Into the
@@ -186,7 +192,7 @@ function VaultShellInner({
       } catch {
         // Ledger unreachable: leave the rows deletable rather than locking the
         // vault. /api/notes/[id] re-checks and refuses with the real reason.
-        if (!cancelled) setAnchored(new Set());
+        if (!cancelled) setAnchored(null);
       }
     })();
     return () => {
@@ -212,7 +218,7 @@ function VaultShellInner({
         // The ledger moved since the explorer last looked — show the chain
         // icon on that row now, so the refusal is not a dead end.
         if (error instanceof DeleteNoteError && error.code === "ANCHORED") {
-          setAnchored((prev) => new Set(prev).add(note.id));
+          setAnchored((prev) => new Set(prev ?? []).add(note.id));
         }
         toast.error(
           error instanceof Error ? error.message : "Could not delete note",
@@ -305,7 +311,7 @@ function VaultShellInner({
         setRetryTarget(target);
         setUploadOpen(true);
       }}
-      anchoredIds={anchored}
+      anchoredIds={anchored ?? undefined}
       deletingId={deletingId}
       onDeleteNote={setPendingDelete}
       onRenameNote={(note) => {
@@ -324,7 +330,7 @@ function VaultShellInner({
         creating={creating}
         canCreate={canCreate}
         onNewNote={() => void handleNewNote()}
-        profileActive={segment === "profile"}
+        accountPage={currentAccountPage}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -334,6 +340,7 @@ function VaultShellInner({
           active={routeAction ?? ribbonActive}
           onAction={handleRibbonAction}
           isAdmin={isAdmin}
+          accountPage={currentAccountPage}
         />
 
         <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
@@ -375,12 +382,6 @@ function VaultShellInner({
         workspaceName={workspace.name}
         wordCount={wordCount}
         saveState={saveState}
-        trailing={
-          <>
-            <AccountMenu />
-            <LogOutButton />
-          </>
-        }
       />
 
       <Sheet open={drawerOpen && isMobile} onOpenChange={setDrawerOpen}>
@@ -395,12 +396,6 @@ function VaultShellInner({
         >
           <SheetTitle className="sr-only">Notes</SheetTitle>
           <div className="min-h-0 flex-1">{explorer}</div>
-          {/* The wallet and sign-out. The note count is in the Notes header
-              above, and the profile has its own button in the top bar. */}
-          <div className="bg-sidebar border-border flex h-12 shrink-0 items-center justify-between gap-2 border-t px-3 text-[12px] whitespace-nowrap">
-            <AccountMenu className="text-sidebar-foreground h-9 min-w-0 text-[12px]" />
-            <LogOutButton className="h-9 shrink-0 text-[12px] [&_svg]:size-3.5" />
-          </div>
         </SheetContent>
       </Sheet>
 

@@ -122,16 +122,23 @@ test.describe("vault shell", () => {
     await expect(dialog.getByRole("button", { name: "Disconnect" })).toHaveCount(0);
   });
 
-  test("account menu shows the vault wallet, balance, and disconnect", async ({ page }) => {
+  test("ribbon profile button opens the account popover with pages and one log out", async ({ page }) => {
     await page.goto(`/vault/${noteId}`);
-    const trigger = page.getByTestId("account-menu");
-    await expect(trigger).toContainText(shortenAddress(E2E_WALLET));
-    // Funded or not, the balance resolves to a value rather than staying "…".
-    await expect(page.getByTestId("xlm-balance")).not.toHaveText("…", { timeout: 15_000 });
+    const trigger = page.getByTestId("ribbon-profile");
+    await expect(trigger).toHaveAccessibleName(new RegExp(shortenAddress(E2E_WALLET)));
 
     await trigger.click();
-    // Not clicked: signing out would end the session the other tests share.
-    await expect(page.getByRole("menuitem", { name: "Disconnect" })).toBeVisible();
+    // Funded or not, the balance resolves to a value rather than staying "…".
+    await expect(page.getByTestId("xlm-balance")).not.toHaveText(/…/, { timeout: 15_000 });
+    await expect(page.getByRole("menuitem", { name: "Profile & settings" })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: "Workspace members" })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: "Refresh balance" })).toBeVisible();
+    // Not clicked: logging out would end the session the other tests share.
+    await expect(page.getByRole("menuitem", { name: "Log out" })).toHaveCount(1);
+    await expect(page.getByRole("menuitem", { name: "Disconnect" })).toHaveCount(0);
+
+    await page.getByRole("menuitem", { name: "Workspace members" }).click();
+    await page.waitForURL("**/vault/workspace/members");
   });
 
   test("a new note appears in the explorer and the note count", async ({ page }) => {

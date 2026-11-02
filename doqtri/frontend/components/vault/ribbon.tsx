@@ -15,6 +15,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
+import { AccountMenu, type AccountPage } from "@/components/vault/account-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -40,14 +41,20 @@ const ITEMS: { id: RibbonAction; label: string; Icon: typeof FilesIcon }[] = [
 const BUTTON =
   "text-sidebar-foreground/70 hover:text-foreground relative flex size-9 items-center justify-center rounded-[10px] border border-transparent transition-colors hover:bg-[var(--glass)] focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden";
 
+const ACTIVE =
+  "text-foreground bg-sidebar-accent border-[var(--glass-lo)] shadow-[inset_0_1px_0_0_var(--glass-hi)] before:bg-foreground before:absolute before:top-2 before:bottom-2 before:-left-[7px] before:w-0.5 before:rounded-full before:shadow-[0_0_8px_var(--foreground)]";
+
 export function Ribbon({
   active,
   onAction,
   isAdmin = false,
+  accountPage,
 }: {
   active?: RibbonAction;
   onAction: (action: RibbonAction) => void;
   isAdmin?: boolean;
+  /** On an account page (profile, members): the profile button shows as current. */
+  accountPage?: AccountPage;
 }) {
   return (
     <nav
@@ -66,18 +73,26 @@ export function Ribbon({
           <TooltipTrigger
             aria-label={label}
             onClick={() => onAction(id)}
-            className={cn(
-              BUTTON,
-              active === id &&
-                "text-foreground bg-sidebar-accent border-[var(--glass-lo)] shadow-[inset_0_1px_0_0_var(--glass-hi)] before:bg-foreground before:absolute before:top-2 before:bottom-2 before:-left-[7px] before:w-0.5 before:rounded-full before:shadow-[0_0_8px_var(--foreground)]",
-            )}
+            className={cn(BUTTON, active === id && ACTIVE)}
           >
             <Icon className="size-[17px]" strokeWidth={1.5} />
           </TooltipTrigger>
           <TooltipContent side="right">{label}</TooltipContent>
         </Tooltip>
       ))}
-      {isAdmin && <AdminMenu />}
+      {/* The foot: staff tools, then the profile button, which opens the
+          account popover (profile, members, apps, wallet, Log out). It stays
+          reachable when the notes sidebar is collapsed. */}
+      <div className="mt-auto flex flex-col items-center gap-1.5">
+        {isAdmin && <AdminMenu />}
+        <AccountMenu
+          variant="icon"
+          side="right"
+          align="end"
+          current={accountPage}
+          className={cn(BUTTON, accountPage && ACTIVE)}
+        />
+      </div>
     </nav>
   );
 }
@@ -95,7 +110,7 @@ function AdminMenu() {
           render={<DropdownMenuTrigger />}
           aria-label="Admin"
           data-testid="ribbon-admin"
-          className={cn(BUTTON, "mt-auto")}
+          className={BUTTON}
         >
           <ShieldIcon className="size-[17px]" strokeWidth={1.5} />
         </TooltipTrigger>

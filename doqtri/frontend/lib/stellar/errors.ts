@@ -49,16 +49,16 @@ export function mapWalletError(err: unknown): DoqtriError {
   if (m.includes("freighter") && (m.includes("not") || m.includes("install"))) {
     return new DoqtriError(
       "NO_FREIGHTER",
-      "Install the Freighter extension to continue.",
+      "Install the Varial extension to continue.",
     );
   }
   if (m.includes("user rejected") || m.includes("rejected") || m.includes("denied")) {
-    return new DoqtriError("USER_REJECTED", "Signature rejected in Freighter.");
+    return new DoqtriError("USER_REJECTED", "Signature rejected in Varial.");
   }
   if (m.includes("wrong network") || m.includes("network mismatch")) {
     return new DoqtriError(
       "WRONG_NETWORK",
-      "Switch Freighter to Stellar Testnet.",
+      "Switch Varial to Stellar Testnet.",
     );
   }
   if (
