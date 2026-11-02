@@ -7,6 +7,8 @@ const runChainJobs = vi.fn();
 vi.mock("@/lib/stellar/chain-jobs", () => ({ runChainJobs: (...args: unknown[]) => runChainJobs(...args) }));
 const runPendingWrites = vi.fn();
 vi.mock("@/lib/stellar/pending-writes", () => ({ runPendingWrites: (...args: unknown[]) => runPendingWrites(...args) }));
+const runWalletTopUps = vi.fn();
+vi.mock("@/lib/stellar/wallet-topups", () => ({ runWalletTopUps: (...args: unknown[]) => runWalletTopUps(...args) }));
 vi.mock("@/lib/stellar/chain-jobs-scheduler", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/stellar/chain-jobs-scheduler")>()),
   readSchedulerHealth: async () => health.value,
@@ -24,6 +26,8 @@ beforeEach(() => {
   runChainJobs.mockResolvedValue({ done: 2, pending: 0, failed: 0, needsProductOwner: 0 });
   runPendingWrites.mockReset();
   runPendingWrites.mockResolvedValue({ confirmed: 1, failed: 0, pending: 2 });
+  runWalletTopUps.mockReset();
+  runWalletTopUps.mockResolvedValue({ skipped: false, done: 1, pending: 0, failed: 0 });
 });
 
 describe("GET /api/chain/jobs", () => {
@@ -36,10 +40,12 @@ describe("GET /api/chain/jobs", () => {
       failed: 0,
       needsProductOwner: 0,
       pendingWrites: { confirmed: 1, failed: 0, pending: 2 },
+      topUps: { skipped: false, done: 1, pending: 0, failed: 0 },
       scheduler: { status: "configured", job: true, missingSecrets: [] },
     });
     expect(runChainJobs).toHaveBeenCalledWith(expect.anything(), { limit: 50 });
     expect(runPendingWrites).toHaveBeenCalledTimes(1);
+    expect(runWalletTopUps).toHaveBeenCalledTimes(1);
   });
 
   it("settles pending paid writes even when the queue fails, and works the queue when they can't be read", async () => {
@@ -66,6 +72,20 @@ describe("GET /api/chain/jobs", () => {
     expect((await (await response).json()).pendingWrites).toEqual({ confirmed: 0, failed: 0, pending: 0 });
   });
 
+  it("retries wallet top-ups even when the chain jobs fail, and the other way round (DOQ-6)", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    runChainJobs.mockRejectedValueOnce(new Error("db down"));
+    const failedJobs = await run("Bearer s3cret");
+    expect(failedJobs.status).toBe(503);
+    expect((await failedJobs.json()).topUps).toEqual({ skipped: false, done: 1, pending: 0, failed: 0 });
+
+    runWalletTopUps.mockRejectedValueOnce(new Error("rpc down"));
+    const failedTopUps = await run("Bearer s3cret");
+    expect(failedTopUps.status).toBe(200);
+    expect(await failedTopUps.json()).toMatchObject({ done: 2, topUps: null });
+    error.mockRestore();
+  });
+
   it("logs a warning when the pg_cron job cannot run, and still works the queue", async () => {
     health.value = { status: "missing", job: true, missingSecrets: ["doqtri_cron_secret"] };
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -83,5 +103,6 @@ describe("GET /api/chain/jobs", () => {
     expect((await run("Bearer ")).status).toBe(401);
     expect(runChainJobs).not.toHaveBeenCalled();
     expect(runPendingWrites).not.toHaveBeenCalled();
+    expect(runWalletTopUps).not.toHaveBeenCalled();
   });
 });

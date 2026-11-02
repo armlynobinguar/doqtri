@@ -1,17 +1,16 @@
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
 import { walletAddressFromEmail } from "@/lib/wallet-address";
-import { MAX_USER_FEE_STROOPS, NETWORK, USER_PAYS_FEES } from "@/lib/stellar/smart-wallet-config";
+import { NETWORK, USER_PAYS_FEES } from "@/lib/stellar/smart-wallet-config";
 import { RelayRejection } from "@/lib/stellar/relay-validation";
-import { topUpWallet } from "@/lib/stellar/friendbot-topup";
+import { TOP_UP_BELOW_STROOPS, topUpWallet } from "@/lib/stellar/friendbot-topup";
 import { xlmBalanceStroops } from "@/lib/stellar/wallet-balance";
 
 /**
  * Testnet only: tops up the caller's passkey wallet with free test XLM so it
  * can pay for its own writes (progress/003). Refused while the wallet still
- * has plenty, which keeps one account from draining Friendbot through us:
- * twice the most one write may cost (1,000 XLM at testnet's raised cap).
+ * has plenty (TOP_UP_BELOW_STROOPS), which keeps one account from draining
+ * Friendbot through us.
  */
-const TOP_UP_BELOW_STROOPS = BigInt(2) * MAX_USER_FEE_STROOPS;
 
 export async function POST() {
   if (!USER_PAYS_FEES) return Response.json({ error: "Top-ups aren't available on this network." }, { status: 400 });
