@@ -117,17 +117,17 @@ test.describe("mobile vault", () => {
     await expectNoHorizontalScroll(page);
   });
 
-  test("the top bar's profile button opens the profile", async ({ page }) => {
+  test("the top bar's profile button opens the account popover", async ({ page }) => {
     await page.goto("/vault");
-    const profile = page.getByRole("link", { name: "Profile & wallet" });
+    const profile = page.getByTestId("mobile-profile");
     await expect(profile).toBeVisible();
 
     await expect(async () => {
       await profile.tap();
+      await page.getByRole("menuitem", { name: "Profile & settings" }).tap({ timeout: 2_000 });
       await page.waitForURL("**/vault/profile", { timeout: 2_000 });
     }).toPass();
     await expect(page.getByRole("heading", { name: "Profile", exact: true })).toBeVisible();
-    await expect(profile).toHaveAttribute("aria-current", "page");
     // An account page, not a note: no tab is current.
     const tabs = page.getByRole("navigation", { name: "Primary" });
     await expect(tabs.locator('[aria-current="page"]')).toHaveCount(0);

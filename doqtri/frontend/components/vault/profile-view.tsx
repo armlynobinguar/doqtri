@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useOptimistic, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -172,14 +172,22 @@ export function ProfileView({
   // The tab lives in the URL (`?tab=`), so other screens can link to it.
   const router = useRouter();
   const requestedTab = useSearchParams().get("tab");
-  const tab: ProfileTab =
+  const urlTab: ProfileTab =
     isProfileTab(requestedTab) &&
     (requestedTab !== "invite" || referral) &&
     (requestedTab !== "apps" || connectedApps)
       ? requestedTab
       : "account";
+  // A tab change re-renders the server page before the URL settles, which
+  // left the click with no visible answer for a moment. The tab switches at
+  // once; the URL catches up inside the transition.
+  const [tab, showTab] = useOptimistic(urlTab);
+  const [switchingTab, startTabSwitch] = useTransition();
   function setTab(next: ProfileTab) {
-    router.replace(next === "account" ? "/vault/profile" : `/vault/profile?tab=${next}`, { scroll: false });
+    startTabSwitch(() => {
+      showTab(next);
+      router.replace(next === "account" ? "/vault/profile" : `/vault/profile?tab=${next}`, { scroll: false });
+    });
   }
 
   /** Applies a preference and briefly shows that it was saved. */
@@ -365,10 +373,11 @@ export function ProfileView({
               variant="outline"
               className="text-destructive"
               disabled={busy !== null}
-              onClick={() => void act("Sign out", identity.kind === "wallet" ? wallet.disconnect : wallet.signOut)}
+              data-testid="profile-log-out"
+              onClick={() => void act("Log out", identity.kind === "wallet" ? wallet.disconnect : wallet.signOut)}
             >
-              <LogOutIcon />
-              {identity.kind === "wallet" ? "Disconnect" : "Sign out"}
+              {busy === "Log out" ? <Loader2Icon className="animate-spin" /> : <LogOutIcon />}
+              {busy === "Log out" ? "Logging out…" : "Log out"}
             </Button>
           </div>
         </section>
@@ -403,7 +412,11 @@ export function ProfileView({
           </div>
         ) : null}
 
-        <Tabs value={tab} onValueChange={(value) => setTab(value as ProfileTab)}>
+        <Tabs
+          value={tab}
+          onValueChange={(value) => setTab(value as ProfileTab)}
+          aria-busy={switchingTab || undefined}
+        >
           {/* On phones the labels alone fit; the icons come back from sm up. */}
           <TabsList className="h-9 w-full sm:w-fit max-sm:[&_svg]:hidden">
             <TabsTrigger value="account" data-testid="profile-tab-account">
@@ -569,7 +582,7 @@ export function ProfileView({
                         onClick={topUp}
                       >
                         {busy === "Top up" ? <Loader2Icon className="animate-spin" /> : <DropletIcon />}
-                        Top up with test XLM
+                        {busy === "Top up" ? "Topping up…" : "Top up with test XLM"}
                       </Button>
                     ) : null}
                     {!IS_MAINNET && identity.kind === "wallet" ? (
@@ -581,7 +594,7 @@ export function ProfileView({
                         onClick={fund}
                       >
                         {busy === "Friendbot" ? <Loader2Icon className="animate-spin" /> : <DropletIcon />}
-                        Fund with Friendbot
+                        {busy === "Friendbot" ? "Funding…" : "Fund with Friendbot"}
                       </Button>
                     ) : null}
                     {identity.kind === "wallet" && wallet.walletAddress === null ? (
@@ -602,7 +615,7 @@ export function ProfileView({
                       })}
                     >
                       {busy === "Refresh" ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
-                      Refresh
+                      {busy === "Refresh" ? "Refreshing…" : "Refresh"}
                     </Button>
                     <a
                       href={expertAddressUrl(address)}

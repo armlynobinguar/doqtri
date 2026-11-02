@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { CheckIcon, Loader2Icon, PlugIcon, RefreshCwIcon, TriangleAlertIcon, UnplugIcon } from "lucide-react";
 import { toast } from "sonner";
+import { QditMark } from "@/components/brand/qdit-mark";
 import { Button } from "@/components/ui/button";
 import { StatusTag } from "@/components/ui/status-tag";
 import {
@@ -99,11 +100,19 @@ export function ConnectedApps({ data }: { data: ConnectedAppsData }) {
 
       <div className="grid gap-2.5 rounded-xl border border-[var(--glass-lo)] px-3 py-3" data-testid="connected-app-qdit">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="min-w-0">
-            <p className="text-[14px] font-medium">qdit</p>
-            <p className="text-muted-foreground text-[12px]">
-              Link plans to qdit projects, and create milestones from headings.
-            </p>
+          <div className="flex min-w-0 items-center gap-3">
+            <span
+              aria-hidden
+              className="grid size-10 shrink-0 place-items-center rounded-xl border border-[var(--glass-lo)] bg-[var(--glass)] shadow-[inset_0_1px_0_0_var(--glass-hi)]"
+            >
+              <QditMark className="size-6" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[14px] font-medium">qdit</p>
+              <p className="text-muted-foreground text-[12px]">
+                Link plans to qdit projects, and create milestones from headings.
+              </p>
+            </div>
           </div>
           <StatusTag
             tone={status === "connected" ? "verified" : status === "needs_reconnect" ? "warning" : "planned"}

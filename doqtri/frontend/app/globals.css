@@ -209,6 +209,32 @@ html[data-reduce-motion] *::after {
   scroll-behavior: auto !important;
 }
 
+/*
+ * Press feedback that does not move. The macOS/iOS "Reduce motion" setting
+ * and the one above zero out transitions and the buttons' 1px press nudge, so
+ * a press has to read as a change of tone instead: everything you can press
+ * dims while it is held. Instant, so it shows with motion off too.
+ */
+:where(
+    button,
+    a[href],
+    summary,
+    [role="button"],
+    [role="tab"],
+    [role="menuitem"],
+    [role="option"],
+    [role="switch"],
+    [role="checkbox"]
+  ):not(:disabled, [aria-disabled="true"], [data-disabled]):active {
+  filter: brightness(0.78);
+}
+@media (prefers-reduced-motion: reduce) {
+  /* The press nudge is motion; the dimming above stands in for it. */
+  [data-slot="button"]:active {
+    translate: none !important;
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

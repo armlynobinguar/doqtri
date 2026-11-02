@@ -6,6 +6,7 @@ import {
   FileTextIcon,
   ChevronDownIcon,
   LinkIcon,
+  Link2OffIcon,
   UploadIcon,
   FilePlusIcon,
   Loader2Icon,
@@ -15,9 +16,9 @@ import {
   TriangleAlertIcon,
   XIcon,
 } from "lucide-react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { StatusTag } from "@/components/ui/status-tag";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -69,6 +70,32 @@ export function FileExplorer({
   deletingId?: string | null;
   onRenameNote?: (note: NoteSummary) => void;
 }) {
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+
+  // Split by whether the ledger has the note. Until the ledger answers (or if
+  // it cannot be reached) `anchoredIds` is undefined and the list stays whole,
+  // rather than showing every note as off-chain and then reshuffling.
+  const sections: Section[] = anchoredIds
+    ? [
+        {
+          key: "onchain",
+          label: "On-chain",
+          tone: "onchain",
+          notes: notes.filter((note) => anchoredIds.has(note.id)),
+          empty: "Nothing anchored yet.",
+          hint: "Anchored on Stellar. These notes can be renamed, but their on-chain record cannot be deleted.",
+        },
+        {
+          key: "offchain",
+          label: "Off-chain",
+          tone: "offchain",
+          notes: notes.filter((note) => !anchoredIds.has(note.id)),
+          empty: "Every note is anchored.",
+          hint: "Saved in your vault only. Anchor a note to put a record of it on Stellar.",
+        },
+      ]
+    : [{ key: "all", label: "Notes", tone: "plain", notes }];
+
   return (
     <aside className="bg-sidebar flex h-full min-h-0 flex-col">
       <header className="border-border flex h-10 shrink-0 pointer-coarse:h-12 items-center justify-between gap-1 border-b pr-1.5 pl-3">
@@ -118,58 +145,34 @@ export function FileExplorer({
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="pb-4">
-          <div className="text-sidebar-foreground/80 flex items-center gap-1.5 px-3 pt-3 pb-1.5 text-[13px]">
-            <ChevronDownIcon className="text-label size-3 shrink-0" strokeWidth={1.5} />
-            <span className="eyebrow truncate">Notes</span>
-            <span className="text-label ml-auto pr-1 text-[11px] tabular-nums">
-              {notes.length}
-            </span>
-          </div>
-
           {notes.length === 0 ? (
-            <p className="text-label px-3 py-2 text-[12px] leading-relaxed">
-              No notes yet. Create a note or upload a document.
-            </p>
+            <>
+              <SectionHeading label="Notes" count={0} />
+              <p className="text-label px-3 py-2 text-[12px] leading-relaxed">
+                No notes yet. Create a note or upload a document.
+              </p>
+            </>
           ) : (
-            <ul>
-              {notes.map((note) => {
-                const isActive = note.id === activeId;
-                const anchored = anchoredIds?.has(note.id) ?? false;
-                return (
-                  <li
+            sections.map((section) => (
+              <NoteSection
+                key={section.key}
+                section={section}
+                collapsed={collapsed[section.key] ?? false}
+                onToggle={() => setCollapsed((prev) => ({ ...prev, [section.key]: !prev[section.key] }))}
+              >
+                {section.notes.map((note) => (
+                  <NoteRow
                     key={note.id}
-                    className={cn(
-                      "group mx-2 my-px flex items-center rounded-lg border pr-1 text-[13px] transition-colors pointer-coarse:text-[15px]",
-                      // The active note is a raised glass row, lit from above.
-                      isActive
-                        ? "bg-sidebar-accent text-sidebar-accent-foreground border-[var(--glass-lo)] shadow-[inset_0_1px_0_0_var(--glass-hi)]"
-                        : "text-sidebar-foreground border-transparent hover:bg-[var(--glass)] hover:text-foreground",
-                    )}
-                  >
-                    <NavLink
-                      href={`/vault/${note.id}`}
-                      aria-current={isActive ? "page" : undefined}
-                      className="flex min-w-0 flex-1 items-center gap-2 py-[5px] pl-2.5 pointer-coarse:gap-3 pointer-coarse:py-3"
-                    >
-                      <FileTextIcon
-                        className={cn("size-3.5 shrink-0", isActive ? "text-foreground" : "opacity-60")}
-                        strokeWidth={1.5}
-                      />
-                      <span className="truncate">{note.title}</span>
-                    </NavLink>
-                    {onRenameNote && canCreate ? (
-                      <RenameRowAction note={note} onRename={onRenameNote} />
-                    ) : null}
-                    <NoteRowAction
-                      note={note}
-                      anchored={anchored}
-                      deleting={deletingId === note.id}
-                      onDelete={canCreate ? onDeleteNote : undefined}
-                    />
-                  </li>
-                );
-              })}
-            </ul>
+                    note={note}
+                    isActive={note.id === activeId}
+                    anchored={anchoredIds?.has(note.id) ?? false}
+                    deleting={deletingId === note.id}
+                    onRename={onRenameNote && canCreate ? onRenameNote : undefined}
+                    onDelete={canCreate ? onDeleteNote : undefined}
+                  />
+                ))}
+              </NoteSection>
+            ))
           )}
 
           {failedImports.length > 0 && onRetryImport ? (
@@ -178,6 +181,151 @@ export function FileExplorer({
         </div>
       </ScrollArea>
     </aside>
+  );
+}
+
+type Section = {
+  key: string;
+  label: string;
+  tone: "onchain" | "offchain" | "plain";
+  notes: NoteSummary[];
+  /** Shown in place of rows when the section has none. */
+  empty?: string;
+  /** What the section means, on the heading's tooltip. */
+  hint?: string;
+};
+
+function SectionHeading({
+  label,
+  count,
+  tone = "plain",
+  collapsed,
+  onToggle,
+  hint,
+}: {
+  label: string;
+  count: number;
+  tone?: Section["tone"];
+  collapsed?: boolean;
+  onToggle?: () => void;
+  hint?: string;
+}) {
+  const Icon = tone === "onchain" ? LinkIcon : tone === "offchain" ? Link2OffIcon : null;
+  const body = (
+    <>
+      <ChevronDownIcon
+        aria-hidden
+        className={cn("text-label size-3 shrink-0 transition-transform", collapsed && "-rotate-90")}
+        strokeWidth={1.5}
+      />
+      {Icon ? (
+        <Icon
+          aria-hidden
+          className={cn("size-3 shrink-0", tone === "onchain" ? "text-onchain" : "text-label")}
+          strokeWidth={1.75}
+        />
+      ) : null}
+      <span className="eyebrow truncate">{label}</span>
+      <span className="text-label ml-auto pr-1 text-[11px] tabular-nums">{count}</span>
+    </>
+  );
+  const className =
+    "text-sidebar-foreground/80 flex w-full items-center gap-1.5 px-3 pt-3 pb-1.5 text-[13px]";
+  if (!onToggle) return <div className={className}>{body}</div>;
+
+  const button = (
+    <button
+      type="button"
+      aria-expanded={!collapsed}
+      onClick={onToggle}
+      className={cn(
+        className,
+        "hover:text-foreground focus-visible:ring-ring rounded-md text-left focus-visible:ring-1 focus-visible:outline-hidden focus-visible:ring-inset pointer-coarse:py-3",
+      )}
+    >
+      {body}
+    </button>
+  );
+  if (!hint) return button;
+  return (
+    <Tooltip>
+      <TooltipTrigger render={button} />
+      <TooltipContent side="right" className="max-w-[260px]">
+        {hint}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function NoteSection({
+  section,
+  collapsed,
+  onToggle,
+  children,
+}: {
+  section: Section;
+  collapsed: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <section aria-label={`${section.label} notes`} data-testid={`notes-${section.key}`}>
+      <SectionHeading
+        label={section.label}
+        count={section.notes.length}
+        tone={section.tone}
+        collapsed={collapsed}
+        onToggle={onToggle}
+        hint={section.hint}
+      />
+      {collapsed ? null : section.notes.length === 0 ? (
+        section.empty ? <p className="text-label px-3 pt-0.5 pb-2 pl-8 text-[12px]">{section.empty}</p> : null
+      ) : (
+        <ul>{children}</ul>
+      )}
+    </section>
+  );
+}
+
+function NoteRow({
+  note,
+  isActive,
+  anchored,
+  deleting,
+  onRename,
+  onDelete,
+}: {
+  note: NoteSummary;
+  isActive: boolean;
+  anchored: boolean;
+  deleting: boolean;
+  onRename?: (note: NoteSummary) => void;
+  onDelete?: (note: NoteSummary) => void;
+}) {
+  return (
+    <li
+      className={cn(
+        "group mx-2 my-px flex items-center rounded-lg border pr-1 text-[13px] transition-colors pointer-coarse:text-[15px]",
+        // The active note is a raised glass row, lit from above.
+        isActive
+          ? "bg-sidebar-accent text-sidebar-accent-foreground border-[var(--glass-lo)] shadow-[inset_0_1px_0_0_var(--glass-hi)]"
+          : "text-sidebar-foreground border-transparent hover:bg-[var(--glass)] hover:text-foreground",
+      )}
+    >
+      <NavLink
+        href={`/vault/${note.id}`}
+        aria-current={isActive ? "page" : undefined}
+        className="flex min-w-0 flex-1 items-center gap-2 py-[5px] pl-2.5 pointer-coarse:gap-3 pointer-coarse:py-3"
+      >
+        <FileTextIcon
+          className={cn("size-3.5 shrink-0", isActive ? "text-foreground" : "opacity-60")}
+          strokeWidth={1.5}
+        />
+        <span className="truncate">{note.title}</span>
+      </NavLink>
+      {onRename ? <RenameRowAction note={note} onRename={onRename} /> : null}
+      <NoteRowAction note={note} anchored={anchored} deleting={deleting} onDelete={onDelete} />
+    </li>
   );
 }
 
@@ -290,6 +438,8 @@ function NoteRowAction({
   onDelete?: (note: NoteSummary) => void;
 }) {
   if (anchored) {
+    // The section heading already says "On-chain"; this only explains, on
+    // hover, why the row has no delete. Touch has no hover, so it is left out.
     return (
       <Tooltip>
         {/* A span, not a disabled button: a disabled button swallows the
@@ -298,12 +448,9 @@ function NoteRowAction({
           render={<span />}
           role="img"
           aria-label={`${note.title} is anchored on Stellar and cannot be deleted`}
-          className="flex shrink-0 items-center"
+          className="text-onchain flex size-6 shrink-0 items-center justify-center opacity-0 transition-opacity group-hover:opacity-100 pointer-coarse:hidden"
         >
-          <StatusTag tone="onchain" className="px-1.5 py-[3px] text-[10px]">
-            <LinkIcon strokeWidth={2} />
-            On-chain
-          </StatusTag>
+          <LinkIcon className="size-3.5" strokeWidth={1.75} />
         </TooltipTrigger>
         <TooltipContent side="right" className="max-w-[260px]">
           Anchored on Stellar. The on-chain record cannot be deleted, so this

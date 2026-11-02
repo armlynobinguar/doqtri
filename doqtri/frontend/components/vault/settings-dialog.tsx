@@ -63,8 +63,8 @@ export function SettingsDialog({
 
         <p className="text-muted-foreground text-[12px]">
           {wallet
-            ? "Balance, reconnect, and disconnect are in the account menu at the bottom right of the status bar."
-            : "Sign out is in the account menu at the bottom right of the status bar."}
+            ? "Balance, reconnect and Log out are in the account menu: the profile button at the bottom of the left bar."
+            : "Log out is in the account menu: the profile button at the bottom of the left bar."}
         </p>
       </DialogContent>
     </Dialog>

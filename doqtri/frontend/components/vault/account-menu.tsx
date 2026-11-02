@@ -3,6 +3,7 @@
 import { useState } from "react";
 import {
   ArrowLeftRightIcon,
+  CheckIcon,
   CopyIcon,
   DropletIcon,
   ExternalLinkIcon,
@@ -26,7 +27,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useNavigate } from "@/components/vault/navigation";
 import { useWallet } from "@/components/vault/wallet-provider";
+import { qditIntegrationEnabled } from "@/lib/integrations/qdit-config";
 import { expertContractUrl, IS_MAINNET, MARKET_CONTRACT_ID } from "@/lib/stellar/config";
 import { PasskeysDialog } from "@/components/vault/passkeys-dialog";
 import { USER_PAYS_FEES } from "@/lib/stellar/smart-wallet-config";
@@ -41,11 +45,37 @@ function formatXlm(value: number): string {
   return value.toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 }
 
+/** The account pages the menu links to; the current one is ticked. */
+export type AccountPage = "profile" | "members" | "apps";
+
+type Placement = {
+  side: "top" | "right" | "bottom" | "left";
+  align: "start" | "center" | "end";
+};
+
 /**
- * The vault's account surface, in the status bar: which wallet owns the vault,
- * whether it is connected, what it can spend, and the one place to disconnect.
+ * How the menu is opened: the profile icon at the foot of the desktop ribbon,
+ * or the ringed avatar in the phone's top bar. Both open the same popover.
  */
-export function AccountMenu({ className }: { className?: string }) {
+type Variant = "icon" | "avatar";
+
+/**
+ * The vault's account surface: one popover with the account pages (profile,
+ * members, connected apps), the wallet and its balance, and the only Log out.
+ */
+export function AccountMenu({
+  className,
+  side = "top",
+  align = "start",
+  current,
+  variant = "icon",
+}: {
+  className?: string;
+  side?: Placement["side"];
+  align?: Placement["align"];
+  current?: AccountPage;
+  variant?: Variant;
+}) {
   const wallet = useWallet();
   const [busy, setBusy] = useState(false);
   const { sessionAddress, walletAddress, mismatch, balance, balanceError } = wallet;
@@ -54,6 +84,10 @@ export function AccountMenu({ className }: { className?: string }) {
     return (
       <EmailAccountMenu
         className={className}
+        side={side}
+        align={align}
+        current={current}
+        variant={variant}
         email={wallet.identity.email}
         smartWallet={wallet.identity.smartWallet}
       />
@@ -86,33 +120,15 @@ export function AccountMenu({ className }: { className?: string }) {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger
-        aria-label="Account"
-        data-testid="account-menu"
-        className={cn(
-          "hover:text-foreground focus-visible:ring-ring -mr-1.5 flex h-5 items-center gap-1.5 rounded px-1.5 tabular-nums focus-visible:ring-1 focus-visible:outline-hidden",
-          className,
-        )}
-      >
-        <span
-          aria-hidden
-          className={cn(
-            "size-1.5 shrink-0 rounded-full",
-            connected ? "bg-success shadow-[0_0_6px_var(--success)]" : "bg-warning",
-          )}
-        />
-        <span className="shrink-0 font-mono">{shortenAddress(sessionAddress)}</span>
-        <span aria-hidden className="shrink-0">·</span>
-        {/* Truncates rather than overflowing where space is tight (the phone drawer). */}
-        <span
-          data-testid="xlm-balance"
-          className={cn("min-w-0 truncate", (low || unfunded || balanceError) && "text-warning")}
-        >
-          {balanceLabel}
-        </span>
-      </DropdownMenuTrigger>
+      <AccountTrigger
+        variant={variant}
+        className={className}
+        label={`Account: ${shortenAddress(sessionAddress)}, ${balanceLabel}`}
+        tone={connected ? "ok" : "warn"}
+        active={current !== undefined}
+      />
 
-      <DropdownMenuContent side="top" align="end" className="w-64 text-[13px]">
+      <DropdownMenuContent side={side} align={align} className="w-64 text-[13px]">
         <DropdownMenuGroup>
           <DropdownMenuLabel>
             Vault wallet · {IS_MAINNET ? "Mainnet" : "Testnet"}
@@ -128,22 +144,24 @@ export function AccountMenu({ className }: { className?: string }) {
             <span className="font-mono">{shortenAddress(sessionAddress)}</span>
             <span className="text-muted-foreground ml-auto text-[11px]">copy</span>
           </DropdownMenuItem>
-          <ProfileItem />
-          <MembersItem />
         </DropdownMenuGroup>
+
+        <DropdownMenuSeparator />
+        <PageItems current={current} />
+        <DropdownMenuSeparator />
 
         <DropdownMenuGroup>
           <DropdownMenuLabel>Balance</DropdownMenuLabel>
           <div className="grid gap-0.5 px-1.5 pb-1 text-[12px]">
             {balance?.funded ? (
               <>
-                <span>{formatXlm(balance.balance)} XLM total</span>
+                <span data-testid="xlm-balance">{formatXlm(balance.balance)} XLM total</span>
                 <span className={cn("text-muted-foreground", low && "text-warning")}>
                   {formatXlm(balance.spendable)} XLM spendable after reserve
                 </span>
               </>
             ) : (
-              <span className="text-warning">
+              <span className="text-warning" data-testid="xlm-balance">
                 {balanceError
                   ? "Could not reach Horizon."
                   : unfunded
@@ -173,54 +191,57 @@ export function AccountMenu({ className }: { className?: string }) {
           ) : null}
         </DropdownMenuGroup>
 
-        <DropdownMenuSeparator />
+        {walletAddress === null || mismatch ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              {walletAddress === null ? (
+                <DropdownMenuItem disabled={busy} onClick={() => void act("Reconnect", wallet.reconnect)}>
+                  <PlugIcon />
+                  Reconnect wallet
+                </DropdownMenuItem>
+              ) : (
+                <>
+                  <DropdownMenuLabel className="text-warning">
+                    Wallet is on {shortenAddress(walletAddress)}
+                  </DropdownMenuLabel>
+                  <DropdownMenuItem disabled={busy} onClick={() => void act("Switch", wallet.switchVault)}>
+                    <ArrowLeftRightIcon />
+                    Switch vault to {shortenAddress(walletAddress)}
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuGroup>
+          </>
+        ) : null}
 
-        <DropdownMenuGroup>
-          {walletAddress === null ? (
-            <DropdownMenuItem disabled={busy} onClick={() => void act("Reconnect", wallet.reconnect)}>
-              <PlugIcon />
-              Reconnect wallet
-            </DropdownMenuItem>
-          ) : mismatch ? (
-            <>
-              <DropdownMenuLabel className="text-warning">
-                Wallet is on {shortenAddress(walletAddress)}
-              </DropdownMenuLabel>
-              <DropdownMenuItem disabled={busy} onClick={() => void act("Switch", wallet.switchVault)}>
-                <ArrowLeftRightIcon />
-                Switch vault to {shortenAddress(walletAddress)}
-              </DropdownMenuItem>
-            </>
-          ) : null}
-          <DropdownMenuItem
-            variant="destructive"
-            disabled={busy}
-            onClick={() => void act("Disconnect", wallet.disconnect)}
-          >
-            <LogOutIcon />
-            Disconnect
-          </DropdownMenuItem>
-        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <LogOutItem />
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
 /**
- * Email accounts: who is signed in, their passkey wallet (or the way to create
- * one), and the way out. No balance: the relay pays every fee.
+ * Email accounts: who is signed in and their passkey wallet (or the way to
+ * create one). No balance: the relay pays every fee.
  */
 function EmailAccountMenu({
   email,
   smartWallet,
   className,
+  side,
+  align,
+  current,
+  variant,
 }: {
   email: string;
   smartWallet: { address: string; passkeys: unknown[] } | null;
   className?: string;
-}) {
+  current?: AccountPage;
+  variant: Variant;
+} & Placement) {
   const wallet = useWallet();
-  const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
   const [passkeysOpen, setPasskeysOpen] = useState(false);
   const [toppingUp, setToppingUp] = useState(false);
@@ -249,40 +270,28 @@ function EmailAccountMenu({
     }
   }
 
-  async function signOut() {
-    setBusy(true);
-    try {
-      await wallet.signOut();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Sign out failed");
-      setBusy(false);
-    }
-  }
-
   return (
     <>
       <DropdownMenu>
-        <DropdownMenuTrigger
-          aria-label="Account"
-          data-testid="account-menu"
-          className={cn(
-            "hover:text-foreground focus-visible:ring-ring -mr-1.5 flex h-5 max-w-56 items-center gap-1.5 rounded px-1.5 focus-visible:ring-1 focus-visible:outline-hidden",
-            className,
-          )}
-        >
-          <span aria-hidden className="bg-success size-1.5 shrink-0 rounded-full shadow-[0_0_6px_var(--success)]" />
-          <span className="truncate">{email}</span>
-        </DropdownMenuTrigger>
+        <AccountTrigger
+          variant={variant}
+          className={className}
+          label={`Account: ${email}`}
+          tone="ok"
+          active={current !== undefined}
+        />
 
-        <DropdownMenuContent side="top" align="end" className="w-64 text-[13px]">
+        <DropdownMenuContent side={side} align={align} className="w-64 text-[13px]">
           <DropdownMenuGroup>
             <DropdownMenuLabel>Signed in with email</DropdownMenuLabel>
             <div className="truncate px-1.5 pb-1 text-[12px]" title={email}>
               {email}
             </div>
-            <ProfileItem />
-            <MembersItem />
           </DropdownMenuGroup>
+
+          <DropdownMenuSeparator />
+          <PageItems current={current} />
+          <DropdownMenuSeparator />
 
           <DropdownMenuGroup>
             <DropdownMenuLabel>Passkey wallet · {IS_MAINNET ? "Mainnet" : "Testnet"}</DropdownMenuLabel>
@@ -354,11 +363,7 @@ function EmailAccountMenu({
           </DropdownMenuGroup>
 
           <DropdownMenuSeparator />
-
-          <DropdownMenuItem variant="destructive" disabled={busy} onClick={() => void signOut()}>
-            <LogOutIcon />
-            Sign out
-          </DropdownMenuItem>
+          <LogOutItem />
         </DropdownMenuContent>
       </DropdownMenu>
       <PasskeysDialog open={passkeysOpen} onOpenChange={setPasskeysOpen} />
@@ -378,24 +383,138 @@ function EarningsItem() {
   );
 }
 
-/** Who is in each workspace, invites and on-chain roles (WP-1.5). */
-function MembersItem() {
-  const router = useRouter();
+/**
+ * What opens the menu: the ribbon's profile icon (desktop) or the top bar's
+ * ringed avatar (phones), each with the wallet's state as a dot on its rim.
+ */
+function AccountTrigger({
+  variant,
+  className,
+  label,
+  tone,
+  active,
+}: {
+  variant: Variant;
+  className?: string;
+  label: string;
+  tone: "ok" | "warn";
+  /** On an account page: the avatar shows as current. The ribbon styles its own. */
+  active: boolean;
+}) {
+  if (variant === "avatar") {
+    return (
+      <DropdownMenuTrigger
+        aria-label={label}
+        data-testid="mobile-profile"
+        className={cn(
+          "group focus-visible:ring-ring flex size-10 shrink-0 items-center justify-center rounded-lg focus-visible:ring-1 focus-visible:outline-hidden",
+          className,
+        )}
+      >
+        {/* Ringed, so it reads as "you" rather than as one more tool icon. */}
+        <span
+          className={cn(
+            "relative flex size-8 items-center justify-center rounded-full border transition-colors",
+            active
+              ? "text-foreground border-[var(--glass-hi)] bg-[var(--glass-strong)] shadow-[inset_0_1px_0_0_var(--glass-hi)]"
+              : "text-sidebar-foreground border-[var(--glass-lo)] bg-[var(--glass)] group-hover:text-foreground group-aria-expanded:text-foreground",
+          )}
+        >
+          <UserRoundIcon className="size-[18px]" strokeWidth={1.5} />
+          <StatusDot tone={tone} className="-right-0.5 -bottom-0.5 size-2.5" />
+        </span>
+      </DropdownMenuTrigger>
+    );
+  }
   return (
-    <DropdownMenuItem data-testid="open-members" onClick={() => router.push("/vault/workspace/members")}>
-      <UsersIcon />
-      Workspace members
-    </DropdownMenuItem>
+    <Tooltip>
+      <TooltipTrigger
+        render={<DropdownMenuTrigger />}
+        aria-label={label}
+        data-testid="ribbon-profile"
+        className={className}
+      >
+        <span className="relative flex">
+          <UserRoundIcon className="size-[17px]" strokeWidth={1.5} />
+          <StatusDot tone={tone} className="-right-1 -bottom-0.5 size-2" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="right">Account</TooltipContent>
+    </Tooltip>
   );
 }
 
-/** Account details, the wallet, recent on-chain activity and display settings. */
-function ProfileItem() {
-  const router = useRouter();
+/** Green when the wallet can sign, amber when it needs attention. */
+function StatusDot({ tone, className }: { tone: "ok" | "warn"; className?: string }) {
   return (
-    <DropdownMenuItem data-testid="open-profile" onClick={() => router.push("/vault/profile")}>
-      <UserRoundIcon />
-      Profile, wallet &amp; settings
+    <span
+      aria-hidden
+      className={cn(
+        "ring-sidebar pointer-events-none absolute rounded-full ring-2",
+        tone === "ok" ? "bg-success" : "bg-warning",
+        className,
+      )}
+    />
+  );
+}
+
+/** Profile, members and (with the qdit integration on) connected apps. */
+function PageItems({ current }: { current?: AccountPage }) {
+  const navigate = useNavigate();
+  const pages: { id: AccountPage; href: string; label: string; Icon: typeof UserRoundIcon; testId: string }[] = [
+    { id: "profile", href: "/vault/profile", label: "Profile & settings", Icon: UserRoundIcon, testId: "open-profile" },
+    { id: "members", href: "/vault/workspace/members", label: "Workspace members", Icon: UsersIcon, testId: "open-members" },
+    ...(qditIntegrationEnabled()
+      ? [{ id: "apps" as const, href: "/vault/profile?tab=apps", label: "Connected apps", Icon: PlugIcon, testId: "open-apps" }]
+      : []),
+  ];
+  return (
+    <DropdownMenuGroup>
+      {pages.map(({ id, href, label, Icon, testId }) => (
+        <DropdownMenuItem
+          key={id}
+          data-testid={testId}
+          aria-current={current === id ? "page" : undefined}
+          onClick={() => navigate(href)}
+        >
+          <Icon />
+          {label}
+          {current === id ? <CheckIcon className="text-muted-foreground ml-auto" aria-hidden /> : null}
+        </DropdownMenuItem>
+      ))}
+    </DropdownMenuGroup>
+  );
+}
+
+/**
+ * The one way out. Wallet accounts also drop the wallet connection
+ * (`disconnect`); email accounts only end the session. Stays open while it
+ * works, so the press visibly answers.
+ */
+function LogOutItem() {
+  const wallet = useWallet();
+  const [busy, setBusy] = useState(false);
+
+  async function logOut() {
+    setBusy(true);
+    try {
+      await (wallet.identity.kind === "wallet" ? wallet.disconnect() : wallet.signOut());
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Log out failed");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <DropdownMenuItem
+      variant="destructive"
+      disabled={busy}
+      closeOnClick={false}
+      data-testid="log-out"
+      onClick={() => void logOut()}
+    >
+      {busy ? <Loader2Icon className="animate-spin" /> : <LogOutIcon />}
+      {busy ? "Logging out…" : "Log out"}
     </DropdownMenuItem>
   );
 }

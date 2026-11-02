@@ -1,3 +1,4 @@
+import { ChevronRightIcon } from "lucide-react";
 import { StatusTag } from "@/components/ui/status-tag";
 import { expertTxUrl } from "@/lib/stellar/config";
 import type { DocumentHistory, PendingChainWrite } from "@/lib/stellar/history";
@@ -38,14 +39,33 @@ export function hasVersionHistory(history: VersionList | null): history is Versi
   return history != null && (history.versions.length > 0 || pendingVersions(history.pending).length > 0);
 }
 
-export function VersionHistory({ history }: { history: VersionList }) {
+export function VersionHistory({
+  history,
+  current = null,
+}: {
+  history: VersionList;
+  /** The ledger's current version, shown on the summary line. */
+  current?: number | null;
+}) {
   const versions = [...history.versions].reverse();
   const pending = pendingVersions(history.pending).reverse();
   return (
-    <details className="text-[11px]">
-      <summary className="text-muted-foreground cursor-pointer select-none">
-        Version history ({history.versions.length}
-        {pending.length ? `, ${pending.length} pending` : ""})
+    <details className="group/history text-[11px]">
+      <summary className="text-muted-foreground hover:text-foreground flex cursor-pointer list-none items-center gap-1.5 select-none [&::-webkit-details-marker]:hidden">
+        <ChevronRightIcon
+          aria-hidden
+          className="size-3 shrink-0 group-open/history:rotate-90"
+          strokeWidth={1.75}
+        />
+        <span className="min-w-0 flex-1 truncate">
+          Version history ({history.versions.length}
+          {pending.length ? `, ${pending.length} pending` : ""})
+        </span>
+        {current != null ? (
+          <StatusTag tone="onchain" className="font-mono" title="Current version on the ledger">
+            v{current}
+          </StatusTag>
+        ) : null}
       </summary>
       <ol className="mt-1.5 grid gap-1">
         {pending.map((p) => (
