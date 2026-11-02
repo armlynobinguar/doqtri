@@ -11,7 +11,9 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test --project=chromium --project=mobile",
     "shots": "playwright test --project=shots",
-    "walkthrough": "playwright test --project=walkthrough"
+    "walkthrough": "playwright test --project=walkthrough",
+    "load:paid-writes": "vitest run --config scripts/load-test/vitest.config.mts paid-writes",
+    "load:smoke": "vitest run --config scripts/load-test/vitest.config.mts smoke"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
