@@ -482,3 +482,48 @@ describe("step timings (RELAY_TIMING, DOQ-8)", () => {
     expect(pool.released).toEqual([{ idx: channelIdx, leaseId, nextSeq: BigInt(501) }]);
   });
 });
+
+describe("the relayer's testnet funding check (DOQ-8)", () => {
+  async function submitWith(ensureFunded: (publicKey: string) => Promise<void>) {
+    const chain = fakeChain();
+    fakes.server = chain.server;
+    const { submitPaidWrite } = await load();
+    const func = forwardCall();
+    const pool = memoryPool();
+    const result = await submitPaidWrite(func, walletEntry(func), BigInt(100_000), {
+      server: chain.server as never,
+      pool: pool.store,
+      ensureFunded,
+      now: chain.now,
+      sleep: chain.sleep,
+    });
+    return { result, pool };
+  }
+
+  it("still runs for a pooled write, with the relayer's key", async () => {
+    const checked: string[] = [];
+    await submitWith(async (publicKey) => void checked.push(publicKey));
+    expect(checked).toEqual([relayer.publicKey()]);
+  });
+
+  it("doesn't hold the write: one that never answers still lets it land and release", async () => {
+    const { result, pool } = await submitWith(() => new Promise<void>(() => {}));
+    expect(result.status).toBe("confirmed");
+    expect(pool.released).toEqual([{ idx: channelIdx, leaseId, nextSeq: BigInt(502) }]);
+  });
+
+  it("can't fail the write", async () => {
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const { result } = await submitWith(async () => {
+        throw new Error("horizon down");
+      });
+      expect(result.status).toBe("confirmed");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+});

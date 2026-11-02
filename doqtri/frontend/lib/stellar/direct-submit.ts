@@ -323,9 +323,16 @@ async function leaseAndSend(
 ): Promise<PaidWriteResult> {
   const server = timer.rpc(deps.server ?? new rpc.Server(RPC_URL));
   const sleep = deps.sleep ?? defaultSleep;
-  // The relayer still collects fee_amount and is still kept topped up on
-  // testnet; channels pay their network fees from what they were seeded with.
-  await timer.span("funded", () => (deps.ensureFunded ?? ensureRelayerFunded)(relayer.publicKey()));
+  // The relayer is still kept topped up on testnet, but a pooled write never
+  // spends its XLM: channels pay the network fees from what they were seeded
+  // with, and the relayer only receives fee_amount. So the check runs beside
+  // the write, not in front of it (DOQ-8): it held the first write on each
+  // server every 5 minutes for a Horizon round trip (~0.9 s), longer when it
+  // called Friendbot. Untimed, as it no longer adds to the write's time.
+  // ensureRelayerFunded never throws; a stand-in that does is caught here.
+  void Promise.resolve()
+    .then(() => (deps.ensureFunded ?? ensureRelayerFunded)(relayer.publicKey()))
+    .catch(() => undefined);
 
   const pool = timer.pool(deps.pool ?? supabaseChannelPoolStore(createSupabaseAdminClient()));
   const lease = await timer.span("lease", () => leaseChannel(pool, { network: NETWORK, seed, now, sleep }));
