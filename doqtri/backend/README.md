@@ -427,6 +427,60 @@ select count(*) from public.integration_connections
  where provider = 'qdit' and status = 'needs_reconnect' and updated_at > now() - interval '1 hour';
 ```
 
+## Relay pool operations
+
+With `RELAY_POOL=on`, each user-paid write leases one row of `relay_channels`
+(a channel account) for as long as it takes to submit and confirm, then gives
+it back (`frontend/lib/stellar/channel-pool.ts`). A request that finds every
+channel leased asks again every 500 ms and gets a 503 with `Retry-After: 5`
+after 20 s.
+
+### Runbook: how many channels (DOQ-8)
+
+Size the pool from how long a write holds its channel (H, lease to release).
+Measured on 2 Nov 2026 (local stack, public testnet RPC, 40 channels, 205
+writes): a single write held it 3.3 to 8.5 s (five runs; where in the 5 s
+ledger cycle it was sent decides most of that), and 30 writes at once held
+theirs p50 7.4 s, p95 10.3 s, max 10.9 s. Most of H is the ledger (one closes every 5 s) and RPC
+round trips; leasing and releasing take about 10 ms each. On 1 Nov the same
+code held about 15 to 20 s per write because the public RPC answered slowly.
+
+A burst of B writes on C channels runs in waves of C. Wave k waits about
+k × H for a channel and answers after about (k + 1) × H:
+
+| Channels for a burst of B | What happens |
+| --- | --- |
+| C ≥ B | One wave: every write answers in about H (p50 7.5 s at 30 writes) |
+| B/2 ≤ C < B | The second wave answers after about 2H (15 to 21 s). With a slow RPC (H near 20 s) it passes the 20 s lease wait and gets 503s. That happened on 1 Nov: 100 writes on 40 channels, 80 served, 20 × 503. |
+| C < B/2 | 503s on any day |
+
+So:
+
+- **Keep C at about 1.25 × the largest burst you expect, and never below it.**
+  40 channels (today) cover a 30-write burst. For 40 at once, seed 50.
+- **About 50 is the useful ceiling on testnet.** A ledger takes at most 580M
+  instructions and one paid write uses about 10.2M, so about 57 fit, shared
+  with everyone else's traffic. Past that, more channels don't land more writes
+  per ledger. Check `ledgerMaxInstructions` and measure H again before sizing
+  the pool for mainnet; there, each channel pays its fees in real XLM.
+- **Steady throughput is C / H:** 40 / 7.4 s ≈ 5.4 writes a second
+  (about 27 per ledger) on a good day, about 2.4 a second with a slow RPC.
+
+To add channels, run `node scripts/seed-relay-channels.mjs --count=<C>` from
+`frontend/` with the deployment's `RELAY_CHANNEL_SEED` (`--dry-run` first).
+
+To measure H again, set `RELAY_TIMING=on` on the deployment and run the load
+test (`frontend/scripts/load-test/README.md`, "Where the time goes"). H is the
+total minus the `funded` and `lease` steps. In the logs:
+
+- `leaseTries` above 1: the pool was full; that write waited for a channel.
+- High `state`, `simulateMeasure`, `simulateCharge` or `send`: the RPC is
+  slow. A dedicated provider (`SOROBAN_RPC_URL`) is the fix, not more
+  channels.
+- `poll` minus `pollAfterCloseMs` is the wait for the ledger; `retryWait`
+  above 0 means the network refused a submission and the write waited a
+  ledger to retry.
+
 ## Known advisory
 
 `get_advisors` reports two `SECURITY DEFINER` warnings for
