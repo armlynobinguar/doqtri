@@ -481,6 +481,40 @@ total minus the `funded` and `lease` steps. In the logs:
   above 0 means the network refused a submission and the write waited a
   ledger to retry.
 
+### Runbook: after a testnet reset
+
+Testnet is reset from time to time, and a reset deletes every account on it:
+the relay channels, the relayer, and every user's testnet smart wallet. The
+`relay_channels` rows survive in the database but point at accounts that no
+longer exist, so with `RELAY_POOL=on` every pooled write fails until the pool
+is reseeded (a leased channel that is missing on-chain answers 503).
+
+1. Set `RELAY_POOL` to off (unset it) in Vercel and redeploy, so paid writes go
+   back to the relayer while you reseed. Friendbot recreates the relayer on its
+   next funding check.
+2. Run the seed script against the deployment's database, from `frontend/`,
+   with that deployment's `NEXT_PUBLIC_SUPABASE_URL` and
+   `SUPABASE_SERVICE_ROLE_KEY`:
+
+   ```bash
+   RELAY_CHANNEL_SEED=<seed> node scripts/seed-relay-channels.mjs --dry-run
+   RELAY_CHANNEL_SEED=<seed> node scripts/seed-relay-channels.mjs
+   ```
+
+   With the same seed it recreates and funds every missing account and keeps
+   the rows. `RELAY_CHANNEL_SEED` is stored as a sensitive variable in Vercel
+   and cannot be read back, so if you no longer have it, generate a new one
+   (`openssl rand -hex 32`), set it in Vercel first, then run the script with
+   it: a new seed re-keys every row to the new accounts instead of adding
+   rows. Rerun it if any channel is reported as skipped (Friendbot was busy).
+3. Check: `select count(*), count(*) filter (where lease_id is not null) from
+   public.relay_channels;` shows every channel, none leased.
+4. Set `RELAY_POOL=on` again and redeploy (a new seed also needs this redeploy
+   to reach the server).
+
+Users' smart wallets and everything anchored before the reset are gone from
+the ledger too. Recovering those is outside this runbook.
+
 ## Known advisory
 
 `get_advisors` reports two `SECURITY DEFINER` warnings for
