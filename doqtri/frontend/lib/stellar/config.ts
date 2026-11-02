@@ -17,9 +17,12 @@ const RAW = {
 } as const;
 
 /** Dashboard values often arrive wrapped in quotes or with a stray newline. */
+function clean(raw: string | undefined): string {
+  return raw?.trim().replace(/^["']|["']$/g, "") ?? "";
+}
+
 function env(name: keyof typeof RAW, fallback: string): string {
-  const raw = RAW[name]?.trim().replace(/^["']|["']$/g, "");
-  return raw || fallback;
+  return clean(RAW[name]) || fallback;
 }
 
 /**
@@ -51,10 +54,38 @@ export const NETWORK_PASSPHRASE = env(
  */
 export const IS_MAINNET = NETWORK_PASSPHRASE === MAINNET_PASSPHRASE;
 
-export const RPC_URL = env(
+/** The RPC the browser talks to: public by construction, it is in the bundle. */
+const PUBLIC_RPC_URL = env(
   "SOROBAN_RPC_URL",
   IS_MAINNET ? "https://mainnet.sorobanrpc.com" : "https://soroban-testnet.stellar.org",
 );
+
+/**
+ * The server's RPC (DOQ-7): SOROBAN_RPC_URL when set, else the public one.
+ * A dedicated provider's URL usually carries its API key, so it lives in a
+ * var without the NEXT_PUBLIC_ prefix, which Next never inlines into a
+ * client bundle.
+ */
+export function serverRpcUrl(serverValue: string | undefined, publicUrl: string): string {
+  return clean(serverValue) || publicUrl;
+}
+
+/**
+ * The Soroban RPC every rpc.Server and contract Client in the app uses. On
+ * the server (API routes, the relay, chain jobs, server components) it
+ * prefers SOROBAN_RPC_URL; in the browser it is always the public URL. The
+ * modules that build clients (contract-client, history, market-reads,
+ * wallet-balance, …) run on both sides, which is why the choice is made
+ * here rather than in a server-only module. Next compiles the
+ * `typeof window` test to a constant, so the server branch is dropped from
+ * client bundles, and even where it is not, the unprefixed var reads as
+ * undefined in the browser. Never pass RPC_URL to a Client Component or put
+ * it in a response: on the server it may hold that key. The SDK's HTTP
+ * errors carry it too, so log a caught RPC error with logError
+ * (lib/log-error.ts), never as a raw object.
+ */
+export const RPC_URL =
+  typeof window === "undefined" ? serverRpcUrl(process.env.SOROBAN_RPC_URL, PUBLIC_RPC_URL) : PUBLIC_RPC_URL;
 
 export const CONTRACT_ID = (() => {
   const id = env("CONTRACT_ID", "");

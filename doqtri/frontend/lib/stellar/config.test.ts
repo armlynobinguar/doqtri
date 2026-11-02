@@ -32,3 +32,62 @@ describe("registry address", () => {
     expect(config.LEGACY_CONTRACT_IDS).toEqual([]);
   });
 });
+
+/*
+ * Which Soroban RPC the app talks to (DOQ-7): the server prefers the
+ * server-only SOROBAN_RPC_URL, which may carry a provider's API key; the
+ * browser only ever sees NEXT_PUBLIC_SOROBAN_RPC_URL or the public default.
+ */
+describe("RPC endpoint", () => {
+  const KEYED = "https://rpc.provider.test/v1/secret-key";
+  const PUBLIC = "https://rpc.public.test";
+
+  const MAINNET = "Public Global Stellar Network ; September 2015";
+
+  async function loadRpc(env: { server?: string; public?: string; mainnet?: boolean }) {
+    vi.resetModules();
+    vi.stubEnv("NEXT_PUBLIC_NETWORK_PASSPHRASE", env.mainnet ? MAINNET : "");
+    // Mainnet refuses to load without its own registry id.
+    vi.stubEnv("NEXT_PUBLIC_CONTRACT_ID", env.mainnet ? "CA6YPRXQ2IFGACBFLKWEFETGLZ2C5R7DG5TTBKTTP4AVYOF3HFOSBCC2" : "");
+    vi.stubEnv("SOROBAN_RPC_URL", env.server ?? "");
+    vi.stubEnv("NEXT_PUBLIC_SOROBAN_RPC_URL", env.public ?? "");
+    return import("./config");
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("uses the server-only URL on the server when it is set", async () => {
+    const config = await loadRpc({ server: KEYED, public: PUBLIC });
+    expect(config.RPC_URL).toBe(KEYED);
+  });
+
+  it("falls back to the public URL on the server", async () => {
+    const config = await loadRpc({ public: PUBLIC });
+    expect(config.RPC_URL).toBe(PUBLIC);
+  });
+
+  it("falls back to the public testnet default when neither is set", async () => {
+    const config = await loadRpc({});
+    expect(config.RPC_URL).toBe("https://soroban-testnet.stellar.org");
+  });
+
+  it("falls back to the public mainnet default on mainnet", async () => {
+    const config = await loadRpc({ mainnet: true });
+    expect(config.IS_MAINNET).toBe(true);
+    expect(config.RPC_URL).toBe("https://mainnet.sorobanrpc.com");
+    expect((await loadRpc({ mainnet: true, server: KEYED })).RPC_URL).toBe(KEYED);
+  });
+
+  it("never uses the server-only URL in the browser", async () => {
+    vi.stubGlobal("window", {});
+    expect((await loadRpc({ server: KEYED, public: PUBLIC })).RPC_URL).toBe(PUBLIC);
+    expect((await loadRpc({ server: KEYED })).RPC_URL).toBe("https://soroban-testnet.stellar.org");
+  });
+
+  it("cleans dashboard quoting and ignores a blank server value", async () => {
+    const { serverRpcUrl } = await loadRpc({});
+    expect(serverRpcUrl(` "${KEYED}"\n`, PUBLIC)).toBe(KEYED);
+    expect(serverRpcUrl("  ", PUBLIC)).toBe(PUBLIC);
+    expect(serverRpcUrl(undefined, PUBLIC)).toBe(PUBLIC);
+  });
+});

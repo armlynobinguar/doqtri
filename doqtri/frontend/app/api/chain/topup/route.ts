@@ -4,6 +4,7 @@ import { NETWORK, USER_PAYS_FEES } from "@/lib/stellar/smart-wallet-config";
 import { RelayRejection } from "@/lib/stellar/relay-validation";
 import { TOP_UP_BELOW_STROOPS, topUpWallet } from "@/lib/stellar/friendbot-topup";
 import { xlmBalanceStroops } from "@/lib/stellar/wallet-balance";
+import { logError } from "@/lib/log-error";
 
 /**
  * Testnet only: tops up the caller's passkey wallet with free test XLM so it
@@ -40,7 +41,7 @@ export async function POST() {
     return Response.json({ hash, amount: amountStroops.toString() });
   } catch (error) {
     if (error instanceof RelayRejection) return Response.json({ error: error.message }, { status: error.status });
-    console.error("[chain/topup] unexpected error", error);
+    logError("[chain/topup] unexpected error", error);
     return Response.json({ error: "The top-up failed. Try again." }, { status: 500 });
   }
 }

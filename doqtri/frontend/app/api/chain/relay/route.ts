@@ -42,6 +42,7 @@ import { simulateWithinCap, submitAndConfirm } from "@/lib/stellar/channels";
 import { readWalletPasskeys } from "@/lib/stellar/wallet-signers";
 import { submitPaidWrite, type PaidWriteStatus } from "@/lib/stellar/direct-submit";
 import { topUpNewWalletOrQueue } from "@/lib/stellar/wallet-topups";
+import { logError } from "@/lib/log-error";
 
 /**
  * Fee-sponsored submission for passkey smart wallets (progress/002).
@@ -139,7 +140,7 @@ export async function POST(request: Request) {
     return await relayWalletAdmin(user.id, submission, new URL(request.url).hostname);
   } catch (error) {
     if (error instanceof RelayRejection) return rejected(error);
-    console.error("[chain/relay] unexpected error", error);
+    logError("[chain/relay] unexpected error", error);
     return fail("Something went wrong submitting this transaction.", 500);
   }
 }

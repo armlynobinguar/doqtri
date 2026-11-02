@@ -4,6 +4,7 @@ import { runChainJobs } from "@/lib/stellar/chain-jobs";
 import { runWalletTopUps } from "@/lib/stellar/wallet-topups";
 import { readSchedulerHealth, schedulerWarning } from "@/lib/stellar/chain-jobs-scheduler";
 import { runPendingWrites } from "@/lib/stellar/pending-writes";
+import { logError } from "@/lib/log-error";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -50,14 +51,14 @@ export async function GET(request: Request) {
     return null;
   });
   const topUps = runWalletTopUps(admin).catch((error) => {
-    console.error("[chain/jobs] wallet top-ups failed", error);
+    logError("[chain/jobs] wallet top-ups failed", error);
     return null;
   });
   try {
     const queue = await runChainJobs(admin, { limit: 50 });
     return Response.json({ ...queue, pendingWrites: await settling, topUps: await topUps, scheduler });
   } catch (error) {
-    console.error("[chain/jobs] failed", error);
+    logError("[chain/jobs] failed", error);
     return Response.json(
       { error: "The queue couldn't run.", pendingWrites: await settling, topUps: await topUps, scheduler },
       { status: 503 },
