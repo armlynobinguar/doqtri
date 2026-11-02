@@ -45,6 +45,7 @@ import {
   type ChannelLease,
   type ChannelPoolStore,
 } from "@/lib/stellar/channel-pool";
+import { paidWriteTimer, type PaidWriteTimer } from "@/lib/stellar/paid-write-timing";
 import { RelayRejection } from "@/lib/stellar/relay-validation";
 import { DOQTRI_RELAYER, NETWORK } from "@/lib/stellar/smart-wallet-config";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
@@ -267,6 +268,8 @@ export type ChannelWriteDeps = {
   ensureFunded?: (publicKey: string) => Promise<void>;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** Step timings (RELAY_TIMING, DOQ-8); by default on when the env says so. */
+  timer?: PaidWriteTimer;
 };
 
 /** One write's hold on its channel. */
@@ -276,6 +279,7 @@ type ChannelWrite = {
   relayer: Keypair;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
+  timer: PaidWriteTimer;
   /** When the lease was granted, by this server's clock. */
   leasedAt: number;
   /** What the lease is given back with: see "Releasing" in channel-pool.ts. */
@@ -287,7 +291,8 @@ const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(r
 /**
  * Leases a channel, submits from it, and gives it back whatever happened:
  * the finally runs on a refused simulation, a fee over the maximum and a
- * failed submission alike.
+ * failed submission alike. With RELAY_TIMING=on, logs one timing line at the
+ * end (paid-write-timing.ts).
  */
 async function submitFromChannel(
   func: xdr.HostFunction,
@@ -297,16 +302,42 @@ async function submitFromChannel(
 ): Promise<PaidWriteResult> {
   const relayer = relayerKeypair();
   const seed = relayChannelSeed();
-  const server = deps.server ?? new rpc.Server(RPC_URL);
   const now = deps.now ?? Date.now;
-  const sleep = deps.sleep ?? defaultSleep;
-  // The relayer still collects fee_amount and is still kept topped up on
-  // testnet; channels pay their network fees from what they were seeded with.
-  await (deps.ensureFunded ?? ensureRelayerFunded)(relayer.publicKey());
+  const timer = deps.timer ?? paidWriteTimer(now);
+  try {
+    const result = await leaseAndSend(func, walletEntry, maxFee, deps, { relayer, seed, now, timer });
+    timer.finish({ status: result.status, hash: result.hash });
+    return result;
+  } catch (error) {
+    timer.finish({ status: error instanceof RelayRejection ? String(error.status) : "error" });
+    throw error;
+  }
+}
 
-  const pool = deps.pool ?? supabaseChannelPoolStore(createSupabaseAdminClient());
-  const lease = await leaseChannel(pool, { network: NETWORK, seed, now, sleep });
-  const write: ChannelWrite = { server, lease, relayer, now, sleep, leasedAt: now(), releaseSeq: null };
+async function leaseAndSend(
+  func: xdr.HostFunction,
+  walletEntry: xdr.SorobanAuthorizationEntry,
+  maxFee: bigint,
+  deps: ChannelWriteDeps,
+  { relayer, seed, now, timer }: { relayer: Keypair; seed: string; now: () => number; timer: PaidWriteTimer },
+): Promise<PaidWriteResult> {
+  const server = timer.rpc(deps.server ?? new rpc.Server(RPC_URL));
+  const sleep = deps.sleep ?? defaultSleep;
+  // The relayer is still kept topped up on testnet, but a pooled write never
+  // spends its XLM: channels pay the network fees from what they were seeded
+  // with, and the relayer only receives fee_amount. So the check runs beside
+  // the write, not in front of it (DOQ-8): it held the first write on each
+  // server every 5 minutes for a Horizon round trip (~0.9 s), longer when it
+  // called Friendbot. Untimed, as it no longer adds to the write's time.
+  // ensureRelayerFunded never throws; a stand-in that does is caught here.
+  void Promise.resolve()
+    .then(() => (deps.ensureFunded ?? ensureRelayerFunded)(relayer.publicKey()))
+    .catch(() => undefined);
+
+  const pool = timer.pool(deps.pool ?? supabaseChannelPoolStore(createSupabaseAdminClient()));
+  const lease = await timer.span("lease", () => leaseChannel(pool, { network: NETWORK, seed, now, sleep }));
+  timer.channel(lease.idx);
+  const write: ChannelWrite = { server, lease, relayer, now, sleep, timer, leasedAt: now(), releaseSeq: null };
   try {
     return await sendFromChannel(write, func, walletEntry, maxFee);
   } finally {
@@ -324,7 +355,7 @@ async function sendFromChannel(
   const { server, lease } = write;
   // The lease's nextSeq is a floor under the RPC's read, which can lag a ledger.
   let floor = lease.nextSeq;
-  let state = await channelState(write);
+  let state = await write.timer.span("state", () => channelState(write));
 
   const build = async (fee: bigint) => {
     const priced = withFee(func, fee);
@@ -363,8 +394,8 @@ async function sendFromChannel(
         // fresh read after the next ledger decides from here.
         if (badSeq) floor = null;
         // Retrying in the same ledger only meets the same refusal.
-        await waitForNextLedger(write);
-        state = await channelState(write);
+        await write.timer.span("retryWait", () => waitForNextLedger(write));
+        state = await write.timer.span("state", () => channelState(write));
         if (badSeq) write.releaseSeq = state.accountSequence + BigInt(1);
         continue;
       }

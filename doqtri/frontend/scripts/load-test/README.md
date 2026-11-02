@@ -115,6 +115,30 @@ LOADTEST_SERVER_LOG=staging-logs.txt \
   such as sign-in, funding, note, connect wallet or sign write. These are not
   counted as relay failures.
 
+## Where the time goes (server timing)
+
+Start the deployment with `RELAY_POOL=on` and `RELAY_TIMING=on`, and give the
+test its log with `LOADTEST_SERVER_LOG`. Each pooled write then logs one
+`[chain/relay] timing {...}` line (`lib/stellar/paid-write-timing.ts`), and
+the report adds a section built from them:
+
+- **Steps:** p50, p95, min and max per step, and each step's share of the
+  total. `funded` is the relayer's testnet balance check, `lease` includes
+  any wait for a free channel, `state` is the latest ledger and the
+  channel's sequence number (read together), `simulateMeasure` and
+  `simulateCharge` are the two simulations, `send` is `sendTransaction`,
+  `retryWait` is the wait for the next ledger after a refusal, `poll` runs
+  until the write is found, and `other` is the code between steps.
+  "Outside submitPaidWrite" is the client's time minus the server's, matched
+  by hash: sign-in, the relay's checks, the quota and HTTP.
+- **Ledgers between send and landing:** the ledger the RPC reported when it
+  accepted the write against the ledger the write landed in. The RPC's view
+  trails the network, so +2 can still mean "the next ledger to close".
+- **Poll answered … after the landing ledger closed:** how much the poll's
+  1-second interval and the RPC's ingestion add after the write is final.
+
+The relayer path (`RELAY_POOL` unset) logs no timing lines.
+
 ## Settings
 
 | Variable | Default | Meaning |

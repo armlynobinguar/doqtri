@@ -4,9 +4,11 @@ import {
   formatReport,
   latencyStats,
   parseServerLog,
+  parseTimingLines,
   percentile,
   runPool,
   summarize,
+  summarizeTimings,
   type WriteOutcome,
 } from "./report";
 
@@ -129,5 +131,60 @@ describe("summarize and formatReport", () => {
 
   it("says when 502s cannot be split for want of a log", () => {
     expect(formatReport(summarize(meta, outcomes, [], null, 12_500))).toContain("No server log was given");
+  });
+});
+
+describe("server timing lines (RELAY_TIMING, DOQ-8)", () => {
+  const timing = (o: Record<string, unknown>) => ({
+    v: 1,
+    path: "pool",
+    status: "confirmed",
+    hash: "aa",
+    channel: 1,
+    ms: { funded: 0, lease: 10, state: 1_000, simulateMeasure: 500, simulateCharge: 500, send: 300, poll: 4_000, release: 10 },
+    calls: {},
+    totalMs: 6_400,
+    otherMs: 80,
+    leaseTries: 1,
+    attempts: 1,
+    pollRounds: 4,
+    sentLedger: 100,
+    landedLedger: 101,
+    pollAfterCloseMs: 900,
+    startedAt: "2026-11-02T00:00:00.000Z",
+    ...o,
+  });
+  const line = (o: Record<string, unknown> = {}) => `2026-11-02 [chain/relay] timing ${JSON.stringify(timing(o))}`;
+
+  it("reads the relay's timing lines and skips everything else", () => {
+    const log = [line(), "[chain/relay] paid write rejected: txBadSeq", '[chain/relay] timing {"v":1,"cut', line({ hash: "bb" })].join("\n");
+    expect(parseTimingLines(log).map((t) => t.hash)).toEqual(["aa", "bb"]);
+  });
+
+  it("summarizes steps, ledgers after send and time outside submitPaidWrite", () => {
+    const timings = parseTimingLines([line(), line({ hash: "bb", landedLedger: 102, totalMs: 11_400, ms: { poll: 9_000 } })].join("\n"));
+    const outcomes = [out({ hash: "aa", relayMs: 6_500 }), out({ hash: "bb", relayMs: 11_600 }), out({ hash: "cc" })];
+    const t = summarizeTimings(timings, outcomes)!;
+    expect(t.writes).toBe(2);
+    expect(t.ledgersAfterSend).toEqual([
+      { ledgers: 1, count: 1 },
+      { ledgers: 2, count: 1 },
+    ]);
+    expect(t.outsideSubmit).toMatchObject({ count: 2, min: 100, max: 200 });
+    const poll = t.steps.find((s) => s.step === "poll")!;
+    expect(poll.stats).toMatchObject({ min: 4_000, max: 9_000 });
+    expect(poll.share).toBeCloseTo(13_000 / 17_800);
+    // A step a write skipped counts as 0 for it.
+    expect(t.steps.find((s) => s.step === "state")!.stats.min).toBe(0);
+    expect(summarizeTimings([])).toBeNull();
+  });
+
+  it("adds a where-the-time-goes section to the report when there are timing lines", () => {
+    const s = summarize({ target: "http://localhost:3100", startedAt: "t", n: 1 }, [out({ hash: "aa" })], [], null, 1_000, parseTimingLines(line()));
+    const md = formatReport(s);
+    expect(md).toContain("### Where the time goes (server timing, 1 pooled writes)");
+    expect(md).toContain("| poll | 4.00 s |");
+    expect(md).toContain("| +1 | 1 |");
+    expect(formatReport(summarize({ target: "x", startedAt: "t", n: 1 }, [out({})], [], null, 1_000))).not.toContain("Where the time goes");
   });
 });
