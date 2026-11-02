@@ -9,7 +9,12 @@
  * (txBadSeq, TRY_AGAIN_LATER, …) is only in the server's log line
  * `[chain/relay] paid write rejected: <code>`. The report counts those lines
  * from the deployment's log when one is given.
+ *
+ * With RELAY_TIMING=on on the deployment (DOQ-8), the relay also logs one
+ * `[chain/relay] timing {...}` line per pooled write, and the report shows
+ * where each write's time went, step by step (lib/stellar/paid-write-timing.ts).
  */
+import type { PaidWriteTiming } from "@/lib/stellar/paid-write-timing";
 
 /** One relay request as the driver saw it. */
 export type WriteOutcome = {
@@ -92,6 +97,88 @@ export function parseServerLog(text: string): ServerLogCounts {
   return counts;
 }
 
+const TIMING = /\[chain\/relay\] timing (\{.*\})\s*$/;
+
+/** The relay's per-write timing lines (RELAY_TIMING=on) in a server log. */
+export function parseTimingLines(text: string): PaidWriteTiming[] {
+  const timings: PaidWriteTiming[] = [];
+  for (const line of text.split("\n")) {
+    const match = TIMING.exec(line);
+    if (!match) continue;
+    try {
+      const timing = JSON.parse(match[1]) as PaidWriteTiming;
+      if (timing.v === 1) timings.push(timing);
+    } catch {
+      // A line cut short by the log; skip it.
+    }
+  }
+  return timings;
+}
+
+/** The steps a pooled write runs, in order; "other" is the code between them. */
+export const TIMING_STEPS = [
+  "funded",
+  "lease",
+  "state",
+  "simulateMeasure",
+  "simulateCharge",
+  "send",
+  "retryWait",
+  "poll",
+  "release",
+  "other",
+] as const;
+
+export type TimingSummary = {
+  writes: number;
+  /** Per step: the spread across writes (a write that skipped a step counts 0) and its mean share of the total. */
+  steps: { step: string; stats: LatencyStats; share: number }[];
+  total: LatencyStats;
+  /** The client's relay time minus the server's, matched by hash: auth, checks, quota, HTTP. */
+  outsideSubmit: LatencyStats;
+  /** landedLedger − sentLedger, as count of writes per difference. */
+  ledgersAfterSend: { ledgers: number; count: number }[];
+  pollAfterClose: LatencyStats;
+  pollRounds: LatencyStats;
+  leaseTries: LatencyStats;
+  /** sendTransaction calls per write. */
+  attempts: { attempts: number; count: number }[];
+};
+
+function histogram(values: number[]): Map<number, number> {
+  const counts = new Map<number, number>();
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
+  return new Map([...counts].sort((a, b) => a[0] - b[0]));
+}
+
+/** Where the time went, across the run's timing lines; null when there are none. */
+export function summarizeTimings(timings: PaidWriteTiming[], outcomes: WriteOutcome[] = []): TimingSummary | null {
+  if (timings.length === 0) return null;
+  const step = (t: PaidWriteTiming, name: string) => (name === "other" ? t.otherMs : (t.ms[name] ?? 0));
+  const totalSum = timings.reduce((sum, t) => sum + t.totalMs, 0) || 1;
+  const byHash = new Map(timings.filter((t) => t.hash).map((t) => [t.hash!, t]));
+  const outside = outcomes.flatMap((o) => {
+    const t = o.hash ? byHash.get(o.hash) : undefined;
+    return t ? [o.relayMs - t.totalMs] : [];
+  });
+  const landed = timings.filter((t) => t.sentLedger !== null && t.landedLedger !== null);
+  return {
+    writes: timings.length,
+    steps: TIMING_STEPS.map((name) => ({
+      step: name,
+      stats: latencyStats(timings.map((t) => step(t, name))),
+      share: timings.reduce((sum, t) => sum + step(t, name), 0) / totalSum,
+    })),
+    total: latencyStats(timings.map((t) => t.totalMs)),
+    outsideSubmit: latencyStats(outside),
+    ledgersAfterSend: [...histogram(landed.map((t) => t.landedLedger! - t.sentLedger!))].map(([ledgers, count]) => ({ ledgers, count })),
+    pollAfterClose: latencyStats(timings.flatMap((t) => (t.pollAfterCloseMs === null ? [] : [t.pollAfterCloseMs]))),
+    pollRounds: latencyStats(timings.filter((t) => t.pollRounds > 0).map((t) => t.pollRounds)),
+    leaseTries: latencyStats(timings.map((t) => t.leaseTries)),
+    attempts: [...histogram(timings.map((t) => t.attempts))].map(([attempts, count]) => ({ attempts, count })),
+  };
+}
+
 /** Nearest-rank percentile (p in 0–100); null for no values. */
 export function percentile(values: number[], p: number): number | null {
   if (values.length === 0) return null;
@@ -151,6 +238,8 @@ export type Summary = RunMeta & {
   successMs: LatencyStats;
   /** From the first request out to the last answer back, in ms. */
   wallMs: number;
+  /** Server step timings, when the deployment logged them. */
+  timing?: TimingSummary | null;
 };
 
 export function summarize(
@@ -159,6 +248,7 @@ export function summarize(
   prepareFailures: PrepareFailure[],
   serverLog: ServerLogCounts | null,
   wallMs: number,
+  timings: PaidWriteTiming[] = [],
 ): Summary {
   const counts = new Map<string, number>();
   for (const o of outcomes) {
@@ -177,6 +267,7 @@ export function summarize(
     relayMs: latencyStats(outcomes.map((o) => o.relayMs)),
     successMs: latencyStats(outcomes.filter((o) => o.ok).map((o) => o.relayMs)),
     wallMs,
+    timing: summarizeTimings(timings, outcomes),
   };
 }
 
@@ -221,9 +312,36 @@ export function formatReport(s: Summary): string {
     "",
     `All requests were sent at once; the last answer came back after ${ms(s.wallMs)}.`,
   );
+  if (s.timing) lines.push("", ...formatTiming(s.timing));
   if (s.prepareFailures.length) {
     lines.push("", "| Wallet | Failed before the relay at | Error |", "| ---: | --- | --- |");
     lines.push(...s.prepareFailures.map((f) => `| ${f.wallet} | ${f.step} | ${shorten(f.error, 120)} |`));
   }
   return lines.join("\n") + "\n";
+}
+
+const pct = (share: number) => `${(share * 100).toFixed(0)}%`;
+const row = (label: string, st: LatencyStats, share?: number) =>
+  `| ${label} | ${ms(st.p50)} | ${ms(st.p95)} | ${ms(st.min)} | ${ms(st.max)} | ${share === undefined ? "" : pct(share)} |`;
+
+/** The server-timing section: steps, then what the ledger and the poll did. */
+export function formatTiming(t: TimingSummary): string[] {
+  const n = (st: LatencyStats) => (st.p50 === null ? "–" : `p50 ${st.p50}, max ${st.max}`);
+  return [
+    `### Where the time goes (server timing, ${t.writes} pooled writes)`,
+    "",
+    "| Step | p50 | p95 | min | max | share of total |",
+    "| --- | ---: | ---: | ---: | ---: | ---: |",
+    ...t.steps.map((s) => row(s.step, s.stats, s.share)),
+    row("**submitPaidWrite total**", t.total, 1),
+    row("outside submitPaidWrite (auth, checks, quota, HTTP)", t.outsideSubmit),
+    "",
+    "| Ledgers between send and landing | Writes |",
+    "| ---: | ---: |",
+    ...t.ledgersAfterSend.map((l) => `| +${l.ledgers} | ${l.count} |`),
+    "",
+    `Poll answered ${ms(t.pollAfterClose.p50)} (p50) / ${ms(t.pollAfterClose.p95)} (p95) after the landing ledger closed; ` +
+      `poll rounds ${n(t.pollRounds)}; lease tries ${n(t.leaseTries)}; ` +
+      `sendTransaction calls per write: ${t.attempts.map((a) => `${a.attempts}×${a.count}`).join(", ")}.`,
+  ];
 }

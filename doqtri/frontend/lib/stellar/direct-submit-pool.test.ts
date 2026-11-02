@@ -388,3 +388,97 @@ describe("the lease is released", () => {
     expect(pool.released).toEqual([{ idx: channelIdx, leaseId, nextSeq: null }]);
   });
 });
+
+describe("step timings (RELAY_TIMING, DOQ-8)", () => {
+  const timingLines = (spy: { mock: { calls: unknown[][] } }) =>
+    spy.mock.calls.map((c) => String(c[0])).filter((line) => line.startsWith("[chain/relay] timing "));
+  const parse = (line: string) => JSON.parse(line.slice("[chain/relay] timing ".length));
+
+  it("logs nothing when RELAY_TIMING is unset", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    await submit(fakeChain(), memoryPool());
+    expect(timingLines(info)).toEqual([]);
+  });
+
+  it("logs one line per write when RELAY_TIMING=on, without changing what the RPC is asked", async () => {
+    vi.stubEnv("RELAY_TIMING", "on");
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const chain = fakeChain();
+    const polled: { hash: string; attempts?: number }[] = [];
+    chain.server.pollTransaction = (async (hash: string, opts?: { attempts?: number }) => {
+      polled.push({ hash, attempts: opts?.attempts });
+      return { status: "SUCCESS", ledger: chain.ledger() + 1, createdAt: 0 };
+    }) as never;
+    const pool = memoryPool();
+    const result = await submit(chain, pool);
+    expect(result.status).toBe("confirmed");
+    expect(polled).toEqual([{ hash: "hash-501", attempts: 20 }]);
+    expect(pool.released).toEqual([{ idx: channelIdx, leaseId, nextSeq: BigInt(502) }]);
+    const lines = timingLines(info);
+    expect(lines).toHaveLength(1);
+    expect(parse(lines[0])).toMatchObject({ v: 1, path: "pool", status: "confirmed", hash: "hash-501", channel: channelIdx, attempts: 1 });
+    // No key, seed or URL in the line.
+    expect(lines[0]).not.toContain(relayer.secret());
+    expect(lines[0]).not.toContain(seed);
+    expect(lines[0]).not.toMatch(/https?:/);
+  });
+
+  it("times each step on the write's clock, and the ledger it landed in", async () => {
+    const lines: string[] = [];
+    const { createPaidWriteTimer } = await import("./paid-write-timing");
+    const chain = fakeChain({ simulateMs: 300 });
+    const wall = { t: 1_800_000_000_000 };
+    chain.server.pollTransaction = (async (_hash: string, opts?: { sleepStrategy?: (attempt: number) => number }) => {
+      // Two rounds that find nothing, then a ledger closes and the third finds it.
+      for (const attempt of [1, 2]) await chain.sleep(opts!.sleepStrategy!(attempt));
+      wall.t += 2_000;
+      return { status: "SUCCESS", ledger: 101, createdAt: Math.floor((wall.t - 600) / 1000) };
+    }) as never;
+    fakes.server = chain.server;
+    const { submitPaidWrite } = await load();
+    const func = forwardCall();
+    const pool = memoryPool();
+    await submitPaidWrite(func, walletEntry(func), BigInt(100_000), {
+      server: chain.server as never,
+      pool: pool.store,
+      ensureFunded: async () => {},
+      now: chain.now,
+      sleep: chain.sleep,
+      timer: createPaidWriteTimer(chain.now, () => wall.t, (line) => lines.push(line)),
+    });
+    expect(lines).toHaveLength(1);
+    const timing = parse(lines[0]);
+    expect(timing.ms).toMatchObject({ lease: 0, state: 0, simulateMeasure: 300, simulateCharge: 300, send: 0, poll: 2_000, release: 0 });
+    expect(timing.totalMs).toBe(2_600);
+    expect(timing.otherMs).toBe(0);
+    expect(timing).toMatchObject({ leaseTries: 1, attempts: 1, pollRounds: 3, sentLedger: 100, landedLedger: 101 });
+    expect(timing.pollAfterCloseMs).toBeGreaterThanOrEqual(600);
+    expect(timing.pollAfterCloseMs).toBeLessThan(1_600);
+  });
+
+  it("counts retries and logs a refused write with its HTTP status", async () => {
+    const lines: string[] = [];
+    const { createPaidWriteTimer } = await import("./paid-write-timing");
+    const chain = fakeChain({ sends: ["txBadSeq", "txBadSeq", "txBadSeq"] });
+    fakes.server = chain.server;
+    const { submitPaidWrite } = await load();
+    const func = forwardCall();
+    const pool = memoryPool(BigInt(510));
+    await expect(
+      submitPaidWrite(func, walletEntry(func), BigInt(100_000), {
+        server: chain.server as never,
+        pool: pool.store,
+        ensureFunded: async () => {},
+        now: chain.now,
+        sleep: chain.sleep,
+        timer: createPaidWriteTimer(chain.now, () => 0, (line) => lines.push(line)),
+      }),
+    ).rejects.toMatchObject({ status: 502 });
+    const timing = parse(lines[0]);
+    expect(timing).toMatchObject({ status: "502", hash: null, attempts: 3, sentLedger: null, landedLedger: null });
+    expect(timing.calls).toMatchObject({ simulateCharge: 3, state: 3, retryWait: 2 });
+    expect(timing.ms.retryWait).toBeGreaterThanOrEqual(2 * LEDGER_MS);
+    // Still released, as without timing.
+    expect(pool.released).toEqual([{ idx: channelIdx, leaseId, nextSeq: BigInt(501) }]);
+  });
+});

@@ -34,6 +34,7 @@ import {
 import {
   formatReport,
   parseServerLog,
+  parseTimingLines,
   runPool,
   summarize,
   type PrepareFailure,
@@ -92,7 +93,7 @@ function logSize(path: string | null): number {
   return path && existsSync(path) ? statSync(path).size : 0;
 }
 
-function readLogFrom(path: string | null, offset: number): ServerLogCounts | null {
+function readLogFrom(path: string | null, offset: number): { counts: ServerLogCounts; text: string } | null {
   if (!path || !existsSync(path)) return null;
   const size = statSync(path).size;
   const buffer = Buffer.alloc(Math.max(0, size - offset));
@@ -102,7 +103,8 @@ function readLogFrom(path: string | null, offset: number): ServerLogCounts | nul
   } finally {
     closeSync(fd);
   }
-  return parseServerLog(buffer.toString("utf8"));
+  const text = buffer.toString("utf8");
+  return { counts: parseServerLog(text), text };
 }
 
 /** Creates the test users and wallets the state file is missing, up to N. */
@@ -185,7 +187,8 @@ it.skipIf(Boolean(reportFrom))("paid writes: N concurrent relay requests from N 
   await new Promise((resolve) => setTimeout(resolve, 1_000));
 
   const meta: RunMeta = { target: cfg.target.baseUrl, startedAt, n: cfg.n, deployment: cfg.label };
-  const summary = summarize(meta, outcomes, failures, readLogFrom(cfg.serverLog, offset), wallMs);
+  const log = readLogFrom(cfg.serverLog, offset);
+  const summary = summarize(meta, outcomes, failures, log?.counts ?? null, wallMs, parseTimingLines(log?.text ?? ""));
   const base = writeResults(cfg, { summary, outcomes, prepareFailures: failures }, startedAt.replace(/[:.]/g, "-"));
   console.log(`\n${formatReport(summary)}\nSaved ${base}.md and .json`);
 });
@@ -195,12 +198,14 @@ it.skipIf(!reportFrom)("paid writes: rebuild a saved report with a server log", 
   const log = process.env.LOADTEST_SERVER_LOG?.trim();
   if (!log) throw new Error("Set LOADTEST_SERVER_LOG to the deployment's log for the run's time window.");
   const { summary: old, outcomes, prepareFailures } = results;
+  const text = readFileSync(log, "utf8");
   const summary = summarize(
     { target: old.target, startedAt: old.startedAt, n: old.n, deployment: old.deployment },
     outcomes,
     prepareFailures,
-    parseServerLog(readFileSync(log, "utf8")),
+    parseServerLog(text),
     old.wallMs,
+    parseTimingLines(text),
   );
   const md = reportFrom!.replace(/\.json$/, "") + ".with-log.md";
   writeFileSync(md, formatReport(summary));
