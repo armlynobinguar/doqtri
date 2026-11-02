@@ -13,6 +13,8 @@ const state = vi.hoisted(() => ({
   /** Methods whose simulation fails before any result (the RPC down, a 429). */
   throws: new Set<string>(),
   relayed: 0,
+  /** The relay answers the next paid writes 202 (DOQ-5). */
+  pending: false,
 }));
 
 const METHODS = [
@@ -55,7 +57,7 @@ vi.mock("@/lib/bindings/doqtri-registry", async (importOriginal) => {
 vi.mock("@/lib/passkey-wallet", () => ({
   passkeyWalletFor: (address: string) => ({ address, createdTx: "", passkeys: [] }),
   signAndRelay: async () => `tx-${++state.relayed}`,
-  payAndRelay: async () => ({ hash: `tx-${++state.relayed}`, feeStroops: BigInt(0) }),
+  payAndRelay: async () => ({ hash: `tx-${++state.relayed}`, feeStroops: BigInt(0), pending: state.pending }),
 }));
 
 vi.mock("@/lib/wallet", () => ({ signSorobanTx: async () => "" }));
@@ -105,6 +107,7 @@ beforeEach(() => {
   state.results = {};
   state.throws = new Set();
   state.relayed = 0;
+  state.pending = false;
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -281,6 +284,26 @@ describe("with NEXT_PUBLIC_REGISTRY_EDITORS on", () => {
       code: "NOT_EDITOR",
     });
     expect(state.relayed).toBe(0);
+  });
+});
+
+describe("a paid write the relay answered 202 for (DOQ-5)", () => {
+  it("comes back as a pending receipt, not an error, with no version to read yet", async () => {
+    const { DoqtriRegistry } = await load(false);
+    state.pending = true;
+    state.results.get_document = [chainDoc(wallet)];
+    state.results.update_document = [2];
+    const receipt = await DoqtriRegistry.updateDocument(wallet, docId, contentHash);
+    expect(receipt).toEqual({ txHash: "tx-1", pending: true });
+  });
+
+  it("leaves a pending team write's workspace alone: the ledger can't place it yet", async () => {
+    const { DoqtriRegistry } = await load(true);
+    state.pending = true;
+    state.results.anchor_as = [1];
+    const receipt = await DoqtriRegistry.anchor(wallet, docId, contentHash, done, team);
+    expect(called()).toEqual(["anchor_as"]);
+    expect(receipt).toEqual({ txHash: "tx-1", pending: true });
   });
 });
 

@@ -17,6 +17,8 @@ export class RelayRejection extends Error {
   constructor(
     message: string,
     readonly status = 403,
+    /** Sent as Retry-After, in seconds, when waiting a little will let the request through (a busy pool). */
+    readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "RelayRejection";
