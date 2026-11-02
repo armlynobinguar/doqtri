@@ -14,6 +14,14 @@ const fmt = new Intl.NumberFormat("en-US");
 /** Fees are fractions of an XLM; four significant digits keep them readable. */
 const fmtXlm = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 4 });
 
+/** Where the average fee was measured, in words: every wallet's transactions, or only the relay's writes. */
+function feeNote(fee: NonNullable<SiteStats["fee"]>): string {
+  const what = fee.source === "contracts" ? "Doqtri transaction" : "relayed anchor write";
+  return fee.sample === 1
+    ? `Measured from the latest ${what} on testnet`
+    : `Measured from the last ${fee.sample} ${what}s on testnet`;
+}
+
 /** Each card's accent, one of the brand tints. */
 type Tone = "purple" | "blue" | "green" | "pearl";
 
@@ -107,10 +115,7 @@ export function LiveStats() {
             value: stats.fee.avgXlm,
             format: (n: number) => fmtXlm.format(n),
             unit: "XLM",
-            note:
-              stats.fee.sample === 1
-                ? "Measured from the latest anchor write on testnet"
-                : `Measured from the last ${stats.fee.sample} anchor writes on testnet`,
+            note: feeNote(stats.fee),
           },
         ]
       : []),

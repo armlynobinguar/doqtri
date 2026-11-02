@@ -1,9 +1,11 @@
+import { rpc } from "@stellar/stellar-sdk";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   CONTRACT_ID,
   HORIZON_URL,
   LEGACY_CONTRACT_IDS,
   MARKET_CONTRACT_ID,
+  RPC_URL,
   expertApiContractUrl,
   expertContractUrl,
 } from "@/lib/stellar/config";
@@ -19,12 +21,17 @@ export type SiteStats = {
   documents: number;
   transactions: number;
   contracts: { id: string; label: string; invocations: number; url: string }[];
-  /** Average fee actually charged on recent anchor writes; null until one can be read. */
+  /** Average fee actually charged on recent contract transactions; null until one can be read. */
   fee: FeeSample | null;
   updatedAt: string;
 };
 
-export type FeeSample = { avgXlm: number; sample: number; measuredAt: string };
+/**
+ * `source` says where the measured transactions came from: "contracts" when
+ * they were read from the contracts' own events (every wallet), "relay" when
+ * that failed and the relay's chain_writes were used instead.
+ */
+export type FeeSample = { avgXlm: number; sample: number; measuredAt: string; source: "contracts" | "relay" };
 
 /** Every contract Doqtri writes to on this network, current registry first. */
 export function statsContracts(): { id: string; label: string }[] {
@@ -63,12 +70,71 @@ export function averageFeeXlm(stroops: number[]): number | null {
   return valid.reduce((a, b) => a + b, 0) / valid.length / STROOPS_PER_XLM;
 }
 
+/** Latest transactions (newest first) that called the given contracts, at most `limit`. */
+export type RecentContractTxs = (contractIds: string[], limit: number) => Promise<string[]>;
+
 /**
- * Measures what Doqtri's document writes really cost: the latest relayed
- * writes indexed in chain_writes, each fee read back from Horizon, so the
- * number is the network's, not an estimate.
+ * Ledgers per getEvents request. One request only scans a bounded ledger range
+ * (a request starting a week back returns nothing from this week), so the
+ * search walks back from the newest ledger in windows small enough to be
+ * scanned whole.
  */
-export async function measureFee(admin: SupabaseClient, fetchImpl: typeof fetch = fetch): Promise<FeeSample | null> {
+const EVENT_WINDOW_LEDGERS = 5_000;
+const EVENT_PAGE = 1000;
+/** Full pages followed inside one window before moving on. */
+const EVENT_MAX_PAGES = 5;
+/** Kept clear of the oldest retained ledger, which advances while the search runs. */
+const RETENTION_MARGIN = 100;
+/** Soroban RPC accepts at most this many contract ids per event filter. */
+const IDS_PER_FILTER = 5;
+
+/**
+ * The latest successful transactions that called Doqtri's contracts (newest
+ * first), read from their events through Soroban RPC as far back as it
+ * retains them (about a week on testnet). Unlike chain_writes this includes
+ * transactions that Freighter and other wallets submitted themselves, not
+ * only the relay's.
+ */
+export const recentContractTxs: RecentContractTxs = async (contractIds, limit) => {
+  if (contractIds.length === 0) return [];
+  const server = new rpc.Server(RPC_URL);
+  const { latestLedger, oldestLedger } = await server.getHealth();
+  const floor = oldestLedger + RETENTION_MARGIN;
+  const filters = [];
+  for (let i = 0; i < contractIds.length; i += IDS_PER_FILTER) {
+    filters.push({ type: "contract" as const, contractIds: contractIds.slice(i, i + IDS_PER_FILTER) });
+  }
+
+  const found: string[] = [];
+  const seen = new Set<string>();
+  let end: number | undefined; // the first window runs to the newest ledger
+  let start = Math.max(floor, latestLedger - EVENT_WINDOW_LEDGERS);
+  while (found.length < limit) {
+    // Events come oldest first within a window.
+    const windowHashes: string[] = [];
+    let page = await server.getEvents({ filters, startLedger: start, ...(end ? { endLedger: end } : {}), limit: EVENT_PAGE });
+    for (let n = 1; ; n++) {
+      // Current RPCs emit events of successful calls only and leave the flag out, so only
+      // an explicit `false` (older RPCs) marks a failed call.
+      for (const event of page.events) if (event.inSuccessfulContractCall !== false) windowHashes.push(event.txHash);
+      if (page.events.length < EVENT_PAGE || n >= EVENT_MAX_PAGES) break;
+      page = await server.getEvents({ filters, cursor: page.cursor, limit: EVENT_PAGE });
+    }
+    for (const hash of windowHashes.reverse()) {
+      if (!seen.has(hash)) {
+        seen.add(hash);
+        found.push(hash);
+      }
+    }
+    if (start <= floor) break;
+    end = start;
+    start = Math.max(floor, start - EVENT_WINDOW_LEDGERS);
+  }
+  return found.slice(0, limit);
+};
+
+/** The relay's latest indexed writes: the fallback when contract events can't be read. */
+async function recentRelayTxs(admin: SupabaseClient): Promise<string[]> {
   const { data, error } = await admin
     .from("chain_writes")
     .select("tx_hash")
@@ -76,8 +142,32 @@ export async function measureFee(admin: SupabaseClient, fetchImpl: typeof fetch 
     .order("created_at", { ascending: false })
     .limit(FEE_SAMPLE);
   if (error) throw new Error(`chain_writes: ${error.message}`);
+  return (data ?? []).map((row) => row.tx_hash as string);
+}
 
-  const hashes = (data ?? []).map((row) => row.tx_hash as string);
+/**
+ * Measures what Doqtri's transactions really cost: the latest transactions
+ * that called its contracts, from any wallet, each fee read back from Horizon,
+ * so the number is the network's, not an estimate. Falls back to the relay's
+ * chain_writes when the contract events can't be read.
+ */
+export async function measureFee(
+  admin: SupabaseClient,
+  fetchImpl: typeof fetch = fetch,
+  recentTxs: RecentContractTxs = recentContractTxs,
+): Promise<FeeSample | null> {
+  let source: FeeSample["source"] = "contracts";
+  let hashes: string[] = [];
+  try {
+    hashes = await recentTxs(statsContracts().map((c) => c.id), FEE_SAMPLE);
+  } catch (e) {
+    console.error(`[stats] contract events not read: ${(e as Error).message}`);
+  }
+  if (hashes.length === 0) {
+    source = "relay";
+    hashes = await recentRelayTxs(admin);
+  }
+
   const fees: number[] = [];
   for (let i = 0; i < hashes.length; i += HORIZON_BATCH) {
     const batch = await Promise.all(
@@ -96,14 +186,24 @@ export async function measureFee(admin: SupabaseClient, fetchImpl: typeof fetch 
 
   const avgXlm = averageFeeXlm(fees);
   if (avgXlm === null) return null;
-  return { avgXlm, sample: fees.filter((n) => Number.isFinite(n) && n > 0).length, measuredAt: new Date().toISOString() };
+  return {
+    avgXlm,
+    sample: fees.filter((n) => Number.isFinite(n) && n > 0).length,
+    measuredAt: new Date().toISOString(),
+    source,
+  };
 }
 
 /** The cached fee sample, re-measured once it is older than FEE_TTL_MS. A failed re-measure keeps the last one. */
-async function cachedFee(admin: SupabaseClient, fetchImpl: typeof fetch, now = Date.now()): Promise<FeeSample | null> {
+async function cachedFee(
+  admin: SupabaseClient,
+  fetchImpl: typeof fetch,
+  recentTxs: RecentContractTxs,
+  now = Date.now(),
+): Promise<FeeSample | null> {
   if (feeCache && now - feeCache.at < FEE_TTL_MS) return feeCache.value;
   try {
-    const value = await measureFee(admin, fetchImpl);
+    const value = await measureFee(admin, fetchImpl, recentTxs);
     if (value) feeCache = { at: now, value };
   } catch (e) {
     console.error(`[stats] fee not measured: ${(e as Error).message}`);
@@ -116,10 +216,14 @@ export function resetFeeCache() {
   feeCache = null;
 }
 
-export async function loadSiteStats(admin: SupabaseClient, fetchImpl: typeof fetch = fetch): Promise<SiteStats> {
+export async function loadSiteStats(
+  admin: SupabaseClient,
+  fetchImpl: typeof fetch = fetch,
+  recentTxs: RecentContractTxs = recentContractTxs,
+): Promise<SiteStats> {
   const contracts = statsContracts();
   const [fee, users, documents, ...invocations] = await Promise.all([
-    cachedFee(admin, fetchImpl),
+    cachedFee(admin, fetchImpl, recentTxs),
     // perPage 1: only the total is needed, not the users themselves.
     admin.auth.admin.listUsers({ page: 1, perPage: 1 }).then(({ data, error }) => {
       if (error) throw new Error(`users: ${error.message}`);
