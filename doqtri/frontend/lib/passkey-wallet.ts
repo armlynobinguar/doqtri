@@ -369,7 +369,27 @@ function callsIn(invocation: xdr.SorobanAuthorizedInvocation): number {
   return 1 + invocation.subInvocations().reduce((n, sub) => n + callsIn(sub), 0);
 }
 
-export type PaidWrite = { hash: string; feeStroops: bigint };
+/**
+ * `pending`: the relay answered 202. The network accepted the write but no
+ * ledger had it within the relay's ~20 s poll; it is indexed as pending and
+ * settled by the chain-jobs run (DOQ-5), so it is not a failure.
+ */
+export type PaidWrite = { hash: string; feeStroops: bigint; pending: boolean };
+
+/** The relay's answer to a paid write; throws its error unless it took the write. */
+export function paidWriteFromRelay(
+  res: Pick<Response, "ok" | "status">,
+  body: { success?: boolean; error?: string; data?: { hash?: string; status?: string; feeStroops?: string } },
+): PaidWrite {
+  if (!res.ok || !body.success || !body.data?.hash) {
+    throw new Error(body.error || "The write could not be submitted.");
+  }
+  return {
+    hash: body.data.hash,
+    feeStroops: BigInt(body.data.feeStroops ?? "0"),
+    pending: res.status === 202 || body.data.status === "pending",
+  };
+}
 
 /**
  * Wraps `tx`'s registry call in `forward(...)` so the wallet pays for it, has
@@ -442,15 +462,7 @@ export async function payAndRelay<T>(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ func: func.toXDR("base64"), auth: [signed.toXDR("base64")] }),
   });
-  const body = (await res.json().catch(() => ({}))) as {
-    success?: boolean;
-    error?: string;
-    data?: { hash?: string; feeStroops?: string };
-  };
-  if (!res.ok || !body.success || !body.data?.hash) {
-    throw new Error(body.error || "The write could not be submitted.");
-  }
-  return { hash: body.data.hash, feeStroops: BigInt(body.data.feeStroops ?? "0") };
+  return paidWriteFromRelay(res, await res.json().catch(() => ({})));
 }
 
 /**

@@ -57,6 +57,12 @@ export type WorkspaceAssignment =
 /** What a registry write leaves behind for the UI to show as a receipt. */
 export type WriteReceipt = {
   txHash: string;
+  /**
+   * The relay took the write (202) but no ledger had it yet (DOQ-5): it may
+   * still land, and the note's history shows it as pending until it does.
+   * There is no version to read yet.
+   */
+  pending?: true;
   /** The document version after the write; absent for node-status writes. */
   version?: number;
   /** Set for writes on a team workspace's document (editor mode). */
@@ -270,7 +276,16 @@ async function send<T>(
   if (!isSmartWallet(source)) return signSendAndConfirm(tx, hasVersion);
 
   const wallet = passkeyWalletFor(source);
-  const txHash = USER_PAYS_FEES ? (await payAndRelay(tx, wallet)).hash : await signAndRelay(tx, wallet);
+  if (USER_PAYS_FEES) {
+    const paid = await payAndRelay(tx, wallet);
+    if (paid.pending) return { txHash: paid.hash, pending: true };
+    return withVersion(paid.hash, hasVersion);
+  }
+  return withVersion(await signAndRelay(tx, wallet), hasVersion);
+}
+
+/** A relayed write's receipt, with the version it returned when there is one. */
+async function withVersion(txHash: string, hasVersion: boolean): Promise<WriteReceipt> {
   if (!hasVersion) return { txHash };
   // The relay waited for the ledger, so the result is final; read the version
   // it returned instead of re-querying the document.
@@ -294,6 +309,9 @@ async function withWorkspace(
   target: WriteTarget,
   receipt: WriteReceipt,
 ): Promise<WriteReceipt> {
+  // The ledger doesn't have a pending write yet, so it can't say where the
+  // note stands; the note's next write reconciles it.
+  if (receipt.pending) return receipt;
   return { ...receipt, workspace: await DoqtriRegistry.reconcileWorkspace(source, docId, target) };
 }
 

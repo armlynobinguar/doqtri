@@ -2,6 +2,7 @@ import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/sup
 import { REGISTRY_EDITORS } from "@/lib/stellar/config";
 import { runChainJobs } from "@/lib/stellar/chain-jobs";
 import { chainSyncGate, rlsVisibility } from "@/lib/chain-sync-access";
+import { logError } from "@/lib/log-error";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -33,7 +34,7 @@ export async function POST(_request: Request, context: RouteContext<"/api/worksp
   try {
     return Response.json(await runChainJobs(createSupabaseAdminClient(), { workspaceId: id, limit: 10 }));
   } catch (error) {
-    console.error("[workspaces/chain-sync] failed", error);
+    logError("[workspaces/chain-sync] failed", error);
     return Response.json({ error: "On-chain updates couldn't run right now." }, { status: 503 });
   }
 }

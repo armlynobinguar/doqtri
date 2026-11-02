@@ -6,6 +6,7 @@ import { getActiveWorkspace } from "@/lib/active-workspace";
 import { REGISTRY_EDITORS } from "@/lib/stellar/config";
 import { runChainJobs } from "@/lib/stellar/chain-jobs";
 import { MembersView } from "@/components/vault/members-view";
+import { logError } from "@/lib/log-error";
 
 export const metadata: Metadata = {
   title: "Workspace members · Doqtri",
@@ -38,7 +39,7 @@ export default async function MembersPage(props: PageProps<"/vault/workspace/mem
   if (REGISTRY_EDITORS) {
     after(() =>
       runChainJobs(createSupabaseAdminClient(), { workspaceId, limit: 10 }).catch((e) =>
-        console.error("[members] chain jobs", e),
+        logError("[members] chain jobs", e),
       ),
     );
   }

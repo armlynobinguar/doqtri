@@ -12,8 +12,15 @@ export default defineConfig({
     // graph from markdown, and it is what these tests pin down. Route tests
     // under app/api mock Supabase and exercise a handler's answers. Component
     // tests under components/, and the public audit page's under app/d,
-    // render to static markup (no DOM).
-    include: ["lib/**/*.test.ts", "app/api/**/*.test.ts", "app/d/**/*.test.ts", "components/**/*.test.ts"],
+    // render to static markup (no DOM). The load test's pure parts are tested
+    // under scripts/; its network runs (*.load.ts) have their own config.
+    include: [
+      "lib/**/*.test.ts",
+      "app/api/**/*.test.ts",
+      "app/d/**/*.test.ts",
+      "components/**/*.test.ts",
+      "scripts/**/*.test.ts",
+    ],
     environment: "node",
   },
 });

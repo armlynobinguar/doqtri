@@ -40,8 +40,9 @@ import { MAX_MARKET_FEE_STROOPS } from "@/lib/stellar/market-config";
 import { marketCallPlan, purchaseColumns, syncTemplate, type SaleRecord } from "@/lib/market-server";
 import { simulateWithinCap, submitAndConfirm } from "@/lib/stellar/channels";
 import { readWalletPasskeys } from "@/lib/stellar/wallet-signers";
-import { submitPaidWrite } from "@/lib/stellar/direct-submit";
-import { topUpWallet } from "@/lib/stellar/friendbot-topup";
+import { submitPaidWrite, type PaidWriteStatus } from "@/lib/stellar/direct-submit";
+import { topUpNewWalletOrQueue } from "@/lib/stellar/wallet-topups";
+import { logError } from "@/lib/log-error";
 
 /**
  * Fee-sponsored submission for passkey smart wallets (progress/002).
@@ -61,7 +62,16 @@ import { topUpWallet } from "@/lib/stellar/friendbot-topup";
  * wallet. Each relayed
  * note write is indexed in chain_writes, because Horizon cannot list a
  * contract account's writes by owner.
+ *
+ * A paid note write the network accepted but hadn't confirmed within the
+ * relay's ~20 s poll answers 202 with `status: "pending"` and is indexed as
+ * pending; the chain-jobs run settles it (lib/stellar/pending-writes.ts,
+ * DOQ-5). Paid membership and market writes have no such record, so for
+ * them it stays a 502 that says to check before retrying.
  */
+
+/** A paid write with nothing to settle it later that the poll window ran out on (DOQ-5). */
+const NOT_CONFIRMED_YET = "The network hasn't confirmed this transaction yet. Check again in a minute before retrying.";
 
 const DEPLOYS_PER_USER = positive(process.env.CHAIN_DEPLOYS_PER_USER_DAILY, 3);
 const DEPLOYS_GLOBAL = positive(process.env.CHAIN_DEPLOYS_GLOBAL_DAILY, 200);
@@ -77,8 +87,14 @@ function positive(raw: string | undefined, fallback: number): number {
   return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
-function fail(error: string, status: number, extra: Record<string, unknown> = {}) {
-  return Response.json({ success: false, error, ...extra }, { status });
+function fail(error: string, status: number, extra: Record<string, unknown> = {}, headers?: HeadersInit) {
+  return Response.json({ success: false, error, ...extra }, { status, headers });
+}
+
+/** A refusal from the checks or the submission, with Retry-After when it says when to come back. */
+function rejected(error: RelayRejection) {
+  const retryAfter = error.retryAfterSeconds;
+  return fail(error.message, error.status, {}, retryAfter ? { "Retry-After": String(retryAfter) } : undefined);
 }
 
 export async function POST(request: Request) {
@@ -123,8 +139,8 @@ export async function POST(request: Request) {
     }
     return await relayWalletAdmin(user.id, submission, new URL(request.url).hostname);
   } catch (error) {
-    if (error instanceof RelayRejection) return fail(error.message, error.status);
-    console.error("[chain/relay] unexpected error", error);
+    if (error instanceof RelayRejection) return rejected(error);
+    logError("[chain/relay] unexpected error", error);
     return fail("Something went wrong submitting this transaction.", 500);
   }
 }
@@ -198,9 +214,15 @@ async function authorizeWrite(userId: string, write: RegistryWrite): Promise<voi
  * Note writes go into chain_writes, keyed by the wallet that signed them.
  * The write is on-chain either way; a missing index row only hides it from
  * the history list until reconciled, so report success and log loudly.
- * Membership writes belong to no note and are not indexed.
+ * Membership writes belong to no note and are not indexed. A pending write
+ * is indexed as pending, for the chain-jobs run to settle.
  */
-async function indexWrite(write: RegistryWrite, hash: string, wallet: string): Promise<void> {
+async function indexWrite(
+  write: RegistryWrite,
+  hash: string,
+  wallet: string,
+  status: PaidWriteStatus = "confirmed",
+): Promise<void> {
   if (!isDocumentWrite(write)) return;
   const { error } = await createSupabaseAdminClient().from("chain_writes").insert({
     network: NETWORK,
@@ -208,6 +230,7 @@ async function indexWrite(write: RegistryWrite, hash: string, wallet: string): P
     document_id: write.docId,
     fn: write.fn,
     owner: wallet,
+    status,
   });
   if (error) console.error(`[chain/relay] ${write.fn} ${hash} not indexed: ${error.message}`);
 }
@@ -243,10 +266,25 @@ async function relayPaidWrite(userId: string, submission: RelaySubmission) {
   const refused = await chargeQuota(userId, "write", WRITES_PER_USER, WRITES_GLOBAL);
   if (refused) return refused;
 
-  const { hash, feeStroops } = await submitPaidWrite(submission.func, walletAuthEntry(submission, wallet.address), write.maxFee);
-  await indexWrite(write, hash, wallet.address);
+  const { hash, feeStroops, status } = await submitPaidWrite(
+    submission.func,
+    walletAuthEntry(submission, wallet.address),
+    write.maxFee,
+  );
+  if (status === "pending" && !isDocumentWrite(write)) {
+    // A membership write has no chain_writes row for the chain-jobs run to
+    // settle, and its caller would report a role as in place, so it keeps
+    // answering as before: not confirmed is a refusal to check before retrying.
+    console.error(`[chain/relay] ${write.fn} ${hash} not confirmed within the poll window`);
+    throw new RelayRejection(NOT_CONFIRMED_YET, 502);
+  }
+  await indexWrite(write, hash, wallet.address, status);
 
-  return Response.json({ success: true, data: { hash, status: "confirmed", feeStroops: feeStroops.toString() } });
+  // 202: accepted, not yet confirmed. The browser shows it as pending.
+  return Response.json(
+    { success: true, data: { hash, status, feeStroops: feeStroops.toString() } },
+    { status: status === "pending" ? 202 : 200 },
+  );
 }
 
 /** The wallet's own (validated) approval among a submission's auth entries. */
@@ -352,7 +390,18 @@ async function relayPaidMarketWrite(userId: string, submission: RelaySubmission)
   const refused = await chargeQuota(userId, "market", MARKET_PER_USER, MARKET_GLOBAL);
   if (refused) return refused;
 
-  const { hash, feeStroops } = await submitPaidWrite(submission.func, walletAuthEntry(submission, wallet.address), write.maxFee);
+  const { hash, feeStroops, status } = await submitPaidWrite(
+    submission.func,
+    walletAuthEntry(submission, wallet.address),
+    write.maxFee,
+  );
+  if (status === "pending") {
+    // Market writes have no pending record to settle later (a buy would be
+    // recorded before it landed), so they keep answering as before: not
+    // confirmed is a refusal the buyer can check and retry.
+    console.error(`[chain/relay] market ${call.fn} ${hash} not confirmed within the poll window`);
+    throw new RelayRejection(NOT_CONFIRMED_YET, 502);
+  }
   await recordPurchase(userId, wallet.address, call, plan.sale, hash);
   return Response.json({ success: true, data: { hash, status: "confirmed", feeStroops: feeStroops.toString() } });
 }
@@ -473,16 +522,16 @@ async function deployWallet(userId: string, submission: RelaySubmission, rpId: s
   // test XLM. The address is known before the deploy lands and the native token
   // accepts transfers to it, so the top-up (Friendbot, then a transfer: ~10s)
   // runs alongside the deploy instead of after it, and `after` lets it finish
-  // once the response is sent. Best effort: Top up in the app covers a failure.
+  // once the response is sent. When Friendbot refuses and the deploy lands,
+  // the chain jobs run retries it (wallet-topups.ts, DOQ-6).
   const address = deployedContractAddress(deploy.deployer, deploy.salt, NETWORK_PASSPHRASE);
+  const deployed = submitAndConfirm(submission.func, submission.auth);
   if (USER_PAYS_FEES && !IS_MAINNET) {
-    const topUp = topUpWallet(address).catch((error: Error) =>
-      console.error(`[chain/relay] first top-up for ${address} failed: ${error.message}`),
-    );
+    const topUp = topUpNewWalletOrQueue(admin, { userId, address }, deployed);
     after(() => topUp);
   }
 
-  const sent = await submitAndConfirm(submission.func, submission.auth);
+  const sent = await deployed;
 
   const { error: walletError } = await admin.from("smart_wallets").insert({
     user_id: userId,

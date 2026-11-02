@@ -9,11 +9,19 @@
  */
 import { Address, Contract, Keypair, nativeToScVal, rpc, TransactionBuilder } from "@stellar/stellar-sdk";
 import { IS_MAINNET, NETWORK_PASSPHRASE, RPC_URL } from "@/lib/stellar/config";
-import { NATIVE_XLM } from "@/lib/stellar/smart-wallet-config";
+import { MAX_USER_FEE_STROOPS, NATIVE_XLM } from "@/lib/stellar/smart-wallet-config";
 import { RelayRejection } from "@/lib/stellar/relay-validation";
 
 /** Friendbot pays 10,000 XLM; the throwaway account keeps a little for its reserve and the fee. */
 const TRANSFER_XLM = BigInt(9_990);
+
+/**
+ * A wallet holding at least this much needs no top-up: twice the most one
+ * write may cost (1,000 XLM at testnet's raised cap). /api/chain/topup refuses
+ * above it, which keeps one account from draining Friendbot through us, and
+ * a queued retry (wallet-topups.ts) counts a wallet above it as filled.
+ */
+export const TOP_UP_BELOW_STROOPS = BigInt(2) * MAX_USER_FEE_STROOPS;
 
 export async function topUpWallet(wallet: string): Promise<{ hash: string; amountStroops: bigint }> {
   if (IS_MAINNET) throw new RelayRejection("Test XLM only exists on testnet.", 400);

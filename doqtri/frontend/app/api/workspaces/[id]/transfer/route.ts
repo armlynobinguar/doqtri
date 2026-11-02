@@ -8,6 +8,7 @@ import { readChainWorkspace } from "@/lib/stellar/server-signer";
 import { simulateWithinCap, submitAndConfirm } from "@/lib/stellar/channels";
 import { runChainJobs } from "@/lib/stellar/chain-jobs";
 import { acceptTransfer, type OpenTransfer } from "@/lib/workspace-transfer";
+import { logError } from "@/lib/log-error";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -87,11 +88,11 @@ export async function POST(request: Request, context: RouteContext<"/api/workspa
         return data as string;
       },
     });
-    after(() => runChainJobs(admin, { workspaceId: id }).catch((e) => console.error("[workspaces/transfer] chain jobs", e)));
+    after(() => runChainJobs(admin, { workspaceId: id }).catch((e) => logError("[workspaces/transfer] chain jobs", e)));
     return Response.json({ ok: true, ...result });
   } catch (e) {
     if (e instanceof RelayRejection) return fail(e.message, e.status);
-    console.error("[workspaces/transfer] unexpected error", e);
+    logError("[workspaces/transfer] unexpected error", e);
     return fail("The transfer couldn't be completed. Try again.", 500);
   }
 }
