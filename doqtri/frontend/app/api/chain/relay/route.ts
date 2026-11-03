@@ -43,6 +43,7 @@ import { readWalletPasskeys } from "@/lib/stellar/wallet-signers";
 import { submitPaidWrite, type PaidWriteStatus } from "@/lib/stellar/direct-submit";
 import { topUpNewWalletOrQueue } from "@/lib/stellar/wallet-topups";
 import { logError } from "@/lib/log-error";
+import { CHAIN_QUOTA_CAPS } from "@/lib/stellar/chain-quota-caps";
 
 /**
  * Fee-sponsored submission for passkey smart wallets (progress/002).
@@ -73,19 +74,11 @@ import { logError } from "@/lib/log-error";
 /** A paid write with nothing to settle it later that the poll window ran out on (DOQ-5). */
 const NOT_CONFIRMED_YET = "The network hasn't confirmed this transaction yet. Check again in a minute before retrying.";
 
-const DEPLOYS_PER_USER = positive(process.env.CHAIN_DEPLOYS_PER_USER_DAILY, 3);
-const DEPLOYS_GLOBAL = positive(process.env.CHAIN_DEPLOYS_GLOBAL_DAILY, 200);
-const WRITES_PER_USER = positive(process.env.CHAIN_WRITES_PER_USER_DAILY, 100);
-const WRITES_GLOBAL = positive(process.env.CHAIN_WRITES_GLOBAL_DAILY, 5000);
-const MARKET_PER_USER = positive(process.env.CHAIN_MARKET_PER_USER_DAILY, 50);
-const MARKET_GLOBAL = positive(process.env.CHAIN_MARKET_GLOBAL_DAILY, 2000);
+const { perUser: DEPLOYS_PER_USER, global: DEPLOYS_GLOBAL } = CHAIN_QUOTA_CAPS.deploy;
+const { perUser: WRITES_PER_USER, global: WRITES_GLOBAL } = CHAIN_QUOTA_CAPS.write;
+const { perUser: MARKET_PER_USER, global: MARKET_GLOBAL } = CHAIN_QUOTA_CAPS.market;
 /** Well under the contract's own cap of 15 signers per rule. */
 const MAX_PASSKEYS = 10;
-
-function positive(raw: string | undefined, fallback: number): number {
-  const n = Number(raw);
-  return Number.isInteger(n) && n > 0 ? n : fallback;
-}
 
 function fail(error: string, status: number, extra: Record<string, unknown> = {}, headers?: HeadersInit) {
   return Response.json({ success: false, error, ...extra }, { status, headers });

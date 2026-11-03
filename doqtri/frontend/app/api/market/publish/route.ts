@@ -11,7 +11,8 @@ import {
   newTemplateId,
   templateBodyFromNote,
 } from "@/lib/market";
-import { canReceive, consumeQuota, positiveEnv, userWallet } from "@/lib/market-server";
+import { canReceive, consumeQuota, userWallet } from "@/lib/market-server";
+import { CHAIN_QUOTA_CAPS } from "@/lib/stellar/chain-quota-caps";
 import { loadAuthoredDocument } from "@/lib/workspace-docs";
 
 /**
@@ -26,8 +27,7 @@ import { loadAuthoredDocument } from "@/lib/workspace-docs";
  * remove it.
  */
 
-const PUBLISH_PER_USER = positiveEnv(process.env.MARKET_PUBLISH_PER_USER_DAILY, 10);
-const PUBLISH_GLOBAL = positiveEnv(process.env.MARKET_PUBLISH_GLOBAL_DAILY, 500);
+const { perUser: PUBLISH_PER_USER, global: PUBLISH_GLOBAL } = CHAIN_QUOTA_CAPS.publish;
 
 function fail(error: string, status: number) {
   return Response.json({ error }, { status });
