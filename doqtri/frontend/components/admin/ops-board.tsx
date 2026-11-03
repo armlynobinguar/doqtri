@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ExternalLinkIcon, RefreshCwIcon } from "lucide-react";
+import { OpsChannelsSection } from "@/components/admin/ops-channels";
+import { OPS_TONE } from "@/components/admin/ops-tone";
 import { Button } from "@/components/ui/button";
 import { StatusTag } from "@/components/ui/status-tag";
 import type { OpsCheck, OpsReport, OpsSection, OpsStatus } from "@/lib/ops/types";
@@ -9,14 +11,6 @@ import { cn } from "@/lib/utils";
 
 /** How often the board asks again. */
 export const REFRESH_MS = 60_000;
-
-const TONE: Record<OpsStatus, "verified" | "warning" | "danger" | "info" | "planned"> = {
-  ok: "verified",
-  warn: "warning",
-  crit: "danger",
-  unknown: "info",
-  off: "planned",
-};
 
 const SECTIONS: { id: OpsSection; title: string; blurb: string }[] = [
   { id: "spendable", title: "Spendable", blurb: "Balances, quotas, TTLs and sizes that run out." },
@@ -40,7 +34,7 @@ function Tally({ checks }: { checks: OpsCheck[] }) {
       {order
         .filter((status) => c[status])
         .map((status) => (
-          <StatusTag key={status} tone={TONE[status]}>
+          <StatusTag key={status} tone={OPS_TONE[status]}>
             {c[status]} {status}
           </StatusTag>
         ))}
@@ -58,7 +52,7 @@ function CheckRow({ check }: { check: OpsCheck }) {
     >
       <div className="flex items-start justify-between gap-3">
         <span className="text-[14px] font-medium">{check.label}</span>
-        <StatusTag tone={TONE[check.status]}>{check.status}</StatusTag>
+        <StatusTag tone={OPS_TONE[check.status]}>{check.status}</StatusTag>
       </div>
       <div className="font-mono text-[15px] tabular-nums">{check.value}</div>
       {check.detail && <p className="text-muted-foreground text-[12.5px] leading-snug break-words">{check.detail}</p>}
@@ -144,7 +138,10 @@ export function OpsBoard({ initial, billing }: { initial: OpsReport; billing: Bi
             </ul>
           </section>
         );
-      })}
+      }).flatMap((node, i) =>
+        // The per-channel table sits right under Spendable, where its summary check is.
+        SECTIONS[i].id === "spendable" ? [node, <OpsChannelsSection key="channels" channels={report.channels} />] : [node],
+      )}
 
       <section aria-labelledby="ops-billing" className="flex flex-col gap-3">
         <div>

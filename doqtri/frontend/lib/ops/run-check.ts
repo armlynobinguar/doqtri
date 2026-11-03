@@ -60,3 +60,25 @@ export function memoize<T>(load: (key: string) => Promise<T>, ttlMs: number, now
     return value;
   };
 }
+
+/** Each key loaded once for the life of the returned function, failures included: one report's reads. */
+export function onceEach<T>(load: (key: string) => Promise<T>): (key: string) => Promise<T> {
+  const cache = new Map<string, Promise<T>>();
+  return (key) => {
+    let value = cache.get(key);
+    if (!value) {
+      value = load(key);
+      cache.set(key, value);
+    }
+    return value;
+  };
+}
+
+/** `promise`, or a rejection after `ms`. */
+export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`No answer within ${ms / 1000} s`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
