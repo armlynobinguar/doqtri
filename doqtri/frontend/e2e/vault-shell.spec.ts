@@ -22,8 +22,8 @@ test.describe("vault shell", () => {
     await expect(page.getByRole("button", { name: "Files" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Graph view" })).toBeVisible();
 
-    // Explorer
-    await expect(page.getByText("Vault", { exact: true })).toBeVisible();
+    // Explorer: its header is the workspace switcher (WP-1.7)
+    await expect(page.getByTestId("workspace-switcher")).toBeVisible();
     await expect(page.getByRole("link", { name: title })).toBeVisible();
 
     // Right panel
@@ -67,10 +67,14 @@ test.describe("vault shell", () => {
     const explorer = page.locator('[data-panel][id*="explorer"], [data-panel]').first();
     const before = (await explorer.boundingBox())!.width;
 
-    const handle = page.locator('[data-slot="resizable-handle"]').first();
-    await handle.hover();
+    // The handle is 1px wide, so drag at its coordinates with a real mouse
+    // rather than hover(): if something covered it, the width would not change.
+    const handle = (await page.locator('[data-slot="resizable-handle"]').first().boundingBox())!;
+    const x = handle.x + handle.width / 2;
+    const y = handle.y + handle.height / 2;
+    await page.mouse.move(x, y);
     await page.mouse.down();
-    await page.mouse.move(before + 120, 400, { steps: 12 });
+    await page.mouse.move(x + 120, y, { steps: 12 });
     await page.mouse.up();
 
     const after = (await explorer.boundingBox())!.width;

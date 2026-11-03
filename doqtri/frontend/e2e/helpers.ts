@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { Keypair } from "@stellar/stellar-sdk";
 import { hashMarkdown } from "@/lib/mindmap-hash";
 import { toDocMindmap, type DocMindmap } from "@/lib/mindmap-types";
@@ -190,4 +191,16 @@ export async function serviceRest<T = unknown>(
 /** Unique per run so parallel or repeated runs cannot collide on title. */
 export function uniqueTitle(prefix: string): string {
   return `${prefix} ${Date.now().toString(36)}`;
+}
+
+/**
+ * The note's editor once it accepts typing. The editor is read-only until the
+ * edit-lock status has loaded (WP-1.6); keys pressed before that are dropped,
+ * so every spec that types waits for this first.
+ */
+export async function editableEditor(page: Page): Promise<Locator> {
+  const textarea = page.locator("textarea.w-md-editor-text-input");
+  await expect(textarea).toBeVisible();
+  await expect(textarea).not.toHaveAttribute("readonly", /.*/);
+  return textarea;
 }

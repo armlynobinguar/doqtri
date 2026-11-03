@@ -55,7 +55,8 @@ test.describe("mobile vault", () => {
     // So is the docked explorer: its notes only appear once the drawer opens.
     await expect(page.getByRole("link", { name: title })).toBeHidden();
 
-    await expect(page.getByRole("heading", { name: "Vault" })).toBeVisible();
+    // With no note open, the top bar names the workspace (WP-1.7): a wallet account's is "Personal".
+    await expect(page.getByRole("heading", { name: "Personal" })).toBeVisible();
     await expectNoHorizontalScroll(page);
   });
 

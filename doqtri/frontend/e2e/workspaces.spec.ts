@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { shortenAddress } from "@/lib/wallet";
 import { assertNotProduction } from "./guard";
-import { deleteNote, personalWorkspaceId, seedNote, serviceRest, testUserId, uniqueTitle, userIdForWallet } from "./helpers";
+import { deleteNote, editableEditor, personalWorkspaceId, seedNote, serviceRest, testUserId, uniqueTitle, userIdForWallet } from "./helpers";
 import { createTeamWorkspace, deleteWorkspace, memberRole, setMember } from "./teams";
 import { e2eKeypair, signedInContext } from "./wallet-session";
 
@@ -40,6 +40,18 @@ test.afterAll(async () => {
   await bContext?.close();
   if (team) await deleteWorkspace(team);
 });
+
+/**
+ * The note page refuses this user. Next streams its not-found page once the
+ * vault layout has started, so the HTTP status is 200; the page and the
+ * missing note text are what prove it.
+ */
+async function expectNoteNotFound(page: Page, noteId: string, title: string) {
+  await page.goto(`/vault/${noteId}`);
+  await expect(page.getByText("This page could not be found.")).toBeVisible();
+  await expect(page.getByText(title)).toHaveCount(0);
+  await expect(page.locator("textarea.w-md-editor-text-input")).toHaveCount(0);
+}
 
 async function switchWorkspace(page: Page, name: string) {
   await page.getByTestId("workspace-switcher").click();
@@ -107,8 +119,7 @@ test.describe("workspace scope", () => {
     const page = await bContext.newPage();
     try {
       expect(await memberRole(team, bId)).toBeNull();
-      const res = await page.goto(`/vault/${id}`);
-      expect(res?.status()).toBe(404);
+      await expectNoteNotFound(page, id, title);
       const save = await page.request.put(`/api/notes/${id}`, {
         data: { markdown: "# hijack", version: 1, session: randomUUID() },
       });
@@ -176,8 +187,7 @@ test.describe("members screen", () => {
       // B was an editor, so the removal is queued for the chain (it does not run in e2e).
       await expect(page.getByTestId("pending-removals")).toBeVisible();
 
-      const after = await bPage.goto(`/vault/${noteId}`);
-      expect(after?.status()).toBe(404);
+      await expectNoteNotFound(bPage, noteId, title);
     } finally {
       await bPage.close();
       await deleteNote(noteId);
@@ -256,7 +266,7 @@ test.describe("roles in the editor", () => {
 
     // A starts typing, which takes the lock.
     await page.goto(`/vault/${noteId}`);
-    await editor(page).click();
+    await (await editableEditor(page)).click();
     await editor(page).press("End");
     await editor(page).pressSequentially(" Typed by A.");
     await expect(page.getByText("Saved")).toBeVisible({ timeout: 15_000 });
@@ -296,7 +306,7 @@ test.describe("roles in the editor", () => {
     await setMember(team, bId, "admin");
 
     await page.goto(`/vault/${noteId}`);
-    await editor(page).click();
+    await (await editableEditor(page)).click();
     await editor(page).press("End");
     await editor(page).pressSequentially(" A holds it.");
     await expect(page.getByText("Saved")).toBeVisible({ timeout: 15_000 });

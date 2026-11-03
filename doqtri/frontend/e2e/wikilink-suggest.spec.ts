@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { deleteNote, seedNote, uniqueTitle } from "./helpers";
+import { deleteNote, editableEditor, seedNote, uniqueTitle } from "./helpers";
 
 /*
  * Typing `[[` in the editor lists the vault's notes, Obsidian-style, and
@@ -9,8 +9,7 @@ import { deleteNote, seedNote, uniqueTitle } from "./helpers";
 const TEXTAREA = "textarea.w-md-editor-text-input";
 
 async function caretAtEnd(page: Page) {
-  const textarea = page.locator(TEXTAREA);
-  await expect(textarea).toBeVisible();
+  const textarea = await editableEditor(page);
   await textarea.evaluate((el: HTMLTextAreaElement) => {
     el.focus();
     el.setSelectionRange(el.value.length, el.value.length);

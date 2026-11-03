@@ -10,7 +10,11 @@ import {
 } from "./e2e/qdit-stub/config";
 
 // The tests seed and clean up notes directly, which needs the service role key.
-// `.env.local` wins where both exist — dotenv keeps the first value it sees.
+// Earlier files win — dotenv keeps the first value it sees. `.env.e2e` is the
+// staging branch's keys, written by the release console's
+// `staging.mjs db --app doqtri` and deleted by its `down` (DOQ-16). The dev
+// server below inherits these values, and they beat its own .env files.
+dotenv.config({ path: ".env.e2e", quiet: true });
 dotenv.config({ path: ".env.local", quiet: true });
 dotenv.config({ path: ".env", quiet: true });
 
@@ -23,7 +27,8 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  reporter: [["list"]],
+  // A live terminal view locally (e2e/progress-reporter.ts); the plain list in CI.
+  reporter: process.env.CI ? [["list"]] : [["./e2e/progress-reporter.ts"]],
   timeout: 45_000,
   expect: { timeout: 10_000 },
 

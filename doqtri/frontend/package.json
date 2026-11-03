@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test --project=chromium --project=mobile",
+    "test:e2e:staging": "node scripts/e2e-staging.mjs",
     "shots": "playwright test --project=shots",
     "walkthrough": "playwright test --project=walkthrough",
     "load:paid-writes": "vitest run --config scripts/load-test/vitest.config.mts paid-writes",
