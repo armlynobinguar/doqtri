@@ -366,12 +366,12 @@ function migrationFiles() {
 // here a migration counts as applied only when its row has statements; the
 // parent stamps its own versions, so files are matched to rows by name.
 //
-// Missing files are applied in the order the parent applied them (its
-// versions), and afterwards every replayed row that the parent applied after
-// the first missing one runs again, each in its own transaction, so a later
-// migration that changed what an earlier one set (chain_writes_anchor's
-// constraint, say) ends up the way it is in the parent. One that already
-// fully took effect fails whole ("already exists") and is left as it is.
+// Missing files are applied in file order, after the replay. Replayed rows
+// are not run again: a row's version is the file's version (the console
+// stamps it), not when it ran, so it says nothing about what ran before it.
+// Re-running them put chain_writes_anchor's constraint back over
+// chain_writes_editor_calls' (caught by the release console's
+// `history-backfill --verify`, 3 Nov 2026).
 async function migrate(ref, fresh) {
   const history = await sql(
     ref,
@@ -380,10 +380,7 @@ async function migrate(ref, fresh) {
   if (fresh || history.length === 0) await syncPrivileges(ref);
   const ran = new Set(history.filter((r) => r.n > 0).map((r) => r.name));
   const emptyRow = new Map(history.filter((r) => r.n === 0).map((r) => [r.name, r.version]));
-  const todo = migrationFiles()
-    .filter((m) => !ran.has(m.name))
-    .map((m) => ({ ...m, order: emptyRow.get(m.name) ?? m.version }))
-    .sort((a, b) => a.order.localeCompare(b.order));
+  const todo = migrationFiles().filter((m) => !ran.has(m.name));
   if (!todo.length) {
     log("schema: every migration is applied.");
     return;
@@ -404,22 +401,6 @@ async function migrate(ref, fresh) {
       log(`schema: ${dim(`${i + 1}/${todo.length}`)} ${m.file}`);
     } catch (err) {
       throw new Error(`stopped at ${m.file}; nothing after it was applied.\n${err.message}`);
-    }
-  }
-
-  const first = todo[0].order;
-  const later = history.filter((r) => r.n > 0 && r.version > first);
-  for (const row of later) {
-    stopIfInterrupted();
-    const [{ body }] = await sql(
-      ref,
-      `select array_to_string(statements, E'\\n;\\n') as body from supabase_migrations.schema_migrations where version = ${literal(row.version)};`,
-    );
-    try {
-      await sql(ref, body);
-      log(`schema: ran ${row.name} again, after the files above, as the parent did.`);
-    } catch (err) {
-      log(dim(`schema: ${row.name} already in place (${err.message.match(/ERROR:\s+(\w+)/)?.[1] ?? "error"}), left as it is.`));
     }
   }
 }
