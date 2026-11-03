@@ -104,7 +104,8 @@ export function FileExplorer({
           <Tooltip>
             <TooltipTrigger
               aria-label="New note"
-              disabled={creating || !canCreate}
+              // TooltipTrigger's own `disabled` only stops the tooltip; the button needs it.
+              render={<button type="button" disabled={creating || !canCreate} />}
               onClick={onNewNote}
               className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-7 items-center justify-center rounded-lg transition-colors pointer-coarse:size-10 focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden disabled:opacity-50"
             >
@@ -132,7 +133,7 @@ export function FileExplorer({
           <Tooltip>
             <TooltipTrigger
               aria-label="Upload document"
-              disabled={!canCreate}
+              render={<button type="button" disabled={!canCreate} />}
               onClick={onUploadClick}
               className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-7 items-center justify-center rounded-lg transition-colors pointer-coarse:size-10 focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden disabled:opacity-50"
             >
@@ -466,7 +467,7 @@ function NoteRowAction({
     <Tooltip>
       <TooltipTrigger
         aria-label={`Delete ${note.title}`}
-        disabled={deleting}
+        render={<button type="button" disabled={deleting} />}
         onClick={() => onDelete(note)}
         className="text-sidebar-foreground/70 hover:text-destructive hover:bg-sidebar-accent focus-visible:ring-ring flex size-6 shrink-0 items-center justify-center rounded-lg opacity-0 transition-opacity group-hover:opacity-100 pointer-coarse:size-10 pointer-coarse:opacity-70 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:outline-hidden disabled:opacity-100"
       >
