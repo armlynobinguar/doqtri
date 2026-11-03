@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { deleteNote, seedNote, uniqueTitle } from "./helpers";
+import { deleteNote, editableEditor, seedNote, uniqueTitle } from "./helpers";
 
 /*
  * The markdown editor is a transparent <textarea> (it owns the caret and the
@@ -202,8 +202,7 @@ test.describe("editor caret alignment", () => {
       "# Untitled 3\n\n## Overview\n\nWrite like Obsidian. Headings become the mindmap. Link ideas with [[wikilinks]].\n\n## Next\n",
     );
     await page.goto(`/vault/${noteId}`);
-    const textarea = page.locator(TEXTAREA);
-    await expect(textarea).toBeVisible();
+    const textarea = await editableEditor(page);
     await expectAligned(page);
 
     // The exact sequence from the bug report: append to the long line, break,

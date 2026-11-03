@@ -20,6 +20,8 @@ export default defineConfig({
       "app/d/**/*.test.ts",
       "components/**/*.test.ts",
       "scripts/**/*.test.ts",
+      // The e2e qdit stub, checked against doqtri's real client (no network beyond localhost).
+      "e2e/**/*.test.ts",
     ],
     environment: "node",
   },

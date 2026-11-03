@@ -1,12 +1,24 @@
 import { defineConfig, devices } from "@playwright/test";
 import dotenv from "dotenv";
+import {
+  E2E_DOQTRI_ORIGIN,
+  QDIT_STUB_CLIENT_ID,
+  QDIT_STUB_CLIENT_SECRET,
+  QDIT_STUB_ORIGIN,
+  QDIT_STUB_PORT,
+  qditStubEnv,
+} from "./e2e/qdit-stub/config";
 
 // The tests seed and clean up notes directly, which needs the service role key.
-// `.env.local` wins where both exist — dotenv keeps the first value it sees.
+// Earlier files win — dotenv keeps the first value it sees. `.env.e2e` is the
+// staging branch's keys, written by the release console's
+// `staging.mjs db --app doqtri` and deleted by its `down` (DOQ-16). The dev
+// server below inherits these values, and they beat its own .env files.
+dotenv.config({ path: ".env.e2e", quiet: true });
 dotenv.config({ path: ".env.local", quiet: true });
 dotenv.config({ path: ".env", quiet: true });
 
-const BASE_URL = "http://localhost:3000";
+const BASE_URL = E2E_DOQTRI_ORIGIN;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -15,7 +27,8 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  reporter: [["list"]],
+  // A live terminal view locally (e2e/progress-reporter.ts); the plain list in CI.
+  reporter: process.env.CI ? [["list"]] : [["./e2e/progress-reporter.ts"]],
   timeout: 45_000,
   expect: { timeout: 10_000 },
 
@@ -31,7 +44,8 @@ export default defineConfig({
     { name: "setup", testMatch: /auth\.setup\.ts/ },
     {
       name: "chromium",
-      testIgnore: /mobile\.spec\.ts/,
+      // *.test.ts under e2e/ are Vitest files (the qdit stub's own check).
+      testIgnore: [/mobile\.spec\.ts/, /\.test\.ts$/],
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1440, height: 900 },
@@ -87,10 +101,33 @@ export default defineConfig({
     },
   ],
 
-  webServer: {
-    command: "npm run dev",
-    url: BASE_URL,
-    reuseExistingServer: true,
-    timeout: 120_000,
-  },
+  webServer: [
+    /*
+     * A stand-in qdit (e2e/qdit-stub/server.mts) built from
+     * docs/integration/CONTRACT.md, so the qdit specs run without qdit's
+     * repository, which doqtri does not own (DOQ-16).
+     */
+    {
+      command: "node e2e/qdit-stub/server.mts",
+      url: `${QDIT_STUB_ORIGIN}/__stub/health`,
+      reuseExistingServer: true,
+      timeout: 15_000,
+      env: {
+        QDIT_STUB_PORT: String(QDIT_STUB_PORT),
+        QDIT_STUB_CLIENT_ID,
+        QDIT_STUB_CLIENT_SECRET,
+        QDIT_STUB_DOQTRI_ORIGIN: E2E_DOQTRI_ORIGIN,
+      },
+    },
+    {
+      command: "npm run dev",
+      url: BASE_URL,
+      // A dev server started by hand keeps its own environment, which may
+      // name another Supabase project or a real qdit. Reusing one is opt-in
+      // (E2E_REUSE_DEV_SERVER=1); otherwise a busy :3000 stops the run.
+      reuseExistingServer: process.env.E2E_REUSE_DEV_SERVER === "1",
+      timeout: 120_000,
+      env: qditStubEnv(),
+    },
+  ],
 });

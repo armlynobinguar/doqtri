@@ -85,7 +85,7 @@ export function MindmapPanel({
           <Tooltip>
             <TooltipTrigger
               aria-label={derived ? "Build mindmap" : "Rebuild mindmap"}
-              disabled={building}
+              render={<button type="button" disabled={building} />}
               onClick={rebuild}
               className={
                 // The muted lavender is reserved for AI affordances, and this is one.
