@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { Keypair } from "@stellar/stellar-sdk";
 import { hashMarkdown } from "@/lib/mindmap-hash";
 import { toDocMindmap, type DocMindmap } from "@/lib/mindmap-types";
-import { walletEmail } from "@/lib/wallet-auth";
 
 /**
  * The wallet the e2e session belongs to. Login is wallet-based, so the browser
@@ -36,38 +35,61 @@ function headers() {
   };
 }
 
-let cachedUserId: string | undefined;
+const userIds = new Map<string, string>();
 
 /**
- * The id of the user the browser session belongs to.
+ * The Supabase user id behind a wallet address.
  *
- * Resolved from the wallet address rather than hardcoded: the id is created by
- * /api/auth/wallet the first time the setup project runs, so a fresh Supabase
+ * Resolved from the address rather than hardcoded: the id is created by
+ * /api/auth/wallet the first time that wallet signs in, so a fresh Supabase
  * project gets a different one and a literal here would silently seed notes
  * that no test can see.
  */
-export async function testUserId(): Promise<string> {
-  if (cachedUserId) return cachedUserId;
+export async function userIdForWallet(address: string): Promise<string> {
+  const cached = userIds.get(address);
+  if (cached) return cached;
 
-  const email = walletEmail(E2E_WALLET);
+  // /api/auth/wallet writes wallet_accounts on sign-in; one row per address,
+  // so this stays a point lookup however many accounts the project holds.
   const res = await fetch(
-    `${SUPABASE_URL}/auth/v1/admin/users?page=1&per_page=1000`,
+    `${SUPABASE_URL}/rest/v1/wallet_accounts?address=eq.${address}&select=user_id`,
     { headers: headers() },
   );
   if (!res.ok) {
-    throw new Error(`could not list users: ${res.status} ${await res.text()}`);
+    throw new Error(`could not read wallet_accounts: ${res.status} ${await res.text()}`);
   }
-
-  const { users } = (await res.json()) as { users: { id: string; email?: string }[] };
-  const user = users.find((candidate) => candidate.email?.toLowerCase() === email);
-  if (!user) {
+  const rows = (await res.json()) as { user_id: string }[];
+  if (rows.length !== 1) {
     throw new Error(
-      `no Supabase user for the e2e wallet (${email}). The setup project creates it — run the full suite, not a single spec.`,
+      `no Supabase user for wallet ${address}. It is created when that wallet first signs in — run the full suite, not a single spec.`,
     );
   }
 
-  cachedUserId = user.id;
-  return user.id;
+  userIds.set(address, rows[0].user_id);
+  return rows[0].user_id;
+}
+
+/** The id of the user the default browser session belongs to. */
+export function testUserId(): Promise<string> {
+  return userIdForWallet(E2E_WALLET);
+}
+
+/**
+ * A user's personal workspace. Every account gets one on signup
+ * (ensure_personal_workspace), and it is where the app puts a user's notes
+ * until they switch.
+ */
+export async function personalWorkspaceId(userId?: string): Promise<string> {
+  const owner = userId ?? (await testUserId());
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/workspaces?created_by=eq.${owner}&is_personal=eq.true&select=id`,
+    { headers: headers() },
+  );
+  const rows = (await res.json()) as { id: string }[];
+  if (!res.ok || rows.length !== 1) {
+    throw new Error(`no personal workspace for ${owner}: ${res.status} ${JSON.stringify(rows)}`);
+  }
+  return rows[0].id;
 }
 
 /**
@@ -78,14 +100,21 @@ export async function testUserId(): Promise<string> {
  * `mindmap` seeds the stored concept map too, hashed against this markdown so
  * the note reads as fresh. Without it the note has no map, which is the
  * fallback case — both are worth testing, so both are reachable from here.
+ *
+ * The note goes into the test user's personal workspace unless `into` names
+ * another workspace and author: documents.workspace_id is required and has
+ * no default (WP-1.2).
  */
 export async function seedNote(
   title: string,
   markdown: string,
   mindmap?: DocMindmap,
+  into?: { workspaceId: string; userId: string },
 ): Promise<string> {
+  const userId = into?.userId ?? (await testUserId());
   const row: Record<string, unknown> = {
-    user_id: await testUserId(),
+    user_id: userId,
+    workspace_id: into?.workspaceId ?? (await personalWorkspaceId(userId)),
     title,
     markdown,
   };
@@ -131,7 +160,31 @@ export async function readNote(id: string): Promise<{ title: string; markdown: s
 }
 
 export async function deleteNote(id: string): Promise<void> {
+  // A note linked to a qdit project refuses deletion (D-68 trigger); the
+  // link's cascade takes the note's qdit node_links with it.
+  await fetch(`${SUPABASE_URL}/rest/v1/doc_project_links?document_id=eq.${id}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
   await fetch(`${REST}?id=eq.${id}`, { method: "DELETE", headers: headers() });
+}
+
+/**
+ * A PostgREST call as the service role, for seeding and reading back rows
+ * the specs cannot reach through the UI. Throws on a non-2xx answer.
+ */
+export async function serviceRest<T = unknown>(
+  path: string,
+  init: { method?: string; body?: unknown; prefer?: string } = {},
+): Promise<T> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    method: init.method ?? "GET",
+    headers: { ...headers(), ...(init.prefer ? { Prefer: init.prefer } : {}) },
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`${init.method ?? "GET"} ${path}: ${res.status} ${text}`);
+  return (text ? JSON.parse(text) : null) as T;
 }
 
 /** Unique per run so parallel or repeated runs cannot collide on title. */
