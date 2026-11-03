@@ -63,7 +63,7 @@ function fakeDeps(over: Partial<OpsDeps> = {}, routes: Routes = {}): OpsDeps & {
       expertApiUrl: "https://api.stellar.expert/x",
     },
     snapshot: async () => snapshot(),
-    channelKeys: async () => [],
+    channels: async () => [],
     balance: async () => ({ funded: true, balance: 9000, spendable: 9000 }),
     contractTtl: async (): Promise<ContractTtl> => ({ latestLedger: 1000, instanceLiveUntil: 1000 + 17280 * 60, codeLiveUntil: 1000 + 17280 * 90 }),
     rpcHealth: async () => ({ status: "healthy", latestLedger: 123 }),
@@ -134,7 +134,7 @@ describe("spendable", () => {
     vi.stubEnv("RELAY_POOL", "on");
     const balances: Record<string, number> = { A: 5000, B: 500, C: 3000 };
     const deps = fakeDeps({
-      channelKeys: async () => ["A", "B", "C"],
+      channels: async () => ["A", "B", "C"].map((publicKey, idx) => ({ idx, publicKey, leasedUntil: null })),
       balance: async (key) => ({ funded: true, balance: balances[key], spendable: balances[key] }),
     });
     const result = await check("channel-balances", deps);

@@ -7,25 +7,16 @@ import {
   lowIsBad,
   percent,
   shortKey,
+  worst,
   type Limits,
 } from "@/lib/ops/levels";
 import type { OpsDeps } from "@/lib/ops/deps";
 import type { OpsCheckDef, OpsResult } from "@/lib/ops/types";
+import { FEE_PAYER_LIMITS, readChannelRows } from "@/lib/ops/channels";
 import { CHAIN_QUOTA_CAPS, type ChainQuotaKind } from "@/lib/stellar/chain-quota-caps";
 import { TESTNET_REFILL_BELOW_XLM } from "@/lib/stellar/channel-accounts.mjs";
 import { relayPoolEnabled } from "@/lib/stellar/channel-pool";
 import { serverKeypair } from "@/lib/stellar/server-signer";
-
-/**
- * Relayer and channel accounts pay every paid write's fee. On testnet the
- * relayer refills itself from Friendbot below 1,000 XLM (direct-submit.ts),
- * and the seed script refills channels below the same floor, so crit is that
- * floor and warn is twice it. Mainnet writes cost well under 1 XLM each.
- */
-export const FEE_PAYER_LIMITS: Readonly<Record<"testnet" | "mainnet", Limits>> = {
-  testnet: { warn: 2 * TESTNET_REFILL_BELOW_XLM, crit: TESTNET_REFILL_BELOW_XLM },
-  mainnet: { warn: 50, crit: 10 },
-};
 
 /** The revoker and the contract admin sign a few calls a day. */
 export const SIGNER_LIMITS: Limits = { warn: 50, crit: 10 };
@@ -88,25 +79,27 @@ function channels(deps: OpsDeps): OpsCheckDef {
     section: "spendable",
     label: "Relay channel XLM",
     run: async () => {
-      const keys = await deps.channelKeys();
+      const rows = await readChannelRows(deps);
       const poolOn = relayPoolEnabled();
-      if (keys.length === 0) {
+      if (rows.length === 0) {
         return poolOn
           ? { status: "crit", value: "0 channels", detail: "RELAY_POOL is on but relay_channels is empty: run the seed script" }
           : { status: "off", value: "—", detail: "RELAY_POOL is off and no channels are seeded" };
       }
       const limits = FEE_PAYER_LIMITS[deps.config.network];
-      const accounts = await Promise.all(keys.map((key) => deps.balance(key)));
-      const balances = accounts.map((a) => (a.funded ? a.spendable : 0));
+      const unreadable = rows.filter((r) => r.status === "unknown").length;
+      if (unreadable === rows.length) return { status: "unknown", value: "—", detail: "No channel balance could be read" };
+      // A channel with no account counts as empty.
+      const balances = rows.filter((r) => r.status !== "unknown").map((r) => r.xlm ?? 0);
       const low = balances.filter((b) => b < limits.crit).length;
       const min = Math.min(...balances);
-      const status = lowIsBad(min, limits);
+      const status = worst([lowIsBad(min, limits), unreadable > 0 ? "warn" : "ok"]);
       return {
         // Channels only pay while the pool is on; a low one with it off can wait.
         status: poolOn ? status : status === "ok" ? "ok" : "warn",
         value: `min ${formatXlm(min)}`,
         threshold: limitsText(limits, " XLM"),
-        detail: `${keys.length} channels, ${low} below ${formatCount(limits.crit)} XLM · RELAY_POOL ${poolOn ? "on" : "off"} · refilled only by the seed script`,
+        detail: `${rows.length} channels, ${low} below ${formatCount(limits.crit)} XLM${unreadable ? `, ${unreadable} unreadable` : ""} · RELAY_POOL ${poolOn ? "on" : "off"} · each channel in Relay channels below`,
       };
     },
   };

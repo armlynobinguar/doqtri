@@ -32,6 +32,23 @@ export type OpsCheckDef = {
   run: () => Promise<OpsResult>;
 };
 
+/** One relay channel account on this network (relay_channels), for the per-channel table. */
+export type OpsChannel = {
+  idx: number;
+  publicKey: string;
+  /** Its stellar.expert account page. */
+  explorerUrl: string;
+  /** Spendable XLM, or null when the account does not exist or its balance could not be read. */
+  xlm: number | null;
+  status: OpsStatus;
+  /** When its current lease runs out, or null when it is free. */
+  leasedUntil: string | null;
+};
+
+export type OpsChannels =
+  | { ok: true; poolOn: boolean; limits: { warn: number; crit: number }; rows: OpsChannel[] }
+  | { ok: false; error: string };
+
 export type OpsReport = {
   generatedAt: string;
   /** VERCEL_ENV (production, preview) or NODE_ENV locally. */
@@ -40,4 +57,5 @@ export type OpsReport = {
   /** The deployed commit, first 8 characters, when Vercel says. */
   commit: string | null;
   checks: OpsCheck[];
+  channels: OpsChannels;
 };

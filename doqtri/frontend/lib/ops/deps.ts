@@ -36,6 +36,9 @@ export type OpsSnapshot = {
   };
 };
 
+/** A relay channel as relay_channels holds it: public data only, never its key. */
+export type RelayChannelRow = { idx: number; publicKey: string; leasedUntil: string | null };
+
 /** A contract's instance and code entries: the ledger each lives until, and the latest ledger. */
 export type ContractTtl = { latestLedger: number; instanceLiveUntil: number | null; codeLiveUntil: number | null };
 
@@ -58,7 +61,8 @@ export type OpsDeps = {
   now: () => number;
   config: OpsConfig;
   snapshot: () => Promise<OpsSnapshot>;
-  channelKeys: () => Promise<string[]>;
+  /** This network's relay_channels rows, by idx. */
+  channels: () => Promise<RelayChannelRow[]>;
   balance: (address: string) => Promise<AccountBalance>;
   contractTtl: (contractId: string) => Promise<ContractTtl | null>;
   rpcHealth: () => Promise<{ status: string; latestLedger: number }>;
@@ -132,10 +136,18 @@ export function liveOpsDeps(admin: SupabaseClient): OpsDeps {
       if (typeof data !== "object" || data === null) throw new Error("ops_snapshot answered nothing");
       return data as OpsSnapshot;
     }),
-    channelKeys: async () => {
-      const { data, error } = await admin.from("relay_channels").select("public_key").eq("network", NETWORK).order("idx");
+    channels: async () => {
+      const { data, error } = await admin
+        .from("relay_channels")
+        .select("idx, public_key, leased_until")
+        .eq("network", NETWORK)
+        .order("idx");
       if (error) throw new Error(`reading relay_channels failed: ${error.message}`);
-      return (data ?? []).map((row) => row.public_key as string);
+      return (data ?? []).map((row) => ({
+        idx: row.idx as number,
+        publicKey: row.public_key as string,
+        leasedUntil: (row.leased_until as string | null) ?? null,
+      }));
     },
     balance: cachedBalance,
     contractTtl: cachedContractTtl,
