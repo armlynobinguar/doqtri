@@ -18,8 +18,40 @@ type Kit = typeof import("@creit.tech/stellar-wallets-kit/sdk").StellarWalletsKi
 
 let initialized = false;
 
+/**
+ * Kit 2.8 renamed its Freighter module to Varial, and the module id with it
+ * ("freighter" became "varial"). The kit remembers the chosen wallet by id in
+ * localStorage, and reads it once while its module is being evaluated, so a
+ * returning user still holding "freighter" matches no module: they look
+ * disconnected and the modal never marks Varial as recently used. Rewrite the
+ * old id before the kit is imported.
+ */
+const LEGACY_IDS: Record<string, string> = { freighter: "varial" };
+
+function migrateStoredWalletIds(): void {
+  try {
+    const selectedKey = "@StellarWalletsKit/selectedModuleId";
+    const selected = localStorage.getItem(selectedKey);
+    if (selected && LEGACY_IDS[selected]) localStorage.setItem(selectedKey, LEGACY_IDS[selected]);
+
+    const usedKey = "@StellarWalletsKit/usedWalletsIds";
+    const used = localStorage.getItem(usedKey);
+    if (used) {
+      const ids = JSON.parse(used) as unknown;
+      if (Array.isArray(ids) && ids.some((id) => typeof id === "string" && LEGACY_IDS[id])) {
+        const next = [...new Set(ids.map((id) => (typeof id === "string" && LEGACY_IDS[id]) || id))];
+        localStorage.setItem(usedKey, JSON.stringify(next));
+      }
+    }
+  } catch {
+    // Storage blocked or a malformed record: the kit falls back to no selection.
+  }
+}
+
 async function kit(): Promise<Kit | null> {
   if (typeof window === "undefined") return null;
+
+  if (!initialized) migrateStoredWalletIds();
 
   const [
     { StellarWalletsKit },
@@ -114,7 +146,7 @@ export async function signWalletMessage(message: string, address: string): Promi
   }
 }
 
-/** Prefer the connected Freighter address when available. */
+/** Prefer the connected wallet address when available. */
 export async function getWalletAddress(): Promise<string | null> {
   const wallets = await kit();
   if (!wallets) return null;
