@@ -4,6 +4,9 @@
 //   npm run test:e2e:staging                         the whole suite
 //   npm run test:e2e:staging -- e2e/workspaces.spec.ts -g "two editors"
 //   npm run test:e2e:staging -- --keep               leave the branch up afterwards
+//   npm run test:e2e:chain                           the on-chain project instead
+//                                                    (--chain; DOQ-19), on its own
+//                                                    branch "e2e-chain"
 //
 // 1. branch   create branch "e2e" of the parent project (or reuse one left
 //             behind), wait until it is healthy
@@ -53,7 +56,11 @@ const LOCAL_ORIGIN = "http://localhost:3000";
 
 const argv = process.argv.slice(2);
 const keep = argv.includes("--keep");
-const playwrightArgs = argv.filter((a) => a !== "--keep");
+// --chain runs the testnet project (e2e/chain, DOQ-19) instead of the default
+// suite, on a branch of its own so the two never share accounts or quotas.
+const chain = argv.includes("--chain");
+const playwrightArgs = argv.filter((a) => a !== "--keep" && a !== "--chain");
+const PROJECTS = chain ? ["--project=chain"] : ["--project=chromium", "--project=mobile"];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -153,7 +160,7 @@ function parentRef() {
   throw new Error("No parent project: set E2E_SUPABASE_PARENT_REF, or NEXT_PUBLIC_SUPABASE_URL in .env.");
 }
 
-const BRANCH = process.env.E2E_SUPABASE_BRANCH || "e2e";
+const BRANCH = process.env.E2E_SUPABASE_BRANCH || (chain ? "e2e-chain" : "e2e");
 if (["main", "staging", "master", "production"].includes(BRANCH)) {
   console.error(`[e2e-staging] Refusing branch name "${BRANCH}": this script deletes its branch after every run.`);
   process.exit(1);
@@ -485,7 +492,7 @@ function runPlaywright(env) {
   return new Promise((resolve) => {
     const child = spawn(
       process.platform === "win32" ? "npx.cmd" : "npx",
-      ["playwright", "test", "--project=chromium", "--project=mobile", ...playwrightArgs],
+      ["playwright", "test", ...PROJECTS, ...playwrightArgs],
       { cwd: FRONTEND, stdio: "inherit", env: { ...process.env, ...env } },
     );
     child.on("exit", (code, signal) => resolve(code ?? (signal ? 1 : 0)));
@@ -517,13 +524,14 @@ async function main() {
     await reloadApiSchema(branch.ref, keys.serviceRole);
     stopIfInterrupted();
 
-    phase(4, "tests", dim(`playwright test --project=chromium --project=mobile ${playwrightArgs.join(" ")}`.trim()));
+    phase(4, "tests", dim(`playwright test ${[...PROJECTS, ...playwrightArgs].join(" ")}`));
     testsRan = true;
     exitCode = await runPlaywright({
       NEXT_PUBLIC_SUPABASE_URL: `https://${branch.ref}.supabase.co`,
       NEXT_PUBLIC_SUPABASE_ANON_KEY: keys.anon,
       SUPABASE_SERVICE_ROLE_KEY: keys.serviceRole,
       E2E_ALLOWED_SUPABASE_REFS: branch.ref,
+      ...(chain ? { E2E_CHAIN: "1" } : {}),
     });
     log(exitCode === 0 ? green("tests passed.") : red(`tests failed (exit ${exitCode}).`));
   } catch (err) {
