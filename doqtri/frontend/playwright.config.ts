@@ -45,7 +45,8 @@ export default defineConfig({
     {
       name: "chromium",
       // *.test.ts under e2e/ are Vitest files (the qdit stub's own check).
-      testIgnore: [/mobile\.spec\.ts/, /\.test\.ts$/],
+      // e2e/qdit-live/ runs against staging, from playwright.qdit-live.config.ts.
+      testIgnore: [/mobile\.spec\.ts/, /\.test\.ts$/, /qdit-live\//],
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1440, height: 900 },
