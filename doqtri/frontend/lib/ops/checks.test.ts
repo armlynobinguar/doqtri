@@ -407,6 +407,18 @@ describe("health", () => {
     expect((await check("openai", deps)).status).toBe("crit");
   });
 
+  it("OpenAI: probes OPENAI_BASE_URL when it is set, as the SDK does (DOQ-18)", async () => {
+    vi.stubEnv("OPENAI_BASE_URL", "http://localhost:4020/v1/");
+    try {
+      const deps = fakeDeps({}, { "http://localhost:4020/v1/models": () => Response.json({ data: [] }) });
+      expect((await check("openai", deps)).status).toBe("ok");
+      expect(deps.calls.map((c) => c.url)).toContain("http://localhost:4020/v1/models");
+      expect(deps.calls.map((c) => c.url)).not.toContain("https://api.openai.com/v1/models");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("Horizon: the last ledger's age decides", async () => {
     const at = (seconds: number) =>
       fakeDeps({}, { "https://horizon-testnet.stellar.org": () => Response.json({ history_latest_ledger_closed_at: ago(seconds) }) });

@@ -153,8 +153,10 @@ function dependencyChecks(deps: OpsDeps): OpsCheckDef[] {
     health("openai", "OpenAI API", async () => {
       const key = process.env.OPENAI_API_KEY?.trim();
       if (!key) return { status: "off", value: "—", detail: "OPENAI_API_KEY is unset" };
-      // Listing models is free.
-      const probe = await reachable(deps, "https://api.openai.com/v1/models", { headers: { Authorization: `Bearer ${key}` } });
+      // Listing models is free. OPENAI_BASE_URL is the base the SDK uses too
+      // (the e2e suite points it at a stub).
+      const base = (process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1").replace(/\/+$/, "");
+      const probe = await reachable(deps, `${base}/models`, { headers: { Authorization: `Bearer ${key}` } });
       if (probe.status === 401) return { status: "crit", value: "Key rejected", detail: "OpenAI refused OPENAI_API_KEY: AI features fail" };
       if (probe.status === 429) return { status: "warn", value: "Rate limited", detail: "Check the account's usage and billing" };
       if (probe.status >= 400 && probe.status < 500) return { status: "crit", value: `HTTP ${probe.status}` };
