@@ -46,7 +46,7 @@ export function mapWalletError(err: unknown): DoqtriError {
   const workspaceError = contractCode ? workspaceContractError(Number(contractCode)) : null;
   if (workspaceError) return workspaceError;
 
-  if (m.includes("freighter") && (m.includes("not") || m.includes("install"))) {
+  if ((m.includes("varial") || m.includes("freighter")) && (m.includes("not") || m.includes("install"))) {
     return new DoqtriError(
       "NO_FREIGHTER",
       "Install the Varial extension to continue.",

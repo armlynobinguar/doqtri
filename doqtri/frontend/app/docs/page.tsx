@@ -114,7 +114,7 @@ export default function DocsPage() {
             <h2>Quick start</h2>
             <ol className={styles.steps}>
               <li>
-                <strong>Install a Stellar wallet.</strong> <a href="https://www.freighter.app/" target="_blank" rel="noreferrer">Varial</a>{" "}
+                <strong>Install a Stellar wallet.</strong> <a href="https://varialwallet.com/" target="_blank" rel="noreferrer">Varial</a>{" "}
                 works best; xBull, Lobstr, Hana, Klever, OneKey and HOT are also supported. Switch it to{" "}
                 <b>Stellar {NETWORK}</b>.
               </li>
