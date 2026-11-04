@@ -238,6 +238,34 @@ function parseTokenSet(body: unknown, now: number): TokenSet | null {
   };
 }
 
+/**
+ * Supabase Auth's codes for a grant that is used up, expired or revoked. Its
+ * token endpoint answers them as `{"code":400,"error_code":...,"msg":...}`
+ * rather than RFC 6749's `{"error":"invalid_grant"}`: a refresh after the
+ * user revoked Doqtri in qdit is `refresh_token_not_found` (seen on qdit
+ * staging, DOQ-20). They mean what invalid_grant means, so they are read as it.
+ */
+const SUPABASE_DEAD_GRANT = new Set([
+  "refresh_token_not_found",
+  "refresh_token_already_used",
+  "session_not_found",
+  "session_expired",
+  "flow_state_not_found",
+  "flow_state_expired",
+  "bad_code_verifier",
+]);
+
+/** The OAuth error code of a token endpoint refusal, in RFC 6749's shape or Supabase Auth's. */
+function oauthErrorCode(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const b = body as { error?: unknown; error_code?: unknown };
+  if (typeof b.error === "string" && b.error) return b.error;
+  if (typeof b.error_code === "string" && b.error_code) {
+    return SUPABASE_DEAD_GRANT.has(b.error_code) ? "invalid_grant" : b.error_code;
+  }
+  return null;
+}
+
 async function tokenRequest(
   config: QditConfig,
   form: Record<string, string>,
@@ -256,7 +284,7 @@ async function tokenRequest(
     if (!tokens) throw new OAuthUnavailableError(res.status);
     return tokens;
   }
-  const code = body && typeof (body as { error?: unknown }).error === "string" ? (body as { error: string }).error : null;
+  const code = oauthErrorCode(body);
   // 4xx with an OAuth error is a definite answer; anything else is qdit's trouble.
   if (res.status >= 400 && res.status < 500 && code) throw new OAuthGrantError(code, res.status);
   throw new OAuthUnavailableError(res.status);

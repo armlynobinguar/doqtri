@@ -91,16 +91,15 @@ async function qdit(page: Page, token: string, method: string, path: string, dat
 
 /**
  * qdit's recovery sign-in (email and password), when qdit asked for it, then
- * back to `landing`. Each test has a fresh browser context, so every visit to
- * qdit starts signed out.
+ * waits until `landed`. Each test has a fresh browser context, so every visit
+ * to qdit starts signed out.
  */
-async function signInToQditIfAsked(page: Page, landing: string) {
+async function signInToQditIfAsked(page: Page, landed: (url: URL) => boolean) {
   if (new URL(page.url()).pathname !== "/login") return;
   await page.getByLabel("Email").fill(liveEnv("QDIT_LIVE_EMAIL"));
   await page.getByLabel("Password").fill(liveEnv("QDIT_LIVE_PASSWORD"));
   await page.getByRole("button", { name: "Sign in" }).click();
-  await page.waitForURL((url) => url.pathname === landing, { timeout: 30_000 });
-  assertOnQditStaging(page.url());
+  await page.waitForURL(landed, { timeout: 30_000 });
 }
 
 function card(page: Page) {
@@ -121,17 +120,31 @@ test("connect: doqtri -> qdit sign-in and consent -> doqtri, and qdit's /me answ
   await page.waitForURL((url) => url.pathname === "/login" || url.pathname === "/oauth/consent");
   assertOnQditStaging(page.url());
 
-  await signInToQditIfAsked(page, "/oauth/consent");
-
-  await page.getByRole("button", { name: /^Allow / }).click();
-  await page.waitForURL(/\/vault\/profile/, { timeout: 30_000 });
+  // qdit shows its consent screen the first time. Once the account has
+  // consented to Doqtri (an earlier run that stopped before revoking), Supabase
+  // skips it and sends the browser straight back to doqtri.
+  const consentOrBack = (url: URL) => url.pathname === "/oauth/consent" || url.pathname === "/vault/profile";
+  await signInToQditIfAsked(page, consentOrBack);
+  // The consent page loads either way and forwards at once when consent
+  // exists, so wait for whichever shows: its Allow button, or doqtri again.
+  const allow = page.getByRole("button", { name: /^Allow / });
+  const backInDoqtri = /\/vault\/profile/;
+  await Promise.race([allow.waitFor({ state: "visible", timeout: 30_000 }), page.waitForURL(backInDoqtri, { timeout: 30_000 })]);
+  if (!backInDoqtri.test(page.url())) {
+    assertOnQditStaging(page.url());
+    await allow.click();
+  }
+  await page.waitForURL(backInDoqtri, { timeout: 30_000 });
   await expect(page.getByTestId("qdit-outcome")).toHaveText("qdit is connected.");
   await expect(page.getByTestId("qdit-status")).toHaveText("Connected");
 
   // The token doqtri stored works against qdit itself.
   const me = await qdit(page, await heldAccessToken(), "GET", "/me");
   expect(me.status(), await me.text()).toBe(200);
-  expect((await me.json()).data).toHaveProperty("id");
+  // CONTRACT.md section 8: { user: { id, ... }, client_id }.
+  const { data } = (await me.json()) as { data: { user: { id: string }; client_id: string } };
+  expect(data.user.id).toMatch(/^[0-9a-f-]{36}$/);
+  expect(data.client_id).toMatch(/^[0-9a-f-]{36}$/);
 });
 
 test("projects: doqtri lists the qdit project, and a note links to it", async ({ page }) => {
@@ -175,8 +188,9 @@ test("milestone: one made from a heading exists in qdit, linked back to the note
 
   const read = await qdit(page, await heldAccessToken(), "GET", `/milestones/${milestoneId}`);
   expect(read.status(), await read.text()).toBe(200);
+  // CONTRACT.md section 7: the Milestone carries `project: { id, name, slug }`.
   expect((await read.json()).data).toMatchObject({
-    project_id: projectId,
+    project: { id: projectId },
     title: "Build the escrow",
     status: "proposed",
     link: { doc_id: note!.id, node_id: H_BUILD },
@@ -226,7 +240,10 @@ test("revoke in qdit cuts doqtri off at once (D-59)", async ({ page }) => {
   await page.goto(`${LIVE_QDIT_URL}/settings`);
   await page.waitForURL((url) => url.pathname === "/settings" || url.pathname === "/login");
   assertOnQditStaging(page.url());
-  await signInToQditIfAsked(page, "/settings");
+  // A sign-in reached from /settings lands on qdit's dashboard, not back here.
+  await signInToQditIfAsked(page, (url) => url.pathname === "/settings" || url.pathname === "/dashboard");
+  if (new URL(page.url()).pathname !== "/settings") await page.goto(`${LIVE_QDIT_URL}/settings`);
+  assertOnQditStaging(page.url());
 
   // The test account authorizes only Doqtri; the dialog title proves the right row was picked.
   await page.getByRole("button", { name: "Revoke" }).first().click();
@@ -240,7 +257,7 @@ test("revoke in qdit cuts doqtri off at once (D-59)", async ({ page }) => {
   expect((await direct.json()).error.code).toBe("unauthorized");
 
   const projects = await page.request.get("/api/integrations/qdit/projects");
-  expect(projects.status()).toBe(409);
+  expect(projects.status(), await projects.text()).toBe(409);
   expect((await projects.json()).code).toBe("QDIT_NOT_CONNECTED");
 
   await page.goto("/vault/profile?tab=apps");

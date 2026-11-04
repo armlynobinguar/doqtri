@@ -151,6 +151,24 @@ describe("token endpoint", () => {
     expect((error as Error).message).not.toContain("rt-secret");
   });
 
+  it("reads Supabase Auth's refusal of a revoked refresh token as invalid_grant (DOQ-20)", async () => {
+    // What qdit staging answers after the user revokes Doqtri in qdit's settings.
+    const fetch = vi.fn(async () =>
+      json(400, { code: 400, error_code: "refresh_token_not_found", msg: "Invalid Refresh Token: Refresh Token Not Found" }),
+    );
+    const error = await refreshTokens(config, "rt", { fetch }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OAuthGrantError);
+    expect((error as OAuthGrantError).error).toBe("invalid_grant");
+    expect((error as OAuthGrantError).status).toBe(400);
+  });
+
+  it("keeps any other Supabase Auth error_code as the grant error's code", async () => {
+    const fetch = vi.fn(async () => json(401, { code: 401, error_code: "invalid_credentials", msg: "Invalid client" }));
+    const error = await refreshTokens(config, "rt", { fetch }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OAuthGrantError);
+    expect((error as OAuthGrantError).error).toBe("invalid_credentials");
+  });
+
   it("treats a 5xx, a network failure or a malformed success as unavailable", async () => {
     await expect(refreshTokens(config, "rt", { fetch: async () => json(502, {}) })).rejects.toBeInstanceOf(OAuthUnavailableError);
     await expect(
