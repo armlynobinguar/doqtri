@@ -8,6 +8,8 @@ import {
   QDIT_STUB_PORT,
   qditStubEnv,
 } from "./e2e/qdit-stub/config";
+import { OPENAI_STUB_ORIGIN, openaiStubEnv, openaiStubServerEnv } from "./e2e/openai-stub/config";
+import { E2E_ADMIN_WALLET } from "./e2e/admin-wallet";
 
 // The tests seed and clean up notes directly, which needs the service role key.
 // Earlier files win — dotenv keeps the first value it sees. `.env.e2e` is the
@@ -120,6 +122,17 @@ export default defineConfig({
         QDIT_STUB_DOQTRI_ORIGIN: E2E_DOQTRI_ORIGIN,
       },
     },
+    /*
+     * A stand-in OpenAI (e2e/openai-stub/server.mts), so upload, Regenerate
+     * and Build mindmap run without spending real tokens (DOQ-18).
+     */
+    {
+      command: "node e2e/openai-stub/server.mts",
+      url: `${OPENAI_STUB_ORIGIN}/__stub/health`,
+      reuseExistingServer: true,
+      timeout: 15_000,
+      env: openaiStubServerEnv(),
+    },
     {
       command: "npm run dev",
       url: BASE_URL,
@@ -128,7 +141,13 @@ export default defineConfig({
       // (E2E_REUSE_DEV_SERVER=1); otherwise a busy :3000 stops the run.
       reuseExistingServer: process.env.E2E_REUSE_DEV_SERVER === "1",
       timeout: 120_000,
-      env: qditStubEnv(),
+      env: {
+        ...qditStubEnv(),
+        // Replaces any real OPENAI_API_KEY with the stub's fake one.
+        ...openaiStubEnv(),
+        // The e2e wallet is the only admin, for the /admin specs.
+        DOQTRI_ADMINS: E2E_ADMIN_WALLET,
+      },
     },
   ],
 });

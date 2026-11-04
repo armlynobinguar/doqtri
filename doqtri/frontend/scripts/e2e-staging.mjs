@@ -11,6 +11,7 @@
 //             every migration in doqtri/backend/migrations (this checkout)
 //             that the branch's history lacks
 // 3. auth     redirect URLs for localhost, sign-up without email confirmation
+//             or captcha
 // 4. test     `playwright test --project=chromium --project=mobile [args]`,
 //             with the branch's URL and keys in the environment, which beat
 //             every .env file (and E2E_ALLOWED_SUPABASE_REFS = the branch)
@@ -429,8 +430,12 @@ async function configureAuth(ref) {
     uri_allow_list: `${LOCAL_ORIGIN}/**`,
     // No SMTP on a branch: accounts are usable as soon as they exist.
     mailer_autoconfirm: true,
+    // The parent's captcha comes along with the branch, but the local app has
+    // no Turnstile site key, so every email sign-up and sign-in would be
+    // refused (DOQ-18). The branch is throwaway; the parent keeps its own.
+    security_captcha_enabled: false,
   });
-  log("auth: localhost redirects, no email confirmation.");
+  log("auth: localhost redirects, no email confirmation, no captcha.");
 }
 
 // doqtri runs on the legacy anon and service_role keys, as production does.

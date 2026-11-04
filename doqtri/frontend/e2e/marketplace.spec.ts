@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { deleteNote, seedNote, uniqueTitle } from "./helpers";
+import { e2eKeypair, signedInContext } from "./wallet-session";
 
 /**
  * Template marketplace surfaces (progress/004). On-chain writes need a funded
@@ -86,10 +87,18 @@ test.describe("template marketplace", () => {
     await expect(page.getByTestId("earnings-view")).toBeVisible();
   });
 
-  test("admin reports queue is hidden from non-admins", async ({ page }) => {
-    // notFound() streams the not-found page, so the status isn't reliable here.
-    const res = await page.goto("/admin/reports");
-    expect(res?.status()).toBeLessThan(500);
-    await expect(page.getByRole("heading", { name: "Template copy reports" })).toHaveCount(0);
+  test("admin reports queue is hidden from non-admins", async ({ browser }) => {
+    // The shared e2e session is an admin (DOQTRI_ADMINS, DOQ-18), so this
+    // signs in a wallet that is listed nowhere.
+    const context = await signedInContext(browser, e2eKeypair("doqtri-e2e-not-admin"));
+    try {
+      const page = await context.newPage();
+      // notFound() streams the not-found page, so the status isn't reliable here.
+      const res = await page.goto("/admin/reports");
+      expect(res?.status()).toBeLessThan(500);
+      await expect(page.getByRole("heading", { name: "Template copy reports" })).toHaveCount(0);
+    } finally {
+      await context.close();
+    }
   });
 });
