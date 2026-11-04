@@ -29,6 +29,8 @@ export function e2eKeypair(label: string): Keypair {
 export async function walletSessionCookies(
   request: APIRequestContext,
   keypair: Keypair,
+  /** The host the cookies belong to: localhost for the local suite, the staging host for qdit-live. */
+  domain = "localhost",
 ): Promise<{ name: string; value: string; domain: string; path: string }[]> {
   const address = keypair.publicKey();
   const challengeRes = await request.post("/api/auth/wallet/challenge", { data: { address } });
@@ -62,7 +64,7 @@ export async function walletSessionCookies(
   expect(error, error?.message).toBeNull();
   expect(jar.size, "setSession wrote no auth cookies").toBeGreaterThan(0);
 
-  return [...jar].map(([name, value]) => ({ name, value, domain: "localhost", path: "/" }));
+  return [...jar].map(([name, value]) => ({ name, value, domain, path: "/" }));
 }
 
 /**

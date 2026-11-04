@@ -280,7 +280,9 @@ function token(req: IncomingMessage, raw: string, res: ServerResponse) {
     const presented = form.get("refresh_token") ?? "";
     const held = state.refresh.get(presented);
     if (!held) {
-      send(res, 400, { error: "invalid_grant" });
+      // Supabase Auth's own shape, not RFC 6749's {"error":"invalid_grant"}:
+      // what real qdit answers for a revoked or spent refresh token (DOQ-20).
+      send(res, 400, { code: 400, error_code: "refresh_token_not_found", msg: "Invalid Refresh Token: Refresh Token Not Found" });
       return;
     }
     state.refresh.delete(presented);
