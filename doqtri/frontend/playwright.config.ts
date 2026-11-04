@@ -17,6 +17,15 @@ import { E2E_ADMIN_WALLET } from "./e2e/admin-wallet";
 // `staging.mjs db --app doqtri` and deleted by its `down` (DOQ-16). The dev
 // server below inherits these values, and they beat its own .env files.
 dotenv.config({ path: ".env.e2e", quiet: true });
+// The testnet project's extra settings (DOQ-19, e2e/chain/README.md), only
+// when `npm run test:e2e:chain` asks for them. They reach the dev server too.
+if (process.env.E2E_CHAIN === "1") {
+  dotenv.config({ path: ".env.chain", quiet: true });
+  // On-chain workspace roles, and a cron key so the spec can run the chain
+  // job queue itself. Neither is a secret on a throwaway e2e run.
+  process.env.NEXT_PUBLIC_REGISTRY_EDITORS ||= "1";
+  process.env.CRON_SECRET ||= "e2e-chain-only-cron-secret";
+}
 dotenv.config({ path: ".env.local", quiet: true });
 dotenv.config({ path: ".env", quiet: true });
 
@@ -48,13 +57,34 @@ export default defineConfig({
       name: "chromium",
       // *.test.ts under e2e/ are Vitest files (the qdit stub's own check).
       // e2e/qdit-live/ runs against staging, from playwright.qdit-live.config.ts.
-      testIgnore: [/mobile\.spec\.ts/, /\.test\.ts$/, /qdit-live\//],
+      // e2e/chain/ spends testnet XLM and runs only from `npm run test:e2e:chain`.
+      testIgnore: [/mobile\.spec\.ts/, /\.test\.ts$/, /qdit-live\//, /chain\//],
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1440, height: 900 },
         storageState: "e2e/.auth/user.json",
       },
       dependencies: ["setup"],
+    },
+    /*
+     * On-chain flows on Stellar testnet (DOQ-19): passkey wallets, anchoring,
+     * the audit page, the marketplace and on-chain workspaces. Slow and
+     * dependent on public RPC, so never part of `test:e2e`; run it with
+     * `npm run test:e2e:chain`. Its own setup signs nobody in: each spec makes
+     * its own email accounts and passkey wallets.
+     */
+    {
+      name: "chain",
+      testDir: "./e2e/chain",
+      testMatch: /.*\.chain\.ts/,
+      timeout: 300_000,
+      expect: { timeout: 30_000 },
+      // A failed write would leave later steps with nothing to act on.
+      retries: 0,
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 1440, height: 900 },
+      },
     },
     // The vault's compact layout. A Chromium phone profile, so it runs on the
     // same installed browser as the desktop suite.
