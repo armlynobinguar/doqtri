@@ -11,6 +11,7 @@ import {
   ImageIcon,
   FlagIcon,
   GiftIcon,
+  BanknoteIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -143,6 +144,10 @@ function AdminMenu() {
           <DropdownMenuItem onClick={() => router.push("/admin/referrals")}>
             <GiftIcon strokeWidth={1.5} />
             Referrals
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => router.push("/admin/referrals/payouts")}>
+            <BanknoteIcon strokeWidth={1.5} />
+            Referral payouts
           </DropdownMenuItem>
         </DropdownMenuGroup>
       </DropdownMenuContent>

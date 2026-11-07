@@ -47,12 +47,28 @@ returns void language sql as $$
   values (p_network, pg_temp.tx(p_tx), pg_temp.uid(p_n), pg_temp.wallet('G', p_n), 'anchor', p_at)
 $$;
 
+-- A paid one is eligible first, then paid the only way a reward can be (DOQ-26).
 create function pg_temp.reward(p_n int, p_referrer int, p_status text, p_amount int, p_network text default 'testnet')
-returns void language sql as $$
+returns void language plpgsql as $$
+begin
   insert into public.referral_rewards
     (network, referrer_user_id, referred_user_id, referred_wallet, amount_php, status, void_reason)
-  values (p_network, pg_temp.uid(p_referrer), pg_temp.uid(p_n), pg_temp.wallet('G', p_n), p_amount, p_status,
-          case when p_status = 'void' then 'admin says no' end)
+  values (p_network, pg_temp.uid(p_referrer), pg_temp.uid(p_n), pg_temp.wallet('G', p_n), p_amount,
+          case when p_status = 'paid' then 'eligible' else p_status end,
+          case when p_status = 'void' then 'admin says no' end);
+  if p_status = 'paid' then
+    insert into public.referral_payout_profiles (user_id, method, name, xlm_address)
+    values (pg_temp.uid(p_referrer), 'xlm', 'Payout Holder', 'G' || repeat('P', 55))
+    on conflict (user_id) do nothing;
+    perform public.mark_referral_rewards_paid(
+      pg_temp.uid(p_referrer),
+      array[(select id from public.referral_rewards where referred_user_id = pg_temp.uid(p_n))],
+      p_amount,
+      (select updated_at from public.referral_payout_profiles where user_id = pg_temp.uid(p_referrer)),
+      null,
+      pg_temp.uid(p_referrer));
+  end if;
+end;
 $$;
 
 -- ---------------------------------------------------------------------------
