@@ -64,6 +64,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261107100000_referral_eligibility.sql   # NOT yet applied (WP-4.6, DOQ-23): needs 20261101110000_chain_writes_status.sql first
 20261107110000_referral_dashboard.sql     # NOT yet applied (WP-4.6, DOQ-24): needs 20261107100000_referral_eligibility.sql first
 20261107120000_referral_payout_profiles.sql  # NOT yet applied (WP-4.6, DOQ-25): needs 20261107110000_referral_dashboard.sql first
+20261107140000_referral_testimonials.sql     # NOT yet applied (WP-4.6, DOQ-28): needs 20261107120000_referral_payout_profiles.sql first
 ```
 
 Files marked "NOT recorded" were added without updating this list, so whether they are

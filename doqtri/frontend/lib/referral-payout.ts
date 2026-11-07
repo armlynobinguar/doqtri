@@ -112,13 +112,16 @@ function characters(text: string): number {
 }
 
 /** Trimmed text, "" for nothing there, or null for something that isn't text at all. */
-function readText(value: unknown): string | null {
+export function readText(value: unknown): string | null {
   if (value === undefined || value === null) return "";
   return typeof value === "string" ? value.trim() : null;
 }
 
-/** The problem with a required (`empty` says what to do) or optional (`empty` null) piece of text. */
-function textProblem(value: string | null, max: number, empty: string | null): string | null {
+/**
+ * The problem with a required (`empty` says what to do) or optional (`empty` null)
+ * piece of text. The testimonial's feedback (lib/referral-testimonial.ts) uses it too.
+ */
+export function textProblem(value: string | null, max: number, empty: string | null): string | null {
   if (value === null) return NOT_TEXT;
   if (!value) return empty;
   if (INVISIBLE.test(value)) return CHARACTERS;
