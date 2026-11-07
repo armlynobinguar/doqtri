@@ -84,7 +84,7 @@ const put = (body: unknown) =>
     }),
   );
 
-const XLM = { name: NAME, method: "xlm", address: ADDRESS, memo: MEMO };
+const XLM = { name: NAME, method: "xlm", address: ADDRESS, memo: MEMO, memoType: "text" };
 const EWALLET = {
   name: NAME,
   method: "ewallet",
@@ -98,6 +98,7 @@ const STORED_XLM = {
   name: NAME,
   xlm_address: ADDRESS,
   xlm_memo: MEMO,
+  xlm_memo_type: "text",
   ewallet_provider: null,
   ewallet_account_name: null,
   ewallet_account_number: null,
@@ -216,7 +217,7 @@ describe("eligibility (AC 1)", () => {
     const res = await GET();
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      profile: { method: "xlm", name: NAME, address: ADDRESS, memo: MEMO },
+      profile: { method: "xlm", name: NAME, address: ADDRESS, memo: MEMO, memoType: "text" },
       canEdit: false,
     });
   });
@@ -243,6 +244,7 @@ describe("reading", () => {
       name: NAME,
       xlm_address: null,
       xlm_memo: null,
+      xlm_memo_type: null,
       ewallet_provider: "Maya",
       ewallet_account_name: NAME,
       ewallet_account_number: NUMBER,
@@ -273,7 +275,7 @@ describe("saving", () => {
     const res = await put(XLM);
     expect(res.headers.get("Cache-Control")).toBe("no-store");
     const text = await res.text();
-    expect(JSON.parse(text)).toEqual({ summary: { label: "XLM", last4: ADDRESS.slice(-4) } });
+    expect(JSON.parse(text)).toEqual({ summary: { label: "XLM", last4: ADDRESS.slice(-4), memoType: "text" } });
     for (const secret of [ADDRESS, NAME, MEMO]) expect(text).not.toContain(secret);
   });
 
@@ -284,6 +286,7 @@ describe("saving", () => {
       method: "xlm",
       xlm_address: ADDRESS,
       xlm_memo: MEMO,
+      xlm_memo_type: "text",
       ewallet_provider: null,
       ewallet_account_name: null,
       ewallet_account_number: null,
@@ -293,6 +296,7 @@ describe("saving", () => {
       method: "ewallet",
       xlm_address: null,
       xlm_memo: null,
+      xlm_memo_type: null,
       ewallet_provider: "GCash",
       ewallet_account_name: NAME,
       ewallet_account_number: NUMBER,
@@ -310,13 +314,14 @@ describe("saving", () => {
         "user_id",
         "xlm_address",
         "xlm_memo",
+        "xlm_memo_type",
       ].sort(),
     );
   });
 
   it("drops the other method's fields sent alongside, rather than store them", async () => {
     await put({ ...EWALLET, address: ADDRESS, memo: MEMO });
-    expect(state.saves[0].row).toMatchObject({ method: "ewallet", xlm_address: null, xlm_memo: null });
+    expect(state.saves[0].row).toMatchObject({ method: "ewallet", xlm_address: null, xlm_memo: null, xlm_memo_type: null });
   });
 });
 
@@ -324,7 +329,12 @@ describe("the server's own validation (AC 2, AC 3)", () => {
   it.each([
     ["a passkey C address", { ...XLM, address: "C" + ADDRESS.slice(1) }, "address"],
     ["a bad checksum", { ...XLM, address: ADDRESS.slice(0, -1) + (ADDRESS.endsWith("A") ? "B" : "A") }, "address"],
-    ["a 29-byte memo", { ...XLM, memo: "é".repeat(14) + "x" }, "memo"],
+    ["a 29-byte memo", { ...XLM, memo: "x".repeat(29) }, "memo"],
+    ["a zero-width space in a memo", { ...XLM, memo: "123456\u200b" }, "memo"],
+    ["a memo with no type", { ...XLM, memoType: undefined }, "memoType"],
+    ["an ID memo past 64 bits", { ...XLM, memo: "18446744073709551616", memoType: "id" }, "memo"],
+    ["fullwidth digits in a number", { ...EWALLET, accountNumber: "0999\uff18\uff18\uff18\uff17\uff17\uff17\uff17" }, "accountNumber"],
+    ["an invisible name", { ...EWALLET, name: "\u200b\u2800" }, "name"],
     ["no name", { ...XLM, name: " " }, "name"],
     ["no provider", { ...EWALLET, provider: undefined }, "provider"],
     ["no account name", { ...EWALLET, accountName: "" }, "accountName"],
@@ -345,17 +355,93 @@ describe("the server's own validation (AC 2, AC 3)", () => {
     ["not JSON", "{"],
     ["JSON that isn't an object", "[1, 2]"],
     ["nothing at all", ""],
-    ["more than any form could be", JSON.stringify({ ...XLM, padding: "x".repeat(9000) })],
   ])("refuses %s with 400, saving nothing", async (_name, body) => {
     const res = await put(body);
     expect(res.status).toBe(400);
     expect(state.saves).toEqual([]);
   });
 
+  it("an ID memo saves with its type, and the summary says only that", async () => {
+    const res = await put({ ...XLM, memo: "18446744073709551615", memoType: "id" });
+    expect(res.status).toBe(200);
+    expect(state.saves[0].row).toMatchObject({ xlm_memo: "18446744073709551615", xlm_memo_type: "id" });
+    const text = await res.text();
+    expect(JSON.parse(text).summary).toEqual({ label: "XLM", last4: ADDRESS.slice(-4), memoType: "id" });
+    expect(text).not.toContain("18446744073709551615");
+  });
+
   it("never quotes the details back in a refusal", async () => {
     const res = await put({ ...XLM, address: `C${MEMO}`, memo: MEMO.repeat(3), name: `${NAME}\n${NAME}` });
     const text = await res.text();
     for (const secret of [MEMO, NAME]) expect(text).not.toContain(secret);
+  });
+});
+
+describe("the body's size", () => {
+  const LIMIT = 8 * 1024;
+  const big = JSON.stringify({ ...XLM, padding: "x".repeat(LIMIT) });
+
+  /** A body that counts how much of it was read, and never ends unless read to the end. */
+  function streamed(text: string, chunk = 1024) {
+    const bytes = new TextEncoder().encode(text);
+    let pulled = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled >= bytes.length) return controller.close();
+        controller.enqueue(bytes.slice(pulled, pulled + chunk));
+        pulled += chunk;
+      },
+      // Nothing read ahead: only what the route asks for is pulled.
+    }, { highWaterMark: 0 });
+    return { body, pulled: () => Math.min(pulled, bytes.length) };
+  }
+
+  const send = (body: BodyInit, headers: Record<string, string> = {}) =>
+    PUT(
+      new Request("http://localhost/api/referrals/payout-profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", ...headers },
+        body,
+        duplex: "half",
+      } as RequestInit),
+    );
+
+  it("a Content-Length over the cap is refused with 413 before anything is read or checked", async () => {
+    const { body, pulled } = streamed(big);
+    const res = await send(body, { "Content-Length": String(LIMIT + 1) });
+    expect(res.status).toBe(413);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(pulled()).toBe(0);
+    expect(state.adminUsed).toBe(0);
+    expect(state.saves).toEqual([]);
+  });
+
+  it("with no Content-Length, reading stops just past the cap", async () => {
+    const { body, pulled } = streamed(big + "x".repeat(64 * 1024));
+    const res = await send(body);
+    expect(res.status).toBe(413);
+    expect(pulled()).toBeLessThanOrEqual(LIMIT + 1024);
+    expect(state.saves).toEqual([]);
+  });
+
+  it("a Content-Length that understates the body can't get more read either", async () => {
+    const { body, pulled } = streamed(big + "x".repeat(64 * 1024));
+    const res = await send(body, { "Content-Length": "100" });
+    expect(res.status).toBe(413);
+    expect(pulled()).toBeLessThanOrEqual(LIMIT + 1024);
+    expect(state.saves).toEqual([]);
+  });
+
+  it("counts bytes, not characters", async () => {
+    // Under the cap in characters, over it in bytes.
+    const res = await put(JSON.stringify({ ...XLM, padding: "\u00e9".repeat(LIMIT / 2 + 10) }));
+    expect(res.status).toBe(413);
+  });
+
+  it("a form under the cap, streamed in pieces, saves as usual", async () => {
+    const { body } = streamed(JSON.stringify(XLM), 7);
+    expect((await send(body)).status).toBe(200);
+    expect(state.saves).toHaveLength(1);
   });
 });
 

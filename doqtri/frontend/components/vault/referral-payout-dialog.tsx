@@ -23,9 +23,9 @@ import {
   type PayoutLoaded,
 } from "@/components/vault/referral-payout-client";
 import {
+  PAYOUT_MEMO_ID_MAX,
   PAYOUT_MEMO_MAX_BYTES,
   PAYOUT_PROVIDERS,
-  utf8Bytes,
   type PayoutField,
   type PayoutFieldErrors,
   type PayoutSummary,
@@ -33,15 +33,24 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
- * THE PRIVACY POLICY LINK GOES HERE. DOQ-25 needs one, and the page is DOQ-27,
- * on another branch: once /privacy is on this one, set this to "/privacy" and the
- * note under the form links it. Until then the note says who sees the details
- * and why, without a link.
+ * The Privacy Policy (DOQ-27, on another branch until it merges). Never a dead
+ * link to a user: the form exists only once LEGAL_OPERATOR_NAME is set, and that
+ * switch is what publishes the legal pages.
  */
-const PRIVACY_POLICY_HREF: string | null = null;
+const PRIVACY_POLICY_HREF = "/privacy";
 
 /** Top to bottom, for finding the first field with a problem. */
-const FIELD_ORDER: PayoutField[] = ["name", "method", "address", "memo", "provider", "accountName", "accountNumber", "details"];
+const FIELD_ORDER: PayoutField[] = [
+  "name",
+  "method",
+  "address",
+  "memo",
+  "memoType",
+  "provider",
+  "accountName",
+  "accountNumber",
+  "details",
+];
 
 /**
  * The questionnaire (WP-4.6, DOQ-25, D-112). Opens on what GET returns, which is
@@ -227,7 +236,11 @@ export function PayoutForm({
   }
 
   /** What every text field shares. Read-only rather than disabled when it can't be changed, so it stays legible. */
-  const textField = (field: Exclude<PayoutField, "method" | "provider">, required: boolean, hasHint = false) => ({
+  const textField = (
+    field: Exclude<PayoutField, "method" | "provider" | "memoType">,
+    required: boolean,
+    hasHint = false,
+  ) => ({
     id: fieldId(field),
     value: draft[field],
     onChange: (event: React.ChangeEvent<HTMLInputElement>) => update(field, event.target.value),
@@ -240,7 +253,13 @@ export function PayoutForm({
     "data-testid": `payout-${field}`,
   });
 
-  const memoBytes = utf8Bytes(draft.memo.trim());
+  // Characters, not bytes: a text memo has to be ASCII, where the two agree, and
+  // a count in bytes would make anything else look longer than it reads.
+  const memoLength = Array.from(draft.memo.trim()).length;
+  const memoHint =
+    draft.memoType === "id"
+      ? `A whole number, up to ${PAYOUT_MEMO_ID_MAX}.`
+      : `${memoLength}/${PAYOUT_MEMO_MAX_BYTES} characters: English letters, digits, spaces and common symbols.`;
 
   return (
     <form onSubmit={submit} noValidate className="grid min-w-0 gap-4 text-[13px]" data-testid="payout-form">
@@ -324,14 +343,58 @@ export function PayoutForm({
               className="font-mono"
             />
           </PayoutFieldRow>
-          <PayoutFieldRow
-            id={fieldId("memo")}
-            label="Memo"
-            error={errors.memo}
-            hint={`${memoBytes}/${PAYOUT_MEMO_MAX_BYTES} bytes. If your address is at an exchange, use the memo it gave you.`}
-          >
-            <Input {...textField("memo", false, true)} spellCheck={false} autoCapitalize="off" autoCorrect="off" />
+          <PayoutFieldRow id={fieldId("memo")} label="Memo" error={errors.memo} hint={memoHint}>
+            <Input
+              {...textField("memo", false, true)}
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+              inputMode={draft.memoType === "id" ? "numeric" : "text"}
+            />
           </PayoutFieldRow>
+          <fieldset
+            className="grid min-w-0 gap-1.5"
+            aria-describedby={[hintId("memoType"), errors.memoType ? errorId("memoType") : null].filter(Boolean).join(" ")}
+            data-testid="payout-memo-type"
+          >
+            <legend className="text-muted-foreground mb-1 text-[12px]">Memo type</legend>
+            <div className="flex flex-wrap gap-2">
+              {(
+                [
+                  ["text", "Text"],
+                  ["id", "ID (a number)"],
+                ] as const
+              ).map(([value, label], index) => (
+                <label
+                  key={value}
+                  className={cn(
+                    "has-[:focus-visible]:ring-ring/50 flex min-h-9 cursor-pointer items-center rounded-[10px] border px-3 text-[13px] transition-colors has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50 has-[:focus-visible]:ring-3",
+                    draft.memoType === value
+                      ? "text-foreground border-[var(--glass-hi)] bg-[var(--glass-strong)]"
+                      : "text-muted-foreground hover:text-foreground border-[var(--glass-lo)] bg-[var(--glass)] hover:border-[var(--glass-hi)]",
+                  )}
+                >
+                  <input
+                    type="radio"
+                    name={`${baseId}-memo-type`}
+                    id={index === 0 ? fieldId("memoType") : undefined}
+                    className="sr-only"
+                    value={value}
+                    checked={draft.memoType === value}
+                    disabled={saving || !canEdit}
+                    onChange={() => update("memoType", value)}
+                    data-testid={`payout-memo-type-${value}`}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+            <p id={hintId("memoType")} className="text-label text-[12px]">
+              If your address is at an exchange, use the memo and the type it shows. Sent as the wrong type, a memo
+              may not reach your account.
+            </p>
+            <FieldError id={errorId("memoType")} message={errors.memoType} />
+          </fieldset>
         </div>
       ) : null}
 

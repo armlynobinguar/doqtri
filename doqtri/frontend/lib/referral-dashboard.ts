@@ -13,8 +13,8 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { FORMER_USER } from "@/lib/former-user";
-import type { PayoutState } from "@/lib/referral-payout";
-import { readPayoutState } from "@/lib/referral-payout-profiles";
+import type { PayoutState, PayoutSummary } from "@/lib/referral-payout";
+import { readPayoutSummary } from "@/lib/referral-payout-profiles";
 import { REFERRAL_REWARD_LIMIT } from "@/lib/referral-program";
 import { isReservedEmail, walletAddressFromEmail } from "@/lib/wallet-address";
 
@@ -83,7 +83,7 @@ export type ReferralDashboard = {
   pageSize: number;
   totals: ReferralTotals;
   limit: ReferralLimit;
-  /** An unpaid reward and no payout details saved (DOQ-25). */
+  /** An unpaid reward and no payout details saved (DOQ-25). False while the details can't be read. */
   payoutNeeded: boolean;
   /** Whether the questionnaire opens, and a masked view of what's saved: never the details themselves. */
   payout: PayoutState;
@@ -275,6 +275,36 @@ async function readLimit(admin: Pick<SupabaseClient, "from">, referrer: string):
 }
 
 /**
+ * Whether the questionnaire opens, from the rows the dashboard already has: the
+ * same rule as hasEligibleReferral() (lib/referral-payout-profiles.ts), which the
+ * route checks for itself before any write. referral_dashboard() returns every
+ * reward of this referrer on this network, a deleted referred user's included,
+ * so an eligible or paid one among them is exactly that rule.
+ */
+export function canEditPayout(records: readonly Pick<ReferralDashboardRecord, "reward_status">[]): boolean {
+  return records.some((record) => record.reward_status === "eligible" || record.reward_status === "paid");
+}
+
+const UNAVAILABLE = Symbol("payout details unavailable");
+
+/**
+ * The masked summary, or UNAVAILABLE when it can't be read: the rest of the
+ * dashboard still loads. Logged by label alone, since the error is about rows
+ * of financial details.
+ */
+async function readSavedPayout(
+  admin: Pick<SupabaseClient, "from">,
+  referrer: string,
+): Promise<PayoutSummary | null | typeof UNAVAILABLE> {
+  try {
+    return await readPayoutSummary(admin, referrer);
+  } catch {
+    console.error("[referrals] payout details not loaded for the dashboard");
+    return UNAVAILABLE;
+  }
+}
+
+/**
  * One page of the referrer's list, masked, with totals over all of it. `referrer`
  * must come from the verified session. A page past the end shows the last one.
  */
@@ -284,11 +314,16 @@ export async function loadReferralDashboard(
   network: string,
   requestedPage: number,
 ): Promise<ReferralDashboard> {
-  const [records, limit, payout] = await Promise.all([
+  const [records, limit, saved] = await Promise.all([
     readRecords(admin, referrer, network),
     readLimit(admin, referrer),
-    readPayoutState(admin, referrer, network),
+    readSavedPayout(admin, referrer),
   ]);
+  const payout: PayoutState = {
+    canEdit: canEditPayout(records),
+    summary: saved === UNAVAILABLE ? null : saved,
+    ...(saved === UNAVAILABLE ? { unavailable: true } : {}),
+  };
   const pageSize = REFERRAL_DASHBOARD_PAGE_SIZE;
   const pages = Math.max(1, Math.ceil(records.length / pageSize));
   const page = Math.min(requestedPage, pages);
@@ -300,7 +335,7 @@ export async function loadReferralDashboard(
     pageSize,
     totals,
     limit,
-    payoutNeeded: totals.unpaidPhp > 0 && !payout.summary,
+    payoutNeeded: totals.unpaidPhp > 0 && !payout.summary && !payout.unavailable,
     payout,
   };
 }

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  canEditPayout,
   joinedDay,
   loadReferralDashboard,
   maskedReferralIdentity,
@@ -320,11 +321,11 @@ describe("loading", () => {
   type Saved = Record<string, unknown> | null;
   function client(
     all: ReferralDashboardRecord[],
-    { used = 0, override = null as number | null, eligible = 0, saved = null as Saved } = {},
+    { used = 0, override = null as number | null, saved = null as Saved, payoutError = false } = {},
   ) {
     const ranges: [number, number][] = [];
-    /** Every query, with its own filters, so one can't be mistaken for another. */
-    const queries: { table: string; filters: [string, unknown][] }[] = [];
+    /** Every query, with its own columns and filters, so one can't be mistaken for another. */
+    const queries: { table: string; columns: string; filters: [string, unknown][] }[] = [];
     const admin = {
       rpc: () => ({
         range: async (from: number, to: number) => {
@@ -333,28 +334,28 @@ describe("loading", () => {
         },
       }),
       from: (table: string) => {
-        const entry = { table, filters: [] as [string, unknown][] };
+        const entry = { table, columns: "", filters: [] as [string, unknown][] };
         queries.push(entry);
         const query = {
-          select: () => query,
+          select: (columns: string) => {
+            entry.columns = columns;
+            return query;
+          },
           eq: (column: string, value: unknown) => {
             entry.filters.push([column, value]);
             return query;
           },
-          maybeSingle: async () => ({
-            data:
-              table === "referral_payout_profiles"
-                ? saved
-                : override === null
-                  ? null
-                  : { reward_limit: override },
-            error: null,
-          }),
+          maybeSingle: async () => {
+            if (table !== "referral_payout_profiles") {
+              return { data: override === null ? null : { reward_limit: override }, error: null };
+            }
+            return payoutError
+              ? { data: null, error: { code: "XX000", message: "row (Account Holder, 09171234567)" } }
+              : { data: saved, error: null };
+          },
           in: async (column: string, value: unknown) => {
             entry.filters.push([column, value]);
-            // The payout check filters by network, the limit doesn't.
-            const network = entry.filters.some(([name]) => name === "network");
-            return { count: network ? eligible : used, error: null };
+            return { count: used, error: null };
           },
         };
         return query;
@@ -413,39 +414,77 @@ describe("loading", () => {
     ]);
   });
 
-  it("knows whether the questionnaire opens: an eligible or paid reward, this referrer, this network", async () => {
-    const { admin, queries } = client([], { eligible: 1 });
-    expect((await loadReferralDashboard(admin, "me", "testnet", 1)).payout).toEqual({ canEdit: true, summary: null });
-    expect(queries.filter((q) => q.table === "referral_rewards").map((q) => q.filters)).toContainEqual([
-      ["referrer_user_id", "me"],
-      ["network", "testnet"],
-      ["status", ["eligible", "paid"]],
-    ]);
-    expect((await loadReferralDashboard(client([]).admin, "me", "testnet", 1)).payout.canEdit).toBe(false);
+  it("opens the questionnaire on an eligible or paid reward, from the rows it already read", async () => {
+    const opens = async (rows: ReferralDashboardRecord[]) => {
+      const { admin, queries } = client(rows);
+      const dashboard = await loadReferralDashboard(admin, "me", "testnet", 1);
+      // No count of its own: the limit's is the only one.
+      expect(queries.filter((q) => q.table === "referral_rewards")).toHaveLength(1);
+      return dashboard.payout.canEdit;
+    };
+    expect(await opens([record({ reward_status: "eligible", amount_php: 30 })])).toBe(true);
+    expect(await opens([record({ reward_status: "paid", amount_php: 30 })])).toBe(true);
+    // A deleted referred user's reward still counts, as the route's own check counts it.
+    expect(await opens([record({ former_user: true, reward_status: "eligible", amount_php: 30 })])).toBe(true);
+    expect(await opens([record({ reward_status: "over_limit" }), record({ reward_status: "void" }), record()])).toBe(
+      false,
+    );
+    expect(await opens([])).toBe(false);
   });
 
-  it("an unpaid reward needs details until they're saved, then shows them masked and nothing more", async () => {
+  it("is the same rule as the route's", () => {
+    for (const status of ["eligible", "paid", "over_limit", "void", null]) {
+      expect(canEditPayout([{ reward_status: status }])).toBe(status === "eligible" || status === "paid");
+    }
+  });
+
+  const SAVED = {
+    method: "ewallet",
+    xlm_address: null,
+    xlm_memo_type: null,
+    ewallet_provider: "GCash",
+    ewallet_account_number: "09171234567",
+  };
+
+  it("an unpaid reward needs details until they're saved, then shows them masked, from the summary's columns only", async () => {
     const unpaid = [record({ reward_status: "eligible", amount_php: 30 })];
-    expect((await loadReferralDashboard(client(unpaid, { eligible: 1 }).admin, "me", "testnet", 1)).payoutNeeded).toBe(
-      true,
-    );
-    const saved = {
-      method: "ewallet",
-      name: "Account Holder",
-      xlm_address: null,
-      xlm_memo: null,
-      ewallet_provider: "GCash",
-      ewallet_account_name: "Account Holder",
-      ewallet_account_number: "09171234567",
-      ewallet_details: "Main branch",
-    };
-    const { admin, queries } = client(unpaid, { eligible: 1, saved });
+    expect((await loadReferralDashboard(client(unpaid).admin, "me", "testnet", 1)).payoutNeeded).toBe(true);
+    const { admin, queries } = client(unpaid, { saved: SAVED });
     const dashboard = await loadReferralDashboard(admin, "me", "testnet", 1);
     expect(dashboard.payoutNeeded).toBe(false);
     expect(dashboard.payout).toEqual({ canEdit: true, summary: { label: "GCash", last4: "4567" } });
-    const text = JSON.stringify(dashboard);
-    for (const secret of ["Account Holder", "09171234567", "Main branch"]) expect(text).not.toContain(secret);
-    expect(queries).toContainEqual({ table: "referral_payout_profiles", filters: [["user_id", "me"]] });
+    expect(JSON.stringify(dashboard)).not.toContain("09171234567");
+    const read = queries.find((q) => q.table === "referral_payout_profiles");
+    expect(read).toEqual({
+      table: "referral_payout_profiles",
+      columns: "method, xlm_address, xlm_memo_type, ewallet_provider, ewallet_account_number",
+      filters: [["user_id", "me"]],
+    });
+    for (const column of ["name", "xlm_memo,", "ewallet_account_name", "ewallet_details"]) {
+      expect(`${read!.columns},`).not.toContain(column);
+    }
+  });
+
+  it("an XLM summary carries the memo's type and never the memo", async () => {
+    const saved = { method: "xlm", xlm_address: G, xlm_memo_type: "id", ewallet_provider: null, ewallet_account_number: null };
+    const dashboard = await loadReferralDashboard(client([], { saved }).admin, "me", "testnet", 1);
+    expect(dashboard.payout.summary).toEqual({ label: "XLM", last4: "WXYZ", memoType: "id" });
+  });
+
+  it("still loads when the payout details can't be read, saying so, and logs the label alone", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const unpaid = [record({ reward_status: "eligible", amount_php: 30 })];
+      const dashboard = await loadReferralDashboard(client(unpaid, { payoutError: true }).admin, "me", "testnet", 1);
+      expect(dashboard.totals.unpaidPhp).toBe(30);
+      expect(dashboard.rows).toHaveLength(1);
+      expect(dashboard.payout).toEqual({ canEdit: true, summary: null, unavailable: true });
+      // Not "needed": whether details are saved is unknown, so it doesn't nag.
+      expect(dashboard.payoutNeeded).toBe(false);
+      expect(log.mock.calls).toEqual([["[referrals] payout details not loaded for the dashboard"]]);
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("uses the override that's stored", async () => {

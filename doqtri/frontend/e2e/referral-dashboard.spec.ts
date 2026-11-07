@@ -204,7 +204,7 @@ test.describe("referral dashboard", () => {
     const dialog = page.getByTestId("payout-dialog");
     const field = (name: string) => dialog.getByTestId(`payout-${name}`);
     const payoutTo = Keypair.random().publicKey();
-    const memo = "e2e-memo-4242";
+    const memo = "4242424242";
     const accountNumber = "0917 555 4567";
 
     await page.goto("/vault/referrals");
@@ -225,26 +225,43 @@ test.describe("referral dashboard", () => {
     // The user's own wallet is a testnet one, and isn't offered.
     await expect(field("address")).toHaveValue("");
     await expect(dialog.getByTestId("payout-xlm-notes")).toContainText("rewards are real XLM on mainnet");
+    await expect(dialog.getByRole("link", { name: "Privacy Policy" })).toHaveAttribute("href", "/privacy");
+    await expect(dialog.getByRole("radio", { name: "Text" })).toBeChecked();
 
-    // A passkey address, then a memo one byte over: both refused, in the form's words.
+    // A passkey address, then a text memo one byte over: both refused, in the form's words.
     await field("address").fill(`C${payoutTo.slice(1)}`);
-    await field("memo").fill("é".repeat(14) + "x");
-    await expect(field("memo").locator("xpath=..")).toContainText("29/28 bytes");
+    await field("memo").fill("x".repeat(29));
+    await expect(field("memo").locator("xpath=..")).toContainText("29/28 characters");
     await dialog.getByRole("button", { name: "Save details" }).click();
     await expect(field("address")).toBeFocused();
     await expect(dialog).toContainText("This is a passkey wallet (C…) address, which can't receive payouts.");
-    await expect(dialog).toContainText("A memo can be at most 28 bytes.");
+    await expect(dialog).toContainText("A text memo can be at most 28 characters.");
 
+    // An invisible character in a memo, then an ID one past 64 bits: refused too.
     await field("address").fill(payoutTo);
+    await field("memo").fill("123456\u200b");
+    await dialog.getByRole("button", { name: "Save details" }).click();
+    await expect(dialog).toContainText("A text memo can use only English letters, digits, spaces and common symbols.");
+    // The radio itself is visually hidden inside its label, as the method cards' are: click what a user sees.
+    await dialog.getByText("ID (a number)", { exact: true }).click();
+    await expect(dialog.getByRole("radio", { name: "ID (a number)" })).toBeChecked();
+    await field("memo").fill("18446744073709551616");
+    await dialog.getByRole("button", { name: "Save details" }).click();
+    await expect(dialog).toContainText("An ID memo can be at most 18446744073709551615.");
+
     await field("memo").fill(memo);
     await dialog.getByRole("button", { name: "Save details" }).click();
     await expect(dialog).toBeHidden();
     const saved = page.getByTestId("referrals-payout-saved");
     await expect(saved).toContainText("Payout details saved");
-    await expect(saved).toContainText(`XLM ending in ${payoutTo.slice(-4)}`);
+    await expect(saved).toContainText(`XLM ending in ${payoutTo.slice(-4)}, with an ID memo`);
     await expect(card).toHaveCount(0);
     // Focus goes back to the button that opened the form, which is now Edit.
     await expect(saved.getByRole("button", { name: "Edit" })).toBeFocused();
+
+    expect(
+      await serviceRest(`referral_payout_profiles?user_id=eq.${referrerId}&select=method,xlm_address,xlm_memo,xlm_memo_type`),
+    ).toEqual([{ method: "xlm", xlm_address: payoutTo, xlm_memo: memo, xlm_memo_type: "id" }]);
 
     // Reload: still saved, still masked, and the prompt stays gone (AC 5, AC 8).
     await page.reload();
@@ -257,6 +274,7 @@ test.describe("referral dashboard", () => {
     await saved.getByRole("button", { name: "Edit" }).click();
     await expect(field("address")).toHaveValue(payoutTo);
     await expect(field("memo")).toHaveValue(memo);
+    await expect(dialog.getByRole("radio", { name: "ID (a number)" })).toBeChecked();
     await dialog.getByText("E-wallet or bank", { exact: true }).click();
     await dialog.getByRole("combobox", { name: /Provider/ }).click();
     await page.getByRole("option", { name: "Maya" }).click();
@@ -276,7 +294,7 @@ test.describe("referral dashboard", () => {
 
     // The stored row holds the e-wallet's details only: the XLM ones are gone (AC 4).
     const rows = await serviceRest<Record<string, unknown>[]>(
-      `referral_payout_profiles?user_id=eq.${referrerId}&select=method,name,xlm_address,xlm_memo,ewallet_provider,ewallet_account_number`,
+      `referral_payout_profiles?user_id=eq.${referrerId}&select=method,name,xlm_address,xlm_memo,xlm_memo_type,ewallet_provider,ewallet_account_number`,
     );
     expect(rows).toEqual([
       {
@@ -284,6 +302,7 @@ test.describe("referral dashboard", () => {
         name: "E2E Referrer",
         xlm_address: null,
         xlm_memo: null,
+        xlm_memo_type: null,
         ewallet_provider: "Maya",
         ewallet_account_number: accountNumber,
       },

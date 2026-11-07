@@ -68,11 +68,33 @@ describe("the fields", () => {
     expect(memo).not.toMatch(/\srequired/);
     const hint = attr(memo, "aria-describedby")!;
     expect(html).toContain(`id="${hint}"`);
-    expect(new RegExp(`id="${hint}"[^>]*>0/28 bytes`).test(html)).toBe(true);
+    expect(new RegExp(`id="${hint}"[^>]*>0/28 characters`).test(html)).toBe(true);
   });
 
-  it("counts the memo in bytes as it's typed", () => {
-    expect(render({ method: "xlm", memo: "é".repeat(14) }).text).toContain("28/28 bytes");
+  it("counts a text memo as it's typed", () => {
+    expect(render({ method: "xlm", memo: "x".repeat(28) }).text).toContain("28/28 characters");
+    // An invisible character counts as the one it is, not as its three bytes.
+    expect(render({ method: "xlm", memo: "123456\u200b" }).text).toContain("7/28 characters");
+  });
+
+  it("asks for the memo's type, Text by default, with ID as the other choice", () => {
+    const { html, text } = render({ method: "xlm" });
+    expect(html).toMatch(/<legend[^>]*>Memo type<\/legend>/);
+    expect(tag(html, "payout-memo-type-text")).toContain('type="radio"');
+    expect(tag(html, "payout-memo-type-text")).toContain("checked");
+    expect(tag(html, "payout-memo-type-id")).not.toContain("checked");
+    expect(text).toContain("ID (a number)");
+    expect(text).toContain("use the memo and the type it shows");
+    // The fieldset points at its explanation.
+    const fieldset = tag(html, "payout-memo-type");
+    expect(html).toContain(`id="${attr(fieldset, "aria-describedby")}"`);
+  });
+
+  it("for an ID memo, says what a number may be and offers the number pad", () => {
+    const { html, text } = render({ method: "xlm", memo: "42", memoType: "id" });
+    expect(text).toContain("A whole number, up to 18446744073709551615.");
+    expect(attr(tag(html, "payout-memo"), "inputMode")).toBe("numeric");
+    expect(tag(html, "payout-memo-type-id")).toContain("checked");
   });
 
   it("for XLM, explains mainnet, the memo and passkey addresses in the ticket's terms", () => {
@@ -123,10 +145,10 @@ describe("who sees this, and when a change applies", () => {
     expect(text).toContain("A change applies to future payouts only. Payouts already made aren't affected.");
   });
 
-  it("has no Privacy Policy link yet: the page is on another branch", () => {
+  it("links the Privacy Policy at /privacy", () => {
     const { html } = render();
-    expect(html).not.toContain("<a ");
-    expect(html).not.toContain("Privacy Policy");
+    const links = [...html.matchAll(/<a [^>]*href="([^"]+)"[^>]*>([^<]*)<\/a>/g)].map(([, href, label]) => [href, label]);
+    expect(links).toEqual([["/privacy", "Privacy Policy"]]);
   });
 });
 
