@@ -204,5 +204,7 @@ describe("POST /api/chain/relay, a paid note write from a leased channel that is
     expect(state.rpcCalls.filter((c) => c.fn === "release_relay_channel").map((c) => c.args)).toEqual([
       { p_idx: channelIdx, p_lease_id: leaseId, p_next_seq: "702" },
     ]);
+    // Not yet a referral activity: it counts once the chain-jobs run settles it (DOQ-23).
+    expect(state.rpcCalls.map((c) => c.fn)).not.toContain("record_referral_activity");
   });
 });
