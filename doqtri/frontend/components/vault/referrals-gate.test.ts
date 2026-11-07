@@ -4,9 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /*
  * While LEGAL_OPERATOR_NAME is empty the referral dashboard doesn't exist
- * (WP-4.6, DOQ-24): every place that shows it is checked here with the switch
- * off and on, through the real server component where the switch is read, so
- * removing any one guard fails a test. GET /api/referrals has its own in
+ * (WP-4.6, DOQ-24): every place that reads the switch is checked here with it off
+ * and on, through the real server component, so removing any one of those guards
+ * fails a test. These mock the client trees they hand the answer to, which have
+ * tests of their own: components/vault/vault-shell-gate.test.ts follows it through
+ * the shell to the ribbon, and components/vault/profile-invite-gate.test.ts through
+ * ProfileView to the Invite tab. GET /api/referrals has its own in
  * app/api/referrals/route.test.ts.
  */
 
@@ -63,7 +66,7 @@ vi.mock("@/components/vault/account-menu", () => ({ AccountMenu: () => null }));
 vi.mock("@/components/auth/email-auth-form", () => ({ EmailAuthForm: () => null }));
 vi.mock("@/components/auth/wallet-option", () => ({ WalletOption: () => null }));
 
-const { default: ReferralsPage } = await import("@/app/vault/referrals/page");
+const { default: ReferralsPage, generateMetadata } = await import("@/app/vault/referrals/page");
 const { default: VaultLayout } = await import("@/app/vault/layout");
 const { default: ProfilePage } = await import("@/app/vault/profile/page");
 const { default: SignUpPage } = await import("@/app/(auth)/signup/page");
@@ -108,6 +111,22 @@ describe("/vault/referrals", () => {
     on();
     const page = await ReferralsPage();
     expect((page.props as { inviteUrl: string }).inviteUrl).toContain("/r/abcdefgh");
+  });
+});
+
+describe("the page's metadata", () => {
+  it("is nothing of its own while off, so its title is that of any unknown path", () => {
+    expect(generateMetadata()).toEqual({});
+  });
+
+  it("is nothing with a blank name either", () => {
+    vi.stubEnv("LEGAL_OPERATOR_NAME", "   ");
+    expect(generateMetadata()).toEqual({});
+  });
+
+  it("names the page once on", () => {
+    on();
+    expect(generateMetadata()).toEqual({ title: "Referrals · Doqtri", robots: { index: false } });
   });
 });
 

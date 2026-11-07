@@ -6,10 +6,11 @@ import { referralUrl } from "@/lib/referral";
 import { referralDashboardLive } from "@/lib/referral-dashboard";
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
 
-export const metadata: Metadata = {
-  title: "Referrals · Doqtri",
-  robots: { index: false },
-};
+/** Nothing of its own while off, so it reads like any other unknown path under /vault. */
+export function generateMetadata(): Metadata {
+  if (!referralDashboardLive()) return {};
+  return { title: "Referrals · Doqtri", robots: { index: false } };
+}
 
 /**
  * Who signed up with the user's link and what they've earned (WP-4.6, DOQ-24).

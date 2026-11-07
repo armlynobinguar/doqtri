@@ -1,17 +1,23 @@
 -- What a referrer's dashboard at /vault/referrals reads (WP-4.6, DOQ-24, D-111).
 --
 -- One row per person the referrer referred, on one network: their email and
--- wallets for the app to mask, when they were referred and how, how many
+-- wallets for the app to mask, the day they were referred and how, how many
 -- activities count so far, and their reward, if any. No id, display name, tx
--- hash, referred_wallet or void reason leaves this function, so the route has
--- nothing of the kind to leak. Only lib/referral-dashboard.ts reads it, and it
--- sends the browser masked values only.
+-- hash, referred_wallet, void reason or time of day leaves this function, so the
+-- route has nothing of the kind to leak. Only lib/referral-dashboard.ts reads
+-- it, and it sends the browser masked values only.
+--
+-- A day, in UTC, and never a time: a time can be matched to public contract
+-- calls, which would give away the referred user's wallet.
 --
 -- A referred user who deleted their account has no referral or activity left
 -- (both cascade), only their reward, which outlives them with referred_user_id
 -- null. Those come back as reward-only rows with former_user true and no
--- identity at all: not even the reward's wallet. Their date is when the reward
--- qualified, the only date left, and their activity count is null.
+-- identity at all: not even the reward's wallet. They have no date either, since
+-- the only one left is when the reward qualified, which is what a time above
+-- would give away and wasn't when they joined. So their place says nothing about
+-- when: they sort after everyone still here, and among themselves by the
+-- reward's id, which is random.
 --
 -- Activity counts as qualify_referral() counts it: this network, at or after
 -- the referral was recorded.
@@ -30,7 +36,7 @@ returns table (
   email          text,
   g_wallet       text,
   c_wallet       text,
-  referred_at    timestamptz,
+  referred_on    date,
   source         text,
   activity_count integer,
   reward_status  text,
@@ -42,7 +48,7 @@ stable
 security definer
 set search_path = ''
 as $$
-  select x.email, x.g_wallet, x.c_wallet, x.referred_at, x.source,
+  select x.email, x.g_wallet, x.c_wallet, (x.referred_at at time zone 'UTC')::date, x.source,
          x.activity_count, x.reward_status, x.amount_php, x.former_user
     from (
       select u.email::text as email,
@@ -69,13 +75,13 @@ as $$
          and w.network = p_network
        where r.referrer_user_id = p_referrer
       union all
-      select null, null, null, w.qualified_at, null, null, w.status, w.amount_php, true, w.id
+      select null, null, null, null::timestamptz, null, null, w.status, w.amount_php, true, w.id
         from public.referral_rewards w
        where w.referrer_user_id = p_referrer
          and w.network = p_network
          and w.referred_user_id is null
     ) x
-   order by x.referred_at desc, x.tiebreak;
+   order by x.referred_at desc nulls last, x.tiebreak;
 $$;
 
 comment on function public.referral_dashboard(uuid, text) is

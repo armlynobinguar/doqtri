@@ -66,7 +66,7 @@ const row = (over: Record<string, unknown>) => ({
   email: null,
   g_wallet: null,
   c_wallet: null,
-  referred_at: "2026-11-01T00:00:00Z",
+  referred_on: "2026-11-01",
   source: "link",
   activity_count: 0,
   reward_status: null,
@@ -149,7 +149,7 @@ describe("the answer", () => {
       }),
       row({ email: SYNTHETIC_EMAIL, g_wallet: WALLET, activity_count: 3, reward_status: "eligible", amount_php: 30 }),
       row({ email: null, c_wallet: PASSKEY_WALLET, reward_status: "void", void_reason: VOID_REASON, amount_php: 30 }),
-      row({ former_user: true, activity_count: null, reward_status: "paid", amount_php: 30 }),
+      row({ former_user: true, referred_on: null, activity_count: null, reward_status: "paid", amount_php: 30 }),
     ];
     const res = await get();
     const text = await res.text();
@@ -179,7 +179,7 @@ describe("the answer", () => {
       {
         identity: "ty•••@gmail.com",
         former: false,
-        joinedAt: "2026-11-01T00:00:00Z",
+        joinedOn: "2026-11-01",
         activity: 0,
         status: "pending",
         amountPhp: null,
@@ -187,7 +187,7 @@ describe("the answer", () => {
       {
         identity: "GABC…WXYZ",
         former: false,
-        joinedAt: "2026-11-01T00:00:00Z",
+        joinedOn: "2026-11-01",
         activity: 3,
         status: "eligible",
         amountPhp: 30,
@@ -195,7 +195,7 @@ describe("the answer", () => {
       {
         identity: "CDEF…PQRS",
         former: false,
-        joinedAt: "2026-11-01T00:00:00Z",
+        joinedOn: "2026-11-01",
         activity: 0,
         status: "not_eligible",
         amountPhp: null,
@@ -203,11 +203,39 @@ describe("the answer", () => {
       {
         identity: "Former user",
         former: true,
-        joinedAt: "2026-11-01T00:00:00Z",
+        joinedOn: null,
         activity: null,
         status: "paid",
         amountPhp: 30,
       },
+    ]);
+  });
+
+  it("names no one by a domain of their own", async () => {
+    state.rows = [row({ email: "john.smith@john-smith.com" })];
+    const text = await (await get()).text();
+    expect(text).not.toContain("john-smith");
+    expect(text).not.toContain("smith");
+    expect(JSON.parse(text).rows[0].identity).toBe("jo•••@•••.com");
+  });
+
+  it("holds a calendar day and no time, and no date at all for a former user", async () => {
+    state.rows = [
+      row({ email: "a@x.com", referred_on: "2026-11-01" }),
+      // Should the function ever send more than it does.
+      row({ email: "b@x.com", referred_on: "2026-11-02T13:45:07.123+00:00" }),
+      row({ former_user: true, referred_on: null, activity_count: null, reward_status: "eligible", amount_php: 30 }),
+      row({ former_user: true, referred_on: "2026-11-03T13:45:07+00:00", activity_count: null, reward_status: "paid", amount_php: 30 }),
+    ];
+    const text = await (await get()).text();
+    expect(text).not.toMatch(/\d{2}:\d{2}/);
+    expect(text).not.toMatch(/T\d{2}/);
+    expect(text).not.toContain("2026-11-03");
+    expect(JSON.parse(text).rows.map((r: { joinedOn: string | null }) => r.joinedOn)).toEqual([
+      "2026-11-01",
+      "2026-11-02",
+      null,
+      null,
     ]);
   });
 

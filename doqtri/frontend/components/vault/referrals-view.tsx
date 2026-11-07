@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import {
   BadgeCheckIcon,
@@ -22,6 +22,8 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { StatusTag } from "@/components/ui/status-tag";
+import { createReferralsPager, type ReferralsRead } from "@/components/vault/referrals-pager";
+import { useIsCompactVault } from "@/hooks/use-mobile";
 import type { ReferralDashboard, ReferralLimit, ReferralListRow, ReferralStatus } from "@/lib/referral-dashboard";
 import { REFERRAL_ACTIVITY_THRESHOLD, REFERRAL_REWARD_PHP } from "@/lib/referral-program";
 import { cn } from "@/lib/utils";
@@ -39,12 +41,19 @@ const STATUS: Record<ReferralStatus, { label: string; tone: "planned" | "verifie
   not_eligible: { label: "Not eligible", tone: "danger" },
 };
 
-type Load = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; data: ReferralDashboard };
-
 const FAILED = "Your referrals couldn't be loaded.";
 
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+/** A focusable button that's disabled has no `disabled` attribute for the Button's own styles to find. */
+const PAGE_BUTTON = "aria-disabled:pointer-events-none aria-disabled:opacity-50";
+
+/** `day` is a UTC day from the server, so it's read in UTC: anywhere else it could show the day before. */
+function formatDay(day: string) {
+  return new Date(day).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
 }
 
 function formatNumber(value: number) {
@@ -60,7 +69,7 @@ function rewards(count: number) {
  * reach the user: a dropped connection's message means nothing to them, and an
  * answer without totals would break the page rather than explain anything.
  */
-export async function readReferrals(page: number): Promise<Exclude<Load, { kind: "loading" }>> {
+export async function readReferrals(page: number): Promise<ReferralsRead> {
   try {
     const res = await fetch(`/api/referrals?page=${page}`, { cache: "no-store" });
     const body = (await res.json().catch(() => null)) as (ReferralDashboard & { error?: string }) | null;
@@ -77,24 +86,12 @@ export async function readReferrals(page: number): Promise<Exclude<Load, { kind:
  * them (D-111).
  */
 export function ReferralsView({ inviteUrl }: { inviteUrl: string | null }) {
-  const [load, setLoad] = useState<Load>({ kind: "loading" });
-  const [turning, setTurning] = useState(false);
-
-  const fetchPage = useCallback(async (page: number) => {
-    setLoad(await readReferrals(page));
-  }, []);
+  const [pager] = useState(() => createReferralsPager(readReferrals));
+  const { data, busy, error } = useSyncExternalStore(pager.subscribe, pager.getState, pager.getState);
 
   useEffect(() => {
-    void (async () => {
-      await fetchPage(1);
-    })();
-  }, [fetchPage]);
-
-  async function turnTo(page: number) {
-    setTurning(true);
-    await fetchPage(page);
-    setTurning(false);
-  }
+    void pager.goTo(1);
+  }, [pager]);
 
   return (
     <div className="h-full overflow-y-auto" data-testid="referrals-page">
@@ -109,50 +106,79 @@ export function ReferralsView({ inviteUrl }: { inviteUrl: string | null }) {
           </p>
         </header>
 
-        {load.kind === "loading" ? (
+        {data ? (
+          <ReferralsDashboard
+            data={data}
+            inviteUrl={inviteUrl}
+            busy={busy}
+            pageError={error}
+            onPage={(page) => void pager.goTo(page)}
+            onRetry={() => void pager.retry()}
+          />
+        ) : error ? (
+          <ReferralsError message={error} busy={busy} onRetry={() => void pager.retry()} />
+        ) : (
           <p className="text-muted-foreground mt-2 flex items-center gap-2 text-[13px]" data-testid="referrals-loading">
             <Loader2Icon className="size-4 animate-spin" /> Loading your referrals…
           </p>
-        ) : load.kind === "error" ? (
-          <ReferralsError
-            message={load.message}
-            onRetry={() => {
-              setLoad({ kind: "loading" });
-              void fetchPage(1);
-            }}
-          />
-        ) : (
-          <ReferralsDashboard data={load.data} inviteUrl={inviteUrl} turning={turning} onPage={(p) => void turnTo(p)} />
         )}
       </main>
     </div>
   );
 }
 
-export function ReferralsError({ message, onRetry }: { message: string; onRetry: () => void }) {
+export function ReferralsError({
+  message,
+  busy = false,
+  onRetry,
+}: {
+  message: string;
+  busy?: boolean;
+  onRetry: () => void;
+}) {
   return (
     <div className="mt-2 grid justify-items-start gap-3" data-testid="referrals-error">
       <p role="alert" className="text-destructive text-[14px]">
         {message}
       </p>
-      <Button size="sm" variant="outline" onClick={onRetry}>
-        <RotateCwIcon />
-        Try again
-      </Button>
+      <RetryButton size="sm" busy={busy} onRetry={onRetry} />
     </div>
+  );
+}
+
+/** Focusable while busy: disabling the button under a keyboard user's focus would drop it to the page. */
+function RetryButton({ size, busy, onRetry }: { size: "xs" | "sm"; busy: boolean; onRetry: () => void }) {
+  return (
+    <Button
+      size={size}
+      variant="outline"
+      disabled={busy}
+      focusableWhenDisabled
+      className={PAGE_BUTTON}
+      onClick={onRetry}
+      data-testid="referrals-retry"
+    >
+      {busy ? <Loader2Icon className="animate-spin" /> : <RotateCwIcon />}
+      Try again
+    </Button>
   );
 }
 
 export function ReferralsDashboard({
   data,
   inviteUrl,
-  turning = false,
+  busy = false,
+  pageError = null,
   onPage = () => {},
+  onRetry = () => {},
 }: {
   data: ReferralDashboard;
   inviteUrl: string | null;
-  turning?: boolean;
+  busy?: boolean;
+  /** A turn of the page failed; `data` is still the page that was on screen. */
+  pageError?: string | null;
   onPage?: (page: number) => void;
+  onRetry?: () => void;
 }) {
   const { totals, limit } = data;
   return (
@@ -177,7 +203,7 @@ export function ReferralsDashboard({
             <Figure icon={HourglassIcon} label="Unpaid" value={totals.unpaidPhp} unit="PHP" testId="referrals-total-unpaid" />
             <Figure icon={HandCoinsIcon} label="Paid" value={totals.paidPhp} unit="PHP" testId="referrals-total-paid" />
           </dl>
-          <ReferralList data={data} turning={turning} onPage={onPage} />
+          <ReferralList data={data} busy={busy} pageError={pageError} onPage={onPage} onRetry={onRetry} />
         </>
       )}
 
@@ -262,22 +288,49 @@ async function copyLink(url: string) {
 
 function ReferralList({
   data,
-  turning,
+  busy,
+  pageError,
   onPage,
+  onRetry,
 }: {
   data: ReferralDashboard;
-  turning: boolean;
+  busy: boolean;
+  pageError: string | null;
   onPage: (page: number) => void;
+  onRetry: () => void;
 }) {
   const { rows, page, pages, pageSize, totals } = data;
   const start = (page - 1) * pageSize;
+  const isCompact = useIsCompactVault();
+  const section = useRef<HTMLElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+
+  // A phone's list is long and the buttons are under it, so a new page would
+  // open at its end. Instant, so reduced motion has nothing to respect.
+  const shownPage = useRef(page);
+  useEffect(() => {
+    if (shownPage.current === page) return;
+    shownPage.current = page;
+    if (isCompact) section.current?.scrollIntoView({ block: "start" });
+  }, [page, isCompact]);
+
+  // Try again goes away when it works, and a keyboard user's focus would go with
+  // it: hand that to the list it just brought back.
+  const hadPageError = useRef(false);
+  useEffect(() => {
+    if (hadPageError.current && !pageError && document.activeElement === document.body) {
+      heading.current?.focus({ preventScroll: true });
+    }
+    hadPageError.current = Boolean(pageError);
+  }, [pageError]);
+
   return (
-    <section aria-label="Your referrals" className="mt-2">
-      <h2 className="text-foreground text-[15px] font-semibold">
+    <section ref={section} aria-label="Your referrals" className="mt-2 scroll-mt-4">
+      <h2 ref={heading} tabIndex={-1} className="text-foreground text-[15px] font-semibold outline-none">
         Your referrals{" "}
         <span className="text-label ml-1 text-[12px] font-normal tabular-nums">{formatNumber(totals.referred)}</span>
       </h2>
-      <div className="glass mt-3 overflow-hidden rounded-2xl" aria-busy={turning || undefined}>
+      <div className="glass mt-3 overflow-hidden rounded-2xl" aria-busy={busy || undefined}>
         <div className="text-label hidden grid-cols-[minmax(0,1fr)_7rem_6rem_11rem] gap-x-3 px-4 py-2 text-[12px] font-medium sm:grid">
           <span>Person</span>
           <span>Joined</span>
@@ -291,39 +344,76 @@ function ReferralList({
           ))}
         </ul>
       </div>
+      {pageError ? (
+        <div className="mt-3 flex flex-wrap items-center justify-end gap-2" data-testid="referrals-page-error">
+          <p role="alert" className="text-destructive text-[12px]">
+            {pageError}
+          </p>
+          <RetryButton size="xs" busy={busy} onRetry={onRetry} />
+        </div>
+      ) : null}
       {pages > 1 ? (
-        <nav
-          className="text-muted-foreground mt-3 flex items-center justify-end gap-2 text-[12px]"
-          aria-label="Pagination"
-        >
-          <span className="tabular-nums" data-testid="referrals-range" aria-live="polite">
-            {formatNumber(start + 1)}–{formatNumber(start + rows.length)} of {formatNumber(totals.referred)}
-          </span>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="outline"
-            aria-label="Previous page"
-            disabled={turning || page <= 1}
-            onClick={() => onPage(page - 1)}
-            data-testid="referrals-prev"
-          >
-            <ChevronLeftIcon />
-          </Button>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="outline"
-            aria-label="Next page"
-            disabled={turning || page >= pages}
-            onClick={() => onPage(page + 1)}
-            data-testid="referrals-next"
-          >
-            <ChevronRightIcon />
-          </Button>
-        </nav>
+        <PageNav page={page} pages={pages} start={start} shown={rows.length} total={totals.referred} busy={busy} onPage={onPage} />
       ) : null}
     </section>
+  );
+}
+
+/**
+ * Focusable while disabled, so a keyboard user's focus stays on the button they
+ * pressed: while the next page loads, and on the last page, where Next has nothing
+ * left to do.
+ */
+export function PageNav({
+  page,
+  pages,
+  start,
+  shown,
+  total,
+  busy,
+  onPage,
+}: {
+  page: number;
+  pages: number;
+  /** Rows before this page. */
+  start: number;
+  shown: number;
+  total: number;
+  busy: boolean;
+  onPage: (page: number) => void;
+}) {
+  return (
+    <nav className="text-muted-foreground mt-3 flex items-center justify-end gap-2 text-[12px]" aria-label="Pagination">
+      <span className="tabular-nums" data-testid="referrals-range" aria-live="polite">
+        {formatNumber(start + 1)}–{formatNumber(start + shown)} of {formatNumber(total)}
+      </span>
+      <Button
+        type="button"
+        size="icon-sm"
+        variant="outline"
+        aria-label="Previous page"
+        disabled={busy || page <= 1}
+        focusableWhenDisabled
+        className={PAGE_BUTTON}
+        onClick={() => onPage(page - 1)}
+        data-testid="referrals-prev"
+      >
+        <ChevronLeftIcon />
+      </Button>
+      <Button
+        type="button"
+        size="icon-sm"
+        variant="outline"
+        aria-label="Next page"
+        disabled={busy || page >= pages}
+        focusableWhenDisabled
+        className={PAGE_BUTTON}
+        onClick={() => onPage(page + 1)}
+        data-testid="referrals-next"
+      >
+        <ChevronRightIcon />
+      </Button>
+    </nav>
   );
 }
 
@@ -342,8 +432,11 @@ function Row({ row }: { row: ReferralListRow }) {
       >
         {row.identity}
       </span>
-      <span className="text-muted-foreground col-start-1 row-start-2 text-[12px] sm:col-start-2 sm:row-start-1">
-        {formatDate(row.joinedAt)}
+      <span
+        className="text-muted-foreground col-start-1 row-start-2 text-[12px] sm:col-start-2 sm:row-start-1"
+        data-testid="referrals-joined"
+      >
+        {row.joinedOn ? formatDay(row.joinedOn) : <span aria-label="Date not kept">—</span>}
       </span>
       <span
         className="text-muted-foreground col-start-2 row-start-2 justify-self-end text-[12px] whitespace-nowrap tabular-nums sm:col-start-3 sm:row-start-1 sm:justify-self-start"

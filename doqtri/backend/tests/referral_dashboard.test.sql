@@ -1,7 +1,8 @@
 -- pgTAP tests for 20261107110000_referral_dashboard.sql (WP-4.6, DOQ-24, D-111):
 -- only the service role can run it, it returns nothing that identifies beyond
 -- what the app masks, one referrer can't see another's rows, activity follows
--- DOQ-23's window, and a deleted referred user leaves a bare reward row.
+-- DOQ-23's window, a deleted referred user leaves a bare reward row with no date,
+-- and no time of day comes out at all.
 --
 --   pg_prove -d "$DATABASE_URL" doqtri/backend/tests/referral_dashboard.test.sql
 --
@@ -11,7 +12,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(31);
+select plan(39);
 
 create function pg_temp.uid(p_n int) returns uuid language sql immutable as $$
   select ('61000000-0000-4000-8000-' || lpad(p_n::text, 12, '0'))::uuid
@@ -76,9 +77,15 @@ select is(
   (select array_agg(c order by c)
      from unnest((select proargnames from pg_proc where oid = 'public.referral_dashboard(uuid, text)'::regprocedure)) c
     where c not like 'p\_%'),
-  array['activity_count', 'amount_php', 'c_wallet', 'email', 'former_user', 'g_wallet', 'referred_at',
+  array['activity_count', 'amount_php', 'c_wallet', 'email', 'former_user', 'g_wallet', 'referred_on',
         'reward_status', 'source'],
   'it returns these columns and no others: no id, display name, hash, referred_wallet or void reason');
+select is(
+  (select array_agg(format_type(t, null) order by c)
+     from unnest((select proargnames from pg_proc where oid = 'public.referral_dashboard(uuid, text)'::regprocedure),
+                 (select proallargtypes from pg_proc where oid = 'public.referral_dashboard(uuid, text)'::regprocedure)) as a(c, t)
+    where c like 'referred%'),
+  array['date'], 'the date it returns is a day: no time of day leaves it');
 
 select is(
   (select count(*)::int from pg_policies
@@ -134,6 +141,11 @@ select pg_temp.reward(16, 1, 'eligible', 30);
 update public.referral_rewards set qualified_at = now() - interval '30 minutes' where referred_user_id = pg_temp.uid(16);
 delete from auth.users where id = pg_temp.uid(16);
 
+-- Likewise, with a reward on the other network.
+select pg_temp.refer(18, 1, now() - interval '18 hours');
+select pg_temp.reward(18, 1, 'paid', 77, 'mainnet');
+delete from auth.users where id = pg_temp.uid(18);
+
 -- Referred, with a reward on the other network only.
 select pg_temp.refer(17, 1, now() - interval '17 hours');
 select pg_temp.reward(17, 1, 'paid', 99, 'mainnet');
@@ -158,14 +170,14 @@ select is((select count(*)::int from one where email = 'other@example.com'), 0,
 select is((select array_agg(email) from two), array['other@example.com'], 'and referrer 2 sees only it');
 
 select results_eq(
-  $$ select email from one where email is not null order by referred_at desc $$,
+  $$ select email from public.referral_dashboard(pg_temp.uid(1), 'testnet') where email is not null $$,
   $$ values ('tycoon@gmail.com'), (lower(pg_temp.wallet('G', 12)) || '@stellar.doqtri.local'),
             ('user13@example.com'), ('user14@example.com'), ('user15@example.com'), ('user17@example.com') $$,
-  'the living, by referral date');
+  'the living, newest first');
 select is(
   (select array_agg(former_user) from public.referral_dashboard(pg_temp.uid(1), 'testnet')),
-  array[true, false, false, false, false, false, false],
-  'newest first: the former user''s row dates from when the reward qualified');
+  array[false, false, false, false, false, false, true],
+  'a former user comes after everyone still here, whenever they qualified');
 
 select results_eq(
   $$ select activity_count, source from one where email = 'tycoon@gmail.com' $$,
@@ -193,15 +205,51 @@ select results_eq(
   $$ select email, g_wallet, c_wallet, source, activity_count, reward_status, amount_php from one where former_user $$,
   $$ values (null::text, null::text, null::text, null::text, null::int, 'eligible'::text, 30) $$,
   'a deleted referred user leaves only their reward: no identity, not even its wallet');
-select is(
-  (select extract(epoch from now() - referred_at)::int from one where former_user), 30 * 60,
-  'dated when it qualified, the only date left');
+select is((select referred_on from one where former_user), null, 'with no date: when it qualified would point at a wallet');
+select is((select count(*)::int from main where former_user), 1, 'a former user''s reward shows on its own network');
+select is((select amount_php from main where former_user), 77, 'and only there');
 
 select results_eq(
   $$ select reward_status, amount_php from one where email = 'user17@example.com' $$,
   $$ values (null::text, null::int) $$,
   'a reward on another network doesn''t show on this one');
 select is((select amount_php from main where email = 'user17@example.com'), 99, 'it shows on its own');
+
+-- The same moment: ties go in a fixed order, not the order they went in.
+select pg_temp.add_user(3);
+select pg_temp.refer(33, 3, '2026-03-04 23:30:00+00', 'third@example.com');
+select pg_temp.refer(31, 3, '2026-03-04 23:30:00+00', 'first@example.com');
+select pg_temp.refer(32, 3, '2026-03-04 23:30:00+00', 'second@example.com');
+select is(
+  (select array_agg(email) from public.referral_dashboard(pg_temp.uid(3), 'testnet')),
+  array['first@example.com', 'second@example.com', 'third@example.com'],
+  'ties among the living go by id, so reading a range at a time can''t skip or repeat');
+
+-- Two former users, the higher reward id first, told apart by their amounts.
+select pg_temp.refer(35, 3, now(), null);
+select pg_temp.reward(35, 3, 'eligible', 52);
+update public.referral_rewards set id = '61000000-0000-4000-8000-0000000000f2' where referred_user_id = pg_temp.uid(35);
+select pg_temp.refer(34, 3, now(), null);
+select pg_temp.reward(34, 3, 'eligible', 51);
+update public.referral_rewards set id = '61000000-0000-4000-8000-0000000000f1' where referred_user_id = pg_temp.uid(34);
+delete from auth.users where id in (pg_temp.uid(34), pg_temp.uid(35));
+select is(
+  (select array_agg(amount_php) from public.referral_dashboard(pg_temp.uid(3), 'testnet') where former_user),
+  array[51, 52], 'and among former users by the reward''s id, which is random, so it says nothing about when');
+select is(
+  (select array_agg(former_user) from public.referral_dashboard(pg_temp.uid(3), 'testnet')),
+  array[false, false, false, true, true], 'still after everyone else');
+
+-- The day in UTC, whatever the session's time zone: it's the 5th in Manila by then.
+set local timezone = 'Asia/Manila';
+select is(
+  (select referred_on from public.referral_dashboard(pg_temp.uid(3), 'testnet') where email = 'first@example.com'),
+  date '2026-03-04', 'the day is UTC''s, not the session''s');
+set local timezone = 'UTC';
+select is(
+  (select referred_on from one where email = 'user13@example.com'),
+  (select (r.created_at at time zone 'UTC')::date from public.referrals r where r.referred_user_id = pg_temp.uid(13)),
+  'a living referral has its day');
 
 -- A reward someone else holds on a referral of mine stays theirs.
 update public.referral_rewards set referrer_user_id = pg_temp.uid(2) where referred_user_id = pg_temp.uid(14);
