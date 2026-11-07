@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { StatusTag } from "@/components/ui/status-tag";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PasskeysDialog } from "@/components/vault/passkeys-dialog";
+import { ReferralInviteIntro } from "@/components/vault/referral-invite-intro";
 import { ConnectedApps, type ConnectedAppsData } from "@/components/vault/connected-apps";
 import { ActivityList, formatDate, writeActivity, type Activity } from "@/components/vault/activity-list";
 import { usePreferences } from "@/components/vault/preferences";
@@ -145,11 +146,14 @@ type Attention = {
 export function ProfileView({
   joinedAt,
   referral,
+  referralsLive = false,
   workspaceId,
   connectedApps = null,
 }: {
   joinedAt: string;
   referral: ReferralSummary | null;
+  /** The referral dashboard exists (lib/referral-dashboard.ts). */
+  referralsLive?: boolean;
   /** The active workspace, whose notes the vault shows and this page counts (WP-1.7). */
   workspaceId: string;
   /** Connected apps (WP-2.3); null hides the tab (NEXT_PUBLIC_QDIT_INTEGRATION unset). */
@@ -728,10 +732,7 @@ export function ProfileView({
 
         {tab === "invite" && referral ? (
           <Section title="Invite friends" icon={GiftIcon}>
-            <p className="text-muted-foreground text-[13px]">
-              Share your link, let someone scan your QR code, or give them your code to enter when they sign up.
-              Anyone who then creates an account is counted as your referral.
-            </p>
+            <ReferralInviteIntro live={referralsLive} />
             <div className="flex flex-wrap items-center gap-2">
               <span
                 className="glass min-w-0 flex-1 truncate rounded-lg px-3 py-2 font-mono text-[12px]"

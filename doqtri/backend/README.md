@@ -62,6 +62,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261101120000_wallet_topups.sql          # NOT recorded (WP-4.1, DOQ-6): confirm on the remote before deploying
 20261103100000_ops_snapshot.sql           # applied 2026-11-03 as `ops_snapshot` (WP-4.3, DOQ-14)
 20261107100000_referral_eligibility.sql   # NOT yet applied (WP-4.6, DOQ-23): needs 20261101110000_chain_writes_status.sql first
+20261107110000_referral_dashboard.sql     # NOT yet applied (WP-4.6, DOQ-24): needs 20261107100000_referral_eligibility.sql first
 ```
 
 Files marked "NOT recorded" were added without updating this list, so whether they are
@@ -123,8 +124,9 @@ Two supporting tables:
   Both functions are service role only. Owners can read their own code. The
   referrals table is never readable by clients: the profile page shows counts,
   total and by source, and admins see it in full at `/admin/referrals`. Referred
-  users are to reach their referrer only masked, through a server route
-  (DOQ-24).
+  users reach their referrer only masked, through `GET /api/referrals`
+  (DOQ-24, D-111), which reads them through `referral_dashboard()`, service role
+  only.
 - `public.referral_chain_activity`, `public.referral_rewards`,
   `public.referral_reward_limits`, `public.referral_activity_sync` — what a
   referral has earned (WP-4.6, DOQ-23). RLS on with no policies, every privilege

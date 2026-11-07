@@ -27,7 +27,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
-export type RibbonAction = "files" | "search" | "templates" | "graph" | "mindmap" | "settings";
+export type RibbonAction = "files" | "search" | "templates" | "graph" | "mindmap" | "referrals" | "settings";
 
 const ITEMS: { id: RibbonAction; label: string; Icon: typeof FilesIcon }[] = [
   { id: "files", label: "Files", Icon: FilesIcon },
@@ -35,8 +35,18 @@ const ITEMS: { id: RibbonAction; label: string; Icon: typeof FilesIcon }[] = [
   { id: "templates", label: "Templates", Icon: LayoutTemplateIcon },
   { id: "graph", label: "Graph view", Icon: NetworkIcon },
   { id: "mindmap", label: "Global mindmap", Icon: BrainIcon },
+  { id: "referrals", label: "Referrals", Icon: GiftIcon },
   { id: "settings", label: "Settings", Icon: SettingsIcon },
 ];
+
+/**
+ * The ribbon action a route belongs to. While the referral dashboard isn't live,
+ * `/vault/referrals` is a 404 like any other unknown note, so nothing marks it.
+ */
+export function ribbonRouteAction(segment: string | undefined, referralsLive: boolean): RibbonAction | undefined {
+  if (segment === "mindmap" || segment === "graph" || segment === "templates") return segment;
+  return segment === "referrals" && referralsLive ? segment : undefined;
+}
 
 const BUTTON =
   "text-sidebar-foreground/70 hover:text-foreground relative flex size-9 items-center justify-center rounded-[10px] border border-transparent transition-colors hover:bg-[var(--glass)] focus-visible:ring-ring focus-visible:ring-1 focus-visible:outline-hidden";
@@ -48,11 +58,14 @@ export function Ribbon({
   active,
   onAction,
   isAdmin = false,
+  referralsLive = false,
   accountPage,
 }: {
   active?: RibbonAction;
   onAction: (action: RibbonAction) => void;
   isAdmin?: boolean;
+  /** The referral dashboard exists (lib/referral-dashboard.ts). */
+  referralsLive?: boolean;
   /** On an account page (profile, members): the profile button shows as current. */
   accountPage?: AccountPage;
 }) {
@@ -68,7 +81,7 @@ export function Ribbon({
       >
         <DoqtriMark className="size-7" glow={false} title="" />
       </Link>
-      {ITEMS.map(({ id, label, Icon }) => (
+      {ITEMS.filter(({ id }) => id !== "referrals" || referralsLive).map(({ id, label, Icon }) => (
         <Tooltip key={id}>
           <TooltipTrigger
             aria-label={label}
