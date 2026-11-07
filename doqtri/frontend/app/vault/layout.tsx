@@ -7,6 +7,7 @@ import { VaultShell } from "@/components/vault/vault-shell";
 import { PreferencesSync } from "@/components/vault/preferences";
 import { ReferralClaim } from "@/components/vault/referral-claim";
 import { REFERRAL_COOKIE } from "@/lib/referral";
+import { referralDashboardLive } from "@/lib/referral-dashboard";
 import { loadFailedImports } from "@/lib/ingest/failed";
 import { walletAddressFromEmail } from "@/lib/wallet-address";
 import { NETWORK } from "@/lib/stellar/smart-wallet-config";
@@ -88,6 +89,7 @@ export default async function VaultLayout({
         failedImports={failedImports}
         identity={identity}
         isAdmin={isAdmin(user)}
+        referralsLive={referralDashboardLive()}
         workspace={active}
         workspaces={workspaces}
       >

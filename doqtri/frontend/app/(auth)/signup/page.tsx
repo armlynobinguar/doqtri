@@ -5,6 +5,7 @@ import { ReferralCodeField } from "@/components/auth/referral-code-field";
 import { WalletOption } from "@/components/auth/wallet-option";
 import { safeNextPath, withNext } from "@/lib/email-auth";
 import { readReferralCookie, REFERRAL_COOKIE } from "@/lib/referral";
+import { referralDashboardLive } from "@/lib/referral-dashboard";
 
 export const metadata = { title: "Create account · Doqtri" };
 
@@ -26,7 +27,7 @@ export default async function SignUpPage({
       >
         <EmailAuthForm mode="sign-up" next={next} />
         <WalletOption next={next} />
-        <ReferralCodeField initialCode={referral?.code ?? null} />
+        <ReferralCodeField initialCode={referral?.code ?? null} dashboardLive={referralDashboardLive()} />
         <AuthSwitch prompt="Already have an account?" href={withNext("/login", next)} label="Sign in" />
       </AuthCard>
     </AuthPage>
