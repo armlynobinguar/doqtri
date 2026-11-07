@@ -22,6 +22,9 @@ const state = vi.hoisted(() => ({
   inserts: [] as { table: string; row: Record<string, unknown> }[],
 }));
 
+// Outside a request, the real after() refuses; recording itself is route.referral.test.ts's.
+vi.mock("next/server", () => ({ after: () => {} }));
+
 vi.mock("@/lib/stellar/smart-wallet-config", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/stellar/smart-wallet-config")>()),
   FEE_FORWARDER: StrKey.encodeContract(Buffer.alloc(32, 7)),

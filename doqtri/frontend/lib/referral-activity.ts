@@ -19,9 +19,14 @@
  *                         records the ones that count (runReferralSync).
  *
  * The sync covers referred users without a reward, least recently synced
- * first and a fixed number per run, so Horizon load stays small. It keeps no
- * cursor: reading newest-first needs no state, so a testnet reset can't strand
- * it. A Horizon failure leaves that user's counts alone for the next run.
+ * first, a fixed number per run and each at most once per
+ * REFERRAL_RESYNC_SECONDS, so Horizon load stays small. It keeps no cursor:
+ * reading newest-first needs no state, so a testnet reset can't strand it. A
+ * Horizon failure leaves that user's counts alone until their next turn.
+ *
+ * A paid membership or market write the relay answered 502 for can still land.
+ * Nothing records it, so it goes uncounted: an undercount, never a reward
+ * nobody earned.
  *
  * Each step is idempotent: an activity is keyed by network and transaction,
  * and the database decides when a referral qualifies.
@@ -44,8 +49,21 @@ const REFERRAL_SYNCS_PER_RUN = 25;
  */
 export const REFERRAL_SYNC_BUDGET_MS = 60_000;
 
-/** The longest one Horizon request may take. */
+/** The longest one wallet's Horizon read may take, all its pages together. */
 const REFERRAL_SYNC_TIMEOUT_MS = 8_000;
+
+/** Horizon's largest page, and how many a read follows through a busy wallet's feed. */
+const REFERRAL_SYNC_PAGE_SIZE = 200;
+const REFERRAL_SYNC_MAX_PAGES = 3;
+
+/** A referred user who was just synced waits this long for their next turn. */
+const REFERRAL_RESYNC_SECONDS = 15 * 60;
+
+/** How Horizon names a call to a contract; deployments carry `parameters` too. */
+const INVOKE_CONTRACT = "HostFunctionTypeHostFunctionTypeInvokeContract";
+
+/** An operation of a wallet's feed: what history.ts reads, and which host function it ran. */
+type FeedOperation = HorizonOperation & { function?: string };
 
 /** The rules, passed to every SQL function that qualifies, which never repeats them. */
 const RULES = {
@@ -117,17 +135,18 @@ function scVal(value: string): xdr.ScVal {
 
 /**
  * The activity one Horizon operation of `wallet`'s feed counts as, or null
- * when it doesn't: not a contract call (a deployment has no contract
- * parameter), a failed transaction, another account's operation that merely
+ * when it doesn't: not a contract call (a deployment is an
+ * invoke_host_function too, and its `parameters` are its constructor's), a
+ * failed transaction, another account's operation that merely
  * names the wallet, a contract that isn't Doqtri's, older than the referral,
  * or parameters that can't be read, since the feed holds everything the
  * wallet did. The database checks the referral's time again.
  */
 export function referralActivityFrom(
-  op: HorizonOperation,
+  op: FeedOperation,
   { wallet, contracts, referredAt }: { wallet: string; contracts: readonly string[]; referredAt: string },
 ): ReferralActivity | null {
-  if (op.type !== "invoke_host_function") return null;
+  if (op.type !== "invoke_host_function" || op.function !== INVOKE_CONTRACT) return null;
   if (op.transaction_successful === false) return null;
   if (op.source_account !== wallet) return null;
   const params = op.parameters;
@@ -145,22 +164,40 @@ export function referralActivityFrom(
 }
 
 /**
- * One wallet's newest operations from Horizon, without failed transactions.
- * An account that was never funded has no feed; anything else unexpected
- * throws. `fetchImpl` stands in for the network in tests.
+ * One wallet's operations from Horizon, newest first and without failed
+ * transactions, back to `since` or for REFERRAL_SYNC_MAX_PAGES pages, so a run
+ * of newer operations doesn't hide older calls. An account that was never
+ * funded has no feed; anything else unexpected throws, dropping the pages
+ * already read. `timeoutMs` covers the whole read, so the pages cost a run
+ * nothing beyond its time budget. `fetchImpl` stands in for the network in tests.
  */
 export function horizonOperations(
   fetchImpl: typeof fetch = fetch,
   timeoutMs = REFERRAL_SYNC_TIMEOUT_MS,
-): (account: string) => Promise<HorizonOperation[]> {
-  return async (account) => {
-    const res = await fetchImpl(`${HORIZON_URL}/accounts/${account}/operations?order=desc&limit=200&include_failed=false`, {
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (res.status === 404) return [];
-    if (!res.ok) throw new Error(`Horizon answered ${res.status}`);
-    const body = (await res.json()) as { _embedded?: { records?: HorizonOperation[] } };
-    return body._embedded?.records ?? [];
+): (account: string, since: string) => Promise<FeedOperation[]> {
+  return async (account, since) => {
+    const signal = AbortSignal.timeout(timeoutMs);
+    const sinceMs = Date.parse(since);
+    const ops: FeedOperation[] = [];
+    let url: string | undefined =
+      `${HORIZON_URL}/accounts/${account}/operations?order=desc&limit=${REFERRAL_SYNC_PAGE_SIZE}&include_failed=false`;
+    for (let page = 0; url && page < REFERRAL_SYNC_MAX_PAGES; page++) {
+      const res: Response = await fetchImpl(url, { signal });
+      if (res.status === 404) break;
+      if (!res.ok) throw new Error(`Horizon answered ${res.status}`);
+      const body = (await res.json()) as {
+        _embedded?: { records?: FeedOperation[] };
+        _links?: { next?: { href?: string } };
+      };
+      const records = body._embedded?.records ?? [];
+      ops.push(...records);
+      const oldest = records.at(-1);
+      url =
+        records.length === REFERRAL_SYNC_PAGE_SIZE && oldest && !(Date.parse(oldest.created_at) < sinceMs)
+          ? body._links?.next?.href
+          : undefined;
+    }
+    return ops;
   };
 }
 
@@ -168,14 +205,14 @@ export function horizonOperations(
 async function syncOne(
   candidate: ReferralCandidate,
   store: ReferralActivityStore,
-  readOperations: (account: string) => Promise<HorizonOperation[]>,
+  readOperations: (account: string, since: string) => Promise<FeedOperation[]>,
   contracts: readonly string[],
 ): Promise<boolean> {
   let ok = true;
   const wallet = candidate.g_wallet;
   if (wallet) {
     try {
-      for (const op of await readOperations(wallet)) {
+      for (const op of await readOperations(wallet, candidate.referred_at)) {
         const activity = referralActivityFrom(op, { wallet, contracts, referredAt: candidate.referred_at });
         if (activity) await store.record(candidate.user_id, activity);
       }
@@ -185,7 +222,8 @@ async function syncOne(
     }
   }
   // Always, so a Horizon failure neither holds up the sweep nor keeps this
-  // user at the front of the queue.
+  // user at the front of the queue. It stamps the sync, so their retry waits
+  // for their next turn, REFERRAL_RESYNC_SECONDS away.
   try {
     await store.settle(candidate.user_id);
   } catch (error) {
@@ -202,7 +240,7 @@ async function syncOne(
  */
 export async function syncReferralActivity(
   store: ReferralActivityStore,
-  readOperations: (account: string) => Promise<HorizonOperation[]>,
+  readOperations: (account: string, since: string) => Promise<FeedOperation[]>,
   contracts: readonly string[],
   {
     now = () => Date.now(),
@@ -227,7 +265,11 @@ export async function syncReferralActivity(
 export function supabaseReferralStore(admin: Pick<SupabaseClient, "rpc">, network: string): ReferralActivityStore {
   return {
     async candidates(limit) {
-      const { data, error } = await admin.rpc("referral_sync_candidates", { p_network: network, p_limit: limit });
+      const { data, error } = await admin.rpc("referral_sync_candidates", {
+        p_network: network,
+        p_limit: limit,
+        p_min_resync_seconds: REFERRAL_RESYNC_SECONDS,
+      });
       if (error) throw new Error(`reading referral candidates failed: ${error.message}`);
       return (data ?? []) as ReferralCandidate[];
     },
