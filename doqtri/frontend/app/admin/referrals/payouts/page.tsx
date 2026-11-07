@@ -18,16 +18,18 @@ export const metadata: Metadata = {
  * referrer's limit. Admins only (DOQTRI_ADMINS); anyone else, signed out
  * included, gets a 404. Not behind the legal pages' switch: admins need to see
  * eligibility before launch. Read with the service role. Payout details show in
- * full here and nowhere else; nothing on this page sends money.
+ * full here and nowhere else; nothing on this page sends money. Paying is two
+ * steps (lib/referral-payouts-store.ts): Start payout holds it for this admin and
+ * shows the details as they are now, then Record payout records what was sent.
  */
 export default async function ReferralPayoutsAdminPage() {
   const supabase = await createSupabaseServerClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!isAdmin(user)) notFound();
+  if (!user || !isAdmin(user)) notFound();
 
-  const rows = await loadPayoutQueue(createSupabaseAdminClient());
+  const rows = await loadPayoutQueue(createSupabaseAdminClient(), user.id);
 
   return (
     <div className="flex min-h-svh flex-col">

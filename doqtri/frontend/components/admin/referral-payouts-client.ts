@@ -1,4 +1,16 @@
-import type { MarkPaidRequest, PayoutQueueRow, PayoutReferralRow, RewardStatus } from "@/lib/referral-payouts";
+import {
+  formatDay,
+  formatPhp,
+  formatTime,
+  type MarkPaidRequest,
+  type PayoutDetails,
+  type PayoutQueueRow,
+  type PayoutReferralRow,
+  type PayoutRequest,
+  type RewardStatus,
+} from "@/lib/referral-payouts";
+
+export { formatDay, formatPhp, formatTime };
 
 /*
  * The admin payouts panel's logic (WP-4.6, DOQ-26), apart from React so that it
@@ -49,17 +61,52 @@ export function fetchReferrals(referrerId: string): Promise<Outcome<PayoutReferr
 
 /**
  * Exactly what the row showed: its eligible rewards, their total and the details'
- * version. Null when it can't be paid: nothing eligible, or no details.
+ * version, for Start payout. Null when it can't be started: nothing eligible, no
+ * details, or another admin paying.
  */
-export function markPaidRequest(row: PayoutQueueRow, reference: string): MarkPaidRequest | null {
+export function payoutRequest(row: PayoutQueueRow): PayoutRequest | null {
   if (!row.details || row.eligibleRewardIds.length === 0) return null;
+  if (row.claim && !row.claim.mine) return null;
   return {
     referrerId: row.referrerId,
     rewardIds: row.eligibleRewardIds,
     amountPhp: row.owedPhp,
     detailsUpdatedAt: row.details.updatedAt,
-    reference: reference.trim() || null,
   };
+}
+
+/** A payout this admin holds: the details as they are now, which they send to, until `expiresAt`. */
+export type Started = {
+  request: PayoutRequest;
+  details: PayoutDetails;
+  claimedAt: string;
+  expiresAt: string;
+};
+
+export function startPayout(request: PayoutRequest): Promise<Outcome<Started>> {
+  return call(
+    PAYOUTS_ROUTE,
+    { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ action: "start", ...request }) },
+    "The payout couldn't be started. Nothing is held: reload and try again.",
+    (body) => {
+      const started = body.started as Record<string, unknown> | undefined;
+      const details = started?.details as PayoutDetails | undefined;
+      return details && typeof started?.claimedAt === "string" && typeof started?.expiresAt === "string"
+        ? {
+            // Recording sends the version the database just confirmed.
+            request: { ...request, detailsUpdatedAt: details.updatedAt },
+            details,
+            claimedAt: started.claimedAt,
+            expiresAt: started.expiresAt,
+          }
+        : undefined;
+    },
+  );
+}
+
+/** What Record payout sends: what was started, and the reference. */
+export function markPaidRequest(started: Started, reference: string): MarkPaidRequest {
+  return { ...started.request, reference: reference.trim() || null };
 }
 
 export type Paid = { payoutId: string; rewardCount: number; amountPhp: number };
@@ -67,12 +114,21 @@ export type Paid = { payoutId: string; rewardCount: number; amountPhp: number };
 export function markPaid(request: MarkPaidRequest): Promise<Outcome<Paid>> {
   return call(
     PAYOUTS_ROUTE,
-    { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(request) },
+    { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ action: "record", ...request }) },
     "The payout couldn't be confirmed. Reload to check whether it was recorded before trying again.",
     (body) =>
       typeof body.payoutId === "string" && typeof body.rewardCount === "number" && typeof body.amountPhp === "number"
         ? { payoutId: body.payoutId, rewardCount: body.rewardCount, amountPhp: body.amountPhp }
         : undefined,
+  );
+}
+
+export function releasePayout(referrerId: string): Promise<Outcome<true>> {
+  return call(
+    PAYOUTS_ROUTE,
+    { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ action: "release", referrerId }) },
+    "The payout couldn't be released. Reload to see whether you still hold it.",
+    (body) => (body.released === true ? true : undefined),
   );
 }
 
@@ -130,30 +186,12 @@ export function createSingleFlight() {
   };
 }
 
-export function formatPhp(amount: number): string {
-  return `${amount.toLocaleString("en-US")} PHP`;
-}
-
-/** `7 Dec 2026`, in UTC, the same on the server and in the browser. */
-export function formatDay(iso: string | null): string {
-  if (!iso) return "—";
-  const time = Date.parse(iso);
-  if (Number.isNaN(time)) return "—";
-  return new Date(time).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
-}
-
-/** `7 Dec 2026, 14:05 UTC`: for review, where the time of day matters. */
-export function formatTime(iso: string | null): string {
-  if (!iso) return "—";
-  const time = Date.parse(iso);
-  if (Number.isNaN(time)) return "—";
-  const at = new Date(time);
-  const clock = at.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "UTC" });
-  return `${formatDay(iso)}, ${clock} UTC`;
-}
-
 function rewards(count: number): string {
   return `${count} reward${count === 1 ? "" : "s"}`;
+}
+
+export function releasedMessage(identity: string): string {
+  return `Released the payout to ${identity}. Nothing was recorded, and another admin can start it now.`;
 }
 
 export function paidMessage(identity: string, paid: Paid): string {

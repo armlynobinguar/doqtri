@@ -87,7 +87,7 @@ it("sets the limit with the default from lib/referral-program.ts (AC 7)", async 
   ]);
 });
 
-it.each([[-1], [1.5], [10_001], ["many"], [null]])("refuses a limit of %j with a 400", async (limit) => {
+it.each([[-1], [1.5], [1001], [10_001], ["many"], [null]])("refuses a limit of %j with a 400", async (limit) => {
   const res = await patch(REFERRER, { limit });
   expect(res.status).toBe(400);
   expect(res.headers.get("cache-control")).toBe("no-store");

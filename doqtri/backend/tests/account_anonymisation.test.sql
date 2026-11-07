@@ -137,6 +137,7 @@ select public.record_referral_activity(u.id, 'testnet', repeat(u.hex, 63) || n::
 -- Paid the only way a reward can be (DOQ-26), to a's payout details.
 insert into public.referral_payout_profiles (user_id, method, name, xlm_address) values
   ('00000000-0000-4000-8000-0000000000d1', 'xlm', 'Payout Holder', 'G' || repeat('P', 55));
+select public.start_referral_payout('00000000-0000-4000-8000-0000000000d1', array[(select id from public.referral_rewards where referred_user_id = '00000000-0000-4000-8000-0000000000d8')], 30, (select updated_at from public.referral_payout_profiles where user_id = '00000000-0000-4000-8000-0000000000d1'), '00000000-0000-4000-8000-0000000000d1');
 select public.mark_referral_rewards_paid(
   '00000000-0000-4000-8000-0000000000d1',
   array[(select id from public.referral_rewards where referred_user_id = '00000000-0000-4000-8000-0000000000d8')],

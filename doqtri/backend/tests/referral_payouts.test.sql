@@ -1,7 +1,9 @@
 -- pgTAP tests for 20261107130000_referral_payouts.sql (WP-4.6, DOQ-26, D-110,
--- D-112): the queue's amount owed, marking as paid and every refusal, paid being
--- final (each refused transition), restoring, raising and lowering a limit, who
--- can run or read any of it, and what deleting a referrer or an admin leaves.
+-- D-112): the queue's amount owed, the two payout steps (a claim, its expiry, a
+-- competing admin, releasing, recording without or with a mismatched claim) and
+-- every refusal, paid being final (each refused transition, and no deleting),
+-- the details' version, restoring, raising and lowering a limit, who can run or
+-- read any of it, and what deleting a referrer or an admin leaves.
 --
 --   pg_prove -d "$DATABASE_URL" doqtri/backend/tests/referral_payouts.test.sql
 --
@@ -10,14 +12,14 @@
 -- role, as the app calls them. Rules come from the test's own arguments: a limit
 -- of 30 unless a referrer's is set.
 --
--- One session can never be blocked by its own advisory lock, so two mark-as-paid
--- calls really overlapping are in referral_payouts_concurrency.test.sql. Here, a
--- second call with the same rewards, after the first, is refused.
+-- One session can never be blocked by its own advisory lock, so payout steps
+-- really overlapping are in referral_payouts_concurrency.test.sql. Here, a second
+-- call with the same rewards, after the first, is refused.
 
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(113);
+select plan(159);
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -87,13 +89,37 @@ create function pg_temp.payouts() returns int language sql as $$
   select count(*)::int from public.referral_payouts
 $$;
 
--- Mark as paid as the route calls it, with the details as they stand.
-create function pg_temp.pay(p_referrer int, p_rewards int[], p_amount int, p_reference text default null)
+create function pg_temp.ids(p_rewards int[]) returns uuid[] language sql as $$
+  select array_agg(pg_temp.rid(n) order by n) from unnest(p_rewards) n
+$$;
+
+-- The two steps as the route calls them, with the details as they stand, by
+-- admin 9 unless told otherwise.
+create function pg_temp.start(p_referrer int, p_rewards int[], p_amount int, p_admin int default 9)
+returns jsonb language sql as $$
+  select public.start_referral_payout(
+    pg_temp.uid(p_referrer), pg_temp.ids(p_rewards), p_amount, pg_temp.details_at(p_referrer), pg_temp.uid(p_admin))
+$$;
+
+create function pg_temp.record(p_referrer int, p_rewards int[], p_amount int, p_reference text default null,
+                               p_admin int default 9)
 returns uuid language sql as $$
   select public.mark_referral_rewards_paid(
-    pg_temp.uid(p_referrer),
-    (select array_agg(pg_temp.rid(n) order by n) from unnest(p_rewards) n),
-    p_amount, pg_temp.details_at(p_referrer), p_reference, pg_temp.uid(9))
+    pg_temp.uid(p_referrer), pg_temp.ids(p_rewards), p_amount, pg_temp.details_at(p_referrer), p_reference,
+    pg_temp.uid(p_admin))
+$$;
+
+-- Both, as an admin pays: start, send by hand, record.
+create function pg_temp.pay(p_referrer int, p_rewards int[], p_amount int, p_reference text default null)
+returns uuid language plpgsql as $$
+begin
+  perform pg_temp.start(p_referrer, p_rewards, p_amount);
+  return pg_temp.record(p_referrer, p_rewards, p_amount, p_reference);
+end;
+$$;
+
+create function pg_temp.claims(p_referrer int) returns int language sql as $$
+  select count(*)::int from public.referral_payout_claims where referrer_user_id = pg_temp.uid(p_referrer)
 $$;
 
 -- ---------------------------------------------------------------------------
@@ -112,8 +138,19 @@ select is(
   0, 'anon and authenticated hold no privilege on the ledger');
 select ok(has_table_privilege('service_role', 'public.referral_payouts', 'select'), 'the service role can read it');
 select ok(not has_table_privilege('service_role', 'public.referral_payouts', 'insert')
-          and not has_table_privilege('service_role', 'public.referral_payouts', 'update'),
-  'but neither insert nor change a row: only mark_referral_rewards_paid() writes there');
+          and not has_table_privilege('service_role', 'public.referral_payouts', 'update')
+          and not has_table_privilege('service_role', 'public.referral_payouts', 'delete'),
+  'but neither insert, change nor delete a row: only mark_referral_rewards_paid() writes there');
+select is((select relrowsecurity from pg_class where oid = 'public.referral_payout_claims'::regclass), true,
+  'referral_payout_claims has RLS on');
+select is((select count(*)::int from pg_policies where schemaname = 'public' and tablename = 'referral_payout_claims'), 0,
+  'with no policies');
+select is(
+  (select array_agg(r.name || ' ' || p.name order by r.name, p.name)
+     from unnest(array['anon', 'authenticated', 'service_role']) as r(name),
+          unnest(array['select', 'insert', 'update', 'delete']) as p(name)
+    where has_table_privilege(r.name, 'public.referral_payout_claims', p.name)),
+  array['service_role select'], 'on the claims, the service role may only read, and clients nothing');
 select is(
   (select array_agg(column_name::text order by column_name::text)
      from information_schema.columns where table_schema = 'public' and table_name = 'referral_payouts'),
@@ -125,15 +162,18 @@ create temp table payout_fns as
   select p.oid, p.proname::text as name, p.prosecdef as definer, p.proconfig
     from pg_proc p
    where p.pronamespace = 'public'::regnamespace
-     and p.proname in ('mark_referral_rewards_paid', 'restore_referral_reward', 'referral_payout_queue',
-                       'referral_payout_referrals', 'referral_rewards_paid_final',
-                       'referral_payout_profiles_keep_created_at');
+     and p.proname in ('start_referral_payout', 'release_referral_payout', 'mark_referral_rewards_paid',
+                       'restore_referral_reward', 'referral_payout_queue', 'referral_payout_referrals',
+                       'referral_payout_conflict', 'referral_rewards_paid_final', 'referral_payouts_keep',
+                       'referral_payout_profiles_before_update', 'referral_payout_check_request',
+                       'referral_payout_check_rewards', 'referral_payout_account_gone');
 grant select on payout_fns to anon, authenticated, service_role;
 
-select is((select count(*)::int from payout_fns), 6, 'the six functions exist');
+select is((select count(*)::int from payout_fns), 13, 'the thirteen functions exist');
 select is((select array_agg(name order by name) from payout_fns where definer),
-  array['mark_referral_rewards_paid', 'referral_payout_queue', 'referral_payout_referrals'],
-  'marking as paid and the two reads are security definer; restore runs as the service role');
+  array['mark_referral_rewards_paid', 'referral_payout_conflict', 'referral_payout_queue', 'referral_payout_referrals',
+        'release_referral_payout', 'start_referral_payout'],
+  'the payout steps and the reads are security definer; restore and the helpers run as their caller');
 select is((select array_agg(name) from payout_fns where not coalesce(proconfig @> array['search_path=""'], false)),
   null::text[], 'all have an empty search_path');
 select is(
@@ -142,10 +182,15 @@ select is(
   null::text[], 'no client can run any of them');
 select is(
   (select array_agg(f.name order by f.name) from payout_fns f where has_function_privilege('service_role', f.oid, 'execute')),
-  array['mark_referral_rewards_paid', 'referral_payout_queue', 'referral_payout_referrals', 'restore_referral_reward'],
-  'the service role can run all but the triggers''');
+  array['mark_referral_rewards_paid', 'referral_payout_conflict', 'referral_payout_queue', 'referral_payout_referrals',
+        'release_referral_payout', 'restore_referral_reward', 'start_referral_payout'],
+  'the service role can run all but the triggers and the internal helpers');
 select matches(pg_get_functiondef('public.mark_referral_rewards_paid(uuid, uuid[], integer, timestamptz, text, uuid)'::regprocedure),
-  'lock_referral_referrer', 'marking as paid takes the referrer''s lock');
+  'lock_referral_referrer', 'recording takes the referrer''s lock');
+select matches(pg_get_functiondef('public.start_referral_payout(uuid, uuid[], integer, timestamptz, uuid)'::regprocedure),
+  'lock_referral_referrer', 'so does starting');
+select matches(pg_get_functiondef('public.release_referral_payout(uuid, uuid)'::regprocedure),
+  'lock_referral_referrer', 'and releasing');
 select matches(pg_get_functiondef('public.restore_referral_reward(uuid, integer)'::regprocedure),
   'lock_referral_referrer', 'and so does restoring');
 
@@ -154,6 +199,8 @@ select throws_ok($$ select * from public.referral_payouts $$, '42501', null, 'an
 select throws_ok($$ select * from public.referral_payout_queue() $$, '42501', null, 'or the queue');
 select throws_ok($$ select public.mark_referral_rewards_paid(gen_random_uuid(), array[gen_random_uuid()], 30, now(), null, gen_random_uuid()) $$,
   '42501', null, 'or mark anything paid');
+select throws_ok($$ select public.start_referral_payout(gen_random_uuid(), array[gen_random_uuid()], 30, now(), gen_random_uuid()) $$,
+  '42501', null, 'or start a payout');
 reset role;
 set local role authenticated;
 select throws_ok($$ select * from public.referral_payouts $$, '42501', null, 'a signed-in client can''t read the ledger');
@@ -306,7 +353,8 @@ select throws_ok(
   $$ select public.mark_referral_rewards_paid(pg_temp.uid(1), array[pg_temp.rid(17), gen_random_uuid()], 60,
        pg_temp.details_at(1), null, pg_temp.uid(9)) $$,
   'DQR02', null, 'one that doesn''t exist is refused');
-select throws_ok($$ select pg_temp.pay(3, array[31], 30) $$, 'DQR03', null, 'a referrer with no payout details is refused');
+select throws_ok($$ select public.start_referral_payout(pg_temp.uid(3), pg_temp.ids(array[31]), 30, now(), pg_temp.uid(9)) $$,
+  'DQR03', null, 'a referrer with no payout details is refused');
 select throws_ok(
   $$ select public.mark_referral_rewards_paid(pg_temp.uid(1), array[pg_temp.rid(17)], 30,
        pg_temp.details_at(1) - interval '1 second', null, pg_temp.uid(9)) $$,
@@ -357,6 +405,9 @@ select is(
 select throws_ok($$ select pg_temp.pay(1, array[17, 11], 60) $$, 'DQR02', null,
   'the same rewards again, as a second press would send them, are refused');
 select is(pg_temp.payouts(), 1, 'so there is still one payout');
+select throws_ok($$ select pg_temp.record(1, array[17, 11], 60) $$, 'DQR02', null,
+  'recording them again, as a stale tab would, is refused as already paid, not as a missing claim');
+select is(pg_temp.claims(1), 0, 'recording cleared the claim');
 
 select lives_ok($$ select pg_temp.pay(2, array[21], 30, '   ') $$, 'an e-wallet payout, with a blank reference');
 select results_eq(
@@ -383,6 +434,128 @@ select throws_ok(
   $$ select public.mark_referral_rewards_paid(pg_temp.uid(1), array[pg_temp.rid(12)], 45,
        (select updated_at from before_edit), null, pg_temp.uid(9)) $$,
   'DQR04', null, 'and the details as they were before the edit are refused');
+
+-- The version is the database's: a writer that forgets updated_at, or sends an
+-- old one, still makes a new one.
+create temp table before_quiet on commit drop as
+  select updated_at from public.referral_payout_profiles where user_id = pg_temp.uid(2);
+grant select on before_quiet to service_role;
+update public.referral_payout_profiles set ewallet_account_number = '0917 555 0199' where user_id = pg_temp.uid(2);
+select ok((select updated_at from public.referral_payout_profiles where user_id = pg_temp.uid(2))
+          > (select updated_at from before_quiet),
+  'an edit that sends no updated_at still gets a new version');
+update public.referral_payout_profiles set ewallet_details = 'Main branch', updated_at = (select updated_at from before_quiet)
+ where user_id = pg_temp.uid(2);
+select ok((select updated_at from public.referral_payout_profiles where user_id = pg_temp.uid(2))
+          > (select updated_at from before_quiet),
+  'and one that sends an old updated_at gets a new one anyway');
+
+-- ---------------------------------------------------------------------------
+-- Two steps: a claim, a competing admin, a mismatched claim, release, expiry
+-- ---------------------------------------------------------------------------
+
+reset role;
+select pg_temp.add_user(7);
+select pg_temp.add_user(8);  -- a second admin
+select pg_temp.refer(71, 7);
+select pg_temp.reward(71, 7, 'eligible', 30, now() - interval '2 days');
+select pg_temp.refer(72, 7);
+select pg_temp.reward(72, 7, 'eligible', 30, now() - interval '1 day');
+set local role service_role;
+insert into public.referral_payout_profiles (user_id, method, name, xlm_address, xlm_memo, xlm_memo_type)
+values (pg_temp.uid(7), 'xlm', 'Referrer Seven', pg_temp.wallet('G', 707), '77', 'id');
+
+create temp table started on commit drop as select pg_temp.start(7, array[71, 72], 60) as d;
+grant select on started to service_role;
+select results_eq(
+  $$ select d ->> 'method', d ->> 'name', d ->> 'xlm_address', d ->> 'xlm_memo',
+            (d ->> 'details_updated_at')::timestamptz = pg_temp.details_at(7),
+            (d ->> 'expires_at')::timestamptz - (d ->> 'claimed_at')::timestamptz
+       from started $$,
+  $$ values ('xlm'::text, 'Referrer Seven'::text, pg_temp.wallet('G', 707), '77'::text, true, interval '2 hours') $$,
+  'starting returns the details as they are now, and holds the payout for 2 hours');
+select results_eq(
+  $$ select claimed_by, reward_ids, amount_php from public.referral_payout_claims where referrer_user_id = pg_temp.uid(7) $$,
+  $$ values (pg_temp.uid(9), pg_temp.ids(array[71, 72]), 60) $$,
+  'the claim is the admin''s, for exactly those rewards and that total');
+select results_eq(
+  $$ select claim_admin_id, claim_admin_email, claim_expires_at = (select (d ->> 'expires_at')::timestamptz from started)
+       from public.referral_payout_queue() where referrer_user_id = pg_temp.uid(7) $$,
+  $$ values (pg_temp.uid(9), 'user9@example.com'::text, true) $$,
+  'the queue shows who is paying, and until when');
+select throws_ok($$ select pg_temp.start(7, array[71, 72], 60, 8) $$, 'DQR07', null,
+  'another admin can''t start a payout while one is live');
+select is((public.referral_payout_conflict(pg_temp.uid(7), pg_temp.ids(array[71, 72])) -> 'claim' ->> 'admin_id')::uuid,
+  pg_temp.uid(9), 'and can be told who holds it');
+select throws_ok($$ select pg_temp.record(7, array[71, 72], 60, null, 8) $$, 'DQR08', null,
+  'nor record one without a claim of their own');
+select throws_ok($$ select pg_temp.record(7, array[71], 30) $$, 'DQR08', null,
+  'the claiming admin can''t record other rewards than they claimed');
+select is(pg_temp.payouts(), 2, 'none of that recorded anything');
+
+update public.referral_payout_profiles set name = 'Referrer Seven Edited' where user_id = pg_temp.uid(7);
+select throws_ok($$ select pg_temp.record(7, array[71, 72], 60) $$, 'DQR08', null,
+  'the details edited after the claim: the claim no longer matches them');
+select throws_ok(
+  $$ select public.mark_referral_rewards_paid(pg_temp.uid(7), pg_temp.ids(array[71, 72]), 60,
+       (select (d ->> 'details_updated_at')::timestamptz from started), null, pg_temp.uid(9)) $$,
+  'DQR04', null, 'and recording with the claimed version is refused as changed');
+select lives_ok($$ select pg_temp.start(7, array[71, 72], 60) $$,
+  'starting again, with the new details, replaces the admin''s own claim');
+select is(pg_temp.claims(7), 1, 'leaving one');
+
+select is(public.release_referral_payout(pg_temp.uid(7), pg_temp.uid(8)), false, 'another admin can''t release it');
+select is(public.release_referral_payout(pg_temp.uid(7), pg_temp.uid(9)), true, 'the claiming admin can');
+select is(pg_temp.claims(7), 0, 'and then it''s gone');
+select throws_ok($$ select pg_temp.record(7, array[71, 72], 60) $$, 'DQR08', null,
+  'nothing can be recorded after releasing');
+
+select lives_ok($$ select pg_temp.start(7, array[71, 72], 60, 8) $$, 'once released, another admin can start');
+reset role;
+update public.referral_payout_claims
+   set claimed_at = now() - interval '3 hours', expires_at = now() - interval '1 hour'
+ where referrer_user_id = pg_temp.uid(7);
+set local role service_role;
+select is((select claim_admin_id from public.referral_payout_queue() where referrer_user_id = pg_temp.uid(7)), null,
+  'after 2 hours the claim has expired, and the queue shows nobody paying');
+select throws_ok($$ select pg_temp.record(7, array[71, 72], 60, null, 8) $$, 'DQR08', null,
+  'an expired claim records nothing');
+select lives_ok($$ select pg_temp.start(7, array[71, 72], 60) $$, 'and another admin can start');
+select results_eq(
+  $$ select claimed_by, count(*)::int from public.referral_payout_claims
+      where referrer_user_id = pg_temp.uid(7) group by claimed_by $$,
+  $$ values (pg_temp.uid(9), 1) $$,
+  'replacing the expired claim');
+select lives_ok($$ select pg_temp.record(7, array[71, 72], 60, 'tx-77') $$, 'the claiming admin records the payout');
+select is(pg_temp.claims(7), 0, 'which clears the claim');
+select throws_ok($$ select pg_temp.record(7, array[71, 72], 60) $$, 'DQR02', null,
+  'a second record of the same rewards is refused as already paid');
+select throws_ok($$ select pg_temp.start(7, array[71, 72], 60, 8) $$, 'DQR02', null,
+  'and so is starting them again');
+select results_eq(
+  $$ select jsonb_array_length(c -> 'paid'), (c -> 'paid' -> 0 ->> 'admin_id')::uuid, c -> 'paid' -> 0 ->> 'email',
+            (c -> 'paid' -> 0 ->> 'amount_php')::int, (c -> 'paid' -> 0 ->> 'paid_at') is not null
+       from (select public.referral_payout_conflict(pg_temp.uid(7), pg_temp.ids(array[71, 72])) as c) x $$,
+  $$ values (1, pg_temp.uid(9), 'user9@example.com'::text, 60, true) $$,
+  'the refusal can say who paid them, when and how much');
+
+select throws_ok(
+  $$ select public.start_referral_payout(pg_temp.uid(7), pg_temp.ids(array[71]), 30, pg_temp.details_at(7), gen_random_uuid()) $$,
+  'DQR06', null, 'an admin whose account is gone can''t start a payout');
+select throws_ok(
+  $$ select public.mark_referral_rewards_paid(pg_temp.uid(7), pg_temp.ids(array[71]), 30, pg_temp.details_at(7), null,
+       gen_random_uuid()) $$,
+  'DQR06', null, 'or record one');
+select throws_ok(
+  $$ select public.start_referral_payout(gen_random_uuid(), pg_temp.ids(array[71]), 30, now(), pg_temp.uid(9)) $$,
+  'DQR02', null, 'and a referrer whose account is gone is refused as changed');
+select throws_ok(
+  $$ select public.start_referral_payout(pg_temp.uid(7), pg_temp.ids(array[71]), 30, null, pg_temp.uid(9)) $$,
+  '22023', null, 'starting needs the version of the details the admin saw');
+select throws_ok(
+  $$ insert into public.referral_payout_claims (referrer_user_id, claimed_by, reward_ids, amount_php, details_updated_at, expires_at)
+     values (pg_temp.uid(7), pg_temp.uid(8), pg_temp.ids(array[71]), 30, now(), now() + interval '2 hours') $$,
+  '42501', null, 'the service role can''t write a claim itself');
 
 -- ---------------------------------------------------------------------------
 -- Paid is final: every refused transition
@@ -430,7 +603,18 @@ select throws_ok(
   'DQR01', null, 'a reward can''t be written paid');
 select throws_ok(
   $$ delete from public.referral_payouts where id = (select id from first_payout) $$,
-  '23503', null, 'a payout that paid rewards can''t be deleted');
+  '42501', null, 'the service role can''t delete a payout');
+select throws_ok($$ delete from public.referral_rewards where id = pg_temp.rid(11) $$,
+  'DQR01', null, 'nor a paid reward, which would free its wallet to earn again');
+reset role;
+select throws_ok($$ delete from public.referral_payouts where id = (select id from first_payout) $$,
+  'DQR01', null, 'not even the table owner can delete a payout');
+select throws_ok($$ delete from public.referral_rewards where id = pg_temp.rid(11) $$,
+  'DQR01', null, 'or a paid reward');
+select lives_ok($$ delete from public.referral_rewards where referred_user_id = pg_temp.uid(41) $$,
+  'an unpaid reward can still be deleted');
+select is((select count(*)::int from public.referral_rewards where referred_user_id = pg_temp.uid(41)), 0, 'and is');
+set local role service_role;
 select results_eq(
   $$ select status, amount_php, payout_id from public.referral_rewards where id = pg_temp.rid(11) $$,
   $$ select 'paid'::text, 30, id from first_payout $$,
@@ -546,7 +730,7 @@ reset role;
 select lives_ok($$ delete from auth.users where id = pg_temp.uid(9) $$, 'the admin who recorded payouts deletes themselves');
 select is((select count(*)::int from public.referral_payouts where paid_by is not null), 0,
   'and every payout stays, naming no admin');
-select is(pg_temp.payouts(), 2, 'both payouts are still there');
+select is(pg_temp.payouts(), 3, 'all three payouts are still there');
 select is(
   (select count(*)::int from public.referral_payouts
     where referrer_user_id in (pg_temp.uid(1), pg_temp.uid(9)) or paid_by in (pg_temp.uid(1), pg_temp.uid(9))),

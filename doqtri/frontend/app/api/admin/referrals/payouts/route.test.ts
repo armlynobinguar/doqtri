@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * GET and POST /api/admin/referrals/payouts (WP-4.6, DOQ-26): a 404 for anyone
- * but an admin (AC 1), never cached (AC 9), the queue and the review list, Mark
- * as paid's checks and refusals with fixed text, and payout details never in a
+ * but an admin (AC 1), never cached (AC 9), the queue and the review list, the
+ * two payout steps (start, record) and release, their checks and refusals in
+ * fixed words (who already paid, who is paying), and payout details never in a
  * log (AC 9).
  */
 
@@ -64,14 +65,61 @@ const QUEUE_RECORD = {
   ewallet_details: null,
   details_created_at: "2026-10-01T00:00:00+00:00",
   details_updated_at: "2026-10-02T00:00:00+00:00",
+  claim_admin_id: ADMIN,
+  claim_admin_email: "admin@example.com",
+  claim_admin_wallet: null,
+  claimed_at: "2026-11-07T10:00:00+00:00",
+  claim_expires_at: "2026-11-07T12:00:00+00:00",
 };
 
-const GOOD = {
+const REQUEST = {
   referrerId: REFERRER,
   rewardIds: [REWARD],
   amountPhp: 30,
   detailsUpdatedAt: "2026-10-02T00:00:00+00:00",
-  reference: "  abc123  ",
+};
+const START = { action: "start", ...REQUEST };
+const GOOD = { action: "record", ...REQUEST, reference: "  abc123  " };
+const RELEASE = { action: "release", referrerId: REFERRER };
+
+const STARTED = {
+  claimed_at: "2026-11-07T10:00:00+00:00",
+  expires_at: "2026-11-07T12:00:00+00:00",
+  method: "ewallet",
+  name: "Payout Holder",
+  xlm_address: null,
+  xlm_memo: null,
+  xlm_memo_type: null,
+  ewallet_provider: "GCash",
+  ewallet_account_name: "Payout Holder",
+  ewallet_account_number: ACCOUNT_NUMBER,
+  ewallet_details: null,
+  details_created_at: "2026-10-01T00:00:00+00:00",
+  details_updated_at: "2026-10-02T00:00:00.123456+00:00",
+};
+
+const PAID_CONFLICT = {
+  claim: null,
+  paid: [
+    {
+      admin_id: "00000000-0000-4000-8000-0000000000a9",
+      email: "other-admin@example.com",
+      wallet: null,
+      paid_at: "2026-11-07T14:05:00+00:00",
+      amount_php: 30,
+      reward_count: 1,
+    },
+  ],
+};
+const BUSY_CONFLICT = {
+  claim: {
+    admin_id: "00000000-0000-4000-8000-0000000000a9",
+    email: "other-admin@example.com",
+    wallet: null,
+    claimed_at: "2026-11-07T10:00:00+00:00",
+    expires_at: "2026-11-07T12:00:00+00:00",
+  },
+  paid: [],
 };
 
 const get = (query = "") => GET(new Request(`http://localhost/api/admin/referrals/payouts${query}`));
@@ -111,7 +159,7 @@ describe("anyone but an admin (AC 1)", () => {
     ["a signed-in user", { id: USER, email: "user@example.com" }],
   ])("gets a 404 from GET and POST, %s, touching nothing", async (_who, user) => {
     state.user = user;
-    for (const res of [await get(), await get(`?referrer=${REFERRER}`), await post(GOOD)]) {
+    for (const res of [await get(), await get(`?referrer=${REFERRER}`), await post(START), await post(GOOD), await post(RELEASE)]) {
       expect(res.status).toBe(404);
       expect(res.headers.get("cache-control")).toBe("no-store");
       expect(await res.json()).toEqual({ error: "Not found" });
@@ -141,6 +189,7 @@ describe("GET", () => {
       overLimitCount: 1,
       paidCount: 2,
       details: { profile: { accountNumber: ACCOUNT_NUMBER }, savedAt: "2026-10-01T00:00:00+00:00" },
+      claim: { by: "admin@example.com", since: "2026-11-07T10:00:00+00:00", mine: true },
     });
     expect(JSON.stringify(consoleCalls)).not.toContain(ACCOUNT_NUMBER);
   });
@@ -197,8 +246,89 @@ describe("GET", () => {
   });
 });
 
-describe("POST: mark as paid (AC 3, AC 5)", () => {
-  it("records the payout with exactly what the admin saw, the reference trimmed and the admin from the session", async () => {
+describe("POST start: step one", () => {
+  it("holds the payout for the admin from the session, and answers the details as they are now", async () => {
+    state.results.start_referral_payout = { data: STARTED, error: null };
+    const res = await post({ ...START, adminId: USER });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const body = await res.json();
+    expect(body.started).toMatchObject({
+      claimedAt: "2026-11-07T10:00:00+00:00",
+      expiresAt: "2026-11-07T12:00:00+00:00",
+      details: {
+        profile: { method: "ewallet", provider: "GCash", accountNumber: ACCOUNT_NUMBER },
+        updatedAt: "2026-10-02T00:00:00.123456+00:00",
+      },
+    });
+    expect(state.calls).toEqual([
+      {
+        name: "start_referral_payout",
+        args: {
+          p_referrer: REFERRER,
+          p_reward_ids: [REWARD],
+          p_amount_php: 30,
+          p_details_updated_at: "2026-10-02T00:00:00+00:00",
+          p_admin: ADMIN,
+        },
+      },
+    ]);
+    expect(JSON.stringify(consoleCalls)).not.toContain(ACCOUNT_NUMBER);
+  });
+
+  it("says who is paying when another admin holds it, and not to send anything", async () => {
+    state.results.start_referral_payout = { data: null, error: { code: "DQR07", message: "Another admin is paying" } };
+    state.results.referral_payout_conflict = { data: BUSY_CONFLICT, error: null };
+    const res = await post(START);
+    expect(res.status).toBe(409);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect((await res.json()).error).toBe(
+      "Being paid by other-admin@example.com since 7 Nov 2026, 10:00 UTC. Don't send anything: wait for them to record it, " +
+        "or for their hold to end at 7 Nov 2026, 12:00 UTC.",
+    );
+  });
+
+  it("says plainly when the rewards were already paid, by whom and when", async () => {
+    state.results.start_referral_payout = { data: null, error: { code: "DQR02", message: "changed" } };
+    state.results.referral_payout_conflict = { data: PAID_CONFLICT, error: null };
+    const res = await post(START);
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.refusal).toBe("paid");
+    expect(body.error).toContain(
+      "already recorded as paid by other-admin@example.com on 7 Nov 2026, 14:05 UTC (1 reward, 30 PHP)",
+    );
+    expect(body.error).toContain("reconcile with the referrer");
+  });
+
+  it.each([
+    ["DQR02", 409, "These rewards changed since the page loaded"],
+    ["DQR03", 409, "hasn't added payout details yet"],
+    ["DQR04", 409, "The payout details changed since the page loaded."],
+    ["DQR06", 409, "Your admin account no longer exists, so nothing was started."],
+  ])("turns the database's %s into fixed words", async (code, status, text) => {
+    state.results.start_referral_payout = { data: null, error: { code, message: `secret ${ACCOUNT_NUMBER}` } };
+    state.results.referral_payout_conflict = { data: { claim: null, paid: [] }, error: null };
+    const res = await post(START);
+    expect(res.status).toBe(status);
+    const body = await res.text();
+    expect(JSON.parse(body).error).toContain(text);
+    expect(body).not.toContain(ACCOUNT_NUMBER);
+  });
+
+  it.each([
+    ["an amount past what the column holds", { ...START, amountPhp: 2 ** 31 }],
+    ["more rewards than a limit allows", { ...START, rewardIds: Array.from({ length: 1001 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`) }],
+    ["no details version", { ...START, detailsUpdatedAt: undefined }],
+  ])("refuses %s with a 400, calling nothing", async (_what, body) => {
+    const res = await post(body);
+    expect(res.status).toBe(400);
+    expect(state.calls).toEqual([]);
+  });
+});
+
+describe("POST record: step two (AC 3, AC 5)", () => {
+  it("records the payout with exactly what was started, the reference trimmed and the admin from the session", async () => {
     state.results.mark_referral_rewards_paid = { data: "00000000-0000-4000-8000-0000000000e5", error: null };
     const res = await post({ ...GOOD, paidBy: USER });
     expect(res.status).toBe(200);
@@ -223,12 +353,33 @@ describe("POST: mark as paid (AC 3, AC 5)", () => {
     ]);
   });
 
+  it("says plainly that a stale tab's rewards were already paid, by whom and when", async () => {
+    state.results.mark_referral_rewards_paid = { data: null, error: { code: "DQR02", message: "changed" } };
+    state.results.referral_payout_conflict = { data: PAID_CONFLICT, error: null };
+    const res = await post(GOOD);
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe(
+      "These rewards were already recorded as paid by other-admin@example.com on 7 Nov 2026, 14:05 UTC (1 reward, 30 PHP). " +
+        "Nothing more was recorded. If you also sent money for them, reconcile with the referrer before paying again.",
+    );
+    expect(state.calls.map((call) => call.name)).toEqual(["mark_referral_rewards_paid", "referral_payout_conflict"]);
+  });
+
+  it("still refuses, in plainer words, when who paid can't be read", async () => {
+    state.results.mark_referral_rewards_paid = { data: null, error: { code: "DQR02", message: "changed" } };
+    state.results.referral_payout_conflict = { data: null, error: { code: "XX000", message: "down" } };
+    const res = await post(GOOD);
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toContain("Nothing was recorded.");
+  });
+
   it.each([
-    ["DQR02", 409, "These rewards changed since the page loaded."],
-    ["DQR03", 409, "This referrer hasn't added payout details yet"],
-    ["DQR04", 409, "The payout details changed since the page loaded."],
+    ["DQR03", 409, "no payout details any more"],
+    ["DQR04", 409, "The payout details changed after you started."],
+    ["DQR06", 409, "Your admin account no longer exists, so nothing was recorded."],
+    ["DQR08", 409, "You no longer hold this payout"],
     ["22023", 400, "Check the reference"],
-  ])("turns the database's %s into fixed text", async (code, status, text) => {
+  ])("turns the database's %s into fixed words", async (code, status, text) => {
     state.results.mark_referral_rewards_paid = { data: null, error: { code, message: `secret ${ACCOUNT_NUMBER}` } };
     const res = await post(GOOD);
     expect(res.status).toBe(status);
@@ -256,9 +407,12 @@ describe("POST: mark as paid (AC 3, AC 5)", () => {
     ["a reward twice", { ...GOOD, rewardIds: [REWARD, REWARD] }],
     ["no amount", { ...GOOD, amountPhp: undefined }],
     ["a fractional amount", { ...GOOD, amountPhp: 1.5 }],
+    ["an amount past what the column holds", { ...GOOD, amountPhp: 2 ** 31 }],
     ["no details version", { ...GOOD, detailsUpdatedAt: undefined }],
     ["a reference too long", { ...GOOD, reference: "r".repeat(101) }],
     ["a reference with a line break", { ...GOOD, reference: "a\nb" }],
+    ["no action", { ...REQUEST }],
+    ["an action that doesn't exist", { ...REQUEST, action: "pay" }],
   ])("refuses %s with a 400, calling nothing", async (_what, body) => {
     const res = await post(body);
     expect(res.status).toBe(400);
@@ -280,5 +434,29 @@ describe("POST: mark as paid (AC 3, AC 5)", () => {
     await post(GOOD);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(state.calls.map((call) => call.name)).toEqual(["mark_referral_rewards_paid"]);
+  });
+});
+
+describe("POST release", () => {
+  it("gives up the admin's own hold", async () => {
+    state.results.release_referral_payout = { data: true, error: null };
+    const res = await post(RELEASE);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ released: true });
+    expect(state.calls).toEqual([
+      { name: "release_referral_payout", args: { p_referrer: REFERRER, p_admin: ADMIN } },
+    ]);
+  });
+
+  it("says so when there's nothing of theirs to release", async () => {
+    state.results.release_referral_payout = { data: false, error: null };
+    const res = await post(RELEASE);
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toContain("You don't hold this payout any more");
+  });
+
+  it("refuses a bad referrer id, calling nothing", async () => {
+    expect((await post({ ...RELEASE, referrerId: "x" })).status).toBe(400);
+    expect(state.calls).toEqual([]);
   });
 });

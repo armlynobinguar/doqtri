@@ -11,14 +11,20 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  accountIdentity,
+  payoutDetails,
   payoutQueueRow,
   payoutReferralRow,
   sortPayoutQueue,
   type MarkPaidRequest,
+  type PayoutConflict,
+  type PayoutDetails,
+  type PayoutDetailsRecord,
   type PayoutQueueRecord,
   type PayoutQueueRow,
   type PayoutReferralRecord,
   type PayoutReferralRow,
+  type PayoutRequest,
 } from "@/lib/referral-payouts";
 import { REFERRAL_REWARD_LIMIT } from "@/lib/referral-program";
 
@@ -54,13 +60,20 @@ async function readAll<T>(read: (from: number, to: number) => PromiseLike<{ data
   }
 }
 
-/** Every referrer with something to act on, shaped and sorted for the panel. */
-export async function loadPayoutQueue(admin: Pick<SupabaseClient, "rpc">, now = Date.now()): Promise<PayoutQueueRow[]> {
+/**
+ * Every referrer with something to act on, shaped and sorted for the panel.
+ * `viewer` is the admin looking, from their session: which claims are theirs.
+ */
+export async function loadPayoutQueue(
+  admin: Pick<SupabaseClient, "rpc">,
+  viewer: string,
+  now = Date.now(),
+): Promise<PayoutQueueRow[]> {
   const records = await readAll<PayoutQueueRecord>(
     (from, to) => admin.rpc("referral_payout_queue").range(from, to),
     "Reading the payout queue failed",
   );
-  return sortPayoutQueue(records.map((record) => payoutQueueRow(record, now)));
+  return sortPayoutQueue(records.map((record) => payoutQueueRow(record, now, viewer)));
 }
 
 /** Everyone `referrer` referred, in full, for review. */
@@ -76,20 +89,66 @@ export async function loadPayoutReferrals(
   return records.map(payoutReferralRow);
 }
 
-export type MarkPaidResult =
-  | { ok: true; payoutId: string }
-  | { ok: false; refusal: "stale" | "no_details" | "details_changed" | "invalid" };
+export type PayoutRefusal =
+  | "stale"
+  | "no_details"
+  | "details_changed"
+  | "admin_gone"
+  | "busy"
+  | "no_claim"
+  | "invalid";
 
 /** The database's refusals, by the SQLSTATE the migration gives each. */
-const MARK_REFUSALS: Record<string, Exclude<MarkPaidResult, { ok: true }>["refusal"]> = {
+const REFUSALS: Record<string, PayoutRefusal> = {
   DQR02: "stale",
   DQR03: "no_details",
   DQR04: "details_changed",
+  DQR06: "admin_gone",
+  DQR07: "busy",
+  DQR08: "no_claim",
   "22023": "invalid",
   "23514": "invalid",
 };
 
-/** One payout of exactly the rewards the admin saw. `paidBy` comes from the admin's session. */
+type Refused = { ok: false; refusal: PayoutRefusal };
+
+function refusalOf(error: { code?: string }, what: string): Refused {
+  const refusal = REFUSALS[errorCode(error)];
+  if (refusal) return { ok: false, refusal };
+  throw storeError(what, error);
+}
+
+export type StartResult = { ok: true; details: PayoutDetails; claimedAt: string; expiresAt: string } | Refused;
+
+/**
+ * Step one: holds the payout for `adminId`, from the admin's session, for exactly
+ * what they saw, and returns the details as they are now, which they send to.
+ */
+export async function startPayout(
+  admin: Pick<SupabaseClient, "rpc">,
+  request: PayoutRequest,
+  adminId: string,
+): Promise<StartResult> {
+  const { data, error } = await admin.rpc("start_referral_payout", {
+    p_referrer: request.referrerId,
+    p_reward_ids: request.rewardIds,
+    p_amount_php: request.amountPhp,
+    p_details_updated_at: request.detailsUpdatedAt,
+    p_admin: adminId,
+  });
+  if (error) return refusalOf(error, "Starting the payout failed");
+  const record = data as (PayoutDetailsRecord & { claimed_at: string; expires_at: string }) | null;
+  const details = record ? payoutDetails(record) : null;
+  if (!record || !details) throw new PayoutsStoreError("Starting the payout returned no details", "shape");
+  return { ok: true, details, claimedAt: record.claimed_at, expiresAt: record.expires_at };
+}
+
+export type MarkPaidResult = { ok: true; payoutId: string } | Refused;
+
+/**
+ * Step two: one payout of exactly the rewards the admin started, which they
+ * must still hold. `paidBy` comes from the admin's session.
+ */
 export async function markRewardsPaid(
   admin: Pick<SupabaseClient, "rpc">,
   request: MarkPaidRequest,
@@ -103,12 +162,60 @@ export async function markRewardsPaid(
     p_reference: request.reference,
     p_paid_by: paidBy,
   });
-  if (error) {
-    const refusal = MARK_REFUSALS[errorCode(error)];
-    if (refusal) return { ok: false, refusal };
-    throw storeError("Recording the payout failed", error);
-  }
+  if (error) return refusalOf(error, "Recording the payout failed");
   return { ok: true, payoutId: String(data) };
+}
+
+/** Gives up the admin's own live hold without paying. False when they hold none. */
+export async function releasePayout(
+  admin: Pick<SupabaseClient, "rpc">,
+  referrerId: string,
+  adminId: string,
+): Promise<boolean> {
+  const { data, error } = await admin.rpc("release_referral_payout", { p_referrer: referrerId, p_admin: adminId });
+  if (error) throw storeError("Releasing the payout failed", error);
+  return data === true;
+}
+
+type ConflictRecord = {
+  claim: { admin_id: string; email: string | null; wallet: string | null; claimed_at: string; expires_at: string } | null;
+  paid: {
+    admin_id: string | null;
+    email: string | null;
+    wallet: string | null;
+    paid_at: string;
+    amount_php: number;
+    reward_count: number;
+  }[];
+};
+
+/** Who holds the payout, and who already paid any of these rewards: for a refusal's words. */
+export async function readConflict(
+  admin: Pick<SupabaseClient, "rpc">,
+  referrerId: string,
+  rewardIds: string[],
+): Promise<PayoutConflict> {
+  const { data, error } = await admin.rpc("referral_payout_conflict", {
+    p_referrer: referrerId,
+    p_reward_ids: rewardIds,
+  });
+  if (error) throw storeError("Reading who is paying failed", error);
+  const record = (data ?? { claim: null, paid: [] }) as ConflictRecord;
+  return {
+    claim: record.claim
+      ? {
+          by: accountIdentity(record.claim.email, record.claim.wallet, record.claim.admin_id),
+          since: record.claim.claimed_at,
+          expiresAt: record.claim.expires_at,
+        }
+      : null,
+    paid: (record.paid ?? []).map((p) => ({
+      by: p.admin_id ? accountIdentity(p.email, p.wallet, p.admin_id) : "a former admin",
+      paidAt: p.paid_at,
+      amountPhp: p.amount_php,
+      rewardCount: p.reward_count,
+    })),
+  };
 }
 
 /** False when there's no such reward, or it's paid or already void. */

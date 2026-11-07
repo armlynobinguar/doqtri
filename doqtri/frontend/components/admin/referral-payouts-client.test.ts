@@ -12,6 +12,9 @@ import {
   markPaid,
   markPaidRequest,
   paidMessage,
+  payoutRequest,
+  releasePayout,
+  startPayout,
   restoreMessage,
   setLimit,
   voidReward,
@@ -42,6 +45,7 @@ const row = (over: Partial<PayoutQueueRow> = {}): PayoutQueueRow => ({
     updatedAt: "2026-10-02T00:00:00+00:00",
   },
   due: { state: "due", dueAt: "2026-11-01T00:00:00.000Z", overdue: true },
+  claim: null,
   ...over,
 });
 
@@ -53,43 +57,81 @@ function mockFetch(status: number, body: unknown) {
   );
 }
 
-describe("Mark as paid's request", () => {
-  it("sends back exactly the rewards, total and details version the row showed", () => {
-    expect(markPaidRequest(row(), "  tx-hash ")).toEqual({
+const STARTED_DETAILS = {
+  profile: { method: "xlm" as const, name: "Payout Holder", address: ADDRESS, memo: "4242", memoType: "id" as const },
+  savedAt: "2026-10-01T00:00:00+00:00",
+  updatedAt: "2026-10-02T00:00:00.123456+00:00",
+};
+
+describe("paying in two steps", () => {
+  it("starts with exactly the rewards, total and details version the row showed", () => {
+    expect(payoutRequest(row())).toEqual({
       referrerId: "00000000-0000-4000-8000-0000000000c3",
       rewardIds: ["00000000-0000-4000-8000-0000000000d4", "00000000-0000-4000-8000-0000000000d5"],
       amountPhp: 75,
       detailsUpdatedAt: "2026-10-02T00:00:00+00:00",
-      reference: "tx-hash",
     });
-    expect(markPaidRequest(row(), "   ")?.reference).toBeNull();
   });
 
-  it("is nothing without details, or with nothing eligible", () => {
-    expect(markPaidRequest(row({ details: null }), "")).toBeNull();
-    expect(markPaidRequest(row({ eligibleRewardIds: [], eligibleCount: 0, owedPhp: 0 }), "")).toBeNull();
+  it("can't start without details, with nothing eligible, or while another admin is paying", () => {
+    expect(payoutRequest(row({ details: null }))).toBeNull();
+    expect(payoutRequest(row({ eligibleRewardIds: [], eligibleCount: 0, owedPhp: 0 }))).toBeNull();
+    const claim = { by: "other@example.com", since: "2026-11-07T10:00:00Z", expiresAt: "2026-11-07T12:00:00Z" };
+    expect(payoutRequest(row({ claim: { ...claim, mine: false } }))).toBeNull();
+    expect(payoutRequest(row({ claim: { ...claim, mine: true } }))).not.toBeNull();
   });
 
-  it("posts it, uncached, and reads what was recorded", async () => {
-    const fetchSpy = mockFetch(200, { payoutId: "p1", rewardCount: 2, amountPhp: 75 });
-    const result = await markPaid(markPaidRequest(row(), "")!);
-    expect(result).toEqual({ ok: true, value: { payoutId: "p1", rewardCount: 2, amountPhp: 75 } });
+  it("posts start, uncached, and records with the version the database confirmed", async () => {
+    const fetchSpy = mockFetch(200, {
+      started: { details: STARTED_DETAILS, claimedAt: "2026-11-07T10:00:00Z", expiresAt: "2026-11-07T12:00:00Z" },
+    });
+    const started = await startPayout(payoutRequest(row())!);
+    expect(started.ok).toBe(true);
     const [url, init] = fetchSpy.mock.calls[0];
     expect(url).toBe(PAYOUTS_ROUTE);
     expect(init).toMatchObject({ method: "POST", cache: "no-store" });
+    expect(JSON.parse(String(init?.body))).toMatchObject({ action: "start", amountPhp: 75 });
+    if (!started.ok) return;
+    expect(started.value.details.profile).toEqual(STARTED_DETAILS.profile);
+    expect(markPaidRequest(started.value, "  tx-hash ")).toEqual({
+      referrerId: "00000000-0000-4000-8000-0000000000c3",
+      rewardIds: ["00000000-0000-4000-8000-0000000000d4", "00000000-0000-4000-8000-0000000000d5"],
+      amountPhp: 75,
+      detailsUpdatedAt: "2026-10-02T00:00:00.123456+00:00",
+      reference: "tx-hash",
+    });
+    expect(markPaidRequest(started.value, "   ").reference).toBeNull();
+  });
+
+  it("records, and reads what was recorded", async () => {
+    const fetchSpy = mockFetch(200, { payoutId: "p1", rewardCount: 2, amountPhp: 75 });
+    const request = { ...payoutRequest(row())!, reference: null };
+    expect(await markPaid(request)).toEqual({ ok: true, value: { payoutId: "p1", rewardCount: 2, amountPhp: 75 } });
+    expect(JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))).toMatchObject({ action: "record" });
+  });
+
+  it("releases", async () => {
+    const fetchSpy = mockFetch(200, { released: true });
+    expect(await releasePayout("u1")).toEqual({ ok: true, value: true });
+    expect(JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))).toEqual({ action: "release", referrerId: "u1" });
   });
 
   it("shows the server's refusal in its own words, or a fixed one when there are none", async () => {
-    mockFetch(409, { error: "These rewards changed since the page loaded." });
-    expect(await markPaid(markPaidRequest(row(), "")!)).toEqual({
+    const request = { ...payoutRequest(row())!, reference: null };
+    mockFetch(409, { error: "These rewards were already recorded as paid by admin@example.com." });
+    expect(await markPaid(request)).toEqual({
       ok: false,
-      message: "These rewards changed since the page loaded.",
+      message: "These rewards were already recorded as paid by admin@example.com.",
     });
     vi.restoreAllMocks();
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("offline"));
-    expect(await markPaid(markPaidRequest(row(), "")!)).toEqual({
+    expect(await markPaid(request)).toEqual({
       ok: false,
       message: "The payout couldn't be confirmed. Reload to check whether it was recorded before trying again.",
+    });
+    expect(await startPayout(payoutRequest(row())!)).toEqual({
+      ok: false,
+      message: "The payout couldn't be started. Nothing is held: reload and try again.",
     });
   });
 });
@@ -177,7 +219,7 @@ describe("the panel", () => {
   it("shows Waiting for details, with Mark as paid unavailable", () => {
     const markup = html([row({ details: null, due: { state: "waiting_for_details" } })]);
     expect(markup).toContain("Waiting for details");
-    expect(markup).toMatch(/<button[^>]*disabled[^>]*data-testid="payout-mark-paid"/);
+    expect(markup).toMatch(/<button[^>]*disabled[^>]*data-testid="payout-start"/);
   });
 
   it("shows an e-wallet's account in full", () => {
@@ -200,6 +242,19 @@ describe("the panel", () => {
     expect(markup).toContain("0917 555 0101");
     expect(markup).toContain("Main branch");
     expect(markup).toContain("E-wallet or bank · Maya");
+  });
+
+  it("says who is paying, and holds Start payout back for everyone else", () => {
+    const claim = { by: "other@example.com", since: "2026-11-07T10:00:00Z", expiresAt: "2026-11-07T12:00:00Z" };
+    const theirs = html([row({ claim: { ...claim, mine: false } })]);
+    expect(theirs).toContain("Being paid by");
+    expect(theirs).toContain("other@example.com");
+    expect(theirs).toContain("since 7 Nov 2026, 10:00 UTC");
+    expect(theirs).toMatch(/<button[^>]*disabled[^>]*data-testid="payout-start"/);
+    const mine = html([row({ claim: { ...claim, mine: true } })]);
+    expect(mine).toContain("You started this payout at 7 Nov 2026, 10:00 UTC");
+    expect(mine).toContain("Continue payout");
+    expect(mine).toContain('data-testid="payout-release"');
   });
 
   it("says when nobody is owed anything", () => {

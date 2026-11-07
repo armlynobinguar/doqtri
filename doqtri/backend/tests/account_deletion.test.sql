@@ -399,6 +399,7 @@ select is((select count(*)::int from public.referral_payout_profiles
 insert into auth.users (id, email, email_confirmed_at) values
   ('00000000-0000-4000-8000-0000000000cd', 'admin@example.com', now());
 set local role service_role;
+select public.start_referral_payout('00000000-0000-4000-8000-0000000000c8', array[(select id from public.referral_rewards where referred_user_id = '00000000-0000-4000-8000-0000000000cb')], 30, (select updated_at from public.referral_payout_profiles where user_id = '00000000-0000-4000-8000-0000000000c8'), '00000000-0000-4000-8000-0000000000cd');
 select public.mark_referral_rewards_paid(
   '00000000-0000-4000-8000-0000000000c8',
   array[(select id from public.referral_rewards where referred_user_id = '00000000-0000-4000-8000-0000000000cb')],

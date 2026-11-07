@@ -51,6 +51,22 @@ export type PayoutQueueRecord = {
   ewallet_details: string | null;
   details_created_at: string | null;
   details_updated_at: string | null;
+  /** The live claim, if any: who is paying this referrer right now. */
+  claim_admin_id: string | null;
+  claim_admin_email: string | null;
+  claim_admin_wallet: string | null;
+  claimed_at: string | null;
+  claim_expires_at: string | null;
+};
+
+/** Someone paying this referrer right now (start_referral_payout()), for 2 hours at most. */
+export type PayoutClaim = {
+  /** The admin's email, or wallet for a wallet login. */
+  by: string;
+  since: string;
+  expiresAt: string;
+  /** The admin looking at the queue holds it. */
+  mine: boolean;
 };
 
 export type PayoutDue =
@@ -80,6 +96,7 @@ export type PayoutQueueRow = {
   limitRaised: boolean;
   details: PayoutDetails | null;
   due: PayoutDue;
+  claim: PayoutClaim | null;
 };
 
 /** The sum of each eligible reward's stored amount: what it was worth when it qualified, not today's rate. */
@@ -104,7 +121,23 @@ export function accountIdentity(email: string | null, wallet: string | null, id:
   return walletAddressFromEmail(email) ?? email ?? wallet ?? id;
 }
 
-export function payoutDetails(record: PayoutQueueRecord): PayoutDetails | null {
+/** The details columns, as the queue and start_referral_payout() both return them. */
+export type PayoutDetailsRecord = Pick<
+  PayoutQueueRecord,
+  | "method"
+  | "name"
+  | "xlm_address"
+  | "xlm_memo"
+  | "xlm_memo_type"
+  | "ewallet_provider"
+  | "ewallet_account_name"
+  | "ewallet_account_number"
+  | "ewallet_details"
+  | "details_created_at"
+  | "details_updated_at"
+>;
+
+export function payoutDetails(record: PayoutDetailsRecord): PayoutDetails | null {
   if (!record.method || !record.name || !record.details_created_at || !record.details_updated_at) return null;
   const profile: PayoutProfile =
     record.method === "xlm"
@@ -120,7 +153,8 @@ export function payoutDetails(record: PayoutQueueRecord): PayoutDetails | null {
   return { profile, savedAt: record.details_created_at, updatedAt: record.details_updated_at };
 }
 
-export function payoutQueueRow(record: PayoutQueueRecord, now: number): PayoutQueueRow {
+/** `viewer` is the admin looking, from their session: whether a claim is theirs. */
+export function payoutQueueRow(record: PayoutQueueRecord, now: number, viewer: string | null = null): PayoutQueueRow {
   const eligible = [...(record.eligible_rewards ?? [])].sort(
     (a, b) => Date.parse(a.qualified_at) - Date.parse(b.qualified_at) || a.id.localeCompare(b.id),
   );
@@ -138,6 +172,15 @@ export function payoutQueueRow(record: PayoutQueueRecord, now: number): PayoutQu
     limitRaised: record.reward_limit !== null,
     details,
     due: payoutDue(eligible[0]?.qualified_at ?? null, details?.savedAt ?? null, now),
+    claim:
+      record.claim_admin_id && record.claimed_at && record.claim_expires_at
+        ? {
+            by: accountIdentity(record.claim_admin_email, record.claim_admin_wallet, record.claim_admin_id),
+            since: record.claimed_at,
+            expiresAt: record.claim_expires_at,
+            mine: record.claim_admin_id === viewer,
+          }
+        : null,
   };
 }
 
@@ -261,9 +304,16 @@ const INVISIBLE = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\u115f\u1160\u2800\u3164\uffa0
 
 export const VOID_REASON_MAX = 200;
 export const PAYOUT_REFERENCE_MAX = 100;
-export const REWARD_LIMIT_MAX = 10_000;
-/** More rewards than one referrer could be owed at once under any sane limit. */
-export const MARK_PAID_MAX_REWARDS = 1000;
+/**
+ * A referrer's limit, and so the most rewards one payout can hold: a payout pays
+ * every eligible reward at once, and eligible ones never pass the limit.
+ */
+export const REWARD_LIMIT_MAX = 1000;
+export const MARK_PAID_MAX_REWARDS = REWARD_LIMIT_MAX;
+/** What referral_payouts.amount_php, a Postgres integer, can hold. */
+export const PAYOUT_AMOUNT_MAX = 2_147_483_647;
+/** How long start_referral_payout() holds a payout for the admin who started it. */
+export const PAYOUT_CLAIM_HOURS = 2;
 
 export type Checked<T> = ({ ok: true } & T) | { ok: false; error: string };
 
@@ -307,32 +357,92 @@ export function checkLimit(input: unknown): Checked<{ limit: number }> {
   return { ok: true, limit };
 }
 
-export type MarkPaidRequest = {
+/** What Start payout sends: exactly what the admin saw. */
+export type PayoutRequest = {
   referrerId: string;
   rewardIds: string[];
   amountPhp: number;
   /** The details' updated_at as the admin saw them, passed back untouched. */
   detailsUpdatedAt: string;
-  reference: string | null;
 };
 
-export function checkMarkPaid(input: unknown): Checked<{ request: MarkPaidRequest }> {
+/** What Record payout sends: the same, and the reference. */
+export type MarkPaidRequest = PayoutRequest & { reference: string | null };
+
+const RELOAD = { ok: false as const, error: "Reload the page and try again." };
+
+export function checkPayoutRequest(input: unknown): Checked<{ request: PayoutRequest }> {
   const raw = (typeof input === "object" && input !== null ? input : {}) as Record<string, unknown>;
-  const invalid = { ok: false as const, error: "Reload the page and try again." };
-  if (!isUuid(raw.referrerId)) return invalid;
+  if (!isUuid(raw.referrerId)) return RELOAD;
   const ids = raw.rewardIds;
-  if (!Array.isArray(ids) || ids.length === 0 || ids.length > MARK_PAID_MAX_REWARDS || !ids.every(isUuid)) return invalid;
-  if (new Set(ids.map((id) => id.toLowerCase())).size !== ids.length) return invalid;
+  if (!Array.isArray(ids) || ids.length === 0 || ids.length > MARK_PAID_MAX_REWARDS || !ids.every(isUuid)) return RELOAD;
+  if (new Set(ids.map((id) => id.toLowerCase())).size !== ids.length) return RELOAD;
   const amount = raw.amountPhp;
-  if (typeof amount !== "number" || !Number.isSafeInteger(amount) || amount <= 0) return invalid;
+  if (typeof amount !== "number" || !Number.isSafeInteger(amount) || amount <= 0 || amount > PAYOUT_AMOUNT_MAX) {
+    return RELOAD;
+  }
   const seen = raw.detailsUpdatedAt;
-  if (typeof seen !== "string" || seen.length > 64 || Number.isNaN(Date.parse(seen))) return invalid;
-  const reference = checkReference(raw.reference);
+  if (typeof seen !== "string" || seen.length > 64 || Number.isNaN(Date.parse(seen))) return RELOAD;
+  return { ok: true, request: { referrerId: raw.referrerId, rewardIds: ids, amountPhp: amount, detailsUpdatedAt: seen } };
+}
+
+export function checkMarkPaid(input: unknown): Checked<{ request: MarkPaidRequest }> {
+  const checked = checkPayoutRequest(input);
+  if (!checked.ok) return checked;
+  const reference = checkReference((input as Record<string, unknown>).reference);
   if (!reference.ok) return reference;
-  return {
-    ok: true,
-    request: { referrerId: raw.referrerId, rewardIds: ids, amountPhp: amount, detailsUpdatedAt: seen, reference: reference.reference },
-  };
+  return { ok: true, request: { ...checked.request, reference: reference.reference } };
+}
+
+// ---------------------------------------------------------------------------
+// Words
+// ---------------------------------------------------------------------------
+
+export function formatPhp(amount: number): string {
+  return `${amount.toLocaleString("en-US")} PHP`;
+}
+
+/** `7 Dec 2026`, in UTC, the same on the server and in the browser. */
+export function formatDay(iso: string | null): string {
+  if (!iso) return "—";
+  const time = Date.parse(iso);
+  if (Number.isNaN(time)) return "—";
+  return new Date(time).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+}
+
+/** `7 Dec 2026, 14:05 UTC`: where the time of day matters. */
+export function formatTime(iso: string | null): string {
+  if (!iso) return "—";
+  const time = Date.parse(iso);
+  if (Number.isNaN(time)) return "—";
+  const at = new Date(time);
+  const clock = at.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "UTC" });
+  return `${formatDay(iso)}, ${clock} UTC`;
+}
+
+/** Who paid, or is paying, when a payout step is refused: from referral_payout_conflict(). */
+export type PayoutConflict = {
+  claim: { by: string; since: string; expiresAt: string } | null;
+  paid: { by: string; paidAt: string; amountPhp: number; rewardCount: number }[];
+};
+
+function rewardsWord(count: number): string {
+  return `${count} reward${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * The refusal an admin who may already have sent money needs: these were
+ * recorded as paid, by whom and when, so they reconcile rather than pay again.
+ */
+export function alreadyPaidMessage(paid: PayoutConflict["paid"]): string {
+  const records = paid
+    .map((p) => `by ${p.by} on ${formatTime(p.paidAt)} (${rewardsWord(p.rewardCount)}, ${formatPhp(p.amountPhp)})`)
+    .join("; ");
+  return `These rewards were already recorded as paid ${records}. Nothing more was recorded. If you also sent money for them, reconcile with the referrer before paying again.`;
+}
+
+export function busyMessage(claim: NonNullable<PayoutConflict["claim"]>): string {
+  return `Being paid by ${claim.by} since ${formatTime(claim.since)}. Don't send anything: wait for them to record it, or for their hold to end at ${formatTime(claim.expiresAt)}.`;
 }
 
 export type RewardAction = { action: "void"; reason: string } | { action: "restore" };
