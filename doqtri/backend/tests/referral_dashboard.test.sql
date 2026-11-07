@@ -60,6 +60,7 @@ begin
     insert into public.referral_payout_profiles (user_id, method, name, xlm_address)
     values (pg_temp.uid(p_referrer), 'xlm', 'Payout Holder', 'G' || repeat('P', 55))
     on conflict (user_id) do nothing;
+    perform public.start_referral_payout(pg_temp.uid(p_referrer), array[(select id from public.referral_rewards where referred_user_id = pg_temp.uid(p_n))], p_amount, (select updated_at from public.referral_payout_profiles where user_id = pg_temp.uid(p_referrer)), pg_temp.uid(p_referrer));
     perform public.mark_referral_rewards_paid(
       pg_temp.uid(p_referrer),
       array[(select id from public.referral_rewards where referred_user_id = pg_temp.uid(p_n))],

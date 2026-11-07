@@ -413,6 +413,7 @@ select is(pg_temp.count_by(100, 'over_limit'), 2, 'with two still waiting');
 -- can be (DOQ-26).
 insert into public.referral_payout_profiles (user_id, method, name, xlm_address)
 values (pg_temp.uid(100), 'xlm', 'Payout Holder', 'G' || repeat('P', 55));
+select public.start_referral_payout(pg_temp.uid(100), array[pg_temp.reward_id(102)], 30, (select updated_at from public.referral_payout_profiles where user_id = pg_temp.uid(100)), pg_temp.uid(100));
 select public.mark_referral_rewards_paid(
   pg_temp.uid(100), array[pg_temp.reward_id(102)], 30,
   (select updated_at from public.referral_payout_profiles where user_id = pg_temp.uid(100)), null, pg_temp.uid(100));
@@ -594,6 +595,7 @@ select pg_temp.qualify(301);
 select pg_temp.qualify(302);
 insert into public.referral_payout_profiles (user_id, method, name, xlm_address)
 values (pg_temp.uid(300), 'xlm', 'Payout Holder', 'G' || repeat('P', 55));
+select public.start_referral_payout(pg_temp.uid(300), array[pg_temp.reward_id(302)], 30, (select updated_at from public.referral_payout_profiles where user_id = pg_temp.uid(300)), pg_temp.uid(300));
 select public.mark_referral_rewards_paid(
   pg_temp.uid(300), array[pg_temp.reward_id(302)], 30,
   (select updated_at from public.referral_payout_profiles where user_id = pg_temp.uid(300)), null, pg_temp.uid(300));

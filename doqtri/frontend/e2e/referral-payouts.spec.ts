@@ -3,18 +3,25 @@ import { test, expect, type Browser, type BrowserContext, type Page } from "@pla
 import { Keypair } from "@stellar/stellar-sdk";
 import { REFERRAL_ACTIVITY_THRESHOLD, REFERRAL_REWARD_LIMIT, REFERRAL_REWARD_PHP } from "@/lib/referral-program";
 import { NETWORK } from "@/lib/stellar/smart-wallet-config";
-import { E2E_ADMIN_WALLET } from "./admin-wallet";
+import { E2E_ADMIN_WALLET, E2E_SECOND_ADMIN_LABEL, E2E_SECOND_ADMIN_WALLET } from "./admin-wallet";
 import { assertNotProduction } from "./guard";
 import { serviceRest, userIdForWallet } from "./helpers";
 import { e2eKeypair, signedInContext } from "./wallet-session";
 
 /**
  * The referral payouts panel (WP-4.6, DOQ-26) end to end, as the e2e admin (the
- * default session, listed in DOQTRI_ADMINS by playwright.config.ts): a referrer
- * with two eligible referrals and one over their limit fills in the payout
- * questionnaire through its own route; the admin reviews the referrals, marks the
- * two as paid (pressing twice), and the referrer sees them Paid. Then the limit,
- * a void with its reason, and a restore.
+ * default session) and a second admin, both listed in DOQTRI_ADMINS by
+ * playwright.config.ts. A referrer with two eligible referrals and one over their
+ * limit fills in the payout questionnaire through its own route. The admin
+ * reviews the referrals and starts the payout, which shows the details as they
+ * are now and holds it: the second admin sees "Being paid by" and can't start.
+ * The admin records it (pressing twice), and the referrer sees Paid. Then the
+ * limit, a void with its reason, a restore, and a payout started and released.
+ *
+ * Paid rewards and payouts can't be deleted, so cleanup deletes accounts, not
+ * rows: this run's referred users and its referrer, whose account the next run's
+ * sign-in creates again. What they leave is anonymised (no referrer, no referred
+ * user) and never in the queue, so nothing here needs an empty table.
  */
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -24,6 +31,7 @@ const adminHeaders = { apikey: SERVICE_ROLE, Authorization: `Bearer ${SERVICE_RO
 /** Every referred user this spec creates, on any run, so a killed run's can be found and removed by the next. */
 const LEFTOVER = /^[a-z]{2}\.referral-payouts-e2e\.[0-9a-f-]+@example\.com$/;
 const REFERRER = e2eKeypair("doqtri-e2e-referral-payouts");
+const SECOND_ADMIN = e2eKeypair(E2E_SECOND_ADMIN_LABEL);
 const ACCOUNT_NUMBER = "0917 555 0142";
 
 async function createUser(email: string): Promise<string> {
@@ -57,27 +65,29 @@ async function leftoverUsers(): Promise<string[]> {
   }
 }
 
+/** The account behind a wallet, if it has signed in before; none is fine. */
+async function accountForWallet(address: string): Promise<string | null> {
+  const rows = await serviceRest<{ user_id: string }[]>(`wallet_accounts?address=eq.${address}&select=user_id`);
+  return rows[0]?.user_id ?? null;
+}
+
 test.describe("referral payouts", () => {
   test.describe.configure({ mode: "serial" });
 
   // Unset if beforeAll failed partway, which cleanup has to survive.
   let referrerContext: BrowserContext | undefined;
+  let secondAdmin: BrowserContext | undefined;
   let referrerId: string | undefined;
-  // Cleanup deletes users and ledger rows, so it runs only on a project the guard has allowed.
+  // Cleanup deletes accounts, so it runs only on a project the guard has allowed.
   let allowed = false;
   const referred: { email: string; id: string; wallet: string }[] = [];
 
-  /** Nothing of this spec's left: this run's, and a killed run's too. Safe however far setup got. */
+  /** This spec's accounts gone: this run's, and a killed run's too. Safe however far setup got. */
   async function clean() {
     if (!allowed) return;
     await Promise.all((await leftoverUsers()).map(deleteUser));
-    if (!referrerId) return;
-    // Rewards before the payouts they point at.
-    await serviceRest(`referral_rewards?referrer_user_id=eq.${referrerId}`, { method: "DELETE" });
-    await serviceRest(`referral_payouts?referrer_user_id=eq.${referrerId}`, { method: "DELETE" });
-    await serviceRest(`referral_payout_profiles?user_id=eq.${referrerId}`, { method: "DELETE" });
-    await serviceRest(`referrals?referrer_user_id=eq.${referrerId}`, { method: "DELETE" });
-    await serviceRest(`referral_reward_limits?user_id=eq.${referrerId}`, { method: "DELETE" });
+    const referrer = await accountForWallet(REFERRER.publicKey());
+    if (referrer) await deleteUser(referrer);
   }
 
   async function refer(prefix: string) {
@@ -117,13 +127,31 @@ test.describe("referral payouts", () => {
 
   const rowOf = (page: Page) => page.getByTestId("payout-row").filter({ hasText: REFERRER.publicKey() });
 
+  /** What Start payout sends for the referrer's eligible rewards, as the database holds them now. */
+  async function requestNow() {
+    const rewards = await serviceRest<{ id: string; amount_php: number }[]>(
+      `referral_rewards?referrer_user_id=eq.${referrerId}&status=eq.eligible&select=id,amount_php`,
+    );
+    const details = await serviceRest<{ updated_at: string }[]>(
+      `referral_payout_profiles?user_id=eq.${referrerId}&select=updated_at`,
+    );
+    return {
+      referrerId,
+      rewardIds: rewards.map((r) => r.id),
+      amountPhp: rewards.reduce((sum, r) => sum + r.amount_php, 0),
+      detailsUpdatedAt: details[0].updated_at,
+    };
+  }
+
   test.beforeAll(async ({ browser }: { browser: Browser }) => {
     assertNotProduction();
     allowed = true;
-    // Signing in creates the referrer's account the first time.
-    referrerContext = await signedInContext(browser, REFERRER);
-    referrerId = await userIdForWallet(REFERRER.publicKey());
+    // Before signing in: the last run's referrer account goes, and with it its rows.
     await clean();
+    referrerContext = await signedInContext(browser, REFERRER);
+    referrerId = await accountForWallet(REFERRER.publicKey()) ?? undefined;
+    expect(referrerId, "signing in should have created the referrer's account").toBeTruthy();
+    secondAdmin = await signedInContext(browser, SECOND_ADMIN);
 
     // A limit of two, then three referrals: two eligible, one over the limit.
     await serviceRest("rpc/set_referral_reward_limit", {
@@ -146,6 +174,7 @@ test.describe("referral payouts", () => {
       await clean();
     } finally {
       await referrerContext?.close();
+      await secondAdmin?.close();
     }
   });
 
@@ -158,9 +187,10 @@ test.describe("referral payouts", () => {
     await expect(row.getByTestId("payout-over-limit")).toHaveText("1");
     await expect(row.getByTestId("payout-paid")).toHaveText("0");
     await expect(row.getByTestId("payout-limit")).toHaveText("2");
-    await expect(row.getByTestId("payout-due")).toHaveText(/^Due \d{1,2} \w{3} 20\d\d$/);
+    await expect(row.getByTestId("payout-due")).toHaveText(/^Due \d{1,2} \w{3,4} 20\d\d$/);
     await expect(row.getByTestId("payout-details")).toContainText(ACCOUNT_NUMBER);
     await expect(row.getByTestId("payout-details")).toContainText("E-wallet or bank · GCash");
+    await expect(row.getByTestId("payout-claim")).toHaveCount(0);
     await expect(page.getByTestId("payouts-manual-note")).toContainText("Nothing is sent automatically.");
 
     // Review: each referred account in full.
@@ -174,34 +204,52 @@ test.describe("referral payouts", () => {
     }
     await expect(entries.filter({ hasText: referred[2].email }).getByTestId("payout-referral-status")).toHaveText(/^Over limit/);
 
-    // The route itself: never cached.
     const res = await page.request.get("/api/admin/referrals/payouts");
     expect(res.headers()["cache-control"]).toBe("no-store");
   });
 
-  test("Mark as paid: confirm, a second press records nothing more, and the referrer sees Paid (AC 3, AC 4)", async ({
-    page,
-  }) => {
+  test("start, a second admin blocked, record (pressed twice), and the referrer sees Paid (AC 3, AC 4)", async ({ page }) => {
     await page.goto("/admin/referrals/payouts");
     const row = rowOf(page);
-    await row.getByTestId("payout-mark-paid").click();
+
+    // Step one: the details as they are now, held for this admin.
+    await row.getByTestId("payout-start").click();
     const dialog = page.getByTestId("payout-pay-dialog");
+    await expect(dialog.getByTestId("payout-pay-held")).toContainText("Send it now.");
+    await expect(dialog.getByTestId("payout-pay-held")).toContainText("no other admin can start it");
     await expect(dialog.getByTestId("payout-pay-count")).toHaveText("2");
     await expect(dialog.getByTestId("payout-pay-amount")).toHaveText(`${2 * REFERRAL_REWARD_PHP} PHP`);
     await expect(dialog.getByTestId("payout-pay-destination")).toHaveText(`GCash ${ACCOUNT_NUMBER} (E2E Payee)`);
+
+    // The second admin, meanwhile: told who is paying, and can't start.
+    const other = await secondAdmin!.newPage();
+    try {
+      await other.goto("/admin/referrals/payouts");
+      const theirs = rowOf(other);
+      await expect(theirs.getByTestId("payout-claim")).toContainText(`Being paid by ${E2E_ADMIN_WALLET} since`);
+      await expect(theirs.getByTestId("payout-start")).toBeDisabled();
+      const blocked = await secondAdmin!.request.post("/api/admin/referrals/payouts", {
+        data: { action: "start", ...(await requestNow()) },
+      });
+      expect(blocked.status()).toBe(409);
+      expect(blocked.headers()["cache-control"]).toBe("no-store");
+      expect((await blocked.json()).error).toContain(`Being paid by ${E2E_ADMIN_WALLET} since`);
+    } finally {
+      await other.close();
+    }
+
+    // Step two, as fast as a double click.
     await dialog.getByTestId("payout-pay-reference").fill("  GC-REF-0042  ");
-    // Two presses as fast as a double click.
     await dialog.getByTestId("payout-pay-confirm").dblclick();
     await expect(dialog).toBeHidden();
     await expect(page.getByTestId("payouts-notice")).toHaveText(
       `Recorded a payout of ${2 * REFERRAL_REWARD_PHP} PHP for 2 rewards to ${REFERRER.publicKey()}. They now show as Paid.`,
     );
-
-    // The row, refreshed: nothing owed, two paid, one still over the limit.
     await expect(row.getByTestId("payout-owed")).toHaveText("0 PHP");
     await expect(row.getByTestId("payout-paid")).toHaveText("2");
     await expect(row.getByTestId("payout-due")).toHaveText("Nothing owed");
-    await expect(row.getByTestId("payout-mark-paid")).toBeDisabled();
+    await expect(row.getByTestId("payout-claim")).toHaveCount(0);
+    await expect(row.getByTestId("payout-start")).toBeDisabled();
 
     const payouts = await serviceRest<Record<string, unknown>[]>(
       `referral_payouts?referrer_user_id=eq.${referrerId}&select=id,amount_php,reward_count,method,ewallet_provider,reference,paid_by`,
@@ -216,13 +264,26 @@ test.describe("referral payouts", () => {
       paid_by: await userIdForWallet(E2E_ADMIN_WALLET),
     });
     expect(JSON.stringify(payouts)).not.toContain(ACCOUNT_NUMBER);
-    const paid = await serviceRest<{ status: string; payout_id: string }[]>(
-      `referral_rewards?referrer_user_id=eq.${referrerId}&status=eq.paid&select=status,payout_id`,
+    const paid = await serviceRest<{ id: string; payout_id: string }[]>(
+      `referral_rewards?referrer_user_id=eq.${referrerId}&status=eq.paid&select=id,payout_id`,
     );
-    expect(paid).toEqual([
-      { status: "paid", payout_id: payouts[0].id },
-      { status: "paid", payout_id: payouts[0].id },
-    ]);
+    expect(paid.map((r) => r.payout_id)).toEqual([payouts[0].id, payouts[0].id]);
+    expect(await serviceRest(`referral_payout_claims?referrer_user_id=eq.${referrerId}&select=id`)).toEqual([]);
+
+    // A stale tab recording the same rewards: told plainly they were already paid, by whom and when.
+    const stale = await page.request.post("/api/admin/referrals/payouts", {
+      data: {
+        action: "record",
+        referrerId,
+        rewardIds: paid.map((r) => r.id),
+        amountPhp: 2 * REFERRAL_REWARD_PHP,
+        detailsUpdatedAt: (await requestNow()).detailsUpdatedAt,
+      },
+    });
+    expect(stale.status()).toBe(409);
+    expect((await stale.json()).error).toMatch(
+      new RegExp(`already recorded as paid by ${E2E_ADMIN_WALLET} on .+ \\(2 rewards, ${2 * REFERRAL_REWARD_PHP} PHP\\)`),
+    );
 
     // The referrer's dashboard says Paid.
     const referrerPage = await referrerContext!.newPage();
@@ -234,7 +295,7 @@ test.describe("referral payouts", () => {
     }
   });
 
-  test("set the limit, void with a reason, and restore (AC 6, AC 7)", async ({ page }) => {
+  test("set the limit, void with a reason, restore, and a payout started then released (AC 6, AC 7)", async ({ page }) => {
     await page.goto("/admin/referrals/payouts");
     const row = rowOf(page);
 
@@ -276,19 +337,34 @@ test.describe("referral payouts", () => {
     await expect(third.getByTestId("payout-referral-status")).toHaveText(/^Eligible/);
     await expect(row.getByTestId("payout-owed")).toHaveText(`${REFERRAL_REWARD_PHP} PHP`);
 
-    // The same rewards as before can't be paid again.
-    const again = await page.request.post("/api/admin/referrals/payouts", {
-      data: {
-        referrerId,
-        rewardIds: (
-          await serviceRest<{ id: string }[]>(`referral_rewards?referrer_user_id=eq.${referrerId}&status=eq.paid&select=id`)
-        ).map((r) => r.id),
-        amountPhp: 2 * REFERRAL_REWARD_PHP,
-        detailsUpdatedAt: new Date().toISOString(),
-      },
+    // Start, close the dialog (the hold stays), then release it from the row.
+    await row.getByTestId("payout-start").click();
+    const dialog = page.getByTestId("payout-pay-dialog");
+    await expect(dialog.getByTestId("payout-pay-amount")).toHaveText(`${REFERRAL_REWARD_PHP} PHP`);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(row.getByTestId("payout-claim")).toContainText("You started this payout at");
+    await expect(row.getByTestId("payout-start")).toHaveText("Continue payout");
+    await row.getByTestId("payout-release").click();
+    await expect(page.getByTestId("payouts-notice")).toHaveText(
+      `Released the payout to ${REFERRER.publicKey()}. Nothing was recorded, and another admin can start it now.`,
+    );
+    await expect(row.getByTestId("payout-claim")).toHaveCount(0);
+
+    // Now the second admin can start it, and release it again through the route.
+    const started = await secondAdmin!.request.post("/api/admin/referrals/payouts", {
+      data: { action: "start", ...(await requestNow()) },
     });
-    expect(again.status()).toBe(409);
-    expect(again.headers()["cache-control"]).toBe("no-store");
+    expect(started.status(), await started.text()).toBe(200);
+    expect((await started.json()).started.details.profile.accountNumber).toBe(ACCOUNT_NUMBER);
+    // Focus brings a tab up to date: this one now shows the second admin paying.
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(row.getByTestId("payout-claim")).toContainText(`Being paid by ${E2E_SECOND_ADMIN_WALLET}`);
+    const released = await secondAdmin!.request.post("/api/admin/referrals/payouts", {
+      data: { action: "release", referrerId },
+    });
+    expect(released.status()).toBe(200);
+    expect(await serviceRest(`referral_payouts?referrer_user_id=eq.${referrerId}&select=id`)).toHaveLength(1);
   });
 
   test("on a phone, the queue and the dialog fit without scrolling sideways", async ({ page }) => {
@@ -299,7 +375,7 @@ test.describe("referral payouts", () => {
     await expect(row.getByTestId("payout-referral")).toHaveCount(3);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(overflow).toBeLessThanOrEqual(0);
-    await row.getByTestId("payout-mark-paid").click();
+    await row.getByTestId("payout-start").click();
     const dialog = page.getByTestId("payout-pay-dialog");
     await expect(dialog).toBeVisible();
     const box = await dialog.boundingBox();
@@ -308,7 +384,8 @@ test.describe("referral payouts", () => {
     expect(await dialog.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(0);
     // 16px in the field, so iOS doesn't zoom into it.
     expect(await dialog.getByTestId("payout-pay-reference").evaluate((el) => getComputedStyle(el).fontSize)).toBe("16px");
-    await page.keyboard.press("Escape");
+    await dialog.getByTestId("payout-pay-release").click();
     await expect(dialog).toBeHidden();
+    await expect(row.getByTestId("payout-claim")).toHaveCount(0);
   });
 });

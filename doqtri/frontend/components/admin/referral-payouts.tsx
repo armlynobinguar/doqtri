@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   BanknoteIcon,
   ChevronDownIcon,
@@ -12,6 +12,8 @@ import {
   RotateCcwIcon,
   RotateCwIcon,
   BanIcon,
+  HandIcon,
+  Undo2Icon,
   XIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -31,12 +33,17 @@ import {
   markPaid,
   markPaidRequest,
   paidMessage,
+  payoutRequest,
+  releasePayout,
+  releasedMessage,
   restoreMessage,
   restoreReward,
   setLimit,
+  startPayout,
   voidMessage,
   voidReward,
   type Outcome,
+  type Started,
 } from "@/components/admin/referral-payouts-client";
 import {
   PAYOUT_REFERENCE_MAX,
@@ -56,7 +63,7 @@ import { cn } from "@/lib/utils";
 type Notice = { tone: "ok" | "error"; text: string };
 type Review = { state: "loading" } | { state: "error"; message: string } | { state: "ready"; rows: PayoutReferralRow[] };
 type Pending =
-  | { kind: "pay"; row: PayoutQueueRow }
+  | { kind: "pay"; row: PayoutQueueRow; started: Started }
   | { kind: "limit"; row: PayoutQueueRow }
   | { kind: "void"; row: PayoutQueueRow; referral: PayoutReferralRow };
 
@@ -68,10 +75,18 @@ const STATUS_TONE: Record<RewardStatus, "planned" | "verified" | "info" | "warni
   void: "danger",
 };
 
+/** Refetch on focus at most this often: a tab left open shouldn't act on old rows. */
+const FOCUS_REFRESH_MS = 2000;
+
 /**
  * The payout queue (WP-4.6, DOQ-26): who is owed what, where to send it, by when,
  * and the actions. Payout details show in full here and nowhere else. Every
  * action goes through one single-flight guard, so a double press sends once.
+ *
+ * Paying is two steps, because the money leaves by hand in between: Start payout
+ * holds it for this admin and answers the details as they are now, which the
+ * dialog shows to send to; Record payout records it. Another admin sees "Being
+ * paid by" and can't start. The rows refetch on focus and after every action.
  */
 export function ReferralPayouts({ initialRows }: { initialRows: PayoutQueueRow[] }) {
   const [rows, setRows] = useState(initialRows);
@@ -119,13 +134,39 @@ export function ReferralPayouts({ initialRows }: { initialRows: PayoutQueueRow[]
     setExpanded(next);
   }
 
-  /** Runs one action: busy while it runs, its message after, and the row refreshed either way. */
+  // A tab coming back to the front refetches, unless something is open or running.
+  const quiet = useRef({ pending: false, busy: false, at: 0 });
+  useEffect(() => {
+    quiet.current.pending = pending !== null;
+    quiet.current.busy = busy !== null;
+  }, [pending, busy]);
+  useEffect(() => {
+    const onFocus = () => {
+      const state = quiet.current;
+      if (document.visibilityState !== "visible" || state.pending || state.busy) return;
+      if (Date.now() - state.at < FOCUS_REFRESH_MS) return;
+      state.at = Date.now();
+      void refresh();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [refresh]);
+
+  /**
+   * Runs one action: busy while it runs, its message after, and the row refreshed
+   * either way. `then` replaces closing the dialog with a message, for Start payout.
+   */
   async function act<T>(
     key: string,
     referrerId: string,
     action: () => Promise<Outcome<T>>,
     describe: (value: T, refreshed: PayoutQueueRow | undefined) => string,
     inDialog: boolean,
+    then?: (value: T, refreshed: PayoutQueueRow | undefined) => void,
   ) {
     await flight.current.run(async () => {
       setBusy(key);
@@ -133,7 +174,9 @@ export function ReferralPayouts({ initialRows }: { initialRows: PayoutQueueRow[]
       try {
         const result = await action();
         const refreshed = await refresh(referrerId);
-        if (result.ok) {
+        if (result.ok && then) {
+          then(result.value, refreshed);
+        } else if (result.ok) {
           setPending(null);
           setNotice({ tone: "ok", text: describe(result.value, refreshed) });
         } else if (inDialog) {
@@ -161,8 +204,9 @@ export function ReferralPayouts({ initialRows }: { initialRows: PayoutQueueRow[]
       </section>
 
       <p className="text-muted-foreground mt-4 text-[13px]" data-testid="payouts-manual-note">
-        Nothing is sent automatically. Send each payout yourself, then mark it as paid here. For XLM, send the PHP
-        equivalent at that day&apos;s rate and paste the transaction hash as the reference. A payout is due 30 days after
+        Nothing is sent automatically. Start a payout first: it&apos;s held for you for 2 hours and shows the details
+        as they are now. Send it yourself, then record it here. For XLM, send the PHP equivalent at that day&apos;s
+        rate and paste the transaction hash as the reference. A payout is due 30 days after
         the earliest unpaid reward qualified or the referrer first saved their details, whichever is later.
       </p>
 
@@ -211,10 +255,31 @@ export function ReferralPayouts({ initialRows }: { initialRows: PayoutQueueRow[]
               review={reviews[row.referrerId]}
               onToggle={() => toggle(row.referrerId)}
               onRetryReview={() => void loadReview(row.referrerId)}
-              onPay={() => {
-                setDialogError(null);
-                setPending({ kind: "pay", row });
+              onStart={() => {
+                const request = payoutRequest(row);
+                if (!request) return;
+                setNotice(null);
+                void act(
+                  "start",
+                  row.referrerId,
+                  () => startPayout(request),
+                  () => "",
+                  false,
+                  (started, refreshed) => {
+                    setDialogError(null);
+                    setPending({ kind: "pay", row: refreshed ?? row, started });
+                  },
+                );
               }}
+              onRelease={() =>
+                void act(
+                  "release",
+                  row.referrerId,
+                  () => releasePayout(row.referrerId),
+                  () => releasedMessage(row.identity),
+                  false,
+                )
+              }
               onLimit={() => {
                 setDialogError(null);
                 setPending({ kind: "limit", row });
@@ -237,17 +302,34 @@ export function ReferralPayouts({ initialRows }: { initialRows: PayoutQueueRow[]
         </ul>
       )}
 
-      <MarkPaidDialog
-        key={pending?.kind === "pay" ? `pay:${pending.row.referrerId}` : "pay"}
-        row={pending?.kind === "pay" ? pending.row : null}
-        busy={busy === "pay"}
+      <PayDialog
+        key={pending?.kind === "pay" ? `pay:${pending.row.referrerId}:${pending.started.claimedAt}` : "pay"}
+        pending={pending?.kind === "pay" ? pending : null}
+        busy={busy === "pay" || busy === "release"}
         error={dialogError}
-        onClose={() => setPending(null)}
-        onConfirm={(row, reference) => {
-          const request = markPaidRequest(row, reference);
-          if (!request) return;
-          void act("pay", row.referrerId, () => markPaid(request), (paid) => paidMessage(row.identity, paid), true);
+        onClose={() => {
+          setPending(null);
+          // The hold stays; the row says so.
+          void refresh();
         }}
+        onRecord={(row, started, reference) =>
+          void act(
+            "pay",
+            row.referrerId,
+            () => markPaid(markPaidRequest(started, reference)),
+            (paid) => paidMessage(row.identity, paid),
+            true,
+          )
+        }
+        onRelease={(row) =>
+          void act(
+            "release",
+            row.referrerId,
+            () => releasePayout(row.referrerId),
+            () => releasedMessage(row.identity),
+            true,
+          )
+        }
       />
       <LimitDialog
         key={pending?.kind === "limit" ? `limit:${pending.row.referrerId}` : "limit"}
@@ -322,7 +404,8 @@ function QueueRow({
   review,
   onToggle,
   onRetryReview,
-  onPay,
+  onStart,
+  onRelease,
   onLimit,
   onVoid,
   onRestore,
@@ -333,13 +416,16 @@ function QueueRow({
   review: Review | undefined;
   onToggle: () => void;
   onRetryReview: () => void;
-  onPay: () => void;
+  onStart: () => void;
+  onRelease: () => void;
   onLimit: () => void;
   onVoid: (referral: PayoutReferralRow) => void;
   onRestore: (referral: PayoutReferralRow) => void;
 }) {
   const reviewId = useId();
   const payable = Boolean(row.details) && row.eligibleCount > 0;
+  const claim = row.claim;
+  const someoneElse = Boolean(claim && !claim.mine);
   return (
     <li className="glass min-w-0 rounded-2xl px-4 py-4 sm:px-5" data-testid="payout-row">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -364,17 +450,56 @@ function QueueRow({
 
       <PayoutDetailsBlock row={row} />
 
+      {claim ? (
+        <p
+          className={cn(
+            "mt-3 flex items-start gap-2 rounded-xl border px-3 py-2 text-[13px]",
+            claim.mine ? "border-[var(--glass-hi)] bg-[var(--glass)]" : "border-[var(--warning)]/50",
+          )}
+          data-testid="payout-claim"
+        >
+          <HandIcon className="mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
+          <span className="min-w-0 break-words">
+            {claim.mine ? (
+              <>
+                You started this payout at {formatTime(claim.since)}. It&apos;s held for you until{" "}
+                {formatTime(claim.expiresAt)}: record it once you&apos;ve sent the money, or release it.
+              </>
+            ) : (
+              <>
+                Being paid by <span className="font-mono text-[12px] break-all">{claim.by}</span> since{" "}
+                {formatTime(claim.since)}. Don&apos;t send anything; it&apos;s held until {formatTime(claim.expiresAt)}.
+              </>
+            )}
+          </span>
+        </p>
+      ) : null}
+
       <div className="mt-4 flex flex-wrap gap-2">
         <Button
           size="sm"
-          disabled={!payable || busy !== null}
-          onClick={onPay}
-          data-testid="payout-mark-paid"
-          title={payable ? undefined : row.details ? "Nothing eligible to pay" : "Waiting for payout details"}
+          disabled={!payable || someoneElse || busy !== null}
+          onClick={onStart}
+          data-testid="payout-start"
+          title={
+            someoneElse
+              ? "Another admin is paying this referrer"
+              : payable
+                ? undefined
+                : row.details
+                  ? "Nothing eligible to pay"
+                  : "Waiting for payout details"
+          }
         >
-          <BanknoteIcon strokeWidth={1.5} />
-          Mark as paid
+          {busy === "start" ? <Loader2Icon className="animate-spin" strokeWidth={1.5} /> : <BanknoteIcon strokeWidth={1.5} />}
+          {claim?.mine ? "Continue payout" : "Start payout"}
         </Button>
+        {claim?.mine ? (
+          <Button size="sm" variant="outline" disabled={busy !== null} onClick={onRelease} data-testid="payout-release">
+            <Undo2Icon strokeWidth={1.5} />
+            Release
+          </Button>
+        ) : null}
         <Button size="sm" variant="outline" disabled={busy !== null} onClick={onLimit} data-testid="payout-set-limit">
           <GaugeIcon strokeWidth={1.5} />
           Set limit
@@ -655,42 +780,47 @@ function ConfirmFooter({
   );
 }
 
-function MarkPaidDialog({
-  row,
+/**
+ * Step two. Opens on what Start payout answered: the details as they are now, held
+ * for this admin. Only now does the admin send the money, then record it here.
+ * Closing keeps the hold; Release gives it up without paying.
+ */
+function PayDialog({
+  pending,
   busy,
   error,
   onClose,
-  onConfirm,
+  onRecord,
+  onRelease,
 }: {
-  row: PayoutQueueRow | null;
+  pending: { row: PayoutQueueRow; started: Started } | null;
   busy: boolean;
   error: string | null;
   onClose: () => void;
-  onConfirm: (row: PayoutQueueRow, reference: string) => void;
+  onRecord: (row: PayoutQueueRow, started: Started, reference: string) => void;
+  onRelease: (row: PayoutQueueRow) => void;
 }) {
   const [reference, setReference] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
   const id = useId();
-  const details = row?.details;
+  const row = pending?.row;
+  const started = pending?.started;
+  const profile = started?.details.profile;
   return (
     <ActionDialog
-      open={Boolean(row && details)}
+      open={Boolean(pending)}
       busy={busy}
-      onClose={() => {
-        setReference("");
-        setProblem(null);
-        onClose();
-      }}
+      onClose={onClose}
       title={
         <>
           <BanknoteIcon className="size-4" strokeWidth={1.5} />
-          Mark as paid
+          Send the payout
         </>
       }
-      description="Record a payout you've already sent by hand. Nothing is sent from here."
+      description="Nothing is sent from here. You send it yourself, then record it."
       testId="payout-pay-dialog"
     >
-      {row && details ? (
+      {row && started && profile ? (
         <form
           className="grid gap-4"
           onSubmit={(event) => {
@@ -701,31 +831,38 @@ function MarkPaidDialog({
               return;
             }
             setProblem(null);
-            onConfirm(row, reference);
+            onRecord(row, started, reference);
           }}
         >
+          <p
+            className="rounded-xl border border-[var(--glass-hi)] bg-[var(--glass)] px-3 py-2 text-[13px]"
+            data-testid="payout-pay-held"
+          >
+            <span className="font-semibold">Send it now.</span> These are the details as they are now. This payout is held
+            for you until {formatTime(started.expiresAt)}, and no other admin can start it until you record or release it.
+          </p>
           <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-[13px]" data-testid="payout-pay-summary">
             <dt className="text-muted-foreground">To</dt>
             <dd className="font-mono text-[12px] break-all">{row.identity}</dd>
             <dt className="text-muted-foreground">Rewards</dt>
-            <dd data-testid="payout-pay-count">{row.eligibleCount}</dd>
+            <dd data-testid="payout-pay-count">{started.request.rewardIds.length}</dd>
             <dt className="text-muted-foreground">Amount</dt>
             <dd className="font-semibold" data-testid="payout-pay-amount">
-              {formatPhp(row.owedPhp)}
+              {formatPhp(started.request.amountPhp)}
             </dd>
             <dt className="text-muted-foreground">Method</dt>
-            <dd>{details.profile.method === "xlm" ? "XLM" : details.profile.provider}</dd>
+            <dd>{profile.method === "xlm" ? "XLM" : profile.provider}</dd>
             <dt className="text-muted-foreground">Name</dt>
-            <dd className="break-words">{details.profile.name}</dd>
+            <dd className="break-words">{profile.name}</dd>
             <dt className="text-muted-foreground">Destination</dt>
             <dd className="font-mono text-[12px] break-all" data-testid="payout-pay-destination">
-              {payoutDestination(details.profile)}
+              {payoutDestination(profile)}
             </dd>
           </dl>
           <p className="text-muted-foreground text-[12px]">
-            {details.profile.method === "xlm"
-              ? `Send the PHP equivalent of ${formatPhp(row.owedPhp)} in XLM at today's rate, then paste the transaction hash below.`
-              : "Paste the e-wallet or bank reference number below."}
+            {profile.method === "xlm"
+              ? `Send the PHP equivalent of ${formatPhp(started.request.amountPhp)} in XLM at today's rate, then paste the transaction hash below.`
+              : "Send it, then paste the e-wallet or bank reference number below."}
           </p>
           <div className="grid gap-1.5">
             <label htmlFor={id} className="text-[13px] font-medium">
@@ -749,17 +886,22 @@ function MarkPaidDialog({
             ) : null}
           </div>
           <DialogError error={error} />
-          <ConfirmFooter
-            busy={busy}
-            onClose={() => {
-              setReference("");
-              setProblem(null);
-              onClose();
-            }}
-            label={`Mark ${row.eligibleCount} as paid`}
-            busyLabel="Recording…"
-            testId="payout-pay-confirm"
-          />
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => onRelease(row)}
+              data-testid="payout-pay-release"
+            >
+              <Undo2Icon strokeWidth={1.5} />
+              Release, nothing sent
+            </Button>
+            <Button type="submit" disabled={busy} focusableWhenDisabled data-testid="payout-pay-confirm">
+              {busy ? <Loader2Icon className="animate-spin" strokeWidth={1.5} /> : null}
+              {busy ? "Recording…" : `Record payout of ${formatPhp(started.request.amountPhp)}`}
+            </Button>
+          </DialogFooter>
         </form>
       ) : null}
     </ActionDialog>

@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  MARK_PAID_MAX_REWARDS,
+  PAYOUT_AMOUNT_MAX,
+  REWARD_LIMIT_MAX,
+  alreadyPaidMessage,
   amountOwed,
+  busyMessage,
   checkLimit,
   checkMarkPaid,
+  checkPayoutRequest,
   checkReference,
   checkRewardAction,
   checkVoidReason,
@@ -49,6 +55,11 @@ function record(overrides: Partial<PayoutQueueRecord> = {}): PayoutQueueRecord {
     ewallet_details: null,
     details_created_at: "2026-11-01T00:00:00.000Z",
     details_updated_at: "2026-11-01T00:00:00.000Z",
+    claim_admin_id: null,
+    claim_admin_email: null,
+    claim_admin_wallet: null,
+    claimed_at: null,
+    claim_expires_at: null,
     ...overrides,
   };
 }
@@ -153,6 +164,23 @@ describe("a queue row", () => {
   it("uses the referrer's own limit, or the default from lib/referral-program.ts", () => {
     expect(payoutQueueRow(record(), 0)).toMatchObject({ limit: REFERRAL_REWARD_LIMIT, limitRaised: false });
     expect(payoutQueueRow(record({ reward_limit: 31 }), 0)).toMatchObject({ limit: 31, limitRaised: true });
+  });
+
+  it("says who is paying, and whether it's the admin looking", () => {
+    const held = record({
+      claim_admin_id: ID_B,
+      claim_admin_email: "admin@example.com",
+      claimed_at: "2026-11-07T10:00:00Z",
+      claim_expires_at: "2026-11-07T12:00:00Z",
+    });
+    expect(payoutQueueRow(held, 0, ID_B).claim).toEqual({
+      by: "admin@example.com",
+      since: "2026-11-07T10:00:00Z",
+      expiresAt: "2026-11-07T12:00:00Z",
+      mine: true,
+    });
+    expect(payoutQueueRow(held, 0, ID_A).claim?.mine).toBe(false);
+    expect(payoutQueueRow(record(), 0, ID_A).claim).toBeNull();
   });
 
   it("carries the details in full, or none while there are none", () => {
@@ -298,7 +326,12 @@ describe("what the routes accept", () => {
   it("takes a limit from 0 to 10,000, whole", () => {
     expect(checkLimit(31)).toEqual({ ok: true, limit: 31 });
     expect(checkLimit("0")).toEqual({ ok: true, limit: 0 });
-    for (const bad of [-1, 1.5, 10_001, "", "abc", null, undefined]) expect(checkLimit(bad).ok).toBe(false);
+    expect(checkLimit(REWARD_LIMIT_MAX)).toEqual({ ok: true, limit: 1000 });
+    for (const bad of [-1, 1.5, 1001, 10_000, "", "abc", null, undefined]) expect(checkLimit(bad).ok).toBe(false);
+  });
+
+  it("keeps a limit and a payout's size the same, so every eligible reward fits in one payout", () => {
+    expect(MARK_PAID_MAX_REWARDS).toBe(REWARD_LIMIT_MAX);
   });
 
   it("takes exactly what Mark as paid needs", () => {
@@ -323,6 +356,17 @@ describe("what the routes accept", () => {
     }
   });
 
+  it("bounds a payout to what the database holds: an int4 amount, and a limit's worth of rewards", () => {
+    const good = { referrerId: ID_A, rewardIds: [ID_B], amountPhp: PAYOUT_AMOUNT_MAX, detailsUpdatedAt: "2026-11-01T00:00:00Z" };
+    expect(checkPayoutRequest(good).ok).toBe(true);
+    expect(checkPayoutRequest({ ...good, amountPhp: 2 ** 31 }).ok).toBe(false);
+    const many = Array.from({ length: MARK_PAID_MAX_REWARDS + 1 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
+    expect(checkPayoutRequest({ ...good, rewardIds: many }).ok).toBe(false);
+    expect(checkPayoutRequest({ ...good, rewardIds: many.slice(1) }).ok).toBe(true);
+    // Start takes no reference; record does, and checks it.
+    expect(checkMarkPaid({ ...good, reference: "a\nb" }).ok).toBe(false);
+  });
+
   it("takes void with a reason, or restore", () => {
     expect(checkRewardAction({ action: "restore" })).toEqual({ ok: true, change: { action: "restore" } });
     expect(checkRewardAction({ action: "void", reason: "fraud" })).toEqual({
@@ -331,5 +375,25 @@ describe("what the routes accept", () => {
     });
     expect(checkRewardAction({ action: "void" }).ok).toBe(false);
     expect(checkRewardAction({ action: "pay" }).ok).toBe(false);
+  });
+});
+
+describe("what a refused payout says", () => {
+  it("says the rewards were already paid, by whom, when and how much, and to reconcile", () => {
+    expect(
+      alreadyPaidMessage([{ by: "admin@example.com", paidAt: "2026-11-07T14:05:00Z", amountPhp: 60, rewardCount: 2 }]),
+    ).toBe(
+      "These rewards were already recorded as paid by admin@example.com on 7 Nov 2026, 14:05 UTC (2 rewards, 60 PHP). " +
+        "Nothing more was recorded. If you also sent money for them, reconcile with the referrer before paying again.",
+    );
+  });
+
+  it("says who is paying, since when, and not to send anything", () => {
+    expect(
+      busyMessage({ by: "other@example.com", since: "2026-11-07T10:00:00Z", expiresAt: "2026-11-07T12:00:00Z" }),
+    ).toBe(
+      "Being paid by other@example.com since 7 Nov 2026, 10:00 UTC. Don't send anything: wait for them to record it, " +
+        "or for their hold to end at 7 Nov 2026, 12:00 UTC.",
+    );
   });
 });
