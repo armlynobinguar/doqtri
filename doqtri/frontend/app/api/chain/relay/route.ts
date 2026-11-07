@@ -43,6 +43,7 @@ import { readWalletPasskeys } from "@/lib/stellar/wallet-signers";
 import { submitPaidWrite, type PaidWriteStatus } from "@/lib/stellar/direct-submit";
 import { topUpNewWalletOrQueue } from "@/lib/stellar/wallet-topups";
 import { logError } from "@/lib/log-error";
+import { recordReferralActivity } from "@/lib/referral-activity";
 import { CHAIN_QUOTA_CAPS } from "@/lib/stellar/chain-quota-caps";
 
 /**
@@ -69,6 +70,11 @@ import { CHAIN_QUOTA_CAPS } from "@/lib/stellar/chain-quota-caps";
  * pending; the chain-jobs run settles it (lib/stellar/pending-writes.ts,
  * DOQ-5). Paid membership and market writes have no such record, so for
  * them it stays a 502 that says to check before retrying.
+ *
+ * Every confirmed note, membership or market write also counts towards the
+ * caller's referral (lib/referral-activity.ts, DOQ-23); wallet deployments and
+ * passkey changes don't, and a pending write counts once it is settled. Failing
+ * to record it never changes the answer.
  */
 
 /** A paid write with nothing to settle it later that the poll window ran out on (DOQ-5). */
@@ -188,6 +194,7 @@ async function relayRegistryWrite(userId: string, submission: RelaySubmission) {
 
   const sent = await submitAndConfirm(submission.func, submission.auth);
   await indexWrite(write, sent.hash, wallet.address);
+  await recordReferralActivity(admin, { userId, txHash: sent.hash, wallet: wallet.address, fn: write.fn });
 
   return Response.json({ success: true, data: sent });
 }
@@ -272,6 +279,10 @@ async function relayPaidWrite(userId: string, submission: RelaySubmission) {
     throw new RelayRejection(NOT_CONFIRMED_YET, 502);
   }
   await indexWrite(write, hash, wallet.address, status);
+  // A pending note write counts once the chain-jobs run has settled it.
+  if (status === "confirmed") {
+    await recordReferralActivity(admin, { userId, txHash: hash, wallet: wallet.address, fn: write.fn });
+  }
 
   // 202: accepted, not yet confirmed. The browser shows it as pending.
   return Response.json(
@@ -396,6 +407,7 @@ async function relayPaidMarketWrite(userId: string, submission: RelaySubmission)
     throw new RelayRejection(NOT_CONFIRMED_YET, 502);
   }
   await recordPurchase(userId, wallet.address, call, plan.sale, hash);
+  await recordReferralActivity(admin, { userId, txHash: hash, wallet: wallet.address, fn: call.fn });
   return Response.json({ success: true, data: { hash, status: "confirmed", feeStroops: feeStroops.toString() } });
 }
 
@@ -424,6 +436,7 @@ async function relayMarketWrite(userId: string, submission: RelaySubmission) {
 
   const sent = await submitAndConfirm(submission.func, submission.auth);
   await recordPurchase(userId, wallet.address, call, plan.sale, sent.hash);
+  await recordReferralActivity(admin, { userId, txHash: sent.hash, wallet: wallet.address, fn: call.fn });
   return Response.json({ success: true, data: sent });
 }
 
