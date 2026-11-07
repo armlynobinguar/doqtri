@@ -21,12 +21,13 @@
 --   h  heir@example.com    admin of Acme
 --   i  inviter@example.com referred a, whose wallet qualified (WP-4.6, DOQ-23)
 --   j  invited@example.com, k  kept@example.com
---                          referred by a, both qualified: k's reward paid
+--                          referred by a, both qualified: k's reward paid, by
+--                          a as the admin recording it (DOQ-26)
 
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(31);
+select plan(32);
 
 insert into auth.users (id, email, email_confirmed_at, raw_user_meta_data) values
   ('00000000-0000-4000-8000-0000000000d1', 'anon@example.com', now(),
@@ -133,7 +134,17 @@ select public.record_referral_activity(u.id, 'testnet', repeat(u.hex, 63) || n::
                ('00000000-0000-4000-8000-0000000000d7'::uuid, '2', 'G' || repeat('J', 55)),
                ('00000000-0000-4000-8000-0000000000d8'::uuid, '3', 'G' || repeat('K', 55))) as u (id, hex, wallet),
        generate_series(1, 3) as n;
-update public.referral_rewards set status = 'paid' where referred_user_id = '00000000-0000-4000-8000-0000000000d8';
+-- Paid the only way a reward can be (DOQ-26), to a's payout details.
+insert into public.referral_payout_profiles (user_id, method, name, xlm_address) values
+  ('00000000-0000-4000-8000-0000000000d1', 'xlm', 'Payout Holder', 'G' || repeat('P', 55));
+select public.start_referral_payout('00000000-0000-4000-8000-0000000000d1', array[(select id from public.referral_rewards where referred_user_id = '00000000-0000-4000-8000-0000000000d8')], 30, (select updated_at from public.referral_payout_profiles where user_id = '00000000-0000-4000-8000-0000000000d1'), '00000000-0000-4000-8000-0000000000d1');
+select public.mark_referral_rewards_paid(
+  '00000000-0000-4000-8000-0000000000d1',
+  array[(select id from public.referral_rewards where referred_user_id = '00000000-0000-4000-8000-0000000000d8')],
+  30,
+  (select updated_at from public.referral_payout_profiles where user_id = '00000000-0000-4000-8000-0000000000d1'),
+  null,
+  '00000000-0000-4000-8000-0000000000d1');
 
 
 -- ---------------------------------------------------------------------------
@@ -332,6 +343,13 @@ select results_eq(
       where referred_user_id = '00000000-0000-4000-8000-0000000000d8' $$,
   $$ values (null::uuid, 'paid'::text, null::text) $$,
   'a paid one stays as the accounting record');
+select results_eq(
+  $$ select p.referrer_user_id, p.paid_by, p.amount_php, p.reward_count, p.method
+       from public.referral_payouts p
+       join public.referral_rewards w on w.payout_id = p.id
+      where w.referred_user_id = '00000000-0000-4000-8000-0000000000d8' $$,
+  $$ values (null::uuid, null::uuid, 30, 1, 'xlm'::text) $$,
+  'and so does its payout, naming neither the referrer nor the admin who recorded it');
 
 
 -- The public audit page (/d/[docId]) reads with the service role.

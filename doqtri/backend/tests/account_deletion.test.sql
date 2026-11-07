@@ -368,7 +368,6 @@ select pg_temp.referred_activity('00000000-0000-4000-8000-0000000000c9', 'E', 2)
 select pg_temp.referred_activity('00000000-0000-4000-8000-0000000000ca', 'A', 3);
 select pg_temp.referred_activity('00000000-0000-4000-8000-0000000000cb', 'B', 3);
 select pg_temp.referred_activity('00000000-0000-4000-8000-0000000000cc', 'C', 3);
-update public.referral_rewards set status = 'paid' where referred_user_id = '00000000-0000-4000-8000-0000000000cb';
 
 select lives_ok(
   $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c9' $$,
@@ -396,6 +395,19 @@ reset role;
 select is((select count(*)::int from public.referral_payout_profiles
             where user_id = '00000000-0000-4000-8000-0000000000c8'),
   1, 'the referrer has payout details saved');
+-- p's reward is paid, the only way a reward can be (DOQ-26), by an admin.
+insert into auth.users (id, email, email_confirmed_at) values
+  ('00000000-0000-4000-8000-0000000000cd', 'admin@example.com', now());
+set local role service_role;
+select public.start_referral_payout('00000000-0000-4000-8000-0000000000c8', array[(select id from public.referral_rewards where referred_user_id = '00000000-0000-4000-8000-0000000000cb')], 30, (select updated_at from public.referral_payout_profiles where user_id = '00000000-0000-4000-8000-0000000000c8'), '00000000-0000-4000-8000-0000000000cd');
+select public.mark_referral_rewards_paid(
+  '00000000-0000-4000-8000-0000000000c8',
+  array[(select id from public.referral_rewards where referred_user_id = '00000000-0000-4000-8000-0000000000cb')],
+  30,
+  (select updated_at from public.referral_payout_profiles where user_id = '00000000-0000-4000-8000-0000000000c8'),
+  null,
+  '00000000-0000-4000-8000-0000000000cd');
+reset role;
 
 select lives_ok(
   $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c8' $$,

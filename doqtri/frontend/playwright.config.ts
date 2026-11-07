@@ -9,7 +9,7 @@ import {
   qditStubEnv,
 } from "./e2e/qdit-stub/config";
 import { OPENAI_STUB_ORIGIN, openaiStubEnv, openaiStubServerEnv } from "./e2e/openai-stub/config";
-import { E2E_ADMIN_WALLET } from "./e2e/admin-wallet";
+import { E2E_ADMIN_WALLET, E2E_SECOND_ADMIN_WALLET } from "./e2e/admin-wallet";
 
 // The tests seed and clean up notes directly, which needs the service role key.
 // Earlier files win — dotenv keeps the first value it sees. `.env.e2e` is the
@@ -175,8 +175,9 @@ export default defineConfig({
         ...qditStubEnv(),
         // Replaces any real OPENAI_API_KEY with the stub's fake one.
         ...openaiStubEnv(),
-        // The e2e wallet is the only admin, for the /admin specs.
-        DOQTRI_ADMINS: E2E_ADMIN_WALLET,
+        // The e2e wallet is the admin for the /admin specs; the second one only
+        // stands in for another admin in e2e/referral-payouts.spec.ts.
+        DOQTRI_ADMINS: [E2E_ADMIN_WALLET, E2E_SECOND_ADMIN_WALLET].join(","),
         // The referral dashboard's switch, which e2e/referral-dashboard.spec.ts needs on.
         LEGAL_OPERATOR_NAME: "Test Operator",
       },

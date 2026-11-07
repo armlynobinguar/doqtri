@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { BanknoteIcon } from "lucide-react";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { ReferralReport, type RecentReferral, type ReferrerEntry } from "@/components/admin/referral-report";
 import { isAdmin } from "@/lib/admin";
+import { loadRewardCounts } from "@/lib/referral-payouts-store";
 import { loadReferrals, summarizeReferrals } from "@/lib/referral-report";
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
 import { walletAddressFromEmail } from "@/lib/wallet-address";
@@ -19,8 +21,8 @@ const RECENT_REFERRALS = 100;
 
 /**
  * Referral tracking: how many accounts signed up through a referral, how the
- * code reached them (link, QR code or typed in), who refers the most, and the
- * latest referred sign-ups. Admins only (DOQTRI_ADMINS); anyone else gets a
+ * code reached them (link, QR code or typed in), who refers the most, with their
+ * eligible and paid rewards (DOQ-26), and the latest referred sign-ups. Admins only (DOQTRI_ADMINS); anyone else gets a
  * 404. Read with the service role, since referrals are never exposed to the
  * browser otherwise.
  */
@@ -32,9 +34,10 @@ export default async function ReferralsAdminPage() {
   if (!isAdmin(user)) notFound();
 
   const admin = createSupabaseAdminClient();
-  const [rows, codes] = await Promise.all([
+  const [rows, codes, rewards] = await Promise.all([
     loadReferrals(admin),
     admin.from("referral_codes").select("*", { count: "exact", head: true }),
+    loadRewardCounts(admin),
   ]);
   if (codes.error) throw new Error(`Failed to count referral codes: ${codes.error.message}`);
 
@@ -58,7 +61,12 @@ export default async function ReferralsAdminPage() {
   );
   const owner = (id: string) => owners.get(id) ?? id;
 
-  const referrers: ReferrerEntry[] = top.map((r) => ({ ...r, owner: owner(r.userId) }));
+  const referrers: ReferrerEntry[] = top.map((r) => ({
+    ...r,
+    owner: owner(r.userId),
+    eligible: rewards.get(r.userId)?.eligible ?? 0,
+    paid: rewards.get(r.userId)?.paid ?? 0,
+  }));
   const latest: RecentReferral[] = recent.map((r) => ({
     referredId: r.referred_user_id,
     referred: owner(r.referred_user_id),
@@ -86,6 +94,17 @@ export default async function ReferralsAdminPage() {
         <p className="text-muted-foreground mt-3 text-[14px]">
           Accounts that signed up through someone&apos;s link, QR code or referral code. A referral counts only for an
           account created after the code was seen.
+        </p>
+        <p className="mt-2 text-[14px]">
+          <Link
+            href="/admin/referrals/payouts"
+            className="inline-flex items-center gap-1.5 underline underline-offset-2"
+            data-testid="referrals-payouts-link"
+          >
+            <BanknoteIcon className="size-4" strokeWidth={1.5} />
+            Referral payouts
+          </Link>
+          <span className="text-muted-foreground">: pay eligible rewards, void them, or raise a referrer&apos;s limit.</span>
         </p>
         <ReferralReport
           total={summary.total}
