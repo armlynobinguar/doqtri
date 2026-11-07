@@ -22,6 +22,7 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { StatusTag } from "@/components/ui/status-tag";
+import { payoutCard } from "@/components/vault/referral-payout-client";
 import { ReferralPayoutDialog } from "@/components/vault/referral-payout-dialog";
 import { createReferralsPager, type ReferralsRead } from "@/components/vault/referrals-pager";
 import { useIsCompactVault } from "@/hooks/use-mobile";
@@ -236,10 +237,8 @@ function LimitNotice({ limit }: { limit: ReferralLimit }) {
  * Where the payout questionnaire opens (DOQ-25). One card whatever it says, so the
  * button that opened the form keeps a keyboard user's focus when the form closes
  * and the words change. "Needed" until details are saved; after that it's the
- * saved state, showing only what the summary masks. Nothing for someone who has
- * neither details nor an eligible referral.
- *
- * What the save returned wins over the page's data, which was read before it.
+ * saved state, showing only what the summary masks: the method and the last few
+ * characters. The details themselves are only ever in the form. See payoutCard().
  */
 function PayoutPrompt({
   payout,
@@ -252,28 +251,31 @@ function PayoutPrompt({
 }) {
   const [justSaved, setJustSaved] = useState<PayoutSummary | null>(null);
   const [open, setOpen] = useState(false);
-  const summary = justSaved ?? payout.summary;
-  const needed = payoutNeeded && !summary;
-  if (!needed && !summary && !payout.canEdit) return null;
+  const card = payoutCard(payout, payoutNeeded, justSaved);
+  if (!card) return null;
 
   return (
     <>
       <div
         role="status"
-        data-testid={needed ? "referrals-payout-prompt" : summary ? "referrals-payout-saved" : "referrals-payout-empty"}
+        data-testid={`referrals-payout-${card.kind === "needed" ? "prompt" : card.kind}`}
         className="flex flex-wrap items-start gap-3 rounded-xl border border-[var(--glass-lo)] bg-[var(--glass)] px-4 py-3 text-[13px]"
       >
         <WalletIcon className="text-muted-foreground mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
         <div className="min-w-0 flex-1 basis-40">
           <p className="text-foreground font-medium">
-            {needed ? "Payout details needed" : summary ? "Payout details saved" : "No payout details saved"}
+            {card.kind === "needed"
+              ? "Payout details needed"
+              : card.kind === "saved"
+                ? "Payout details saved"
+                : "No payout details saved"}
           </p>
           <p className="text-muted-foreground mt-1 [overflow-wrap:anywhere]" data-testid="referrals-payout-text">
-            {needed ? (
+            {card.kind === "needed" ? (
               <>You have {formatNumber(unpaidPhp)} PHP unpaid. We need your payout details before we can pay it.</>
-            ) : summary ? (
+            ) : card.kind === "saved" ? (
               <>
-                {summary.label} ending in <span className="font-mono">{summary.last4}</span>
+                {card.summary.label} ending in <span className="font-mono">{card.summary.last4}</span>
               </>
             ) : (
               <>Add them so that we can pay any future rewards.</>
@@ -283,11 +285,11 @@ function PayoutPrompt({
         <Button
           type="button"
           size="sm"
-          variant={needed ? "default" : "outline"}
+          variant={card.kind === "needed" ? "default" : "outline"}
           onClick={() => setOpen(true)}
           data-testid="referrals-payout-open"
         >
-          {!summary ? "Add details" : payout.canEdit ? "Edit" : "View"}
+          {card.kind !== "saved" ? "Add details" : card.canEdit ? "Edit" : "View"}
         </Button>
       </div>
       <ReferralPayoutDialog open={open} onOpenChange={setOpen} onSaved={setJustSaved} />

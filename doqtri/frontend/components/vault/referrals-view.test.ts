@@ -28,6 +28,7 @@ const dashboard = (over: Partial<ReferralDashboard> = {}): ReferralDashboard => 
   totals: { referred: 1, eligible: 0, earnedPhp: 0, unpaidPhp: 0, paidPhp: 0 },
   limit: { limit: 30, used: 0, reached: false },
   payoutNeeded: false,
+  payout: { canEdit: false, summary: null },
   ...over,
 });
 
@@ -158,24 +159,58 @@ describe("the limit notice", () => {
   });
 });
 
-describe("the payout prompt", () => {
-  it("appears for an unpaid reward, and links nowhere yet", () => {
+describe("the payout card (DOQ-25)", () => {
+  const UNPAID = { referred: 1, eligible: 1, earnedPhp: 30, unpaidPhp: 30, paidPhp: 0 };
+  const card = (html: string, id: string) =>
+    new RegExp(`data-testid="referrals-payout-${id}".*?</button></div>`).exec(html)?.[0] ?? "";
+
+  it("asks for details for an unpaid reward, with a button that opens the form, and no form yet", () => {
+    const html = renderToStaticMarkup(
+      render(dashboard({ payoutNeeded: true, totals: UNPAID, payout: { canEdit: true, summary: null } })),
+    );
+    const prompt = card(html, "prompt");
+    expect(prompt).toContain("Payout details needed");
+    expect(prompt).toContain("You have 30 PHP unpaid.");
+    expect(prompt).toMatch(/data-testid="referrals-payout-open"[^>]*>Add details</);
+    // The form is in a dialog that isn't open: nothing of it is on the page.
+    expect(html).not.toContain("<form");
+    expect(html).not.toContain('data-testid="payout-dialog"');
+  });
+
+  it("once saved, says so with only the masked summary, and offers Edit", () => {
     const html = renderToStaticMarkup(
       render(
         dashboard({
-          payoutNeeded: true,
-          totals: { referred: 1, eligible: 1, earnedPhp: 30, unpaidPhp: 30, paidPhp: 0 },
+          payoutNeeded: false,
+          totals: UNPAID,
+          payout: { canEdit: true, summary: { label: "GCash", last4: "4567" } },
         }),
       ),
     );
-    const prompt = /data-testid="referrals-payout-prompt".*?<\/div><\/div>/.exec(html)?.[0] ?? "";
-    expect(prompt).toContain("Payout details needed");
-    expect(prompt).not.toContain("<a ");
-    expect(prompt).not.toContain("<form");
+    expect(html).not.toContain("Payout details needed");
+    const saved = card(html, "saved");
+    expect(saved).toContain("Payout details saved");
+    expect(saved.replace(/<[^>]+>/g, "")).toContain("GCash ending in 4567");
+    expect(saved).toMatch(/>Edit</);
   });
 
-  it("doesn't appear otherwise", () => {
-    expect(text(render(dashboard()))).not.toContain("Payout details needed");
+  it("offers View instead for someone who can no longer change them", () => {
+    const html = renderToStaticMarkup(
+      render(dashboard({ payout: { canEdit: false, summary: { label: "XLM", last4: "WXYZ" } } })),
+    );
+    expect(card(html, "saved")).toMatch(/>View</);
+  });
+
+  it("offers to add them to someone eligible with nothing owed right now", () => {
+    const html = text(render(dashboard({ payout: { canEdit: true, summary: null } })));
+    expect(html).toContain("No payout details saved");
+    expect(html).not.toContain("Payout details needed");
+  });
+
+  it("doesn't appear for someone with neither details nor an eligible referral", () => {
+    const html = renderToStaticMarkup(render(dashboard()));
+    expect(html).not.toContain("referrals-payout-");
+    expect(html).not.toContain("Payout details");
   });
 });
 

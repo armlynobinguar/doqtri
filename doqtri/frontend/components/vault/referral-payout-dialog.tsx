@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import Link from "next/link";
 import { Loader2Icon, RotateCwIcon, SaveIcon, WalletIcon, XIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -15,62 +16,32 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
+  createPayoutSaver,
+  payoutDraft,
+  readPayoutDetails,
+  type PayoutDraft,
+  type PayoutLoaded,
+} from "@/components/vault/referral-payout-client";
+import {
   PAYOUT_MEMO_MAX_BYTES,
   PAYOUT_PROVIDERS,
   utf8Bytes,
-  validatePayoutProfile,
   type PayoutField,
   type PayoutFieldErrors,
-  type PayoutProfile,
   type PayoutSummary,
 } from "@/lib/referral-payout";
 import { cn } from "@/lib/utils";
 
-const ROUTE = "/api/referrals/payout-profile";
-const LOAD_FAILED = "Your payout details couldn't be loaded.";
-const SAVE_FAILED = "Your payout details couldn't be saved.";
-
-/** What's in the fields. Each method's stay here while the other is chosen, and only the chosen one's is sent. */
-export type PayoutDraft = {
-  name: string;
-  method: "" | "xlm" | "ewallet";
-  address: string;
-  memo: string;
-  provider: string;
-  accountName: string;
-  accountNumber: string;
-  details: string;
-};
+/**
+ * THE PRIVACY POLICY LINK GOES HERE. DOQ-25 needs one, and the page is DOQ-27,
+ * on another branch: once /privacy is on this one, set this to "/privacy" and the
+ * note under the form links it. Until then the note says who sees the details
+ * and why, without a link.
+ */
+const PRIVACY_POLICY_HREF: string | null = null;
 
 /** Top to bottom, for finding the first field with a problem. */
 const FIELD_ORDER: PayoutField[] = ["name", "method", "address", "memo", "provider", "accountName", "accountNumber", "details"];
-
-export function payoutDraft(profile: PayoutProfile | null): PayoutDraft {
-  const empty: PayoutDraft = {
-    name: "",
-    method: "",
-    address: "",
-    memo: "",
-    provider: "",
-    accountName: "",
-    accountNumber: "",
-    details: "",
-  };
-  if (!profile) return empty;
-  return profile.method === "xlm"
-    ? { ...empty, name: profile.name, method: "xlm", address: profile.address, memo: profile.memo ?? "" }
-    : {
-        ...empty,
-        name: profile.name,
-        method: "ewallet",
-        provider: profile.provider,
-        accountName: profile.accountName,
-        accountNumber: profile.accountNumber,
-        details: profile.details ?? "",
-      };
-}
-
-type Loaded = { profile: PayoutProfile | null; canEdit: boolean };
 
 /**
  * The questionnaire (WP-4.6, DOQ-25, D-112). Opens on what GET returns, which is
@@ -132,7 +103,7 @@ function PayoutFormLoader({
   onClose: () => void;
   onSaved: (summary: PayoutSummary) => void;
 }) {
-  const [loaded, setLoaded] = useState<Loaded | null>(null);
+  const [loaded, setLoaded] = useState<PayoutLoaded | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
@@ -184,39 +155,6 @@ function PayoutFormLoader({
   );
 }
 
-async function readPayoutDetails(): Promise<Loaded | { message: string }> {
-  try {
-    const res = await fetch(ROUTE, { cache: "no-store" });
-    const body = (await res.json().catch(() => null)) as (Loaded & { error?: string }) | null;
-    if (!res.ok || !body || typeof body.canEdit !== "boolean") return { message: body?.error || LOAD_FAILED };
-    return { profile: body.profile, canEdit: body.canEdit };
-  } catch {
-    return { message: LOAD_FAILED };
-  }
-}
-
-/** Sends what passed the form's check. The server checks it again, and its answer wins. */
-async function writePayoutDetails(
-  profile: PayoutProfile,
-): Promise<{ summary: PayoutSummary } | { message: string; fields: PayoutFieldErrors }> {
-  try {
-    const res = await fetch(ROUTE, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(profile),
-    });
-    const body = (await res.json().catch(() => null)) as {
-      summary?: PayoutSummary;
-      error?: string;
-      fields?: PayoutFieldErrors;
-    } | null;
-    if (res.ok && body?.summary) return { summary: body.summary };
-    return { message: body?.error || SAVE_FAILED, fields: body?.fields ?? {} };
-  } catch {
-    return { message: SAVE_FAILED, fields: {} };
-  }
-}
-
 export function PayoutForm({
   initial,
   canEdit,
@@ -240,10 +178,14 @@ export function PayoutForm({
   // Bumped to move focus to the first problem once it's on screen.
   const [problemCheck, setProblemCheck] = useState(0);
   const formErrorRef = useRef<HTMLParagraphElement>(null);
-  // State arrives a render late, and a double press doesn't wait for it.
-  const inFlight = useRef(false);
+  const [saver] = useState(() => createPayoutSaver());
 
   const fieldId = (field: PayoutField) => `${baseId}-${field}`;
+  const errorId = (field: PayoutField) => `${fieldId(field)}-error`;
+  const hintId = (field: PayoutField) => `${fieldId(field)}-hint`;
+  /** The hint, if the field has one, and the error, if there is one. */
+  const describedBy = (field: PayoutField, hasHint = false) =>
+    [hasHint ? hintId(field) : null, errors[field] ? errorId(field) : null].filter(Boolean).join(" ") || undefined;
 
   useEffect(() => {
     if (problemCheck === 0) return;
@@ -254,42 +196,38 @@ export function PayoutForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [problemCheck]);
 
-  function update(field: PayoutField, value: string) {
+  function update(field: keyof PayoutDraft, value: string) {
     setDraft((current) => ({ ...current, [field]: value }));
     setErrors((current) => (current[field] ? { ...current, [field]: undefined } : current));
   }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!canEdit || inFlight.current) return;
+    if (!canEdit || saver.saving) return;
     setFormError(null);
+    const outcome = await saver.save(draft, () => onSavingChange(true));
+    if (outcome.kind === "busy") return;
+    if (outcome.kind !== "invalid") onSavingChange(false);
 
-    const result = validatePayoutProfile(draft);
-    if (!result.ok) {
-      setErrors(result.errors);
-      setProblemCheck((n) => n + 1);
-      return;
+    switch (outcome.kind) {
+      case "saved":
+        setErrors({});
+        toast.success("Payout details saved");
+        onSaved(outcome.summary);
+        return;
+      case "invalid":
+        setErrors(outcome.errors);
+        setProblemCheck((n) => n + 1);
+        return;
+      case "refused":
+        setErrors(outcome.errors);
+        setFormError(outcome.message);
+        setProblemCheck((n) => n + 1);
     }
-
-    inFlight.current = true;
-    onSavingChange(true);
-    setErrors({});
-    const written = await writePayoutDetails(result.profile);
-    inFlight.current = false;
-    onSavingChange(false);
-
-    if ("summary" in written) {
-      toast.success("Payout details saved");
-      onSaved(written.summary);
-      return;
-    }
-    setErrors(written.fields);
-    setFormError(written.message);
-    setProblemCheck((n) => n + 1);
   }
 
   /** What every text field shares. Read-only rather than disabled when it can't be changed, so it stays legible. */
-  const textField = (field: PayoutField, required: boolean) => ({
+  const textField = (field: Exclude<PayoutField, "method" | "provider">, required: boolean, hasHint = false) => ({
     id: fieldId(field),
     value: draft[field],
     onChange: (event: React.ChangeEvent<HTMLInputElement>) => update(field, event.target.value),
@@ -298,7 +236,7 @@ export function PayoutForm({
     required,
     autoComplete: "off",
     "aria-invalid": errors[field] ? true : undefined,
-    "aria-describedby": errors[field] ? `${fieldId(field)}-error` : undefined,
+    "aria-describedby": describedBy(field, hasHint),
     "data-testid": `payout-${field}`,
   });
 
@@ -307,7 +245,10 @@ export function PayoutForm({
   return (
     <form onSubmit={submit} noValidate className="grid min-w-0 gap-4 text-[13px]" data-testid="payout-form">
       {!canEdit ? (
-        <p className="text-muted-foreground rounded-xl border border-[var(--glass-lo)] bg-[var(--glass)] px-3 py-2" data-testid="payout-read-only">
+        <p
+          className="text-muted-foreground rounded-xl border border-[var(--glass-lo)] bg-[var(--glass)] px-3 py-2"
+          data-testid="payout-read-only"
+        >
           You don&apos;t have an eligible referral right now, so these details can&apos;t be changed.
         </p>
       ) : null}
@@ -318,7 +259,7 @@ export function PayoutForm({
 
       <fieldset
         className="grid min-w-0 gap-1.5"
-        aria-describedby={errors.method ? `${fieldId("method")}-error` : undefined}
+        aria-describedby={errors.method ? errorId("method") : undefined}
         data-testid="payout-method"
       >
         <legend className="text-muted-foreground mb-1 text-[12px]">
@@ -339,6 +280,7 @@ export function PayoutForm({
                 draft.method === value
                   ? "text-foreground border-[var(--glass-hi)] bg-[var(--glass-strong)]"
                   : "text-muted-foreground hover:text-foreground border-[var(--glass-lo)] bg-[var(--glass)] hover:border-[var(--glass-hi)]",
+                errors.method && "border-destructive/60",
               )}
             >
               <input
@@ -359,7 +301,7 @@ export function PayoutForm({
             </label>
           ))}
         </div>
-        <FieldError id={`${fieldId("method")}-error`} message={errors.method} />
+        <FieldError id={errorId("method")} message={errors.method} />
       </fieldset>
 
       {draft.method === "xlm" ? (
@@ -373,7 +315,14 @@ export function PayoutForm({
             <li>Passkey wallet addresses, which start with C, can&apos;t receive payouts.</li>
           </ul>
           <PayoutFieldRow id={fieldId("address")} label="Stellar address" required error={errors.address}>
-            <Input {...textField("address", true)} placeholder="G…" spellCheck={false} autoCapitalize="characters" autoCorrect="off" />
+            <Input
+              {...textField("address", true)}
+              placeholder="G…"
+              spellCheck={false}
+              autoCapitalize="characters"
+              autoCorrect="off"
+              className="font-mono"
+            />
           </PayoutFieldRow>
           <PayoutFieldRow
             id={fieldId("memo")}
@@ -381,7 +330,7 @@ export function PayoutForm({
             error={errors.memo}
             hint={`${memoBytes}/${PAYOUT_MEMO_MAX_BYTES} bytes. If your address is at an exchange, use the memo it gave you.`}
           >
-            <Input {...textField("memo", false)} spellCheck={false} autoCapitalize="off" autoCorrect="off" />
+            <Input {...textField("memo", false, true)} spellCheck={false} autoCapitalize="off" autoCorrect="off" />
           </PayoutFieldRow>
         </div>
       ) : null}
@@ -393,11 +342,12 @@ export function PayoutForm({
               value={draft.provider || null}
               onValueChange={(next) => next && update("provider", next as string)}
               disabled={saving || !canEdit}
+              required
             >
               <SelectTrigger
                 id={fieldId("provider")}
                 aria-invalid={errors.provider ? true : undefined}
-                aria-describedby={errors.provider ? `${fieldId("provider")}-error` : undefined}
+                aria-describedby={describedBy("provider")}
                 data-testid="payout-provider"
               >
                 <SelectValue placeholder="Choose a provider" />
@@ -414,7 +364,12 @@ export function PayoutForm({
           <PayoutFieldRow id={fieldId("accountName")} label="Account name" required error={errors.accountName}>
             <Input {...textField("accountName", true)} />
           </PayoutFieldRow>
-          <PayoutFieldRow id={fieldId("accountNumber")} label="Account or bank number" required error={errors.accountNumber}>
+          <PayoutFieldRow
+            id={fieldId("accountNumber")}
+            label="Account or bank number"
+            required
+            error={errors.accountNumber}
+          >
             <Input {...textField("accountNumber", true)} spellCheck={false} />
           </PayoutFieldRow>
           <PayoutFieldRow
@@ -423,7 +378,7 @@ export function PayoutForm({
             error={errors.details}
             hint="Anything else we need, such as the bank's name or branch."
           >
-            <Input {...textField("details", false)} />
+            <Input {...textField("details", false, true)} />
           </PayoutFieldRow>
         </div>
       ) : null}
@@ -431,7 +386,13 @@ export function PayoutForm({
       <PayoutPrivacyNote />
 
       {formError ? (
-        <p ref={formErrorRef} tabIndex={-1} role="alert" className="text-destructive outline-none" data-testid="payout-form-error">
+        <p
+          ref={formErrorRef}
+          tabIndex={-1}
+          role="alert"
+          className="text-destructive outline-none"
+          data-testid="payout-form-error"
+        >
           {formError}
         </p>
       ) : null}
@@ -459,16 +420,23 @@ export function PayoutForm({
   );
 }
 
-/**
- * Who sees this, and that an edit changes nothing already paid.
- *
- * THE PRIVACY POLICY LINK GOES HERE (DOQ-25 needs it, the page is DOQ-27 on another
- * branch): link "Privacy Policy" in the first sentence once /privacy is on this one.
- */
+/** Who sees these details and why, and that an edit changes nothing already paid. */
 function PayoutPrivacyNote() {
   return (
     <div className="text-muted-foreground grid gap-1.5 text-[12px]" data-testid="payout-privacy">
-      <p>Only you and Doqtri&apos;s admins can see these details. We use them only to pay your referral rewards.</p>
+      <p>
+        Only you and Doqtri&apos;s admins can see these details. We use them only to pay your referral rewards.
+        {PRIVACY_POLICY_HREF ? (
+          <>
+            {" "}
+            See the{" "}
+            <Link href={PRIVACY_POLICY_HREF} className="hover:text-foreground underline underline-offset-2">
+              Privacy Policy
+            </Link>
+            .
+          </>
+        ) : null}
+      </p>
       <p>A change applies to future payouts only. Payouts already made aren&apos;t affected.</p>
     </div>
   );
@@ -476,9 +444,10 @@ function PayoutPrivacyNote() {
 
 function RequiredMark() {
   return (
-    <span className="text-destructive" title="Required">
+    <span className="text-destructive">
       {" "}
-      *<span className="sr-only"> required</span>
+      <span aria-hidden="true">*</span>
+      <span className="sr-only">(required)</span>
     </span>
   );
 }
@@ -514,7 +483,11 @@ function PayoutFieldRow({
         {required ? <RequiredMark /> : <span className="text-label"> (optional)</span>}
       </label>
       {children}
-      {hint ? <p className="text-label text-[12px]">{hint}</p> : null}
+      {hint ? (
+        <p id={`${id}-hint`} className="text-label text-[12px]">
+          {hint}
+        </p>
+      ) : null}
       <FieldError id={`${id}-error`} message={error} />
     </div>
   );
