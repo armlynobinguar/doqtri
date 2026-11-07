@@ -3,19 +3,25 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { TERMS_PATH } from "@/components/legal/legal-links";
 import { LegalList, LegalPage, LegalTable, MailLink, type LegalSection } from "@/components/legal/legal-page";
-import { legalOperatorName } from "@/lib/legal";
+import { legalOperatorName, legalPagesLive } from "@/lib/legal";
 import {
   AGE_CLAUSE,
+  KEPT_CONTENT_CLAUSE,
   ONCHAIN_PERMANENCE_CLAUSE,
   PRIVACY_EMAIL,
   REFERRAL_DELETION_CLAUSE,
   REFERRER_VIEW_CLAUSE,
+  TESTIMONIAL_CLAUSE,
 } from "@/lib/legal-copy";
 
-export const metadata: Metadata = {
-  title: "Privacy Policy · Doqtri",
-  description: "What Doqtri collects, why, who sees it, what stays public on Stellar, and your rights.",
-};
+/** Empty with the gate off, so the 404 says nothing about the document. */
+export function generateMetadata(): Metadata {
+  if (!legalPagesLive()) return {};
+  return {
+    title: "Privacy Policy · Doqtri",
+    description: "What Doqtri collects, why, who sees it, what stays public on Stellar, and your rights.",
+  };
+}
 
 function sections(operator: string): LegalSection[] {
   return [
@@ -62,7 +68,7 @@ function sections(operator: string): LegalSection[] {
               ],
               [
                 "Referrals",
-                "Your referral code, who referred whom, how the code arrived (link, QR code or typed in) and when, activity counts and rewards. To be paid, your name and either an XLM address with an optional memo or e-wallet details (provider, account name, number and notes, as text; no QR images). The record of each payout. Any feedback you choose to give.",
+                "Your referral code, who referred whom, how the code arrived (link, QR code or typed in) and when, on-chain activity records and counts, and rewards. To be paid, your name and either an XLM address with an optional memo or e-wallet or bank details (provider, account name, account or bank number and any extra details, as text; no QR images). The record of each payout. Any feedback you choose to give.",
               ],
               [
                 "Usage",
@@ -99,7 +105,8 @@ function sections(operator: string): LegalSection[] {
               ["The template marketplace: listing, sales, earnings and reports", "Necessary to provide the service"],
               ["The referral program: counting activity, reviewing rewards and paying them", "Necessary to perform the program's terms"],
               ["Connecting qdit or GitHub, when you ask", "Necessary to provide the service"],
-              ["Rating promo screenshots with AI to order the review queue, and running the promo", "Your consent, given when you submit an entry"],
+              ["Running a promotion you entered", "Necessary to run the promotion"],
+              ["Rating promo entries with AI to order the review queue", "Our legitimate interest in reviewing entries efficiently. The entry form tells you this before you submit, and a person makes the decision"],
               ["Showing a testimonial publicly", "Your consent, which you can withdraw"],
               ["Daily limits, bot checks, abuse and copy reports, and keeping the service secure", "Our legitimate interest in keeping the service working and fair"],
               ["Keeping payout records for accounting", "Our legitimate interest in accurate accounts, and any legal duty that applies"],
@@ -121,9 +128,8 @@ function sections(operator: string): LegalSection[] {
                 wallet address, and when it changed.
               </>,
               <>
-                <b>For each mindmap node:</b> its node id (such as <code>h3</code>), status, tool name and artifact
-                reference. The tool name and artifact reference are what you type, so keep personal information out of
-                them.
+                <b>For each mindmap node with a status:</b> its node id (such as <code>h3</code>), status, tool name and
+                artifact reference.
               </>,
               <>
                 <b>For on-chain workspaces:</b> the workspace id, and each member&rsquo;s wallet address and role.
@@ -133,6 +139,27 @@ function sections(operator: string): LegalSection[] {
                 token and parent, its sales and tip totals, and which wallets bought it.
               </>,
               <>Every transaction, with the wallet that signed it, as with any Stellar transaction.</>,
+            ]}
+          />
+          <p>The tool name and artifact reference depend on where a node&rsquo;s status came from:</p>
+          <LegalList
+            items={[
+              <>
+                <b>Set by hand:</b> whatever you type, or <code>manual</code> if you leave the tool blank. Keep personal
+                information and secrets out of them.
+              </>,
+              <>
+                <b>Synced from GitHub:</b> <code>github</code> and the issue, pull request or commit URL. That URL names
+                the repository, so syncing a node linked to a private repository publishes its name for good.
+              </>,
+              <>
+                <b>Synced from qdit:</b> <code>qdit</code> and a reference holding the network, contract, qdit project
+                and milestone ids, and milestone version.
+              </>,
+              <>
+                <b>Generated by the app:</b> <code>rollup</code> with the child node ids when a parent node rolls up its
+                children, and <code>doqtri-done</code> with the anchored version for Mark mindmap done.
+              </>,
             ]}
           />
           <p>
@@ -163,8 +190,8 @@ function sections(operator: string): LegalSection[] {
                 Notes in your personal workspace are private to you unless you add someone.
               </>,
               <>
-                <b>Other signed-in users</b> see templates you publish, including their full text, in the template
-                gallery. Signed-out visitors do not.
+                <b>Other signed-in users</b> see templates you publish in the template gallery: the full text of a free
+                template, and only the headings of a paid one until they buy it. Signed-out visitors see neither.
               </>,
               <>
                 <b>Referrers.</b> {REFERRER_VIEW_CLAUSE}
@@ -175,8 +202,7 @@ function sections(operator: string): LegalSection[] {
                 reports.
               </>,
               <>
-                <b>Testimonials</b> appear publicly only if you opt in and an admin approves them. A reward never
-                depends on giving one.
+                <b>Testimonials.</b> {TESTIMONIAL_CLAUSE}
               </>,
               <>
                 <b>People who run Doqtri</b> have technical access to the database and file storage.
@@ -198,16 +224,21 @@ function sections(operator: string): LegalSection[] {
               ["Supabase", "Database, file storage, sign-in, and account emails for confirmation and password reset", "The data listed under What we collect. Account emails go out through the email service set up in Supabase"],
               ["Vercel", "Hosts the app and runs scheduled jobs", "Every request to the app, with its IP address, and the server's logs"],
               ["OpenAI", "Import, formatting, mindmaps and promo ratings", "PDFs as the file itself, and other imports as their extracted text. On Regenerate, the note's text and your other note titles. On Build mindmap and at import, the note's title and text. For promo entries, your screenshots and caption"],
-              ["OpenZeppelin Channels", "Submits passkey wallets' on-chain writes and pays their fees", "The contract call and its signatures, which are public once on the ledger"],
+              ["OpenZeppelin Channels", "Submits passkey wallet deployments and passkey changes, and pays their network fees. On a network without our fee forwarder, it also submits and pays for passkey wallets' note and template writes", "The contract call and its signatures, which are public once on the ledger"],
               ["Stellar Horizon and RPC nodes", "Reading the ledger and sending transactions", "Wallet addresses and transactions, and your IP address when your browser calls them directly"],
               ["Stellar Friendbot", "Funds new testnet wallets with test XLM", "The wallet address"],
               ["stellar.expert", "Public contract statistics, and the explorer pages we link to", "Our server sends only contract addresses. If you open a link, stellar.expert sees your visit"],
-              ["GitHub", "Reads the status of an issue or pull request you link", "The repository and number"],
-              ["qdit", "Connected projects and milestones, only if you connect it", "An authorisation request, then the note id, title and URL when you link a note, and milestone changes you make from Doqtri"],
+              ["GitHub", "Reads the status of an issue or pull request you link", "The repository and number, from our server. If you sync that status on-chain, its URL goes on the public ledger, as described above"],
+              ["qdit", "Connected projects and milestones, only if you connect it", "An authorisation request. The note id, title and URL when you link a note. When you link a heading, its text becomes the qdit milestone's title, sent with its node id and anchored version, and a sync renames the milestone when the heading changes"],
               ["Cloudflare Turnstile", "A bot check on email sign-up, sign-in and password reset, when switched on", "Its script runs in your browser, and Cloudflare receives the signals it collects there"],
               ["Your wallet app", "Signs sign-in messages and transactions", "The messages and transactions you approve. Your wallet is your own service, under its own terms"],
             ]}
           />
+          <p>
+            On testnet today, a passkey wallet pays its own fees for note and template writes, in test XLM, and our own
+            relayer sends those writes to a Stellar RPC node without Channels. If you sign in with a wallet app, your
+            wallet signs its own transactions.
+          </p>
           <p>
             Some of these providers may store or process your data outside the Philippines. Under Section 21 of the
             Act, we stay responsible for personal information we send to them.
@@ -235,7 +266,8 @@ function sections(operator: string): LegalSection[] {
               ["doqtri:returning", "Local storage", "Sends a returning visitor to sign-in", "Until cleared"],
               ["@StellarWalletsKit/…", "Local storage", "Which wallet you chose", "Until cleared"],
               ["Dismissed notices", "Local storage", "Promo and legal notices you closed", "Until cleared"],
-              ["Earnings page size and demo mindmap style", "Local storage", "Small display choices", "Until cleared"],
+              ["doqtri:earnings-page-size", "Local storage", "How many rows the earnings page shows", "Until cleared"],
+              ["mindmap-style:…", "Local storage", "Mindmap style edits not yet saved to your account, and the style in the demo vault", "Until saved, or until cleared"],
               ["doqtri.walletSetupDismissed", "Session storage", "Wallet setup prompt you closed", "Until the tab closes"],
               ["Passkey wallet session", "IndexedDB", "Reconnects your passkey wallet without a second prompt", "7 days"],
             ]}
@@ -271,11 +303,11 @@ function sections(operator: string): LegalSection[] {
             ]}
           />
           <p>
-            <b>What stays, no longer tied to your account except where noted:</b>
+            <b>What stays:</b>
           </p>
           <LegalList
             items={[
-              "Every note you wrote, in every workspace, with its import record and original file, and its links to qdit and GitHub.",
+              "Every note you wrote, in every workspace, with its import record, original file and links to qdit and GitHub. It no longer names your account.",
               "Your personal workspace, renamed “Former user”, when it holds a note or another member. It has no owner, and its other members keep their access. An empty one is deleted.",
               "Free templates you published, still listed and shown as by “Former user” with their creator wallet. Paid templates are hidden from the gallery, but buyers can still copy what they bought. Drafts never confirmed on chain are deleted.",
               "Your template purchases, by wallet address, so sales and royalties still add up.",
@@ -283,6 +315,7 @@ function sections(operator: string): LegalSection[] {
               "Everything on the Stellar ledger.",
             ]}
           />
+          <p>{KEPT_CONTENT_CLAUSE}</p>
           <p>
             <b>Referrals.</b> {REFERRAL_DELETION_CLAUSE}
           </p>

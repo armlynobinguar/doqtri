@@ -3,9 +3,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PRIVACY_PATH } from "@/components/legal/legal-links";
 import { LegalList, LegalPage, MailLink, type LegalSection } from "@/components/legal/legal-page";
-import { legalOperatorName } from "@/lib/legal";
+import { legalOperatorName, legalPagesLive } from "@/lib/legal";
 import {
   AGE_CLAUSE,
+  KEPT_CONTENT_CLAUSE,
   MINIMUM_AGE,
   ONCHAIN_PERMANENCE_CLAUSE,
   PRIVACY_EMAIL,
@@ -13,13 +14,18 @@ import {
   REFERRAL_LIMIT_EMAIL,
   REFERRER_VIEW_CLAUSE,
   TAX_CLAUSE,
+  TESTIMONIAL_CLAUSE,
 } from "@/lib/legal-copy";
 import { REFERRAL_ACTIVITY_THRESHOLD, REFERRAL_REWARD_LIMIT, REFERRAL_REWARD_PHP } from "@/lib/referral-program";
 
-export const metadata: Metadata = {
-  title: "Terms of Service · Doqtri",
-  description: "The rules for using Doqtri, its template marketplace, AI features and referral program.",
-};
+/** Empty with the gate off, so the 404 says nothing about the document. */
+export function generateMetadata(): Metadata {
+  if (!legalPagesLive()) return {};
+  return {
+    title: "Terms of Service · Doqtri",
+    description: "The rules for using Doqtri, its template marketplace, AI features and referral program.",
+  };
+}
 
 function sections(operator: string): LegalSection[] {
   return [
@@ -81,7 +87,8 @@ function sections(operator: string): LegalSection[] {
           {ONCHAIN_PERMANENCE_CLAUSE} That includes content hashes, node ids and statuses, tool names, artifact
           references, wallet addresses and marketplace activity. The{" "}
           <Link href={`${PRIVACY_PATH}#public`}>Privacy Policy</Link> lists what is written. Don&rsquo;t put personal
-          information or anything secret in tool names or artifact references.
+          information or anything secret in the tool names or artifact references you type. Syncing a status from GitHub
+          writes the issue, pull request or commit URL, which names the repository, even a private one.
         </p>
       ),
     },
@@ -97,8 +104,8 @@ function sections(operator: string): LegalSection[] {
           </p>
           <p>
             Some things are not private. Anyone can open the audit page at <code>/d/&lt;note id&gt;</code> and read
-            on-chain data. Templates you publish are visible to every signed-in user. Your workspace&rsquo;s members see
-            its notes.
+            on-chain data. Every signed-in user can see the full text of a free template you publish, and the headings of a
+            paid one. Your workspace&rsquo;s members see its notes.
           </p>
         </>
       ),
@@ -168,7 +175,7 @@ function sections(operator: string): LegalSection[] {
             items={[
               "use Doqtri for anything illegal, or to store or share illegal content;",
               "harass or harm others, or infringe their rights;",
-              "attack, overload or try to get around the relay, daily limits, fee sponsorship or bot checks;",
+              "attack, overload or try to get around the relay, the fees it charges or covers, daily limits or bot checks;",
               "create fake accounts, or use more than one account to gain a reward or get around a limit;",
               "try to reach data or accounts that are not yours.",
             ]}
@@ -200,8 +207,8 @@ function sections(operator: string): LegalSection[] {
                 the referral becoming eligible or the questionnaire being complete, whichever is later.
               </>,
               <>
-                <b>How you are paid.</b> In XLM at the PHP equivalent on the payout date, or to the e-wallet you give
-                us. A wrong address, wrong account details or a missing memo is your responsibility.
+                <b>How you are paid.</b> In XLM at the PHP equivalent on the payout date, or to the e-wallet or bank
+                account you give us. A wrong address, wrong account details or a missing memo is your responsibility.
               </>,
               <>
                 <b>Voiding.</b> We can void a reward for self-referral, fake accounts or other abuse.
@@ -220,8 +227,7 @@ function sections(operator: string): LegalSection[] {
                 <b>Deleted accounts.</b> {REFERRAL_DELETION_CLAUSE}
               </>,
               <>
-                <b>Testimonials.</b> Feedback is optional and a reward never depends on it. It appears publicly only if
-                you opt in and an admin approves it.
+                <b>Testimonials.</b> Feedback is optional. {TESTIMONIAL_CLAUSE}
               </>,
             ]}
           />
@@ -234,7 +240,7 @@ function sections(operator: string): LegalSection[] {
       body: (
         <p>
           Promotions such as the one at <Link href="/promo">/promo</Link> follow the rules stated with them. A promo
-          entry may be rated by AI to order the review queue. A person makes the decision.
+          entry is sent to OpenAI for an AI rating, which only orders the review queue. A person makes the decision.
         </p>
       ),
     },
@@ -248,10 +254,11 @@ function sections(operator: string): LegalSection[] {
             can stop using Doqtri at any time.
           </p>
           <p>
-            To delete your account, email <MailLink address={PRIVACY_EMAIL} />. Deleting an account removes your
-            personal account data and keeps your content: your notes stay with no link to you, free templates stay
-            listed as by &ldquo;Former user&rdquo;, paid ones are hidden from the gallery, and purchases stay valid. The{" "}
-            <Link href={`${PRIVACY_PATH}#retention`}>Privacy Policy</Link> has the full list. {ONCHAIN_PERMANENCE_CLAUSE}
+            To delete your account, email <MailLink address={PRIVACY_EMAIL} />. Deleting an account removes the account
+            and keeps your content: your notes stay but no longer name your account, free templates stay listed as by
+            &ldquo;Former user&rdquo;, paid ones are hidden from the gallery, and purchases stay valid. The{" "}
+            <Link href={`${PRIVACY_PATH}#retention`}>Privacy Policy</Link> has the full list. {KEPT_CONTENT_CLAUSE}{" "}
+            {ONCHAIN_PERMANENCE_CLAUSE}
           </p>
           <p>
             We can&rsquo;t delete an account that is the last owner of a team workspace with no admin until another

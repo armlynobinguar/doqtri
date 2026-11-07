@@ -40,13 +40,15 @@ test.describe("legal pages, signed out", () => {
     });
   }
 
-  test("the sitemap lists both and robots.txt allows both", async ({ request }) => {
+  test("the sitemap lists both and robots.txt leaves both open", async ({ request }) => {
     const sitemap = await (await request.get("/sitemap.xml")).text();
     const robots = await (await request.get("/robots.txt")).text();
     for (const { path } of PAGES) {
       expect(sitemap).toContain(`${path}</loc>`);
-      expect(robots).toContain(`Allow: ${path}`);
     }
+    // `Allow: /` covers both, and nothing disallows them.
+    expect(robots).toContain("Allow: /\n");
+    expect(robots).not.toMatch(/Disallow: \/(privacy|terms)/);
   });
 
   test("the landing footer and the docs link to both", async ({ page }) => {

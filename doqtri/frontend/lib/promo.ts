@@ -28,6 +28,10 @@ export const PROMO_IMAGE_TYPES: Record<string, string> = {
 
 export const PROMO_PATH = "/promo";
 
+/** Shown before an entry is submitted, whatever the legal pages' gate says: it is true today. */
+export const PROMO_AI_DISCLOSURE =
+  "Your screenshots and caption are sent to OpenAI for an AI rating. The rating only orders the review queue; the Doqtri team reviews entries and picks the winners.";
+
 /** Review states, set from /admin/promo. Mirrors the column's check. */
 export const PROMO_STATUSES = ["pending", "shortlisted", "winner", "rejected"] as const;
 export type PromoStatus = (typeof PROMO_STATUSES)[number];

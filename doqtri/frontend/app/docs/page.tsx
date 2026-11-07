@@ -205,7 +205,7 @@ export default function DocsPage() {
                 version. It stays disabled while the note matches its latest anchor.
               </li>
               <li>
-                Only the hash goes on-chain — never the note&rsquo;s text. Earlier versions stay in the ledger&rsquo;s
+                The note&rsquo;s text never goes on-chain, only its hash. Earlier versions stay in the ledger&rsquo;s
                 history.
               </li>
             </ul>
@@ -260,8 +260,10 @@ export default function DocsPage() {
                 a private storage bucket.
               </li>
               <li>
-                <b>On-chain data is minimal and permanent.</b> Only hashes, node ids, statuses, tool names and artifact
-                references are written. Anything anchored can&rsquo;t be deleted from the ledger.
+                <b>On-chain data is public and permanent.</b> Your note&rsquo;s text is never written. What is: hashes,
+                document and node ids, statuses, tool names and artifact references (including the GitHub or qdit link
+                behind a synced status), wallet addresses, and workspace and marketplace records. Anything anchored
+                can&rsquo;t be deleted from the ledger.
               </li>
               <li>
                 <b>Every write is yours.</b> The contract requires the document owner&rsquo;s signature for each change.
@@ -339,8 +341,8 @@ export default function DocsPage() {
               <dd>Albedo and Rabet don&rsquo;t support message signing yet. Use Varial or another supported wallet.</dd>
               <dt>Can I delete an anchored version?</dt>
               <dd>
-                You can delete the note from your vault, but the hash and statuses already on the ledger stay there —
-                that permanence is what makes them proof.
+                No. Once a note is anchored it can&rsquo;t be deleted from your vault, and the hash and statuses already
+                on the ledger stay there — that permanence is what makes them proof.
               </dd>
               <dt>Why does the public page show node ids instead of headings?</dt>
               <dd>
