@@ -13,6 +13,8 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { FORMER_USER } from "@/lib/former-user";
+import type { PayoutState } from "@/lib/referral-payout";
+import { readPayoutState } from "@/lib/referral-payout-profiles";
 import { REFERRAL_REWARD_LIMIT } from "@/lib/referral-program";
 import { isReservedEmail, walletAddressFromEmail } from "@/lib/wallet-address";
 
@@ -81,11 +83,10 @@ export type ReferralDashboard = {
   pageSize: number;
   totals: ReferralTotals;
   limit: ReferralLimit;
-  /**
-   * An unpaid reward. DOQ-25 narrows this to "and no payout details", and
-   * adds the questionnaire's link in PayoutPrompt (components/vault/referrals-view.tsx).
-   */
+  /** An unpaid reward and no payout details saved (DOQ-25). */
   payoutNeeded: boolean;
+  /** Whether the questionnaire opens, and a masked view of what's saved: never the details themselves. */
+  payout: PayoutState;
 };
 
 /**
@@ -283,7 +284,11 @@ export async function loadReferralDashboard(
   network: string,
   requestedPage: number,
 ): Promise<ReferralDashboard> {
-  const [records, limit] = await Promise.all([readRecords(admin, referrer, network), readLimit(admin, referrer)]);
+  const [records, limit, payout] = await Promise.all([
+    readRecords(admin, referrer, network),
+    readLimit(admin, referrer),
+    readPayoutState(admin, referrer, network),
+  ]);
   const pageSize = REFERRAL_DASHBOARD_PAGE_SIZE;
   const pages = Math.max(1, Math.ceil(records.length / pageSize));
   const page = Math.min(requestedPage, pages);
@@ -295,6 +300,7 @@ export async function loadReferralDashboard(
     pageSize,
     totals,
     limit,
-    payoutNeeded: totals.unpaidPhp > 0,
+    payoutNeeded: totals.unpaidPhp > 0 && !payout.summary,
+    payout,
   };
 }

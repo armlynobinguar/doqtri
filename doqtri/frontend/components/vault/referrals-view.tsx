@@ -22,9 +22,11 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { StatusTag } from "@/components/ui/status-tag";
+import { ReferralPayoutDialog } from "@/components/vault/referral-payout-dialog";
 import { createReferralsPager, type ReferralsRead } from "@/components/vault/referrals-pager";
 import { useIsCompactVault } from "@/hooks/use-mobile";
 import type { ReferralDashboard, ReferralLimit, ReferralListRow, ReferralStatus } from "@/lib/referral-dashboard";
+import type { PayoutState, PayoutSummary } from "@/lib/referral-payout";
 import { REFERRAL_ACTIVITY_THRESHOLD, REFERRAL_REWARD_PHP } from "@/lib/referral-program";
 import { cn } from "@/lib/utils";
 
@@ -184,7 +186,7 @@ export function ReferralsDashboard({
   return (
     <>
       {limit.reached ? <LimitNotice limit={limit} /> : null}
-      {data.payoutNeeded ? <PayoutPrompt unpaidPhp={totals.unpaidPhp} /> : null}
+      <PayoutPrompt payout={data.payout} payoutNeeded={data.payoutNeeded} unpaidPhp={totals.unpaidPhp} />
 
       {totals.referred === 0 ? (
         <EmptyState inviteUrl={inviteUrl} />
@@ -231,25 +233,65 @@ function LimitNotice({ limit }: { limit: ReferralLimit }) {
 }
 
 /**
- * The questionnaire is DOQ-25, not built yet. That ticket makes this a link to
- * it, and hides this once the user's details are complete (`payoutNeeded`).
+ * Where the payout questionnaire opens (DOQ-25). One card whatever it says, so the
+ * button that opened the form keeps a keyboard user's focus when the form closes
+ * and the words change. "Needed" until details are saved; after that it's the
+ * saved state, showing only what the summary masks. Nothing for someone who has
+ * neither details nor an eligible referral.
+ *
+ * What the save returned wins over the page's data, which was read before it.
  */
-function PayoutPrompt({ unpaidPhp }: { unpaidPhp: number }) {
+function PayoutPrompt({
+  payout,
+  payoutNeeded,
+  unpaidPhp,
+}: {
+  payout: PayoutState;
+  payoutNeeded: boolean;
+  unpaidPhp: number;
+}) {
+  const [justSaved, setJustSaved] = useState<PayoutSummary | null>(null);
+  const [open, setOpen] = useState(false);
+  const summary = justSaved ?? payout.summary;
+  const needed = payoutNeeded && !summary;
+  if (!needed && !summary && !payout.canEdit) return null;
+
   return (
-    <div
-      role="status"
-      data-testid="referrals-payout-prompt"
-      className="flex items-start gap-3 rounded-xl border border-[var(--glass-lo)] bg-[var(--glass)] px-4 py-3 text-[13px]"
-    >
-      <WalletIcon className="text-muted-foreground mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
-      <div className="min-w-0">
-        <p className="text-foreground font-medium">Payout details needed</p>
-        <p className="text-muted-foreground mt-1">
-          You have {formatNumber(unpaidPhp)} PHP unpaid. We need your payout details before we can pay it, and we&apos;ll
-          ask for them here soon.
-        </p>
+    <>
+      <div
+        role="status"
+        data-testid={needed ? "referrals-payout-prompt" : summary ? "referrals-payout-saved" : "referrals-payout-empty"}
+        className="flex flex-wrap items-start gap-3 rounded-xl border border-[var(--glass-lo)] bg-[var(--glass)] px-4 py-3 text-[13px]"
+      >
+        <WalletIcon className="text-muted-foreground mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
+        <div className="min-w-0 flex-1 basis-40">
+          <p className="text-foreground font-medium">
+            {needed ? "Payout details needed" : summary ? "Payout details saved" : "No payout details saved"}
+          </p>
+          <p className="text-muted-foreground mt-1 [overflow-wrap:anywhere]" data-testid="referrals-payout-text">
+            {needed ? (
+              <>You have {formatNumber(unpaidPhp)} PHP unpaid. We need your payout details before we can pay it.</>
+            ) : summary ? (
+              <>
+                {summary.label} ending in <span className="font-mono">{summary.last4}</span>
+              </>
+            ) : (
+              <>Add them so that we can pay any future rewards.</>
+            )}
+          </p>
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant={needed ? "default" : "outline"}
+          onClick={() => setOpen(true)}
+          data-testid="referrals-payout-open"
+        >
+          {!summary ? "Add details" : payout.canEdit ? "Edit" : "View"}
+        </Button>
       </div>
-    </div>
+      <ReferralPayoutDialog open={open} onOpenChange={setOpen} onSaved={setJustSaved} />
+    </>
   );
 }
 
