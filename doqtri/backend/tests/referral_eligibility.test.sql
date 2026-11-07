@@ -409,8 +409,13 @@ select is(pg_temp.status(133), 'eligible', 'the oldest over-limit reward moves u
 select is(pg_temp.count_by(100, 'eligible'), 30, 'back to 30');
 select is(pg_temp.count_by(100, 'over_limit'), 2, 'with two still waiting');
 
--- Paid rewards hold their place and can't be voided.
-update public.referral_rewards set status = 'paid' where referred_user_id = pg_temp.uid(102);
+-- Paid rewards hold their place and can't be voided. Paid the only way a reward
+-- can be (DOQ-26).
+insert into public.referral_payout_profiles (user_id, method, name, xlm_address)
+values (pg_temp.uid(100), 'xlm', 'Payout Holder', 'G' || repeat('P', 55));
+select public.mark_referral_rewards_paid(
+  pg_temp.uid(100), array[pg_temp.reward_id(102)], 30,
+  (select updated_at from public.referral_payout_profiles where user_id = pg_temp.uid(100)), null, pg_temp.uid(100));
 select is(public.void_referral_reward(pg_temp.reward_id(102), 'fraud', 30), false, 'a paid reward can''t be voided');
 select is(pg_temp.status(102), 'paid', 'and stays paid');
 select is(pg_temp.count_by(100, 'over_limit'), 2, 'nothing moved up for it');
@@ -587,7 +592,11 @@ select pg_temp.refer(303, 300);
 select pg_temp.refer(304, 300);
 select pg_temp.qualify(301);
 select pg_temp.qualify(302);
-update public.referral_rewards set status = 'paid' where referred_user_id = pg_temp.uid(302);
+insert into public.referral_payout_profiles (user_id, method, name, xlm_address)
+values (pg_temp.uid(300), 'xlm', 'Payout Holder', 'G' || repeat('P', 55));
+select public.mark_referral_rewards_paid(
+  pg_temp.uid(300), array[pg_temp.reward_id(302)], 30,
+  (select updated_at from public.referral_payout_profiles where user_id = pg_temp.uid(300)), null, pg_temp.uid(300));
 select public.set_referral_reward_limit(pg_temp.uid(300), 2, 30);
 select pg_temp.qualify(303);
 select is(pg_temp.status(303), 'over_limit', 'a referrer with one eligible, one paid and one over the limit');
