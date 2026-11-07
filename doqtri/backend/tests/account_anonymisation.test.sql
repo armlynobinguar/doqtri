@@ -19,11 +19,14 @@
 --   c  buyer@example.com   bought a's template
 --   o  a Freighter account, owns Acme
 --   h  heir@example.com    admin of Acme
+--   i  inviter@example.com referred a, whose wallet qualified (WP-4.6, DOQ-23)
+--   j  invited@example.com, k  kept@example.com
+--                          referred by a, both qualified: k's reward paid
 
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(28);
+select plan(31);
 
 insert into auth.users (id, email, email_confirmed_at, raw_user_meta_data) values
   ('00000000-0000-4000-8000-0000000000d1', 'anon@example.com', now(),
@@ -117,6 +120,21 @@ insert into public.market_purchases (network, template_id, buyer_id, buyer_walle
   ('testnet', 'cccccccccccccccc', '00000000-0000-4000-8000-0000000000d3', 'G' || repeat('C', 55), 10000000, repeat('f', 64)),
   ('testnet', 'dddddddddddddddd', '00000000-0000-4000-8000-0000000000d1', 'C' || repeat('A', 55), 0, null);
 
+insert into auth.users (id, email, email_confirmed_at) values
+  ('00000000-0000-4000-8000-0000000000d6', 'inviter@example.com', now()),
+  ('00000000-0000-4000-8000-0000000000d7', 'invited@example.com', now()),
+  ('00000000-0000-4000-8000-0000000000d8', 'kept@example.com', now());
+insert into public.referrals (referred_user_id, referrer_user_id, code, created_at) values
+  ('00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000d6', 'abcdefgh', now() - interval '1 hour'),
+  ('00000000-0000-4000-8000-0000000000d7', '00000000-0000-4000-8000-0000000000d1', 'abcdefgh', now() - interval '1 hour'),
+  ('00000000-0000-4000-8000-0000000000d8', '00000000-0000-4000-8000-0000000000d1', 'abcdefgh', now() - interval '1 hour');
+select public.record_referral_activity(u.id, 'testnet', repeat(u.hex, 63) || n::text, u.wallet, 'anchor', now(), 3, 30, 30)
+  from (values ('00000000-0000-4000-8000-0000000000d1'::uuid, '1', 'C' || repeat('A', 55)),
+               ('00000000-0000-4000-8000-0000000000d7'::uuid, '2', 'G' || repeat('J', 55)),
+               ('00000000-0000-4000-8000-0000000000d8'::uuid, '3', 'G' || repeat('K', 55))) as u (id, hex, wallet),
+       generate_series(1, 3) as n;
+update public.referral_rewards set status = 'paid' where referred_user_id = '00000000-0000-4000-8000-0000000000d8';
+
 
 -- ---------------------------------------------------------------------------
 -- No foreign key takes the content with the account
@@ -128,7 +146,7 @@ select is(
      join pg_attribute a on a.attrelid = c.conrelid and a.attnum = c.conkey[1]
     where c.contype = 'f' and c.confrelid = 'auth.users'::regclass and c.confdeltype in ('c', 'r')
       and c.conrelid::regclass::text in ('documents', 'node_links', 'doc_project_links', 'market_templates',
-                                          'market_purchases', 'workspaces', 'chain_writes')),
+                                          'market_purchases', 'workspaces', 'chain_writes', 'referral_rewards')),
   null::text[],
   'no content table cascades with, or restricts, an account''s deletion');
 
@@ -294,6 +312,26 @@ select results_eq(
   $$ values ('dddddddddddddddd'::text, false, 'G' || repeat('O', 55)),
             ('eeeeeeeeeeeeeeee'::text, true, 'C' || repeat('A', 55)) $$,
   'the gallery still lists its free one, flagged as a former user''s');
+
+
+-- Referral rewards (WP-4.6, DOQ-23). The scans above already show no row names
+-- the account: these are what is kept with the id gone.
+
+select results_eq(
+  $$ select referred_user_id, referrer_user_id, referred_wallet, status from public.referral_rewards
+      where referred_wallet = 'C' || repeat('A', 55) $$,
+  $$ values (null::uuid, '00000000-0000-4000-8000-0000000000d6'::uuid, 'C' || repeat('A', 55), 'eligible'::text) $$,
+  'the reward it earned as a referred user stays, by its wallet, for the app to show as Former user');
+select results_eq(
+  $$ select referrer_user_id, status, void_reason from public.referral_rewards
+      where referred_user_id = '00000000-0000-4000-8000-0000000000d7' $$,
+  $$ values (null::uuid, 'void'::text, 'referrer_deleted'::text) $$,
+  'an unpaid reward it would have received is voided');
+select results_eq(
+  $$ select referrer_user_id, status, void_reason from public.referral_rewards
+      where referred_user_id = '00000000-0000-4000-8000-0000000000d8' $$,
+  $$ values (null::uuid, 'paid'::text, null::text) $$,
+  'a paid one stays as the accounting record');
 
 
 -- The public audit page (/d/[docId]) reads with the service role.
