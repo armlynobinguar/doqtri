@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { isAdmin } from "@/lib/admin";
+import { legalPagesLive } from "@/lib/legal";
 import { getActiveWorkspace } from "@/lib/active-workspace";
 import { VaultShell } from "@/components/vault/vault-shell";
 import { PreferencesSync } from "@/components/vault/preferences";
@@ -89,6 +90,7 @@ export default async function VaultLayout({
         failedImports={failedImports}
         identity={identity}
         isAdmin={isAdmin(user)}
+        legalLive={legalPagesLive()}
         referralsLive={referralDashboardLive()}
         workspace={active}
         workspaces={workspaces}

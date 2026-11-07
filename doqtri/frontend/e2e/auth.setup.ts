@@ -1,4 +1,5 @@
 import { test as setup, expect } from "@playwright/test";
+import { LEGAL_NOTICE_DISMISS_KEY } from "@/lib/legal-copy";
 import { E2E_KEYPAIR, E2E_WALLET } from "./helpers";
 import { walletSessionCookies } from "./wallet-session";
 
@@ -27,6 +28,9 @@ setup("wallet login surface + session seed", async ({ page }) => {
   await page.goto("/vault");
   await page.waitForURL("**/vault");
   await expect(page.getByText("No note open")).toBeVisible();
+
+  // The notice has its own spec, on its own account; the rest don't expect the strip.
+  await page.evaluate((key) => window.localStorage.setItem(key, "1"), LEGAL_NOTICE_DISMISS_KEY);
 
   await page.context().storageState({ path: AUTH_FILE });
 });

@@ -24,6 +24,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { VarialMark } from "@/components/brand/varial-mark";
+import { useLegalLive } from "@/components/legal/legal-live";
+import { LegalLinks } from "@/components/legal/legal-links";
 import { Button } from "@/components/ui/button";
 import { StatusTag } from "@/components/ui/status-tag";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -160,6 +162,7 @@ export function ProfileView({
   connectedApps?: ConnectedAppsData | null;
 }) {
   const wallet = useWallet();
+  const legalLive = useLegalLive();
   const { identity } = wallet;
   const smartWallet = identity.kind === "email" ? identity.smartWallet : null;
   const address = identity.kind === "wallet" ? identity.address : (smartWallet?.address ?? null);
@@ -508,6 +511,7 @@ export function ProfileView({
                 Your templates &amp; earnings
               </Button>
             ) : null}
+            {legalLive && <LegalLinks className="text-muted-foreground text-[13px]" />}
           </>
         ) : null}
 

@@ -3,6 +3,8 @@ import Link from "next/link";
 import { OpenVaultLink } from "@/components/auth/open-vault-link";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { BlockGlyph, type Glyph } from "@/components/brand/glyphs";
+import { LegalLinks } from "@/components/legal/legal-links";
+import { legalPagesLive } from "@/lib/legal";
 import { CONTRACT_ID, IS_MAINNET, labContractUrl } from "@/lib/stellar/config";
 import styles from "./docs.module.css";
 
@@ -355,6 +357,7 @@ export default function DocsPage() {
               <OpenVaultLink size="lg" label="Open your vault" className={styles.cta} />
             </div>
           </div>
+          {legalPagesLive() && <LegalLinks className="text-muted-foreground mt-6 text-[13px]" />}
         </main>
       </div>
     </div>

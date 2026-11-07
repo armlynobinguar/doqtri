@@ -8,6 +8,7 @@ import { BlockChain } from "@/components/brand/block-chain";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { BlockGlyph, type Glyph } from "@/components/brand/glyphs";
 import { LandingMindmap } from "@/components/landing/landing-mindmap";
+import { LegalLinks } from "@/components/legal/legal-links";
 import { LiveStats } from "@/components/landing/live-stats";
 import { MINDMAP_PROMO, PROMO_PATH } from "@/lib/promo";
 import styles from "./landing-page.module.css";
@@ -48,10 +49,11 @@ const LIFECYCLE: { label: string; glyph: Glyph }[] = [
 ];
 
 /**
+ * `legalLive`: the legal pages are live (lib/legal.ts), so the footer links them.
  * `testimonials`: approved referrers' words (DOQ-28), streamed in by the page
  * under its own Suspense boundary; nothing until the legal pages go live.
  */
-export function LandingPage({ testimonials = null }: { testimonials?: ReactNode }) {
+export function LandingPage({ legalLive, testimonials = null }: { legalLive: boolean; testimonials?: ReactNode }) {
   return (
     <div className={styles.page}>
       <div className={styles.atmosphere} aria-hidden />
@@ -227,6 +229,7 @@ export function LandingPage({ testimonials = null }: { testimonials?: ReactNode 
         </span>
         <span className={styles.footerLinks}>
           <Link href="/docs">Docs</Link>
+          {legalLive && <LegalLinks className="gap-x-4" />}
           <a href={X_URL} target="_blank" rel="noreferrer">
             @usedoqtri
           </a>

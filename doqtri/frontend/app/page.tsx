@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { LandingPage } from "@/components/landing/landing-page";
 import { LandingTestimonials } from "@/components/landing/landing-testimonials";
+import { legalPagesLive } from "@/lib/legal";
 import { landingTestimonials } from "@/lib/referral-testimonials-store";
 
 // Type comes from the root layout (Plus Jakarta Sans + JetBrains Mono), like
@@ -20,6 +21,7 @@ export const metadata = {
 export default function Home() {
   return (
     <LandingPage
+      legalLive={legalPagesLive()}
       testimonials={
         <Suspense fallback={null}>
           <Testimonials />

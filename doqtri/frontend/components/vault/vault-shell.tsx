@@ -22,6 +22,8 @@ import { MobileTabBar, MobileTopBar } from "@/components/vault/mobile-chrome";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useIsCompactVault } from "@/hooks/use-mobile";
 import { WalletProvider } from "@/components/vault/wallet-provider";
+import { LegalLiveProvider } from "@/components/legal/legal-live";
+import { LegalUpdateNotice } from "@/components/legal/legal-update-notice";
 import { WalletSetupDialog } from "@/components/vault/wallet-setup-dialog";
 import {
   VaultStatusProvider,
@@ -46,6 +48,7 @@ export function VaultShell({
   failedImports,
   identity,
   isAdmin,
+  legalLive,
   referralsLive = false,
   workspace,
   workspaces,
@@ -57,6 +60,8 @@ export function VaultShell({
   identity: VaultIdentity;
   /** Staff (DOQTRI_ADMINS) get a ribbon shortcut to the review screens. */
   isAdmin: boolean;
+  /** The legal pages are live (lib/legal.ts): shows their notice and links. */
+  legalLive: boolean;
   /** The referral dashboard exists (lib/referral-dashboard.ts). */
   referralsLive?: boolean;
   /** The workspace the vault shows, resolved on the server. */
@@ -66,24 +71,26 @@ export function VaultShell({
   children: React.ReactNode;
 }) {
   return (
-    <WalletProvider identity={identity}>
-      <VaultStatusProvider>
-        <NavigationProvider>
-          <ActiveWorkspaceProvider active={workspace} workspaces={workspaces}>
-            <VaultShellInner
-              notes={notes}
-              failedImports={failedImports}
-              identity={identity}
-              isAdmin={isAdmin}
-              referralsLive={referralsLive}
-            >
-              {children}
-            </VaultShellInner>
-          </ActiveWorkspaceProvider>
-          <WalletSetupDialog />
-        </NavigationProvider>
-      </VaultStatusProvider>
-    </WalletProvider>
+    <LegalLiveProvider value={legalLive}>
+      <WalletProvider identity={identity}>
+        <VaultStatusProvider>
+          <NavigationProvider>
+            <ActiveWorkspaceProvider active={workspace} workspaces={workspaces}>
+              <VaultShellInner
+                notes={notes}
+                failedImports={failedImports}
+                identity={identity}
+                isAdmin={isAdmin}
+                referralsLive={referralsLive}
+              >
+                {children}
+              </VaultShellInner>
+            </ActiveWorkspaceProvider>
+            <WalletSetupDialog />
+          </NavigationProvider>
+        </VaultStatusProvider>
+      </WalletProvider>
+    </LegalLiveProvider>
   );
 }
 
@@ -343,6 +350,7 @@ function VaultShellInner({
         onNewNote={() => void handleNewNote()}
         accountPage={currentAccountPage}
       />
+      <LegalUpdateNotice />
 
       <div className="flex min-h-0 flex-1">
         <Ribbon
