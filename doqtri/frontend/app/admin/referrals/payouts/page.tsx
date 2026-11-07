@@ -3,8 +3,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { ReferralPayouts } from "@/components/admin/referral-payouts";
+import { ReferralTestimonials } from "@/components/admin/referral-testimonials";
 import { isAdmin } from "@/lib/admin";
 import { loadPayoutQueue } from "@/lib/referral-payouts-store";
+import type { TestimonialReviewRow } from "@/lib/referral-testimonial";
+import { loadTestimonialsForReview, logTestimonialFailure } from "@/lib/referral-testimonials-store";
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
 
 export const metadata: Metadata = {
@@ -21,6 +24,8 @@ export const metadata: Metadata = {
  * full here and nowhere else; nothing on this page sends money. Paying is two
  * steps (lib/referral-payouts-store.ts): Start payout holds it for this admin and
  * shows the details as they are now, then Record payout records what was sent.
+ * Below the queue, referrers' feedback to approve or reject for the landing page
+ * (DOQ-28); a failure there leaves the queue as it is.
  */
 export default async function ReferralPayoutsAdminPage() {
   const supabase = await createSupabaseServerClient();
@@ -29,7 +34,8 @@ export default async function ReferralPayoutsAdminPage() {
   } = await supabase.auth.getUser();
   if (!user || !isAdmin(user)) notFound();
 
-  const rows = await loadPayoutQueue(createSupabaseAdminClient(), user.id);
+  const admin = createSupabaseAdminClient();
+  const [rows, testimonials] = await Promise.all([loadPayoutQueue(admin, user.id), loadTestimonials(admin)]);
 
   return (
     <div className="flex min-h-svh flex-col">
@@ -51,7 +57,18 @@ export default async function ReferralPayoutsAdminPage() {
           review the accounts they referred before paying.
         </p>
         <ReferralPayouts initialRows={rows} />
+        <ReferralTestimonials initialRows={testimonials} />
       </main>
     </div>
   );
+}
+
+/** Null when they can't be read, which the section says, rather than taking the payouts panel down with it. */
+async function loadTestimonials(admin: ReturnType<typeof createSupabaseAdminClient>): Promise<TestimonialReviewRow[] | null> {
+  try {
+    return await loadTestimonialsForReview(admin);
+  } catch (error) {
+    logTestimonialFailure("[admin/referrals] testimonials not loaded", error);
+    return null;
+  }
 }

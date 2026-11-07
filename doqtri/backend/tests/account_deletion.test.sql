@@ -21,13 +21,14 @@
 --   u  unconfirmed@example.com, never confirmed (D-49)
 --   m  market@example.com    editor of Acme, has a template draft and
 --                            has bought one of o's
---   r  referrer@example.com  referred four accounts (WP-4.6, DOQ-23), and
---                            saved payout details (DOQ-25)
+--   r  referrer@example.com  referred four accounts (WP-4.6, DOQ-23),
+--                            saved payout details (DOQ-25), and shared
+--                            feedback an admin approved (DOQ-28)
 
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(51);
+select plan(53);
 
 insert into auth.users (id, email, email_confirmed_at) values
   ('00000000-0000-4000-8000-0000000000c1', 'owner@example.com', now()),
@@ -407,11 +408,22 @@ select public.mark_referral_rewards_paid(
   (select updated_at from public.referral_payout_profiles where user_id = '00000000-0000-4000-8000-0000000000c8'),
   null,
   '00000000-0000-4000-8000-0000000000cd');
+-- r's feedback, shared and approved (DOQ-28): on the landing page until now.
+insert into public.referral_testimonials (user_id, feedback, consent)
+values ('00000000-0000-4000-8000-0000000000c8', 'Referrer feedback for the landing page.', true);
+select public.referral_testimonial_review('00000000-0000-4000-8000-0000000000c8',
+  (select updated_at from public.referral_testimonials where user_id = '00000000-0000-4000-8000-0000000000c8'),
+  true, '00000000-0000-4000-8000-0000000000cd');
+select is((select count(*)::int from public.referral_testimonials_public() where feedback = 'Referrer feedback for the landing page.'),
+  1, 'the referrer''s approved testimonial is public');
 reset role;
 
 select lives_ok(
   $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c8' $$,
   'a referrer deletes themselves');
+select is((select count(*)::int from public.referral_testimonials
+            where user_id = '00000000-0000-4000-8000-0000000000c8'),
+  0, 'and their testimonial goes with the account, so it is off the site (DOQ-28)');
 select is((select count(*)::int from public.referral_payout_profiles
             where user_id = '00000000-0000-4000-8000-0000000000c8'),
   0, 'and their payout details go with the account (DOQ-25)');

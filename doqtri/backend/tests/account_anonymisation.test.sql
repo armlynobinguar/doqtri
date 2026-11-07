@@ -23,11 +23,13 @@
 --   j  invited@example.com, k  kept@example.com
 --                          referred by a, both qualified: k's reward paid, by
 --                          a as the admin recording it (DOQ-26)
+--                          a and i both shared feedback, approved by a as
+--                          an admin (DOQ-28)
 
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(32);
+select plan(34);
 
 insert into auth.users (id, email, email_confirmed_at, raw_user_meta_data) values
   ('00000000-0000-4000-8000-0000000000d1', 'anon@example.com', now(),
@@ -145,6 +147,16 @@ select public.mark_referral_rewards_paid(
   (select updated_at from public.referral_payout_profiles where user_id = '00000000-0000-4000-8000-0000000000d1'),
   null,
   '00000000-0000-4000-8000-0000000000d1');
+-- a's feedback, shared and approved, and i's, approved by a as the admin (DOQ-28).
+-- Approval needs a questionnaire name, so i saves one too.
+insert into public.referral_payout_profiles (user_id, method, name, xlm_address) values
+  ('00000000-0000-4000-8000-0000000000d6', 'xlm', 'Inviter Name', 'G' || repeat('I', 55));
+insert into public.referral_testimonials (user_id, feedback, consent) values
+  ('00000000-0000-4000-8000-0000000000d1', 'Anonymous feedback words.', true),
+  ('00000000-0000-4000-8000-0000000000d6', 'Inviter feedback words.', true);
+select public.referral_testimonial_review(t.user_id, t.updated_at, true, '00000000-0000-4000-8000-0000000000d1')
+  from public.referral_testimonials t
+ where t.user_id in ('00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000d6');
 
 
 -- ---------------------------------------------------------------------------
@@ -350,6 +362,13 @@ select results_eq(
       where w.referred_user_id = '00000000-0000-4000-8000-0000000000d8' $$,
   $$ values (null::uuid, null::uuid, 30, 1, 'xlm'::text) $$,
   'and so does its payout, naming neither the referrer nor the admin who recorded it');
+select is(pg_temp.columns_containing('Anonymous feedback words'), '{}'::text[],
+  'its testimonial is gone with it, words and all (DOQ-28)');
+select results_eq(
+  $$ select feedback, approved_by, approved_at is not null from public.referral_testimonials
+      where user_id = '00000000-0000-4000-8000-0000000000d6' $$,
+  $$ values ('Inviter feedback words.'::text, null::uuid, true) $$,
+  'and one it approved as an admin stays approved, without its id');
 
 
 -- The public audit page (/d/[docId]) reads with the service role.

@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { Box, FileText, Link2, Network, PlayIcon, type LucideIcon } from "lucide-react";
 import { OpenVaultLink } from "@/components/auth/open-vault-link";
@@ -46,7 +47,11 @@ const LIFECYCLE: { label: string; glyph: Glyph }[] = [
   { label: "Verified", glyph: "stellar" },
 ];
 
-export function LandingPage() {
+/**
+ * `testimonials`: approved referrers' words (DOQ-28), streamed in by the page
+ * under its own Suspense boundary; nothing until the legal pages go live.
+ */
+export function LandingPage({ testimonials = null }: { testimonials?: ReactNode }) {
   return (
     <div className={styles.page}>
       <div className={styles.atmosphere} aria-hidden />
@@ -186,6 +191,8 @@ export function LandingPage() {
             </li>
           </ol>
         </section>
+
+        {testimonials}
 
         <section className={styles.proof} id="proof" aria-labelledby="proof-title">
           <p className={styles.eyebrow}>Block by block</p>

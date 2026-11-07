@@ -16,20 +16,29 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  createPayoutSaver,
   payoutDraft,
   readPayoutDetails,
   type PayoutDraft,
   type PayoutLoaded,
 } from "@/components/vault/referral-payout-client";
 import {
+  createQuestionnaireSaver,
+  readTestimonial,
+  testimonialDraft,
+  TESTIMONIAL_LOAD_FAILED,
+  type QuestionnaireErrors,
+  type TestimonialDraft,
+  type TestimonialSlot,
+} from "@/components/vault/referral-testimonial-client";
+import { TestimonialFields } from "@/components/vault/referral-testimonial-fields";
+import {
   PAYOUT_MEMO_ID_MAX,
   PAYOUT_MEMO_MAX_BYTES,
   PAYOUT_PROVIDERS,
   type PayoutField,
-  type PayoutFieldErrors,
   type PayoutSummary,
 } from "@/lib/referral-payout";
+import type { TestimonialField } from "@/lib/referral-testimonial";
 import { cn } from "@/lib/utils";
 
 /**
@@ -40,7 +49,7 @@ import { cn } from "@/lib/utils";
 const PRIVACY_POLICY_HREF = "/privacy";
 
 /** Top to bottom, for finding the first field with a problem. */
-const FIELD_ORDER: PayoutField[] = [
+const FIELD_ORDER: (PayoutField | TestimonialField)[] = [
   "name",
   "method",
   "address",
@@ -50,6 +59,8 @@ const FIELD_ORDER: PayoutField[] = [
   "accountName",
   "accountNumber",
   "details",
+  "feedback",
+  "consent",
 ];
 
 /**
@@ -94,6 +105,7 @@ export function ReferralPayoutDialog({
             onSaved(summary);
             onOpenChange(false);
           }}
+          onSummary={onSaved}
         />
       </DialogContent>
     </Dialog>
@@ -106,24 +118,30 @@ function PayoutFormLoader({
   onSavingChange,
   onClose,
   onSaved,
+  onSummary,
 }: {
   saving: boolean;
   onSavingChange: (saving: boolean) => void;
   onClose: () => void;
   onSaved: (summary: PayoutSummary) => void;
+  onSummary: (summary: PayoutSummary) => void;
 }) {
   const [loaded, setLoaded] = useState<PayoutLoaded | null>(null);
+  const [testimonial, setTestimonial] = useState<TestimonialSlot>({ kind: "hidden" });
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let current = true;
     void (async () => {
-      const result = await readPayoutDetails();
+      // The feedback on its own route (DOQ-28): it fails or is hidden without
+      // keeping the details from loading.
+      const [result, feedback] = await Promise.all([readPayoutDetails(), readTestimonial()]);
       if (!current) return;
       if ("message" in result) setError(result.message);
       else {
         setError(null);
+        setTestimonial(feedback);
         setLoaded(result);
       }
     })();
@@ -137,10 +155,12 @@ function PayoutFormLoader({
       <PayoutForm
         initial={payoutDraft(loaded.profile)}
         canEdit={loaded.canEdit}
+        testimonial={testimonial}
         saving={saving}
         onSavingChange={onSavingChange}
         onClose={onClose}
         onSaved={onSaved}
+        onSummary={onSummary}
       />
     );
   }
@@ -167,29 +187,40 @@ function PayoutFormLoader({
 export function PayoutForm({
   initial,
   canEdit,
+  testimonial = { kind: "hidden" },
   saving,
   onSavingChange,
   onClose,
   onSaved,
+  onSummary,
 }: {
   initial: PayoutDraft;
   /** False for an owner who no longer has an eligible referral: they can see what's stored, not change it. */
   canEdit: boolean;
+  /** The feedback fields (DOQ-28): none unless the feedback route answered, which it does only once live. */
+  testimonial?: TestimonialSlot;
   saving: boolean;
   onSavingChange: (saving: boolean) => void;
   onClose: () => void;
+  /** Saved: the dialog closes. */
   onSaved: (summary: PayoutSummary) => void;
+  /** The details were saved but the feedback wasn't: the dialog stays open, and the page learns the details. */
+  onSummary?: (summary: PayoutSummary) => void;
 }) {
   const baseId = useId();
   const [draft, setDraft] = useState(initial);
-  const [errors, setErrors] = useState<PayoutFieldErrors>({});
+  const savedTestimonial = testimonial.kind === "ready" ? testimonial.testimonial : null;
+  const [feedback, setFeedback] = useState<TestimonialDraft>(() => testimonialDraft(savedTestimonial));
+  const [errors, setErrors] = useState<QuestionnaireErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   // Bumped to move focus to the first problem once it's on screen.
   const [problemCheck, setProblemCheck] = useState(0);
   const formErrorRef = useRef<HTMLParagraphElement>(null);
-  const [saver] = useState(() => createPayoutSaver());
+  const [saver] = useState(() => createQuestionnaireSaver());
+  // Someone without an eligible referral can still withdraw their consent.
+  const canWithdraw = !canEdit && testimonial.kind === "ready" && Boolean(savedTestimonial?.consent);
 
-  const fieldId = (field: PayoutField) => `${baseId}-${field}`;
+  const fieldId = (field: PayoutField | TestimonialField) => `${baseId}-${field}`;
   const errorId = (field: PayoutField) => `${fieldId(field)}-error`;
   const hintId = (field: PayoutField) => `${fieldId(field)}-hint`;
   /** The hint, if the field has one, and the error, if there is one. */
@@ -210,25 +241,53 @@ export function PayoutForm({
     setErrors((current) => (current[field] ? { ...current, [field]: undefined } : current));
   }
 
+  /** Either field's problem can be about the other (consent with no feedback), so a change to one clears both. */
+  function updateFeedback(next: TestimonialDraft) {
+    setErrors((current) =>
+      current.feedback || current.consent ? { ...current, feedback: undefined, consent: undefined } : current,
+    );
+    setFeedback(next);
+  }
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!canEdit || saver.saving) return;
+    if ((!canEdit && !canWithdraw) || saver.saving) return;
     setFormError(null);
-    const outcome = await saver.save(draft, () => onSavingChange(true));
+    const outcome = await saver.save(
+      {
+        draft,
+        savedDraft: initial,
+        canEditDetails: canEdit,
+        testimonial: testimonial.kind === "ready" ? { saved: savedTestimonial, draft: feedback } : null,
+      },
+      () => onSavingChange(true),
+    );
     if (outcome.kind === "busy") return;
     if (outcome.kind !== "invalid") onSavingChange(false);
 
     switch (outcome.kind) {
       case "saved":
         setErrors({});
-        toast.success("Payout details saved");
-        onSaved(outcome.summary);
+        if (outcome.summary) {
+          toast.success("Payout details saved");
+          onSaved(outcome.summary);
+        } else {
+          if (outcome.testimonialSaved) toast.success("Feedback saved");
+          onClose();
+        }
         return;
       case "invalid":
         setErrors(outcome.errors);
         setProblemCheck((n) => n + 1);
         return;
+      case "partial":
+        onSummary?.(outcome.summary);
+        setErrors(outcome.errors);
+        setFormError(outcome.message);
+        setProblemCheck((n) => n + 1);
+        return;
       case "refused":
+        if (outcome.testimonialSaved) toast.success("Feedback taken off the site");
         setErrors(outcome.errors);
         setFormError(outcome.message);
         setProblemCheck((n) => n + 1);
@@ -446,7 +505,23 @@ export function PayoutForm({
         </div>
       ) : null}
 
-      <PayoutPrivacyNote />
+      {testimonial.kind === "ready" ? (
+        <TestimonialFields
+          idPrefix={baseId}
+          saved={savedTestimonial}
+          draft={feedback}
+          canEdit={testimonial.canEdit}
+          saving={saving}
+          errors={errors}
+          onChange={updateFeedback}
+        />
+      ) : testimonial.kind === "unavailable" ? (
+        <p className="text-muted-foreground text-[12px]" data-testid="testimonial-unavailable">
+          {TESTIMONIAL_LOAD_FAILED}
+        </p>
+      ) : null}
+
+      <PayoutPrivacyNote sharing={testimonial.kind === "ready"} />
 
       {formError ? (
         <p
@@ -463,9 +538,9 @@ export function PayoutForm({
       <DialogFooter>
         <Button type="button" variant="outline" disabled={saving} onClick={onClose} data-testid="payout-cancel">
           <XIcon />
-          {canEdit ? "Cancel" : "Close"}
+          {canEdit || canWithdraw ? "Cancel" : "Close"}
         </Button>
-        {canEdit ? (
+        {canEdit || canWithdraw ? (
           // Focusable while saving: a keyboard user's focus stays on the button they pressed.
           <Button
             type="submit"
@@ -475,7 +550,7 @@ export function PayoutForm({
             data-testid="payout-save"
           >
             {saving ? <Loader2Icon className="animate-spin" /> : <SaveIcon />}
-            {saving ? "Saving…" : "Save details"}
+            {saving ? "Saving…" : canEdit ? "Save details" : "Save"}
           </Button>
         ) : null}
       </DialogFooter>
@@ -483,12 +558,21 @@ export function PayoutForm({
   );
 }
 
-/** Who sees these details and why, and that an edit changes nothing already paid. */
-function PayoutPrivacyNote() {
+/**
+ * Who sees these details and why, and that an edit changes nothing already paid.
+ * With the feedback fields shown (`sharing`), what may be public and when.
+ */
+function PayoutPrivacyNote({ sharing = false }: { sharing?: boolean }) {
   return (
     <div className="text-muted-foreground grid gap-1.5 text-[12px]" data-testid="payout-privacy">
       <p>
         Only you and Doqtri&apos;s admins can see these details. We use them only to pay your referral rewards.
+        {sharing ? (
+          <>
+            {" "}
+            Your name and feedback are shown publicly only if you tick the box above and an admin approves them.
+          </>
+        ) : null}
         {PRIVACY_POLICY_HREF ? (
           <>
             {" "}
