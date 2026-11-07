@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  joinedDay,
   loadReferralDashboard,
   maskedReferralIdentity,
   maskEmail,
@@ -25,7 +26,7 @@ const record = (over: Partial<ReferralDashboardRecord> = {}): ReferralDashboardR
   email: "tycoon@gmail.com",
   g_wallet: null,
   c_wallet: null,
-  referred_at: "2026-11-01T00:00:00Z",
+  referred_on: "2026-11-01",
   source: "link",
   activity_count: 0,
   reward_status: null,
@@ -68,13 +69,57 @@ describe("masking an email", () => {
   it.each([
     ["tycoon@gmail.com", "ty•••@gmail.com"],
     ["  tycoon@gmail.com ", "ty•••@gmail.com"],
-    ["abcd@x.com", "ab•••@x.com"],
-    ["abc@x.com", "a•••@x.com"],
-    ["ab@x.com", "a•••@x.com"],
-    ["a@x.com", "•••@x.com"],
-    ["名前です@example.jp", "名前•••@example.jp"],
-  ])("%s becomes %s", (email, masked) => {
+    ["abcd@yahoo.com", "ab•••@yahoo.com"],
+    ["abc@outlook.com", "a•••@outlook.com"],
+    ["ab@hotmail.com", "a•••@hotmail.com"],
+    ["a@live.com", "•••@live.com"],
+    ["tycoon@icloud.com", "ty•••@icloud.com"],
+    ["tycoon@proton.me", "ty•••@proton.me"],
+    ["tycoon@yahoo.com.ph", "ty•••@yahoo.com.ph"],
+    ["名前です@gmail.com", "名前•••@gmail.com"],
+  ])("a large provider keeps its domain: %s becomes %s", (email, masked) => {
     expect(maskEmail(email)).toBe(masked);
+  });
+
+  it("reads a provider's domain in any case, and shows it in lower case", () => {
+    expect(maskEmail("TyCoon@GMAIL.COM")).toBe("Ty•••@gmail.com");
+  });
+
+  it.each([
+    ["john.smith@john-smith.com", "jo•••@•••.com"],
+    ["abcd@x.com", "ab•••@•••.com"],
+    ["ab@x.com", "a•••@•••.com"],
+    ["a@x.com", "•••@•••.com"],
+    ["ab@X.COM", "a•••@•••.com"],
+    ["名前です@example.jp", "名前•••@•••.jp"],
+    ["ab@acme.com.ph", "a•••@•••.ph"],
+  ])("anyone else's domain goes, in case it's their own: %s becomes %s", (email, masked) => {
+    expect(maskEmail(email)).toBe(masked);
+  });
+
+  it.each([
+    ["me@mail.gmail.com", "m•••@•••.com"],
+    ["ab@gmail.com.evil.org", "a•••@•••.org"],
+    ["ab@notgmail.com", "a•••@•••.com"],
+    ["ab@gmail.co", "a•••@•••.co"],
+  ])("a subdomain or lookalike of a provider isn't that provider: %s becomes %s", (email, masked) => {
+    expect(maskEmail(email)).toBe(masked);
+  });
+
+  it.each([
+    ["john@john.smith", "jo•••@•••"],
+    ["abcd@family.museum", "ab•••@•••"],
+    ["ab@x.com.", "a•••@•••"],
+    ["ab@acme.xn--p1ai", "a•••@•••"],
+  ])("a rarer ending goes too: %s becomes %s", (email, masked) => {
+    expect(maskEmail(email)).toBe(masked);
+  });
+
+  it("never shows any part of a domain of someone's own", () => {
+    const shown = maskEmail("john.smith@smith.family.example.com");
+    expect(shown).not.toContain("smith");
+    expect(shown).not.toContain("family");
+    expect(shown).not.toContain("example");
   });
 
   it.each([[null], [undefined], [""], ["   "], ["not-an-email"], ["@x.com"], ["a@"], ["a@b@c.com"], ["a b@c.com"], ["a@nodot"]])(
@@ -83,6 +128,27 @@ describe("masking an email", () => {
       expect(maskEmail(email)).toBeNull();
     },
   );
+});
+
+describe("the day someone joined", () => {
+  it("is a day and no more", () => {
+    expect(joinedDay(record({ referred_on: "2026-11-01" }))).toBe("2026-11-01");
+  });
+
+  it("drops a time, in UTC, should the database ever send one", () => {
+    expect(joinedDay(record({ referred_on: "2026-11-01T23:59:58+00:00" }))).toBe("2026-11-01");
+    expect(joinedDay(record({ referred_on: "2026-11-02T01:00:00+08:00" }))).toBe("2026-11-01");
+  });
+
+  it("is nothing for a former user, whatever the row holds", () => {
+    expect(joinedDay(record({ former_user: true, referred_on: "2026-11-01" }))).toBeNull();
+    expect(joinedDay(record({ former_user: true, referred_on: null }))).toBeNull();
+  });
+
+  it("is nothing when there's nothing readable", () => {
+    expect(joinedDay(record({ referred_on: null }))).toBeNull();
+    expect(joinedDay(record({ referred_on: "soon" }))).toBeNull();
+  });
 });
 
 describe("masking a wallet", () => {
@@ -167,7 +233,7 @@ describe("a list row", () => {
     expect(row).toEqual({
       identity: "ty•••@gmail.com",
       former: false,
-      joinedAt: "2026-11-01T00:00:00Z",
+      joinedOn: "2026-11-01",
       activity: 2,
       status: "pending",
       amountPhp: null,
@@ -185,7 +251,7 @@ describe("a list row", () => {
     const row = referralListRow(
       record({ email: null, former_user: true, activity_count: null, reward_status: "eligible", amount_php: 30 }),
     );
-    expect(row).toMatchObject({ identity: "Former user", former: true, activity: null, amountPhp: 30 });
+    expect(row).toMatchObject({ identity: "Former user", former: true, joinedOn: null, activity: null, amountPhp: 30 });
   });
 });
 

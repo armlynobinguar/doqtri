@@ -1,7 +1,7 @@
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readReferrals, ReferralsDashboard, ReferralsError, ReferralsView } from "@/components/vault/referrals-view";
+import { PageNav, readReferrals, ReferralsDashboard, ReferralsError, ReferralsView } from "@/components/vault/referrals-view";
 import type { ReferralDashboard, ReferralListRow } from "@/lib/referral-dashboard";
 
 /*
@@ -13,7 +13,7 @@ import type { ReferralDashboard, ReferralListRow } from "@/lib/referral-dashboar
 const row = (over: Partial<ReferralListRow> = {}): ReferralListRow => ({
   identity: "ty•••@gmail.com",
   former: false,
-  joinedAt: "2026-11-01T12:00:00Z",
+  joinedOn: "2026-11-01",
   activity: 2,
   status: "pending",
   amountPhp: null,
@@ -47,10 +47,10 @@ const render = (data: ReferralDashboard, inviteUrl: string | null = "https://doq
 const LIMIT_NOTICE = "You've reached the limit of 30 rewards. To request more, email team@doqtri.xyz";
 
 describe("the list", () => {
-  it("shows a row's masked identity, join year, progress and status", () => {
+  it("shows a row's masked identity, join date, progress and status", () => {
     const html = text(render(dashboard()));
     expect(html).toContain("ty•••@gmail.com");
-    expect(html).toContain("2026");
+    expect(html).toContain("Nov 1, 2026");
     expect(html).toContain("2 / 3");
     expect(html).toContain("Pending");
   });
@@ -73,13 +73,28 @@ describe("the list", () => {
     );
   });
 
-  it("shows a former user by that name, with a dash for activity", () => {
+  it("shows a former user by that name, with a dash for the date and for activity", () => {
     const html = renderToStaticMarkup(
-      render(dashboard({ rows: [row({ identity: "Former user", former: true, activity: null, status: "eligible" })] })),
+      render(
+        dashboard({
+          rows: [row({ identity: "Former user", former: true, joinedOn: null, activity: null, status: "eligible" })],
+        }),
+      ),
     );
     expect(html).toContain('data-testid="referrals-identity">Former user<');
-    expect(html).toContain("—");
+    expect(html.match(/—/g)).toHaveLength(2);
     expect(html).not.toContain("/ 3");
+    expect(html).not.toContain("2026");
+  });
+
+  it("reads the day in UTC, so nobody sees the day before", () => {
+    const zone = process.env.TZ;
+    process.env.TZ = "America/Los_Angeles";
+    try {
+      expect(text(render(dashboard({ rows: [row({ joinedOn: "2026-11-01" })] })))).toContain("Nov 1, 2026");
+    } finally {
+      process.env.TZ = zone;
+    }
   });
 
   it("offers no paging on a single page, and pages on many", () => {
@@ -204,12 +219,70 @@ describe("the empty state", () => {
     const html = renderToStaticMarkup(
       render(
         dashboard({
-          rows: [row({ identity: "Former user", former: true, activity: null })],
+          rows: [row({ identity: "Former user", former: true, joinedOn: null, activity: null })],
           totals: { referred: 1, eligible: 0, earnedPhp: 0, unpaidPhp: 0, paidPhp: 0 },
         }),
       ),
     );
     expect(html).not.toContain("referrals-empty");
+  });
+});
+
+describe("turning the page", () => {
+  /** A button in the nav by its test id. PageNav has no hooks, so it can be called and its tree read. */
+  function button(testId: string, props: Partial<Parameters<typeof PageNav>[0]> = {}) {
+    const onPage = vi.fn();
+    const nav = PageNav({ page: 2, pages: 3, start: 20, shown: 20, total: 45, busy: false, onPage, ...props });
+    const buttons = (nav.props as { children: ReactElement<Record<string, unknown>>[] }).children;
+    const found = buttons.find((child) => child.props["data-testid"] === testId)!;
+    return { props: found.props as { disabled: boolean; focusableWhenDisabled: boolean; onClick: () => void }, onPage };
+  }
+
+  it("Next asks for the next page, and Previous the one before", () => {
+    const next = button("referrals-next");
+    next.props.onClick();
+    expect(next.onPage).toHaveBeenCalledWith(3);
+    const previous = button("referrals-prev");
+    previous.props.onClick();
+    expect(previous.onPage).toHaveBeenCalledWith(1);
+  });
+
+  it("neither goes past the ends", () => {
+    expect(button("referrals-prev", { page: 1 }).props.disabled).toBe(true);
+    expect(button("referrals-next", { page: 1 }).props.disabled).toBe(false);
+    expect(button("referrals-next", { page: 3 }).props.disabled).toBe(true);
+    expect(button("referrals-prev", { page: 3 }).props.disabled).toBe(false);
+  });
+
+  it("both wait while a page loads, and neither drops a keyboard user's focus", () => {
+    for (const id of ["referrals-prev", "referrals-next"]) {
+      const { props } = button(id, { busy: true });
+      expect(props.disabled).toBe(true);
+      expect(props.focusableWhenDisabled).toBe(true);
+    }
+  });
+
+  const failedTurn = () =>
+    renderToStaticMarkup(
+      createElement(ReferralsDashboard, {
+        data: dashboard({ page: 2, pages: 3, totals: { referred: 45, eligible: 0, earnedPhp: 0, unpaidPhp: 0, paidPhp: 0 } }),
+        inviteUrl: null,
+        pageError: "Your referrals couldn't be loaded.",
+      }),
+    );
+
+  it("a failed turn says so where the list is, and keeps the list", () => {
+    const html = failedTurn();
+    expect(html).toContain("referrals-page-error");
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("Try again");
+    expect(html).toContain("referrals-list");
+    expect(html).toContain("referrals-totals");
+    expect(html).toContain("referrals-next");
+  });
+
+  it("a page that loaded has no error", () => {
+    expect(renderToStaticMarkup(render(dashboard()))).not.toContain("referrals-page-error");
   });
 });
 

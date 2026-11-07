@@ -6,6 +6,10 @@
  *
  * Browser code imports only the types from here: what the switch reads is
  * never public.
+ *
+ * One network's rows and totals, against a limit counted across networks, as
+ * the database counts it. That can only look odd once a referrer has rewards on
+ * both, so revisit it at the network cutover.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { FORMER_USER } from "@/lib/former-user";
@@ -37,7 +41,7 @@ export type ReferralDashboardRecord = {
   email: string | null;
   g_wallet: string | null;
   c_wallet: string | null;
-  referred_at: string;
+  referred_on: string | null;
   source: string | null;
   activity_count: number | null;
   reward_status: string | null;
@@ -51,7 +55,8 @@ export type ReferralStatus = "pending" | "eligible" | "over_limit" | "paid" | "n
 export type ReferralListRow = {
   identity: string;
   former: boolean;
-  joinedAt: string;
+  /** A day in UTC, `2026-11-07`, never a time. Null for a former user: see joinedDay(). */
+  joinedOn: string | null;
   /** Null for a former user, whose activity went with the account. */
   activity: number | null;
   status: ReferralStatus;
@@ -84,17 +89,58 @@ export type ReferralDashboard = {
 };
 
 /**
- * `ty•••@gmail.com`. At most half the local part shows, so a one-letter one
- * shows nothing and `a@x.com` isn't given away. Null for anything that isn't
- * plainly an email: the caller falls back to the wallet rather than guess which
- * part is safe to show.
+ * Mailbox providers too large for their domain to say who someone is. Exact
+ * matches only: a subdomain, or a name that merely contains one of these, could
+ * be anybody's.
+ */
+const PUBLIC_EMAIL_DOMAINS = new Set([
+  "aol.com",
+  "gmail.com",
+  "gmx.com",
+  "googlemail.com",
+  "hotmail.com",
+  "icloud.com",
+  "live.com",
+  "mac.com",
+  "mail.com",
+  "me.com",
+  "msn.com",
+  "outlook.com",
+  "outlook.ph",
+  "pm.me",
+  "proton.me",
+  "protonmail.com",
+  "yahoo.com",
+  "yahoo.com.ph",
+  "yandex.com",
+  "ymail.com",
+  "zoho.com",
+]);
+
+/** Endings shared by so many domains that they say nothing. Any other could be someone's own. */
+const COMMON_TLDS = new Set([
+  "ai", "app", "au", "ca", "co", "com", "de", "dev", "edu", "es", "fr", "gov", "id", "in", "io", "it", "jp", "kr",
+  "me", "my", "net", "nl", "org", "ph", "sg", "uk", "us",
+]);
+
+/**
+ * `ty•••@gmail.com`, or `jo•••@•••.com` for a domain of someone's own, which
+ * would name them: `john.smith@john-smith.com`. A rarer ending goes too:
+ * `jo•••@•••`. At most half the local part shows, so a one-letter one shows
+ * nothing and `a@x.com` isn't given away. Null for anything that isn't plainly an
+ * email: the caller falls back to the wallet rather than guess which part is
+ * safe to show.
  */
 export function maskEmail(email: string | null | undefined): string | null {
   const trimmed = email?.trim();
   if (!trimmed || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return null;
-  const [local, domain] = trimmed.split("@");
+  const [local, rawDomain] = trimmed.split("@");
+  const domain = rawDomain.toLowerCase();
   const letters = Array.from(local);
-  return `${letters.slice(0, Math.min(2, Math.floor(letters.length / 2))).join("")}•••@${domain}`;
+  const start = letters.slice(0, Math.min(2, Math.floor(letters.length / 2))).join("");
+  if (PUBLIC_EMAIL_DOMAINS.has(domain)) return `${start}•••@${domain}`;
+  const tld = domain.slice(domain.lastIndexOf(".") + 1);
+  return COMMON_TLDS.has(tld) ? `${start}•••@•••.${tld}` : `${start}•••@•••`;
 }
 
 /** `GABC…WXYZ`. Null for anything that isn't a Stellar address. */
@@ -155,13 +201,25 @@ export function referralTotals(records: readonly ReferralDashboardRecord[]): Ref
   return totals;
 }
 
+/**
+ * The day a referred user joined, in UTC, and never more: a time can be matched
+ * to public contract calls, which would give away their wallet (D-111). The
+ * function already returns a day; this holds even if that changes. A former user
+ * has no date, for the same reason: see the migration.
+ */
+export function joinedDay(record: Pick<ReferralDashboardRecord, "referred_on" | "former_user">): string | null {
+  if (record.former_user || !record.referred_on) return null;
+  const time = Date.parse(record.referred_on);
+  return Number.isNaN(time) ? null : new Date(time).toISOString().slice(0, 10);
+}
+
 /** Field by field, so anything else a record carries stays on the server. */
 export function referralListRow(record: ReferralDashboardRecord): ReferralListRow {
   const status = referralStatus(record.reward_status);
   return {
     identity: maskedReferralIdentity(record),
     former: record.former_user,
-    joinedAt: record.referred_at,
+    joinedOn: joinedDay(record),
     activity: record.former_user ? null : (record.activity_count ?? 0),
     status,
     amountPhp: countedAmount(status, record.amount_php),
