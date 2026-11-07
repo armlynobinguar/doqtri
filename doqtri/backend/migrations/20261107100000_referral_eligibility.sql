@@ -54,7 +54,14 @@
 -- concurrent qualifications can't pass the limit. The unique indexes stop two
 -- rewards for one referral or one wallet; two referrers' users on one wallet
 -- at the same moment hold different locks, so the later insert does nothing
--- and its user is marked duplicate on their next sync.
+-- and its user is marked duplicate on their next sync. Deleting an account
+-- doesn't take the lock: Postgres locks the account's row before any BEFORE
+-- trigger runs, and a qualification holding the lock waits on that row for its
+-- foreign key, so a trigger taking the lock there deadlocks nearly every time.
+-- Promoting skips rows another transaction holds instead, so it never waits
+-- while holding a row, and a deletion's set null can't deadlock with it.
+--
+-- Nothing here sets `paid`, or says it is final: that belongs to DOQ-26.
 --
 -- Pending and failed writes don't count: the relay records only confirmed
 -- ones, and the sweep reads only confirmed chain_writes, so a pending write
@@ -191,7 +198,12 @@ as $$
            where w.referrer_user_id = p_referrer and w.status in ('eligible', 'paid'));
 $$;
 
--- Moves the oldest over_limit rewards up while the referrer has places.
+-- Moves the oldest over_limit rewards up while the referrer has places. Skips
+-- a row another transaction holds, because waiting for it while holding a voided
+-- row can deadlock with an account deletion's set null, which updates rewards in
+-- scan order without the lock. Only a deletion holds an over_limit row: the
+-- referrer's voids it anyway, and the referred user's, for that moment, costs the
+-- reward its turn until the next place opens.
 create function public.promote_referral_rewards(p_referrer uuid, p_default_limit integer)
 returns void
 language plpgsql
@@ -212,6 +224,7 @@ begin
       where o.referrer_user_id = p_referrer and o.status = 'over_limit'
       order by o.qualified_at, o.id
       limit v_places
+        for update skip locked
    );
 end;
 $$;
@@ -242,9 +255,15 @@ $$;
 
 -- Gives a referred user their reward once they have reached the threshold.
 -- Does nothing if they have one: eligibility never reverses, and it is stored,
--- so nothing here depends on the ledger still holding the activity. Inserts
+-- so nothing here depends on the ledger still holding the activity. Only
+-- activity since this referral counts: rows from an earlier one outlive it when
+-- that referrer is deleted, since only the referral cascades. Inserts
 -- `on conflict do nothing`, because another referrer's user can take the same
 -- wallet without holding this lock (see the header).
+--
+-- A reward holds one wallet, the one that reached the threshold. A user with two
+-- wallets could earn again on the other after deleting the account, but no
+-- account has two today: this needs looking at if a link-wallet feature ships.
 create function public.qualify_referral(
   p_user_id uuid,
   p_network text,
@@ -257,10 +276,11 @@ language plpgsql
 set search_path = ''
 as $$
 declare
-  v_referrer uuid;
-  v_wallet   text;
+  v_referrer    uuid;
+  v_referred_at timestamptz;
+  v_wallet      text;
 begin
-  select r.referrer_user_id into v_referrer
+  select r.referrer_user_id, r.created_at into v_referrer, v_referred_at
     from public.referrals r where r.referred_user_id = p_user_id;
   if v_referrer is null then
     return;
@@ -268,18 +288,24 @@ begin
 
   perform public.lock_referral_referrer(v_referrer);
 
+  -- The referrer's deletion may have gone first while this waited.
+  if not exists (select 1 from public.referrals r
+                  where r.referred_user_id = p_user_id and r.referrer_user_id = v_referrer) then
+    return;
+  end if;
   if exists (select 1 from public.referral_rewards w where w.referred_user_id = p_user_id) then
     return;
   end if;
   if (select count(*) from public.referral_chain_activity a
-       where a.user_id = p_user_id and a.network = p_network) < p_threshold then
+       where a.user_id = p_user_id and a.network = p_network
+         and a.occurred_at >= v_referred_at) < p_threshold then
     return;
   end if;
 
   -- A wallet they used has already earned on this network.
   select a.wallet into v_wallet
     from public.referral_chain_activity a
-   where a.user_id = p_user_id and a.network = p_network
+   where a.user_id = p_user_id and a.network = p_network and a.occurred_at >= v_referred_at
      and exists (select 1 from public.referral_rewards w
                   where w.network = p_network and w.referred_wallet = a.wallet
                     and w.void_reason is distinct from 'duplicate_wallet')
@@ -296,7 +322,7 @@ begin
   -- The wallet that reached the threshold.
   select a.wallet into v_wallet
     from public.referral_chain_activity a
-   where a.user_id = p_user_id and a.network = p_network
+   where a.user_id = p_user_id and a.network = p_network and a.occurred_at >= v_referred_at
    order by a.occurred_at desc, a.tx_hash
    limit 1;
 
@@ -370,8 +396,10 @@ begin
 end;
 $$;
 
--- The referred users still without a reward, least recently synced first.
-create function public.referral_sync_candidates(p_network text, p_limit integer)
+-- The referred users still without a reward, least recently synced first, leaving
+-- out anyone synced in the last p_min_resync_seconds: a user who never acts stays
+-- here for good, and each turn of a wallet login costs a Horizon read.
+create function public.referral_sync_candidates(p_network text, p_limit integer, p_min_resync_seconds integer)
 returns table (user_id uuid, referred_at timestamptz, c_wallet text, g_wallet text)
 language sql
 set search_path = ''
@@ -382,6 +410,7 @@ as $$
     left join public.wallet_accounts a on a.user_id = r.referred_user_id
     left join public.referral_activity_sync y on y.referred_user_id = r.referred_user_id
    where not exists (select 1 from public.referral_rewards w where w.referred_user_id = r.referred_user_id)
+     and (y.synced_at is null or y.synced_at <= now() - make_interval(secs => p_min_resync_seconds))
    order by y.synced_at asc nulls first, r.created_at, r.referred_user_id
    limit p_limit;
 $$;
@@ -475,7 +504,7 @@ revoke execute on function
   public.qualify_referral(uuid, text, integer, integer, integer),
   public.record_referral_activity(uuid, text, text, text, text, timestamptz, integer, integer, integer),
   public.settle_referral_activity(uuid, text, integer, integer, integer),
-  public.referral_sync_candidates(text, integer),
+  public.referral_sync_candidates(text, integer, integer),
   public.void_referral_reward(uuid, text, integer),
   public.set_referral_reward_limit(uuid, integer, integer)
   from public, anon, authenticated;
@@ -487,7 +516,7 @@ grant execute on function
   public.qualify_referral(uuid, text, integer, integer, integer),
   public.record_referral_activity(uuid, text, text, text, text, timestamptz, integer, integer, integer),
   public.settle_referral_activity(uuid, text, integer, integer, integer),
-  public.referral_sync_candidates(text, integer),
+  public.referral_sync_candidates(text, integer, integer),
   public.void_referral_reward(uuid, text, integer),
   public.set_referral_reward_limit(uuid, integer, integer)
   to service_role;

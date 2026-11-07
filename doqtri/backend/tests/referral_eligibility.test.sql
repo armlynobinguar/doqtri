@@ -14,9 +14,10 @@
 -- calls, as they come from lib/referral-program.ts in the app: 3, 30 PHP, 30.
 --
 -- One session can never be blocked by its own advisory lock, so this file
--- can't show two qualifications really overlapping (AC 6). It checks what one
--- session can: repeating every call changes nothing, the unique indexes refuse
--- a second reward, and every function that decides a place takes the lock.
+-- can't show two qualifications really overlapping (AC 6; that is
+-- referral_eligibility_concurrency.test.sql). It checks what one session can:
+-- repeating every call changes nothing, the unique indexes refuse a second
+-- reward, and every function that decides a place takes the lock.
 --
 -- The backfill checks hold for whatever rows the database had when the
 -- migration ran: run against a copy of production, or with rows inserted
@@ -27,7 +28,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(109);
+select plan(117);
 
 -- ---------------------------------------------------------------------------
 -- The backfill, before anything here adds rows
@@ -241,6 +242,28 @@ select is(pg_temp.activity(6), 0, 'a transaction from before the referral was re
 select pg_temp.act(6, 61, pg_temp.wallet('G', 6), '2026-06-01 12:00:00+00');
 select is(pg_temp.activity(6), 1, 'one at that very moment does');
 
+-- A new referral starts the count again, though rows from an earlier one survive
+-- its referrer's deletion: only the referral cascades.
+select pg_temp.add_user(14);
+select pg_temp.add_user(15);
+select pg_temp.refer(16, 14, now() - interval '2 hours');
+select pg_temp.act(16, 160, pg_temp.wallet('G', 16), now() - interval '100 minutes');
+select pg_temp.act(16, 161, pg_temp.wallet('G', 16), now() - interval '90 minutes');
+delete from auth.users where id = pg_temp.uid(14);
+insert into public.referrals (referred_user_id, referrer_user_id, code, created_at)
+values (pg_temp.uid(16), pg_temp.uid(15), 'abcdefgh', now() - interval '1 hour');
+select is(pg_temp.activity(16), 2, 'a deleted referrer''s referee keeps their earlier activity');
+select pg_temp.act(16, 162, pg_temp.wallet('G', 16));
+select is(pg_temp.status(16), null, 'but with a new referral, 2 from before it and 1 since earn nothing (AC 4)');
+select pg_temp.settle(16);
+select is(pg_temp.status(16), null, 'nor does a sync');
+select pg_temp.act(16, 163, pg_temp.wallet('G', 16));
+select pg_temp.act(16, 164, pg_temp.wallet('G', 16));
+select results_eq(
+  $$ select referrer_user_id, status from public.referral_rewards where referred_user_id = pg_temp.uid(16) $$,
+  $$ values (pg_temp.uid(15), 'eligible'::text) $$,
+  'the 3rd since it does');
+
 -- ---------------------------------------------------------------------------
 -- Passkey writes through chain_writes (AC 2, AC 3)
 -- ---------------------------------------------------------------------------
@@ -262,7 +285,7 @@ select pg_temp.write((select id from doc), 82, pg_temp.wallet('C', 8), 'pending'
 select pg_temp.write((select id from doc), 83, pg_temp.wallet('C', 8), 'confirmed');
 
 set local role service_role;
-select is((select count(*)::int from public.referral_sync_candidates('testnet', 1000) where user_id = pg_temp.uid(8)), 1,
+select is((select count(*)::int from public.referral_sync_candidates('testnet', 1000, 0) where user_id = pg_temp.uid(8)), 1,
   'a referred passkey user waits to be synced');
 select pg_temp.settle(8);
 select results_eq(
@@ -287,7 +310,7 @@ set local role service_role;
 select pg_temp.settle(8);
 select is(pg_temp.activity(8), 3, 'a write both the relay and the sweep saw counts once');
 select is(pg_temp.status(8), 'eligible', 'and it was the 3rd');
-select is((select count(*)::int from public.referral_sync_candidates('testnet', 1000) where user_id = pg_temp.uid(8)), 0,
+select is((select count(*)::int from public.referral_sync_candidates('testnet', 1000, 0) where user_id = pg_temp.uid(8)), 0,
   'a user with a reward is no longer synced');
 reset role;
 
@@ -323,7 +346,7 @@ select pg_temp.refer(13, 10, '2026-06-03 12:00:00+00');
 
 set local role service_role;
 select results_eq(
-  $$ select user_id, referred_at, c_wallet, g_wallet from public.referral_sync_candidates('testnet', 1000)
+  $$ select user_id, referred_at, c_wallet, g_wallet from public.referral_sync_candidates('testnet', 1000, 0)
       where user_id in (pg_temp.uid(11), pg_temp.uid(12), pg_temp.uid(13)) $$,
   $$ values (pg_temp.uid(11), '2026-06-01 12:00:00+00'::timestamptz, null::text, pg_temp.wallet('G', 11)),
             (pg_temp.uid(12), '2026-06-02 12:00:00+00'::timestamptz, pg_temp.wallet('C', 12), null::text),
@@ -331,12 +354,24 @@ select results_eq(
   'candidates come with their wallets, the never-synced oldest referral first');
 select pg_temp.settle(11);
 select results_eq(
-  $$ select user_id from public.referral_sync_candidates('testnet', 1000)
+  $$ select user_id from public.referral_sync_candidates('testnet', 1000, 0)
       where user_id in (pg_temp.uid(11), pg_temp.uid(12), pg_temp.uid(13)) $$,
   $$ values (pg_temp.uid(12)), (pg_temp.uid(13)), (pg_temp.uid(11)) $$,
   'and a user just synced goes to the back');
-select is((select count(*)::int from public.referral_sync_candidates('testnet', 2)), 2, 'a run takes only its limit');
-select is((select c_wallet from public.referral_sync_candidates('mainnet', 1000) where user_id = pg_temp.uid(12)), null,
+select is((select count(*)::int from public.referral_sync_candidates('testnet', 2, 0)), 2, 'a run takes only its limit');
+
+-- Who has just had a turn waits (user 11, settled above).
+select is((select count(*)::int from public.referral_sync_candidates('testnet', 1000, 900) where user_id = pg_temp.uid(11)), 0,
+  'a user synced in the last 15 minutes waits');
+select is((select count(*)::int from public.referral_sync_candidates('testnet', 1000, 900) where user_id = pg_temp.uid(12)), 1,
+  'one never synced doesn''t');
+update public.referral_activity_sync set synced_at = now() - interval '14 minutes' where referred_user_id = pg_temp.uid(11);
+select is((select count(*)::int from public.referral_sync_candidates('testnet', 1000, 900) where user_id = pg_temp.uid(11)), 0,
+  'nor is 14 minutes enough');
+update public.referral_activity_sync set synced_at = now() - interval '15 minutes' where referred_user_id = pg_temp.uid(11);
+select is((select count(*)::int from public.referral_sync_candidates('testnet', 1000, 900) where user_id = pg_temp.uid(11)), 1,
+  'at 15 minutes it has its turn again');
+select is((select c_wallet from public.referral_sync_candidates('mainnet', 1000, 0) where user_id = pg_temp.uid(12)), null,
   'a smart wallet counts only on its own network');
 reset role;
 

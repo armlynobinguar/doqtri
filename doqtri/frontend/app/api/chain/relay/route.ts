@@ -1,5 +1,6 @@
 import { after } from "next/server";
 import { Address } from "@stellar/stellar-sdk";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
 import { walletAddressFromEmail } from "@/lib/wallet-address";
 import { CONTRACT_ID, IS_MAINNET, MARKET_CONTRACT_ID, NETWORK_PASSPHRASE, REGISTRY_EDITORS } from "@/lib/stellar/config";
@@ -73,8 +74,9 @@ import { CHAIN_QUOTA_CAPS } from "@/lib/stellar/chain-quota-caps";
  *
  * Every confirmed note, membership or market write also counts towards the
  * caller's referral (lib/referral-activity.ts, DOQ-23); wallet deployments and
- * passkey changes don't, and a pending write counts once it is settled. Failing
- * to record it never changes the answer.
+ * passkey changes don't, and a pending write counts once it is settled. It is
+ * recorded after the response, since recording can wait on another request's
+ * referrer lock, so failing to record never changes the answer.
  */
 
 /** A paid write with nothing to settle it later that the poll window ran out on (DOQ-5). */
@@ -173,6 +175,18 @@ async function chargeQuota(
   );
 }
 
+/**
+ * Counts a confirmed write towards the caller's referral, once the response is
+ * finished. Should scheduling itself ever fail, the write still stands.
+ */
+function recordActivityAfterResponse(admin: SupabaseClient, write: Parameters<typeof recordReferralActivity>[1]) {
+  try {
+    after(() => recordReferralActivity(admin, write));
+  } catch (error) {
+    logError(`[chain/relay] ${write.fn} ${write.txHash} not recorded for referrals`, error);
+  }
+}
+
 async function relayRegistryWrite(userId: string, submission: RelaySubmission) {
   const admin = createSupabaseAdminClient();
 
@@ -194,7 +208,7 @@ async function relayRegistryWrite(userId: string, submission: RelaySubmission) {
 
   const sent = await submitAndConfirm(submission.func, submission.auth);
   await indexWrite(write, sent.hash, wallet.address);
-  await recordReferralActivity(admin, { userId, txHash: sent.hash, wallet: wallet.address, fn: write.fn });
+  recordActivityAfterResponse(admin, { userId, txHash: sent.hash, wallet: wallet.address, fn: write.fn });
 
   return Response.json({ success: true, data: sent });
 }
@@ -281,7 +295,7 @@ async function relayPaidWrite(userId: string, submission: RelaySubmission) {
   await indexWrite(write, hash, wallet.address, status);
   // A pending note write counts once the chain-jobs run has settled it.
   if (status === "confirmed") {
-    await recordReferralActivity(admin, { userId, txHash: hash, wallet: wallet.address, fn: write.fn });
+    recordActivityAfterResponse(admin, { userId, txHash: hash, wallet: wallet.address, fn: write.fn });
   }
 
   // 202: accepted, not yet confirmed. The browser shows it as pending.
@@ -407,7 +421,7 @@ async function relayPaidMarketWrite(userId: string, submission: RelaySubmission)
     throw new RelayRejection(NOT_CONFIRMED_YET, 502);
   }
   await recordPurchase(userId, wallet.address, call, plan.sale, hash);
-  await recordReferralActivity(admin, { userId, txHash: hash, wallet: wallet.address, fn: call.fn });
+  recordActivityAfterResponse(admin, { userId, txHash: hash, wallet: wallet.address, fn: call.fn });
   return Response.json({ success: true, data: { hash, status: "confirmed", feeStroops: feeStroops.toString() } });
 }
 
@@ -436,7 +450,7 @@ async function relayMarketWrite(userId: string, submission: RelaySubmission) {
 
   const sent = await submitAndConfirm(submission.func, submission.auth);
   await recordPurchase(userId, wallet.address, call, plan.sale, sent.hash);
-  await recordReferralActivity(admin, { userId, txHash: sent.hash, wallet: wallet.address, fn: call.fn });
+  recordActivityAfterResponse(admin, { userId, txHash: sent.hash, wallet: wallet.address, fn: call.fn });
   return Response.json({ success: true, data: sent });
 }
 
