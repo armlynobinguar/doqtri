@@ -185,7 +185,8 @@ export function TestimonialRow({
         <>
           {!row.name ? (
             <p className="text-muted-foreground mt-3 text-[12px]" data-testid="testimonial-no-name">
-              No name in their payout details, so it won&apos;t appear on the site even if approved.
+              No name in their payout details yet, so it can&apos;t be approved: there&apos;s no name to approve it
+              under. It can be once they save one.
             </p>
           ) : null}
           <div className="mt-4 flex flex-wrap gap-2">
@@ -193,6 +194,7 @@ export function TestimonialRow({
               size="sm"
               disabled={!canDecide(row, "approve") || busy !== null}
               onClick={() => onDecide("approve")}
+              title={row.name ? undefined : "No name to approve it under yet"}
               data-testid="testimonial-approve"
             >
               {working("approve") ? (

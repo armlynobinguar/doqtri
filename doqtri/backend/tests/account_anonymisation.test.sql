@@ -148,6 +148,9 @@ select public.mark_referral_rewards_paid(
   null,
   '00000000-0000-4000-8000-0000000000d1');
 -- a's feedback, shared and approved, and i's, approved by a as the admin (DOQ-28).
+-- Approval needs a questionnaire name, so i saves one too.
+insert into public.referral_payout_profiles (user_id, method, name, xlm_address) values
+  ('00000000-0000-4000-8000-0000000000d6', 'xlm', 'Inviter Name', 'G' || repeat('I', 55));
 insert into public.referral_testimonials (user_id, feedback, consent) values
   ('00000000-0000-4000-8000-0000000000d1', 'Anonymous feedback words.', true),
   ('00000000-0000-4000-8000-0000000000d6', 'Inviter feedback words.', true);

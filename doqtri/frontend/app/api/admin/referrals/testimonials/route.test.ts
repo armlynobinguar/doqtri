@@ -133,6 +133,7 @@ describe("POST", () => {
   it.each([
     ["changed", "This feedback changed or was removed since the page loaded."],
     ["private", "This feedback isn't shared publicly, so it can't be approved or rejected."],
+    ["no_name", "This referrer has no name in their payout details, so there is no name to approve it under."],
     ["admin_gone", "Your admin account no longer exists, so nothing was changed."],
   ])("turns %s into a 409 with fixed words", async (result, words) => {
     state.results.referral_testimonial_review = { data: result, error: null };

@@ -94,10 +94,93 @@ describe("createQuestionnaireSaver", () => {
     });
   });
 
-  it("sends no feedback when the details are refused", async () => {
+  it("sends new feedback, which isn't a withdrawal, only once the details are saved", async () => {
     const writeFeedback = vi.fn();
     const saver = createQuestionnaireSaver(async () => ({ message: "Check the highlighted details.", fields: { name: "x" } }), writeFeedback);
-    expect((await saver.save(request({ saved: null, draft: { feedback: "Words", consent: true } }))).kind).toBe("refused");
+    expect(await saver.save(request({ saved: null, draft: { feedback: "Words", consent: true } }))).toEqual({
+      kind: "refused",
+      message: "Check the highlighted details.",
+      errors: { name: "x" },
+      testimonialSaved: false,
+    });
+    expect(writeFeedback).not.toHaveBeenCalled();
+  });
+
+  it("sends a withdrawal first, on its own, and it lands even when the details are then refused", async () => {
+    const calls: string[] = [];
+    const writeFeedback = vi.fn(async (input: { feedback: string | null; consent: boolean }) => {
+      calls.push("feedback");
+      return { testimonial: { feedback: input.feedback!, consent: input.consent, status: "private" as const } };
+    });
+    const writeDetails = vi.fn(async () => {
+      calls.push("details");
+      return { message: "Your payout details couldn't be saved.", fields: {} };
+    });
+    const saver = createQuestionnaireSaver(writeDetails, writeFeedback);
+    const outcome = await saver.save({
+      draft: { ...DETAILS, name: "Payee Renamed" },
+      savedDraft: DETAILS,
+      canEditDetails: true,
+      testimonial: { saved: APPROVED, draft: { feedback: "Words", consent: false } },
+    });
+    expect(calls).toEqual(["feedback", "details"]);
+    expect(writeFeedback).toHaveBeenCalledWith({ feedback: "Words", consent: false });
+    expect(outcome).toEqual({
+      kind: "refused",
+      message: "Your feedback is off the site. Your payout details couldn't be saved.",
+      errors: {},
+      testimonialSaved: true,
+    });
+  });
+
+  it("sends a withdrawal even when the details would fail to send at all", async () => {
+    const writeFeedback = vi.fn(async () => ({ testimonial: null }));
+    const saver = createQuestionnaireSaver(async () => ({ message: "Your payout details couldn't be saved.", fields: {} }), writeFeedback);
+    const outcome = await saver.save({
+      draft: DETAILS,
+      canEditDetails: true,
+      testimonial: { saved: APPROVED, draft: { feedback: "", consent: false } },
+    });
+    expect(writeFeedback).toHaveBeenCalledWith({ feedback: null, consent: false });
+    expect(outcome).toMatchObject({ kind: "refused", testimonialSaved: true });
+  });
+
+  it("doesn't resend unchanged details alongside a withdrawal", async () => {
+    const { saver, writeDetails, writeFeedback } = saverWith();
+    const outcome = await saver.save({
+      draft: { ...DETAILS },
+      savedDraft: DETAILS,
+      canEditDetails: true,
+      testimonial: { saved: APPROVED, draft: { feedback: "Words", consent: false } },
+    });
+    expect(outcome).toEqual({ kind: "saved", summary: null, testimonialSaved: true });
+    expect(writeFeedback).toHaveBeenCalledTimes(1);
+    expect(writeDetails).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing else when a withdrawal fails", async () => {
+    const writeDetails = vi.fn();
+    const saver = createQuestionnaireSaver(writeDetails, async () => ({ message: "Your feedback couldn't be saved.", fields: {} }));
+    const outcome = await saver.save({
+      draft: { ...DETAILS, name: "Payee Renamed" },
+      savedDraft: DETAILS,
+      canEditDetails: true,
+      testimonial: { saved: APPROVED, draft: { feedback: "Words", consent: false } },
+    });
+    expect(outcome).toEqual({ kind: "refused", message: "Your feedback couldn't be saved.", errors: {}, testimonialSaved: false });
+    expect(writeDetails).not.toHaveBeenCalled();
+  });
+
+  it("still sends unchanged details on a plain save, with nothing else to save", async () => {
+    const { saver, writeDetails, writeFeedback } = saverWith();
+    const outcome = await saver.save({
+      draft: { ...DETAILS },
+      savedDraft: DETAILS,
+      canEditDetails: true,
+      testimonial: { saved: APPROVED, draft: { feedback: "Words", consent: true } },
+    });
+    expect(outcome).toEqual({ kind: "saved", summary: SUMMARY, testimonialSaved: false });
+    expect(writeDetails).toHaveBeenCalledTimes(1);
     expect(writeFeedback).not.toHaveBeenCalled();
   });
 

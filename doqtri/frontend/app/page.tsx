@@ -1,4 +1,6 @@
+import { Suspense } from "react";
 import { LandingPage } from "@/components/landing/landing-page";
+import { LandingTestimonials } from "@/components/landing/landing-testimonials";
 import { landingTestimonials } from "@/lib/referral-testimonials-store";
 
 // Type comes from the root layout (Plus Jakarta Sans + JetBrains Mono), like
@@ -10,10 +12,23 @@ export const metadata = {
 };
 
 /**
- * The landing page. Prerendered as before while the legal pages are off; once
- * they're live it reads approved testimonials (DOQ-28) on every request, so a
- * withdrawal or an approval shows on the next load.
+ * The landing page. Prerendered as before while the legal pages are off. Once
+ * they're live, approved testimonials (DOQ-28) are read on every request and
+ * streamed in under their own Suspense boundary, with no fallback: the rest of
+ * the page never waits on the database, and a slow or failed read shows none.
  */
-export default async function Home() {
-  return <LandingPage testimonials={await landingTestimonials()} />;
+export default function Home() {
+  return (
+    <LandingPage
+      testimonials={
+        <Suspense fallback={null}>
+          <Testimonials />
+        </Suspense>
+      }
+    />
+  );
+}
+
+async function Testimonials() {
+  return <LandingTestimonials items={await landingTestimonials()} />;
 }

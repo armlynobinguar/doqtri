@@ -59,10 +59,12 @@ describe("a row", () => {
     expect(button(html, "testimonial-reject")).toBeUndefined();
   });
 
-  it("without a questionnaire name: says it won't appear", () => {
+  it("without a questionnaire name: can't be approved, says why, and can still be rejected", () => {
     const html = renderRow(row("pending", null));
     expect(html).toContain("No name saved");
-    expect(html).toContain("won&#x27;t appear on the site");
+    expect(html).toContain("so it can&#x27;t be approved");
+    expect(disabled(button(html, "testimonial-approve"))).toBe(true);
+    expect(disabled(button(html, "testimonial-reject"))).toBe(false);
   });
 });
 
@@ -92,6 +94,12 @@ describe("a decision", () => {
     expect(canDecide(row("rejected"), "reject")).toBe(false);
   });
 
+  it("is never an approval without a name to see", () => {
+    expect(reviewRequest(row("pending", null), "approve")).toBeNull();
+    expect(reviewRequest(row("rejected", null), "approve")).toBeNull();
+    expect(reviewRequest(row("pending", null), "reject")).toEqual({ userId: USER, version: VERSION, decision: "reject" });
+  });
+
   it("posts to the admin route, never cached, and takes the server's words on a refusal", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "This feedback changed." }), { status: 409 }));
     vi.stubGlobal("fetch", fetchMock);
@@ -109,7 +117,6 @@ describe("a decision", () => {
 
   it("is described afterwards", () => {
     expect(reviewedMessage(row("pending"), "approved")).toContain("Approved Payee Name's testimonial.");
-    expect(reviewedMessage(row("pending", null), "approved")).toContain("won't show on the site");
     expect(reviewedMessage(row("approved"), "rejected")).toContain("isn't shown on the site");
   });
 });

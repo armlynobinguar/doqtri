@@ -13,8 +13,10 @@
 --   - a new row is never approved or rejected;
 --   - editing the text, or withdrawing consent, clears approval and rejection,
 --     so an edit always goes back to review (AC 5);
---   - changing the questionnaire's name clears approval too: what an admin
---     approved was this name with this text;
+--   - a questionnaire name that is new, changed or removed clears approval
+--     too: what an admin approved was this name with this text. Approval
+--     needs a name, so a nameless testimonial is never approved and can't go
+--     public under a name saved after the fact;
 --   - approval and rejection need consent, and never both at once.
 -- consented_at and updated_at are the database's, whatever the writer sends.
 -- updated_at is the row's version: an admin's decision names the version they
@@ -25,8 +27,10 @@
 -- characters. The app's validator (lib/referral-testimonial.ts) is what users
 -- meet; these checks are the backstop.
 --
--- RLS on. The owner can read their own row; no policy allows any write, so
--- writes go through the service role, from the routes. anon has no privileges.
+-- RLS on. The owner can read their own row's text, consent and decision, but
+-- not who decided or when they consented (column grants); no policy allows any
+-- write, so writes go through the service role, from the routes. anon has no
+-- privileges.
 -- Goes with the account (on delete cascade). The approving admin's id goes if
 -- their account does (on delete set null), and the approval stays.
 
@@ -80,7 +84,11 @@ begin
     end;
   end if;
   -- clock_timestamp(), not now(): two writes in one transaction are two versions.
-  new.updated_at := clock_timestamp();
+  -- And always later than the last one, so a coarse clock can't repeat a version.
+  new.updated_at := case
+    when tg_op = 'UPDATE' then greatest(clock_timestamp(), old.updated_at + interval '1 microsecond')
+    else clock_timestamp()
+  end;
   return new;
 end;
 $$;
@@ -89,7 +97,10 @@ create trigger referral_testimonials_before_write
   before insert or update on public.referral_testimonials
   for each row execute function public.referral_testimonials_before_write();
 
--- A new questionnaire name sends an approved testimonial back to review.
+-- A questionnaire name that is new, changed or removed sends an approved
+-- testimonial back to review. It also moves the testimonial's version, approved
+-- or not, so an admin who read the list under the old name (or none) gets
+-- "changed" rather than approving a name they never saw.
 create function public.referral_payout_profiles_name_changed()
 returns trigger
 language plpgsql
@@ -97,17 +108,19 @@ security definer
 set search_path = ''
 as $$
 begin
+  if tg_op = 'UPDATE' and old.name is not distinct from new.name then
+    return null;
+  end if;
   update public.referral_testimonials
      set approved_at = null, approved_by = null
-   where user_id = new.user_id and approved_at is not null;
+   where user_id = case when tg_op = 'DELETE' then old.user_id else new.user_id end;
   return null;
 end;
 $$;
 
 create trigger referral_payout_profiles_name_changed
-  after update of name on public.referral_payout_profiles
-  for each row when (old.name is distinct from new.name)
-  execute function public.referral_payout_profiles_name_changed();
+  after insert or delete or update of name on public.referral_payout_profiles
+  for each row execute function public.referral_payout_profiles_name_changed();
 
 alter table public.referral_testimonials enable row level security;
 
@@ -117,7 +130,9 @@ create policy "Owners can read their testimonial"
   using (auth.uid() = user_id);
 
 revoke all on public.referral_testimonials from public, anon, authenticated;
-grant select on public.referral_testimonials to authenticated;
+-- What the questionnaire shows its owner: the text, the consent and where it
+-- stands. Not approved_by, consented_at or the version.
+grant select (user_id, feedback, consent, approved_at, rejected_at) on public.referral_testimonials to authenticated;
 grant select, insert, update, delete on public.referral_testimonials to service_role;
 
 -- ---------------------------------------------------------------------------
@@ -178,8 +193,10 @@ $$;
 
 -- Approves or rejects the testimonial as it was at p_version. Returns what
 -- happened: approved, rejected, changed (edited or deleted since p_version),
--- private (no consent, so nothing to decide) or admin_gone. p_admin comes from
--- the route's verified admin session.
+-- private (no consent, so nothing to decide), no_name (approval asked for, and
+-- no questionnaire name to show it under: an admin must see the name they
+-- approve) or admin_gone. Rejecting needs no name. p_admin comes from the
+-- route's verified admin session.
 create function public.referral_testimonial_review(
   p_user_id uuid,
   p_version timestamptz,
@@ -204,6 +221,9 @@ begin
   end if;
   if not v_row.consent then
     return 'private';
+  end if;
+  if p_approve and not exists (select 1 from public.referral_payout_profiles p where p.user_id = p_user_id) then
+    return 'no_name';
   end if;
 
   begin

@@ -105,6 +105,8 @@ export type QuestionnaireErrors = PayoutFieldErrors & TestimonialFieldErrors;
 
 export type QuestionnaireRequest = {
   draft: PayoutDraft;
+  /** The details as the form opened with them, to tell whether they changed. */
+  savedDraft?: PayoutDraft | null;
   /** False for an owner without an eligible referral: their details aren't sent. */
   canEditDetails: boolean;
   /** The feedback fields, when the dialog shows them. */
@@ -118,15 +120,30 @@ export type QuestionnaireOutcome =
   | { kind: "invalid"; errors: QuestionnaireErrors }
   /** Everything sent was saved. `summary` is null when the details weren't sent. */
   | { kind: "saved"; summary: PayoutSummary | null; testimonialSaved: boolean }
-  /** Refused before anything was saved. */
-  | { kind: "refused"; message: string; errors: QuestionnaireErrors }
+  /**
+   * The details or the feedback were refused. `testimonialSaved` is true when a
+   * withdrawal, sent first, went through all the same.
+   */
+  | { kind: "refused"; message: string; errors: QuestionnaireErrors; testimonialSaved: boolean }
   /** The details were saved, and the feedback wasn't. */
   | { kind: "partial"; summary: PayoutSummary; message: string; errors: QuestionnaireErrors };
 
+/** Whether two drafts are the same details, as they would be saved. */
+function sameDetails(a: PayoutDraft, b: PayoutDraft): boolean {
+  const left = validatePayoutProfile(a);
+  const right = validatePayoutProfile(b);
+  return left.ok && right.ok && JSON.stringify(left.profile) === JSON.stringify(right.profile);
+}
+
 /**
- * Saves the questionnaire: the details through their route, then the feedback
- * through its own, only if it changed. Both are checked before either is sent.
- * One save at a time, whatever the button's state says.
+ * Saves the questionnaire. Both parts are checked before anything is sent.
+ *
+ * A withdrawal (unticking the box) goes first, on its own, so nothing about the
+ * details, refused or failing, can keep a testimonial on the site. The details
+ * are sent when they changed, or when nothing else is being saved (a plain
+ * save, as before); unchanged details aren't sent again alongside feedback.
+ * Other feedback changes go after the details. One save at a time, whatever the
+ * button's state says.
  */
 export function createQuestionnaireSaver(
   writeDetails: (profile: Parameters<typeof writePayoutDetails>[0]) => Promise<PayoutWritten> = writePayoutDetails,
@@ -140,14 +157,16 @@ export function createQuestionnaireSaver(
     async save(request: QuestionnaireRequest, onSend?: () => void): Promise<QuestionnaireOutcome> {
       if (saving) return { kind: "busy" };
       const errors: QuestionnaireErrors = {};
+      const testimonial = request.testimonial;
 
-      const details = request.canEditDetails ? validatePayoutProfile(request.draft) : null;
+      const feedbackChanged = testimonial ? testimonialChanged(testimonial.saved, testimonial.draft) : false;
+      const withdrawing = feedbackChanged && Boolean(testimonial!.saved?.consent) && !testimonial!.draft.consent;
+      const detailsChanged = !request.savedDraft || !sameDetails(request.savedDraft, request.draft);
+      const sendDetails = request.canEditDetails && (detailsChanged || !feedbackChanged);
+
+      const details = sendDetails ? validatePayoutProfile(request.draft) : null;
       if (details && !details.ok) Object.assign(errors, details.errors);
-
-      const feedbackChanged = request.testimonial
-        ? testimonialChanged(request.testimonial.saved, request.testimonial.draft)
-        : false;
-      const feedback = feedbackChanged ? validateTestimonial(request.testimonial!.draft) : null;
+      const feedback = feedbackChanged ? validateTestimonial(testimonial!.draft) : null;
       if (feedback && !feedback.ok) Object.assign(errors, feedback.errors);
 
       if (Object.keys(errors).length > 0) return { kind: "invalid", errors };
@@ -156,18 +175,33 @@ export function createQuestionnaireSaver(
       saving = true;
       onSend?.();
       try {
+        let withdrawn = false;
+        if (withdrawing && feedback?.ok) {
+          const written = await writeFeedback(feedback.value);
+          if (!("testimonial" in written)) {
+            return { kind: "refused", message: written.message, errors: written.fields, testimonialSaved: false };
+          }
+          withdrawn = true;
+        }
         let summary: PayoutSummary | null = null;
         if (details?.ok) {
           const written = await writeDetails(details.profile);
-          if (!("summary" in written)) return { kind: "refused", message: written.message, errors: written.fields };
+          if (!("summary" in written)) {
+            return {
+              kind: "refused",
+              message: withdrawn ? `Your feedback is off the site. ${written.message}` : written.message,
+              errors: written.fields,
+              testimonialSaved: withdrawn,
+            };
+          }
           summary = written.summary;
         }
-        if (feedback?.ok) {
+        if (feedback?.ok && !withdrawn) {
           const written = await writeFeedback(feedback.value);
           if (!("testimonial" in written)) {
             return summary
               ? { kind: "partial", summary, message: `Your payout details were saved. ${written.message}`, errors: written.fields }
-              : { kind: "refused", message: written.message, errors: written.fields };
+              : { kind: "refused", message: written.message, errors: written.fields, testimonialSaved: false };
           }
         }
         return { kind: "saved", summary, testimonialSaved: Boolean(feedback?.ok) };
