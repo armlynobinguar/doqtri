@@ -7,8 +7,10 @@ import { BlockChain } from "@/components/brand/block-chain";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { BlockGlyph, type Glyph } from "@/components/brand/glyphs";
 import { LandingMindmap } from "@/components/landing/landing-mindmap";
+import { LandingTestimonials } from "@/components/landing/landing-testimonials";
 import { LiveStats } from "@/components/landing/live-stats";
 import { MINDMAP_PROMO, PROMO_PATH } from "@/lib/promo";
+import type { PublicTestimonial } from "@/lib/referral-testimonial";
 import styles from "./landing-page.module.css";
 
 const X_URL = "https://x.com/usedoqtri";
@@ -46,7 +48,8 @@ const LIFECYCLE: { label: string; glyph: Glyph }[] = [
   { label: "Verified", glyph: "stellar" },
 ];
 
-export function LandingPage() {
+/** `testimonials`: approved referrers' words (DOQ-28), none until the legal pages go live. */
+export function LandingPage({ testimonials = [] }: { testimonials?: readonly PublicTestimonial[] }) {
   return (
     <div className={styles.page}>
       <div className={styles.atmosphere} aria-hidden />
@@ -186,6 +189,8 @@ export function LandingPage() {
             </li>
           </ol>
         </section>
+
+        <LandingTestimonials items={testimonials} />
 
         <section className={styles.proof} id="proof" aria-labelledby="proof-title">
           <p className={styles.eyebrow}>Block by block</p>
