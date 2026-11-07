@@ -6,10 +6,11 @@ import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/sup
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
-/** Far more than the longest valid form. */
-const MAX_BODY_CHARS = 8 * 1024;
+/** Far more than the longest valid form, in bytes. */
+const MAX_BODY_BYTES = 8 * 1024;
 
 const NOT_ELIGIBLE = "Payout details open once you have an eligible referral.";
+const TOO_LARGE = "That's more than a payout form can hold.";
 
 function answer(body: unknown, status = 200) {
   return Response.json(body, { status, headers: NO_STORE });
@@ -66,13 +67,18 @@ export async function PUT(request: Request) {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return answer({ error: "Sign in to continue." }, 401);
+  // Too big to be a form, by its own account: refused before anything is read.
+  if (Number(request.headers.get("content-length")) > MAX_BODY_BYTES) return answer({ error: TOO_LARGE }, 413);
 
   try {
     // Service role from here on: user.id comes from the verified session above.
     const admin = createSupabaseAdminClient();
     if (!(await hasEligibleReferral(admin, user.id, NETWORK))) return answer({ error: NOT_ELIGIBLE }, 403);
 
-    const body = parseBody(await request.text());
+    // A missing or wrong Content-Length can't get more than the cap read either.
+    const text = await readBounded(request, MAX_BODY_BYTES);
+    if (text === null) return answer({ error: TOO_LARGE }, 413);
+    const body = parseBody(text);
     if (body === undefined) return answer({ error: "Check your details and try again." }, 400);
 
     const result = validatePayoutProfile(body);
@@ -86,9 +92,36 @@ export async function PUT(request: Request) {
   }
 }
 
+/**
+ * The body as text, or null once it passes `max` bytes, whatever Content-Length
+ * said: reading stops there, and the rest is never taken in.
+ */
+async function readBounded(request: Request, max: number): Promise<string | null> {
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const all = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    all.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return new TextDecoder().decode(all);
+}
+
 /** Undefined for what can't be a form. A parser's error can quote the text, so it goes no further. */
 function parseBody(text: string): unknown {
-  if (text.length > MAX_BODY_CHARS) return undefined;
   try {
     return JSON.parse(text);
   } catch {

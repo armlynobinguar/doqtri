@@ -15,7 +15,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(48);
+select plan(112);
 
 create function pg_temp.uid(p_n int) returns uuid language sql immutable as $$
   select ('62000000-0000-4000-8000-' || lpad(p_n::text, 12, '0'))::uuid
@@ -28,10 +28,11 @@ $$;
 
 insert into auth.users (id, email) values
   (pg_temp.uid(1), 'owner@example.com'),
-  (pg_temp.uid(2), 'someone@example.com');
+  (pg_temp.uid(2), 'someone@example.com'),
+  (pg_temp.uid(3), 'newcomer@example.com');
 
-insert into public.referral_payout_profiles (user_id, method, name, xlm_address, xlm_memo)
-values (pg_temp.uid(1), 'xlm', 'Owner Name', pg_temp.g('A'), '12345');
+insert into public.referral_payout_profiles (user_id, method, name, xlm_address, xlm_memo, xlm_memo_type)
+values (pg_temp.uid(1), 'xlm', 'Owner Name', pg_temp.g('A'), '12345', 'id');
 insert into public.referral_payout_profiles
   (user_id, method, name, ewallet_provider, ewallet_account_name, ewallet_account_number)
 values (pg_temp.uid(2), 'ewallet', 'Someone Else', 'GCash', 'Someone Else', '09171234567');
@@ -153,21 +154,22 @@ set local role service_role;
 
 select lives_ok(
   $$ insert into public.referral_payout_profiles
-       (user_id, method, name, xlm_address, xlm_memo, ewallet_provider, ewallet_account_name,
+       (user_id, method, name, xlm_address, xlm_memo, xlm_memo_type, ewallet_provider, ewallet_account_name,
         ewallet_account_number, ewallet_details, updated_at)
-     values ('62000000-0000-4000-8000-000000000001', 'ewallet', 'Owner Name', null, null, 'Maya',
+     values ('62000000-0000-4000-8000-000000000001', 'ewallet', 'Owner Name', null, null, null, 'Maya',
              'Owner Name', '0917 000 1111', 'Main branch', now())
      on conflict (user_id) do update set
        method = excluded.method, name = excluded.name, xlm_address = excluded.xlm_address,
-       xlm_memo = excluded.xlm_memo, ewallet_provider = excluded.ewallet_provider,
+       xlm_memo = excluded.xlm_memo, xlm_memo_type = excluded.xlm_memo_type,
+       ewallet_provider = excluded.ewallet_provider,
        ewallet_account_name = excluded.ewallet_account_name,
        ewallet_account_number = excluded.ewallet_account_number,
        ewallet_details = excluded.ewallet_details, updated_at = excluded.updated_at $$,
   'the service role switches the owner to e-wallet, writing every column as the route does');
 select results_eq(
-  $$ select method, xlm_address, xlm_memo, ewallet_provider, ewallet_account_number
+  $$ select method, xlm_address, xlm_memo, xlm_memo_type, ewallet_provider, ewallet_account_number
        from public.referral_payout_profiles where user_id = '62000000-0000-4000-8000-000000000001' $$,
-  $$ values ('ewallet'::text, null::text, null::text, 'Maya'::text, '0917 000 1111'::text) $$,
+  $$ values ('ewallet'::text, null::text, null::text, null::text, 'Maya'::text, '0917 000 1111'::text) $$,
   'and the XLM details are gone (AC 4)');
 
 -- ---------------------------------------------------------------------------
@@ -179,7 +181,7 @@ select throws_ok(
       where user_id = '62000000-0000-4000-8000-000000000001' $$,
   '23514', null, 'switching to XLM with the e-wallet details left behind is refused');
 select throws_ok(
-  $$ update public.referral_payout_profiles set xlm_memo = '12345'
+  $$ update public.referral_payout_profiles set xlm_memo = '12345', xlm_memo_type = 'id'
       where user_id = '62000000-0000-4000-8000-000000000001' $$,
   '23514', null, 'so is an XLM memo on an e-wallet row');
 select throws_ok(
@@ -201,12 +203,22 @@ select throws_ok(
   $$ update public.referral_payout_profiles set method = 'cash' where user_id = '62000000-0000-4000-8000-000000000002' $$,
   '23514', null, 'and there are only two methods');
 
-create function pg_temp.xlm(p_address text, p_memo text default null, p_name text default 'Owner Name')
+create function pg_temp.xlm(p_address text, p_memo text default null, p_type text default null,
+                            p_name text default 'Owner Name')
 returns void language sql as $$
   update public.referral_payout_profiles
-     set method = 'xlm', name = p_name, xlm_address = p_address, xlm_memo = p_memo,
+     set method = 'xlm', name = p_name, xlm_address = p_address, xlm_memo = p_memo, xlm_memo_type = p_type,
          ewallet_provider = null, ewallet_account_name = null, ewallet_account_number = null, ewallet_details = null
    where user_id = '62000000-0000-4000-8000-000000000001'
+$$;
+-- The owner's XLM row, with a memo of one type or the other.
+create function pg_temp.memo(p_memo text, p_type text) returns void language sql as $$
+  select pg_temp.xlm('G' || repeat('B', 55), p_memo, p_type)
+$$;
+-- Someone else's e-wallet row, with this account number.
+create function pg_temp.acct(p_number text) returns void language sql as $$
+  update public.referral_payout_profiles set ewallet_account_number = p_number
+   where user_id = '62000000-0000-4000-8000-000000000002'
 $$;
 
 select lives_ok($$ select pg_temp.xlm('G' || repeat('B', 55)) $$, 'switching back to XLM, cleanly, is fine');
@@ -214,24 +226,117 @@ select throws_ok($$ select pg_temp.xlm('C' || repeat('B', 55)) $$, '23514', null
   'a passkey (C...) address is refused');
 select throws_ok($$ select pg_temp.xlm('G' || repeat('B', 54)) $$, '23514', null, 'so is one too short');
 select throws_ok($$ select pg_temp.xlm(lower('G' || repeat('B', 55))) $$, '23514', null, 'or in lower case');
-select lives_ok($$ select pg_temp.xlm('G' || repeat('B', 55), repeat('x', 28)) $$, 'a 28-byte memo is fine');
-select throws_ok($$ select pg_temp.xlm('G' || repeat('B', 55), repeat('x', 29)) $$, '23514', null,
-  'a 29-byte one isn''t');
--- 'é' is two bytes: 14 of them are 28 bytes, in 14 characters.
-select lives_ok($$ select pg_temp.xlm('G' || repeat('B', 55), repeat('é', 14)) $$,
-  'fourteen two-byte characters are 28 bytes, and fine');
-select throws_ok($$ select pg_temp.xlm('G' || repeat('B', 55), repeat('é', 14) || 'x') $$, '23514', null,
-  'one more byte, in fifteen characters, is refused: bytes count, not characters');
-select throws_ok($$ select pg_temp.xlm('G' || repeat('B', 55), '') $$, '23514', null,
-  'an empty memo is stored as null, never as empty');
-select throws_ok($$ select pg_temp.xlm('G' || repeat('B', 55), null, E'Owner\nName') $$, '23514', null,
+select throws_ok($$ select pg_temp.xlm('G' || repeat('B', 55), null, null, E'Owner\nName') $$, '23514', null,
   'a line break in a name is refused');
-select throws_ok($$ select pg_temp.xlm('G' || repeat('B', 55), null, repeat('n', 101)) $$, '23514', null,
+select throws_ok($$ select pg_temp.xlm('G' || repeat('B', 55), null, null, repeat('n', 101)) $$, '23514', null,
   'so is a name over 100 characters');
+
+-- A memo and its type (text or ID), together or not at all.
+select lives_ok($$ select pg_temp.memo(repeat('x', 28), 'text') $$, 'a 28-character text memo is fine');
+select throws_ok($$ select pg_temp.memo(repeat('x', 29), 'text') $$, '23514', null,
+  'a 29-character one isn''t: Stellar''s limit is 28 bytes');
+select lives_ok($$ select pg_temp.memo('Ref 42/a-b_c', 'text') $$, 'spaces and common symbols are fine in text');
+select throws_ok($$ select pg_temp.memo(E'café', 'text') $$, '23514', null,
+  'a text memo is printable ASCII: no accented letters');
+select throws_ok($$ select pg_temp.memo(E'\uFF11\uFF12\uFF13', 'text') $$, '23514', null, 'nor fullwidth digits');
+select throws_ok($$ select pg_temp.memo(' 123', 'text') $$, '23514', null, 'nor a space at either end');
+select throws_ok($$ select pg_temp.memo('', 'text') $$, '23514', null,
+  'an empty memo is stored as null, never as empty');
+select throws_ok($$ select pg_temp.memo('12345', null) $$, '23514', null, 'a memo needs its type');
+select throws_ok($$ select pg_temp.memo(null, 'text') $$, '23514', null, 'and a type needs a memo');
+select throws_ok($$ select pg_temp.memo('12345', 'number') $$, '23514', null, 'there are two types only');
+select lives_ok($$ select pg_temp.memo('18446744073709551615', 'id') $$,
+  'an ID memo can be the largest unsigned 64-bit integer');
+select throws_ok($$ select pg_temp.memo('18446744073709551616', 'id') $$, '23514', null, 'but not one more');
+select lives_ok($$ select pg_temp.memo('0', 'id') $$, 'zero is an ID');
+select throws_ok($$ select pg_temp.memo('99999999999999999999', 'id') $$, '23514', null,
+  'twenty nines are too many');
+select throws_ok($$ select pg_temp.memo('184467440737095516150', 'id') $$, '23514', null, 'so are 21 digits');
+select throws_ok($$ select pg_temp.memo('007', 'id') $$, '23514', null, 'an ID has no leading zeros');
+select throws_ok($$ select pg_temp.memo('+1', 'id') $$, '23514', null, 'no sign');
+select throws_ok($$ select pg_temp.memo('-1', 'id') $$, '23514', null, 'and is never negative');
+select throws_ok($$ select pg_temp.memo('1 2', 'id') $$, '23514', null, 'nor has a space in it');
+select throws_ok($$ select pg_temp.memo('12a', 'id') $$, '23514', null, 'nor a letter');
 select throws_ok(
-  $$ update public.referral_payout_profiles set ewallet_account_number = 'no digits here'
+  $$ update public.referral_payout_profiles set xlm_memo_type = 'text'
       where user_id = '62000000-0000-4000-8000-000000000002' $$,
-  '23514', null, 'an account number needs a digit');
+  '23514', null, 'an e-wallet row has no memo type');
+
+-- Names say something, in any script and either Unicode form.
+select lives_ok($$ select pg_temp.xlm('G' || repeat('B', 55), null, null, E'José Example') $$,
+  'a name in NFC is fine');
+select lives_ok($$ select pg_temp.xlm('G' || repeat('B', 55), null, null, E'Jose\u0301 Example') $$,
+  'and in NFD');
+select lives_ok($$ select pg_temp.xlm('G' || repeat('B', 55), null, null, E'李小龙') $$,
+  'and in another script');
+select throws_ok($$ select pg_temp.xlm('G' || repeat('B', 55), null, null, E'\u200B') $$, '23514', null,
+  'a name of a zero-width space alone is refused');
+select throws_ok($$ select pg_temp.xlm('G' || repeat('B', 55), null, null, E'\u3164') $$, '23514', null,
+  'so is a Hangul filler');
+select throws_ok($$ select pg_temp.xlm('G' || repeat('B', 55), null, null, E'\u2800') $$, '23514', null,
+  'and the blank Braille pattern');
+select throws_ok($$ select pg_temp.xlm('G' || repeat('B', 55), null, null, E'Own\U000E0041er') $$, '23514', null,
+  'a name with a tag character, outside the BMP, is refused');
+select throws_ok($$ select pg_temp.xlm('G' || repeat('B', 55), null, null, E'Own\U000110BDer') $$, '23514', null,
+  'a name with a format character outside the BMP is refused');
+select throws_ok($$ select pg_temp.xlm('G' || repeat('B', 55), null, null, E'Own\u00ADer') $$, '23514', null,
+  'a name with a soft hyphen is refused');
+select throws_ok($$ select pg_temp.xlm('G' || repeat('B', 55), null, null, '- !') $$, '23514', null,
+  'and punctuation alone');
+select throws_ok($$ select pg_temp.xlm('G' || repeat('B', 55), null, null, E'\u0301\u00A0') $$, '23514', null,
+  'and a combining mark with a space');
+select throws_ok($$ select pg_temp.xlm('G' || repeat('B', 55), null, null, ' Owner') $$, '23514', null,
+  'and a name starting with a space');
+
+-- Account numbers are ASCII, so no look-alike digit stands in for one.
+select lives_ok($$ select pg_temp.acct('PH12 3456-7890') $$, 'letters, digits, spaces and dashes are fine');
+select throws_ok($$ select pg_temp.acct(E'0917\uFF11\uFF12\uFF13\uFF14\uFF15\uFF16') $$, '23514', null,
+  'fullwidth digits are refused');
+select throws_ok($$ select pg_temp.acct(E'091712\u0663\u0664\u0665\u0666') $$, '23514', null,
+  'so are Arabic-Indic ones');
+select throws_ok($$ select pg_temp.acct('123456!!!!') $$, '23514', null, 'and other symbols');
+select throws_ok($$ select pg_temp.acct('12345 abc') $$, '23514', null, 'and fewer than six digits');
+select throws_ok($$ select pg_temp.acct('no digits here') $$, '23514', null, 'or none');
+
+-- Each invisible character, in each field, refused by the database itself when
+-- the service role inserts a row directly: what's shown is what's stored. Each
+-- template inserts a valid row with its plain value first, so a refusal below
+-- can only be the character's.
+create temporary table invisible_insert (col text, plain text, template text);
+insert into invisible_insert values
+  ('name', 'Newcomer',
+   $$insert into public.referral_payout_profiles (user_id, method, name, xlm_address)
+     values ('62000000-0000-4000-8000-000000000003', 'xlm', %L, 'G' || repeat('A', 55))$$),
+  ('xlm_memo', '12345',
+   $$insert into public.referral_payout_profiles (user_id, method, name, xlm_address, xlm_memo, xlm_memo_type)
+     values ('62000000-0000-4000-8000-000000000003', 'xlm', 'Newcomer', 'G' || repeat('A', 55), %L, 'text')$$),
+  ('ewallet_account_name', 'Newcomer',
+   $$insert into public.referral_payout_profiles
+       (user_id, method, name, ewallet_provider, ewallet_account_name, ewallet_account_number)
+     values ('62000000-0000-4000-8000-000000000003', 'ewallet', 'Newcomer', 'GCash', %L, '09171234567')$$),
+  ('ewallet_account_number', '0917123',
+   $$insert into public.referral_payout_profiles
+       (user_id, method, name, ewallet_provider, ewallet_account_name, ewallet_account_number)
+     values ('62000000-0000-4000-8000-000000000003', 'ewallet', 'Newcomer', 'GCash', 'Newcomer', %L)$$),
+  ('ewallet_details', 'Main',
+   $$insert into public.referral_payout_profiles
+       (user_id, method, name, ewallet_provider, ewallet_account_name, ewallet_account_number, ewallet_details)
+     values ('62000000-0000-4000-8000-000000000003', 'ewallet', 'Newcomer', 'GCash', 'Newcomer', '09171234567', %L)$$);
+grant select on invisible_insert to service_role;
+
+-- The controls: each insert, with a plain value, goes in (and is taken out again).
+select lives_ok(format(template || '; delete from public.referral_payout_profiles where user_id = %L',
+                       plain || '4567', '62000000-0000-4000-8000-000000000003'),
+                format('the service role can insert a plain %s', col))
+  from invisible_insert order by col;
+select throws_ok(format(f.template, f.plain || c.ch || '4567'), '23514', null,
+                 format('%s in %s is refused, inserted directly by the service role', c.label, f.col))
+  from (values ('ZWSP', E'\u200B'), ('LRM', E'\u200E'), ('RLO', E'\u202E'), ('BOM', E'\uFEFF'), ('U+2028', E'\u2028'))
+         as c(label, ch)
+ cross join invisible_insert f
+ order by f.col, c.label;
+select is((select count(*)::int from public.referral_payout_profiles where user_id = pg_temp.uid(3)), 0,
+  'and none of them is stored');
 
 reset role;
 

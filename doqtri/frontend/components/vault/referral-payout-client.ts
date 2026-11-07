@@ -22,6 +22,8 @@ export type PayoutDraft = {
   method: "" | "xlm" | "ewallet";
   address: string;
   memo: string;
+  /** Text unless the user says otherwise: what most exchanges ask for. */
+  memoType: "text" | "id";
   provider: string;
   accountName: string;
   accountNumber: string;
@@ -38,6 +40,7 @@ export function payoutDraft(profile: PayoutProfile | null): PayoutDraft {
     method: "",
     address: "",
     memo: "",
+    memoType: "text",
     provider: "",
     accountName: "",
     accountNumber: "",
@@ -45,7 +48,14 @@ export function payoutDraft(profile: PayoutProfile | null): PayoutDraft {
   };
   if (!profile) return empty;
   return profile.method === "xlm"
-    ? { ...empty, name: profile.name, method: "xlm", address: profile.address, memo: profile.memo ?? "" }
+    ? {
+        ...empty,
+        name: profile.name,
+        method: "xlm",
+        address: profile.address,
+        memo: profile.memo ?? "",
+        memoType: profile.memoType ?? "text",
+      }
     : {
         ...empty,
         name: profile.name,
@@ -136,7 +146,9 @@ export type PayoutCard =
   /** Saved: the masked summary, with Edit (or View, for someone who can no longer change it). */
   | { kind: "saved"; summary: PayoutSummary; canEdit: boolean }
   /** Eligible but nothing owed right now, and nothing saved: an offer to add them. */
-  | { kind: "empty" };
+  | { kind: "empty" }
+  /** The saved details couldn't be read: say so, and nothing more, rather than guess. */
+  | { kind: "unavailable" };
 
 /**
  * What the dashboard's payout card says, or null for none: someone with neither
@@ -150,6 +162,7 @@ export function payoutCard(
 ): PayoutCard | null {
   const summary = justSaved ?? payout.summary;
   if (summary) return { kind: "saved", summary, canEdit: payout.canEdit };
+  if (payout.unavailable) return { kind: "unavailable" };
   if (payoutNeeded) return { kind: "needed" };
   return payout.canEdit ? { kind: "empty" } : null;
 }

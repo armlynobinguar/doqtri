@@ -123,6 +123,7 @@ describe("the fields as they open", () => {
       method: "",
       address: "",
       memo: "",
+      memoType: "text",
       provider: "",
       accountName: "",
       accountNumber: "",
@@ -131,12 +132,17 @@ describe("the fields as they open", () => {
   });
 
   it("are what's saved, for XLM", () => {
-    expect(payoutDraft({ method: "xlm", name: "A Referrer", address: G, memo: null })).toMatchObject({
+    expect(payoutDraft({ method: "xlm", name: "A Referrer", address: G, memo: null, memoType: null })).toMatchObject({
       method: "xlm",
       name: "A Referrer",
       address: G,
       memo: "",
+      memoType: "text",
       accountNumber: "",
+    });
+    expect(payoutDraft({ method: "xlm", name: "A Referrer", address: G, memo: "42", memoType: "id" })).toMatchObject({
+      memo: "42",
+      memoType: "id",
     });
   });
 
@@ -192,6 +198,13 @@ describe("the dashboard's card", () => {
     expect(payoutCard({ canEdit: true, summary: null }, false, null)).toEqual({ kind: "empty" });
   });
 
+  it("says only that the details couldn't be loaded when that's so, rather than ask for them", () => {
+    expect(payoutCard({ canEdit: true, summary: null, unavailable: true }, false, null)).toEqual({ kind: "unavailable" });
+    expect(payoutCard({ canEdit: false, summary: null, unavailable: true }, false, null)).toEqual({ kind: "unavailable" });
+    // A save made since wins: then it's known.
+    expect(payoutCard({ canEdit: true, summary: null, unavailable: true }, false, SAVED)).toMatchObject({ kind: "saved" });
+  });
+
   it("is nothing for someone with neither details nor an eligible referral", () => {
     expect(payoutCard({ canEdit: false, summary: null }, false, null)).toBeNull();
   });
@@ -223,7 +236,7 @@ describe("talking to the route", () => {
   it("writes with PUT and JSON, and takes the summary back", async () => {
     const fetch = respond(200, { summary: { label: "XLM", last4: "WXYZ" } });
     vi.stubGlobal("fetch", fetch);
-    const profile: PayoutProfile = { method: "xlm", name: "A Referrer", address: G, memo: null };
+    const profile: PayoutProfile = { method: "xlm", name: "A Referrer", address: G, memo: null, memoType: null };
     expect(await writePayoutDetails(profile)).toEqual({ summary: { label: "XLM", last4: "WXYZ" } });
     expect(fetch).toHaveBeenCalledWith("/api/referrals/payout-profile", {
       method: "PUT",
@@ -234,12 +247,12 @@ describe("talking to the route", () => {
 
   it("passes on a refusal's fields, and its own words when there are none", async () => {
     vi.stubGlobal("fetch", respond(400, { error: "Check the highlighted details.", fields: { memo: "Too long." } }));
-    expect(await writePayoutDetails({ method: "xlm", name: "A", address: G, memo: null })).toEqual({
+    expect(await writePayoutDetails({ method: "xlm", name: "A", address: G, memo: null, memoType: null })).toEqual({
       message: "Check the highlighted details.",
       fields: { memo: "Too long." },
     });
     vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>", { status: 502 })));
-    expect(await writePayoutDetails({ method: "xlm", name: "A", address: G, memo: null })).toEqual({
+    expect(await writePayoutDetails({ method: "xlm", name: "A", address: G, memo: null, memoType: null })).toEqual({
       message: SAVE_FAILED,
       fields: {},
     });

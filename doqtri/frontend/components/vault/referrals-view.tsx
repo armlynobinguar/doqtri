@@ -233,12 +233,20 @@ function LimitNotice({ limit }: { limit: ReferralLimit }) {
   );
 }
 
+const PAYOUT_CARD_TITLE: Record<"needed" | "saved" | "empty" | "unavailable", string> = {
+  needed: "Payout details needed",
+  saved: "Payout details saved",
+  empty: "No payout details saved",
+  unavailable: "Your payout details couldn't be loaded",
+};
+
 /**
  * Where the payout questionnaire opens (DOQ-25). One card whatever it says, so the
  * button that opened the form keeps a keyboard user's focus when the form closes
  * and the words change. "Needed" until details are saved; after that it's the
- * saved state, showing only what the summary masks: the method and the last few
- * characters. The details themselves are only ever in the form. See payoutCard().
+ * saved state, showing only what the summary masks: the method, the last few
+ * characters and, for XLM, the memo's type. The details themselves are only ever
+ * in the form. See payoutCard().
  */
 function PayoutPrompt({
   payout,
@@ -263,34 +271,34 @@ function PayoutPrompt({
       >
         <WalletIcon className="text-muted-foreground mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
         <div className="min-w-0 flex-1 basis-40">
-          <p className="text-foreground font-medium">
-            {card.kind === "needed"
-              ? "Payout details needed"
-              : card.kind === "saved"
-                ? "Payout details saved"
-                : "No payout details saved"}
-          </p>
+          <p className="text-foreground font-medium">{PAYOUT_CARD_TITLE[card.kind]}</p>
           <p className="text-muted-foreground mt-1 [overflow-wrap:anywhere]" data-testid="referrals-payout-text">
             {card.kind === "needed" ? (
               <>You have {formatNumber(unpaidPhp)} PHP unpaid. We need your payout details before we can pay it.</>
             ) : card.kind === "saved" ? (
               <>
                 {card.summary.label} ending in <span className="font-mono">{card.summary.last4}</span>
+                {card.summary.memoType ? `, with ${card.summary.memoType === "id" ? "an ID" : "a text"} memo` : null}
               </>
+            ) : card.kind === "unavailable" ? (
+              <>Try reloading the page in a moment.</>
             ) : (
               <>Add them so that we can pay any future rewards.</>
             )}
           </p>
         </div>
-        <Button
-          type="button"
-          size="sm"
-          variant={card.kind === "needed" ? "default" : "outline"}
-          onClick={() => setOpen(true)}
-          data-testid="referrals-payout-open"
-        >
-          {card.kind !== "saved" ? "Add details" : card.canEdit ? "Edit" : "View"}
-        </Button>
+        {/* Nothing to open while it's unknown what's saved: the form would fail the same way. */}
+        {card.kind !== "unavailable" ? (
+          <Button
+            type="button"
+            size="sm"
+            variant={card.kind === "needed" ? "default" : "outline"}
+            onClick={() => setOpen(true)}
+            data-testid="referrals-payout-open"
+          >
+            {card.kind !== "saved" ? "Add details" : card.canEdit ? "Edit" : "View"}
+          </Button>
+        ) : null}
       </div>
       <ReferralPayoutDialog open={open} onOpenChange={setOpen} onSaved={setJustSaved} />
     </>

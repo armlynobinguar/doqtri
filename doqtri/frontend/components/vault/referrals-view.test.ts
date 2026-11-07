@@ -207,6 +207,37 @@ describe("the payout card (DOQ-25)", () => {
     expect(html).not.toContain("Payout details needed");
   });
 
+  it("names an XLM memo's type, and nothing of the memo itself", () => {
+    const html = text(
+      render(dashboard({ payout: { canEdit: true, summary: { label: "XLM", last4: "WXYZ", memoType: "id" } } })),
+    );
+    expect(html).toContain("XLM ending in WXYZ, with an ID memo");
+    expect(
+      text(render(dashboard({ payout: { canEdit: true, summary: { label: "XLM", last4: "WXYZ", memoType: "text" } } }))),
+    ).toContain("XLM ending in WXYZ, with a text memo");
+    expect(
+      text(render(dashboard({ payout: { canEdit: true, summary: { label: "XLM", last4: "WXYZ", memoType: null } } }))),
+    ).not.toContain("memo");
+  });
+
+  it("says plainly when the details couldn't be loaded, with nothing to open, and the rest of the page as usual", () => {
+    const html = renderToStaticMarkup(
+      render(
+        dashboard({
+          payoutNeeded: false,
+          totals: UNPAID,
+          payout: { canEdit: true, summary: null, unavailable: true },
+        }),
+      ),
+    );
+    const card = /data-testid="referrals-payout-unavailable".*?<\/div><\/div>/.exec(html)?.[0] ?? "";
+    expect(card).toContain("Your payout details couldn&#x27;t be loaded");
+    expect(card).toContain("Try reloading the page in a moment.");
+    expect(html).not.toContain("referrals-payout-open");
+    expect(html).not.toContain("Payout details needed");
+    expect(html).toContain('data-testid="referrals-totals"');
+  });
+
   it("doesn't appear for someone with neither details nor an eligible referral", () => {
     const html = renderToStaticMarkup(render(dashboard()));
     expect(html).not.toContain("referrals-payout-");

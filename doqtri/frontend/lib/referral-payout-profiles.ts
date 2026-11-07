@@ -8,18 +8,28 @@
  * which could quote a row.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { payoutSummary, type PayoutProfile, type PayoutProvider, type PayoutState } from "@/lib/referral-payout";
+import {
+  payoutSummary,
+  type PayoutMemoType,
+  type PayoutProfile,
+  type PayoutProvider,
+  type PayoutSummary,
+} from "@/lib/referral-payout";
 
 const TABLE = "referral_payout_profiles";
 
 const COLUMNS =
-  "method, name, xlm_address, xlm_memo, ewallet_provider, ewallet_account_name, ewallet_account_number, ewallet_details";
+  "method, name, xlm_address, xlm_memo, xlm_memo_type, ewallet_provider, ewallet_account_name, ewallet_account_number, ewallet_details";
+
+/** What the masked summary is made from, and nothing more: no name, memo, account name or details. */
+const SUMMARY_COLUMNS = "method, xlm_address, xlm_memo_type, ewallet_provider, ewallet_account_number";
 
 type PayoutProfileRow = {
   method: "xlm" | "ewallet";
   name: string;
   xlm_address: string | null;
   xlm_memo: string | null;
+  xlm_memo_type: PayoutMemoType | null;
   ewallet_provider: PayoutProvider | null;
   ewallet_account_name: string | null;
   ewallet_account_number: string | null;
@@ -65,7 +75,7 @@ export async function hasEligibleReferral(
 
 function profileFromRow(row: PayoutProfileRow): PayoutProfile {
   return row.method === "xlm"
-    ? { method: "xlm", name: row.name, address: row.xlm_address!, memo: row.xlm_memo }
+    ? { method: "xlm", name: row.name, address: row.xlm_address!, memo: row.xlm_memo, memoType: row.xlm_memo_type }
     : {
         method: "ewallet",
         name: row.name,
@@ -89,6 +99,7 @@ export function payoutProfileRow(userId: string, profile: PayoutProfile) {
     name: profile.name,
     xlm_address: xlm?.address ?? null,
     xlm_memo: xlm?.memo ?? null,
+    xlm_memo_type: xlm?.memoType ?? null,
     ewallet_provider: ewallet?.provider ?? null,
     ewallet_account_name: ewallet?.accountName ?? null,
     ewallet_account_number: ewallet?.accountNumber ?? null,
@@ -117,12 +128,22 @@ export async function savePayoutProfile(
   if (error) throw storeError("Saving payout details failed", error);
 }
 
-/** For the dashboard: whether the form opens, and the masked view of what's saved. */
-export async function readPayoutState(
+/**
+ * For the dashboard: the masked view of what's saved, or null, read from only the
+ * columns it's made of. Service role: `userId` must come from the verified session.
+ */
+export async function readPayoutSummary(
   admin: Pick<SupabaseClient, "from">,
   userId: string,
-  network: string,
-): Promise<PayoutState> {
-  const [canEdit, profile] = await Promise.all([hasEligibleReferral(admin, userId, network), readPayoutProfile(admin, userId)]);
-  return { canEdit, summary: profile ? payoutSummary(profile) : null };
+): Promise<PayoutSummary | null> {
+  const { data, error } = await admin.from(TABLE).select(SUMMARY_COLUMNS).eq("user_id", userId).maybeSingle();
+  if (error) throw storeError("Reading payout details failed", error);
+  if (!data) return null;
+  const row = data as Pick<
+    PayoutProfileRow,
+    "method" | "xlm_address" | "xlm_memo_type" | "ewallet_provider" | "ewallet_account_number"
+  >;
+  return row.method === "xlm"
+    ? payoutSummary({ method: "xlm", address: row.xlm_address!, memoType: row.xlm_memo_type })
+    : payoutSummary({ method: "ewallet", provider: row.ewallet_provider!, accountNumber: row.ewallet_account_number! });
 }
