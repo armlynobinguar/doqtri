@@ -2,7 +2,7 @@
  * What a referrer's payout details may be (WP-4.6, DOQ-25, D-112). The form and
  * PUT /api/referrals/payout-profile both run validatePayoutProfile(), and the
  * server's answer is the one that counts. Its messages are fixed text and never
- * quote what was typed, because these are financial details and errors get logged.
+ * quote what was typed, because these are financial details.
  *
  * Safe in the browser. The server's reads and writes are in
  * lib/referral-payout-profiles.ts.
@@ -13,17 +13,23 @@ export const PAYOUT_PROVIDERS = ["GCash", "Maya", "Bank", "Other"] as const;
 export type PayoutProvider = (typeof PAYOUT_PROVIDERS)[number];
 
 /**
- * In UTF-16 units, except the memo. The database checks the same numbers, in
+ * In characters (code points), as Postgres's char_length counts them, except the
+ * memo. The database checks the same numbers, in
  * backend/migrations/20261107120000_referral_payout_profiles.sql.
  */
 export const PAYOUT_NAME_MAX = 100;
 export const PAYOUT_ACCOUNT_NAME_MAX = 100;
 export const PAYOUT_ACCOUNT_NUMBER_MAX = 40;
 export const PAYOUT_DETAILS_MAX = 200;
-/** Stellar's limit for a text memo, in bytes of UTF-8. */
+/** Stellar's limit for a text memo, in bytes of UTF-8, not characters. */
 export const PAYOUT_MEMO_MAX_BYTES = 28;
-/** Bank and e-wallet formats vary too much for more than this: a mobile number has 10 or more, a bank account more. */
-const PAYOUT_ACCOUNT_NUMBER_MIN_DIGITS = 6;
+/**
+ * Bank and e-wallet formats vary too much to check more than this: some digits,
+ * and a plausible length. A mobile number has 10 or more, a bank account more.
+ */
+export const PAYOUT_ACCOUNT_NUMBER_MIN_DIGITS = 6;
+
+export type PayoutMethod = "xlm" | "ewallet";
 
 export type PayoutProfile =
   | { method: "xlm"; name: string; address: string; memo: string | null }
@@ -42,7 +48,7 @@ export type PayoutFieldErrors = Partial<Record<PayoutField, string>>;
 
 export type PayoutValidation = { ok: true; profile: PayoutProfile } | { ok: false; errors: PayoutFieldErrors };
 
-/** All a saved profile shows outside the form: which method, and the end of the number. */
+/** All a saved profile shows outside the form: which method, and the end of the address or number. */
 export type PayoutSummary = { label: string; last4: string };
 
 /** What the dashboard knows about a referrer's details. */
@@ -53,16 +59,23 @@ export type PayoutState = {
 };
 
 /**
- * Control characters, line breaks, lone surrogates (which can't be stored), and
- * the formatting characters that make text display in a different order from how
- * it reads, which could make a number look like another to whoever pays it.
+ * Control characters (line breaks and tabs among them), lone surrogates, which
+ * can't be stored, and the invisible characters that make text display in a
+ * different order from how it reads, which could make one number look like
+ * another to whoever pays it.
  */
-const FORBIDDEN = /[\p{Cc}\p{Cs}\p{Zl}\p{Zp}‪-‮⁦-⁩]/u;
+const FORBIDDEN = /[\p{Cc}\p{Cs}\p{Zl}\p{Zp}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/u;
 
 const CHARACTERS = "Remove the line breaks or special characters.";
+const NOT_TEXT = "Enter this as text.";
 
 export function utf8Bytes(text: string): number {
   return new TextEncoder().encode(text).length;
+}
+
+/** Characters as a person and Postgres count them: an emoji is one, not two. */
+function characters(text: string): number {
+  return Array.from(text).length;
 }
 
 /** Trimmed text, "" for nothing there, or null for something that isn't text at all. */
@@ -71,29 +84,32 @@ function readText(value: unknown): string | null {
   return typeof value === "string" ? value.trim() : null;
 }
 
-/** The problem with a required or optional piece of plain text, if there is one. */
+/** The problem with a required (`empty` says what to do) or optional (`empty` null) piece of text. */
 function textProblem(value: string | null, max: number, empty: string | null): string | null {
-  if (value === null) return "Enter this as text.";
+  if (value === null) return NOT_TEXT;
   if (!value) return empty;
   if (FORBIDDEN.test(value)) return CHARACTERS;
-  if (value.length > max) return `Use ${max} characters or fewer.`;
+  if (characters(value) > max) return `Use ${max} characters or fewer.`;
   return null;
 }
 
+export const PASSKEY_ADDRESS =
+  "This is a passkey wallet (C…) address, which can't receive payouts. Use a Stellar account address starting with G.";
+const MUXED_ADDRESS =
+  "This is a muxed (M…) address. Use the G address your exchange shows, and put its memo in the memo field.";
+const INVALID_ADDRESS = "This isn't a valid Stellar address. It starts with G and has 56 characters.";
+
 function addressProblem(address: string | null): string | null {
-  if (address === null) return "Enter this as text.";
+  if (address === null) return NOT_TEXT;
   if (!address) return "Enter your Stellar address.";
-  if (/^C[A-Z2-7]{55}$/.test(address)) {
-    return "This is a passkey wallet (C…) address, which can't receive payouts. Use a Stellar account address starting with G.";
-  }
-  if (!StrKey.isValidEd25519PublicKey(address)) {
-    return "This isn't a valid Stellar address. It starts with G and has 56 characters.";
-  }
-  return null;
+  // Before the checksum: a passkey address with a typo is still a passkey address.
+  if (/^C[A-Z2-7]{55}$/.test(address)) return PASSKEY_ADDRESS;
+  if (/^M[A-Z2-7]{68}$/.test(address)) return MUXED_ADDRESS;
+  return StrKey.isValidEd25519PublicKey(address) ? null : INVALID_ADDRESS;
 }
 
 function memoProblem(memo: string | null): string | null {
-  if (memo === null) return "Enter this as text.";
+  if (memo === null) return NOT_TEXT;
   if (FORBIDDEN.test(memo)) return CHARACTERS;
   if (utf8Bytes(memo) > PAYOUT_MEMO_MAX_BYTES) {
     return `A memo can be at most ${PAYOUT_MEMO_MAX_BYTES} bytes. Some characters count as more than one.`;
@@ -104,8 +120,10 @@ function memoProblem(memo: string | null): string | null {
 function accountNumberProblem(number: string | null): string | null {
   const problem = textProblem(number, PAYOUT_ACCOUNT_NUMBER_MAX, "Enter your account or bank number.");
   if (problem) return problem;
-  const digits = number!.match(/\d/g)?.length ?? 0;
-  return digits < PAYOUT_ACCOUNT_NUMBER_MIN_DIGITS ? "This doesn't look like an account number: it needs more digits." : null;
+  const digits = number!.match(/[0-9]/g)?.length ?? 0;
+  return digits < PAYOUT_ACCOUNT_NUMBER_MIN_DIGITS
+    ? "This doesn't look like an account number: it needs more digits."
+    : null;
 }
 
 /**
@@ -159,9 +177,11 @@ export function validatePayoutProfile(input: unknown): PayoutValidation {
 }
 
 /** The last four characters at most, and never more than half, so a short number isn't shown whole. */
-function lastCharacters(value: string): string {
+export function lastCharacters(value: string): string {
   const letters = Array.from(value.replace(/[\s-]/g, ""));
-  return letters.slice(-Math.min(4, Math.floor(letters.length / 2))).join("");
+  const shown = Math.min(4, Math.floor(letters.length / 2));
+  // slice(-0) would be the whole of it.
+  return shown > 0 ? letters.slice(-shown).join("") : "";
 }
 
 /** For the page's read view. The name, memo and the rest of the number stay out of it. */

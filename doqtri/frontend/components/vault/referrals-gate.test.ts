@@ -11,6 +11,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * the shell to the ribbon, and components/vault/profile-invite-gate.test.ts through
  * ProfileView to the Invite tab. GET /api/referrals has its own in
  * app/api/referrals/route.test.ts.
+ *
+ * The payout questionnaire (DOQ-25) opens only from that page, so the page's
+ * notFound() is its guard in the UI; GET and PUT /api/referrals/payout-profile
+ * have theirs in app/api/referrals/payout-profile/route.test.ts.
  */
 
 const NOT_FOUND = "NEXT_NOT_FOUND";
