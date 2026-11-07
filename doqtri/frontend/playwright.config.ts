@@ -177,6 +177,8 @@ export default defineConfig({
         ...openaiStubEnv(),
         // The e2e wallet is the only admin, for the /admin specs.
         DOQTRI_ADMINS: E2E_ADMIN_WALLET,
+        // The referral dashboard's switch, which e2e/referral-dashboard.spec.ts needs on.
+        LEGAL_OPERATOR_NAME: process.env.LEGAL_OPERATOR_NAME || "E2E Operator",
       },
     },
   ],

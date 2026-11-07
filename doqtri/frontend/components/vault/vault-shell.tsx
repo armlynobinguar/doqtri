@@ -8,7 +8,7 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
-import { Ribbon, type RibbonAction } from "@/components/vault/ribbon";
+import { Ribbon, ribbonRouteAction, type RibbonAction } from "@/components/vault/ribbon";
 import { FileExplorer } from "@/components/vault/file-explorer";
 import { StatusBar } from "@/components/vault/status-bar";
 import { QuickSwitcher } from "@/components/vault/quick-switcher";
@@ -46,6 +46,7 @@ export function VaultShell({
   failedImports,
   identity,
   isAdmin,
+  referralsLive = false,
   workspace,
   workspaces,
   children,
@@ -56,6 +57,8 @@ export function VaultShell({
   identity: VaultIdentity;
   /** Staff (DOQTRI_ADMINS) get a ribbon shortcut to the review screens. */
   isAdmin: boolean;
+  /** The referral dashboard exists (lib/referral-dashboard.ts). */
+  referralsLive?: boolean;
   /** The workspace the vault shows, resolved on the server. */
   workspace: WorkspaceChoice;
   /** Every workspace the user belongs to, for the switcher. */
@@ -72,6 +75,7 @@ export function VaultShell({
               failedImports={failedImports}
               identity={identity}
               isAdmin={isAdmin}
+              referralsLive={referralsLive}
             >
               {children}
             </VaultShellInner>
@@ -88,6 +92,7 @@ function VaultShellInner({
   failedImports,
   identity,
   isAdmin,
+  referralsLive,
   children,
 }: {
   notes: NoteSummary[];
@@ -95,6 +100,7 @@ function VaultShellInner({
   identity: VaultIdentity;
   /** Staff (DOQTRI_ADMINS) get a ribbon shortcut to the review screens. */
   isAdmin: boolean;
+  referralsLive: boolean;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -122,14 +128,14 @@ function VaultShellInner({
 
   // The shell lives in the layout, so the active note comes from the URL
   // rather than from props. `/vault/mindmap`, `/vault/graph` and
-  // `/vault/templates` are vault-wide views, not notes; `/vault/profile` and
+  // `/vault/templates` are vault-wide views, not notes, and so is
+  // `/vault/referrals` when it exists; `/vault/profile` and
   // `/vault/earnings` and `/vault/workspace/members` are account pages, not
   // notes either.
   const segment = pathname.startsWith("/vault/")
     ? pathname.split("/")[2] || undefined
     : undefined;
-  const routeAction: RibbonAction | undefined =
-    segment === "mindmap" || segment === "graph" || segment === "templates" ? segment : undefined;
+  const routeAction = ribbonRouteAction(segment, referralsLive);
   const accountPage = segment === "profile" || segment === "earnings" || segment === "workspace";
   const currentAccountPage: AccountPage | undefined =
     segment === "profile" ? "profile" : segment === "workspace" ? "members" : undefined;
@@ -144,12 +150,14 @@ function VaultShellInner({
         ? "Global mindmap"
         : routeAction === "templates"
           ? "Templates"
-          : segment === "profile"
-            ? "Profile"
-            : segment === "workspace"
-              ? "Members"
-              : // With no note open, the phone says which workspace it is showing.
-              (notes.find((note) => note.id === activeId)?.title ?? workspace.name);
+          : routeAction === "referrals"
+            ? "Referrals"
+            : segment === "profile"
+              ? "Profile"
+              : segment === "workspace"
+                ? "Members"
+                : // With no note open, the phone says which workspace it is showing.
+                  (notes.find((note) => note.id === activeId)?.title ?? workspace.name);
 
   // Blank by default; a template seeds the title and body instead. Into the
   // workspace on screen, named explicitly so a switch in another tab cannot
@@ -274,6 +282,9 @@ function VaultShellInner({
         case "templates":
           navigate("/vault/templates");
           break;
+        case "referrals":
+          navigate("/vault/referrals");
+          break;
         case "graph":
         case "mindmap":
           // Routes rather than panel tabs: the vault-wide views need the whole
@@ -340,6 +351,7 @@ function VaultShellInner({
           active={routeAction ?? ribbonActive}
           onAction={handleRibbonAction}
           isAdmin={isAdmin}
+          referralsLive={referralsLive}
           accountPage={currentAccountPage}
         />
 
