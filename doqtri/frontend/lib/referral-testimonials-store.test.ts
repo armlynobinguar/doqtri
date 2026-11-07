@@ -15,6 +15,9 @@ const state = vi.hoisted(() => ({
   adminUsed: 0,
   rpc: [] as { name: string; args: unknown }[],
   rpcResult: { data: null as unknown, error: null as { code?: string; message?: string } | null },
+  /** A read that never answers, as from a paused database, unless the signal aborts it. */
+  rpcHangs: false,
+  signals: [] as AbortSignal[],
   writes: [] as { op: string; row?: unknown; options?: unknown; filters: [string, unknown][]; select?: string }[],
   writeResult: { data: null as unknown, error: null as { code?: string; message?: string } | null },
 }));
@@ -30,7 +33,16 @@ function adminClient() {
     rpc: (name: string, args?: unknown) => {
       state.rpc.push({ name, args });
       const result = Promise.resolve(state.rpcResult);
-      return Object.assign(result, { range: () => result });
+      return Object.assign(result, {
+        range: () => result,
+        abortSignal: (signal: AbortSignal) => {
+          state.signals.push(signal);
+          if (!state.rpcHangs) return result;
+          return new Promise((_resolve, reject) =>
+            signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }))),
+          );
+        },
+      });
     },
     from: () => {
       const entry: (typeof state.writes)[number] = { op: "", filters: [] };
@@ -82,6 +94,8 @@ beforeEach(() => {
   state.adminUsed = 0;
   state.rpc = [];
   state.rpcResult = { data: [], error: null };
+  state.rpcHangs = false;
+  state.signals = [];
   state.writes = [];
   state.writeResult = { data: null, error: null };
   consoleCalls = [];
@@ -123,6 +137,20 @@ describe("landingTestimonials", () => {
     ]);
     expect(state.connections).toBe(1);
     expect(state.rpc).toEqual([{ name: "referral_testimonials_public", args: undefined }]);
+  });
+
+  it("gives up after the timeout when the database doesn't answer, aborting the read and showing none", async () => {
+    state.rpcHangs = true;
+    const started = Date.now();
+    expect(await store.landingTestimonials(30)).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(state.signals).toHaveLength(1);
+    expect(state.signals[0].aborted).toBe(true);
+    expect(consoleCalls).toEqual([["[testimonials] landing page read timed out"]]);
+  });
+
+  it("waits about 2 seconds by default", () => {
+    expect(store.LANDING_TESTIMONIALS_TIMEOUT_MS).toBe(2000);
   });
 
   it("shows none rather than break the page when the read fails, logging only the code", async () => {

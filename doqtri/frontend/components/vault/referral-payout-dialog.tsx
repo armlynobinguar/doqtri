@@ -256,6 +256,7 @@ export function PayoutForm({
     const outcome = await saver.save(
       {
         draft,
+        savedDraft: initial,
         canEditDetails: canEdit,
         testimonial: testimonial.kind === "ready" ? { saved: savedTestimonial, draft: feedback } : null,
       },
@@ -286,6 +287,7 @@ export function PayoutForm({
         setProblemCheck((n) => n + 1);
         return;
       case "refused":
+        if (outcome.testimonialSaved) toast.success("Feedback taken off the site");
         setErrors(outcome.errors);
         setFormError(outcome.message);
         setProblemCheck((n) => n + 1);

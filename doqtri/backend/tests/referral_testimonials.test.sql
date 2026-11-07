@@ -13,13 +13,14 @@
 --   o  the owner, whose testimonial goes through every state
 --   s  someone else, with a testimonial of their own
 --   q  private feedback: no consent
---   n  approved, but with no questionnaire name to show it under
+--   n  consented, with no questionnaire name: never approved
+--   l  consented, and saves a questionnaire name later
 --   a  the admin who reviews
 
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(91);
+select plan(112);
 
 create function pg_temp.uid(p_n int) returns uuid language sql immutable as $$
   select ('63000000-0000-4000-8000-' || lpad(p_n::text, 12, '0'))::uuid
@@ -74,8 +75,19 @@ select is(
 
 select ok(not has_table_privilege('anon', 'public.referral_testimonials', 'select'), 'anon can''t read');
 select ok(not has_table_privilege('anon', 'public.referral_testimonials', 'insert, update, delete'), 'nor write');
-select ok(has_table_privilege('authenticated', 'public.referral_testimonials', 'select'),
-  'a signed-in user may select, for RLS to filter');
+select ok(not has_table_privilege('authenticated', 'public.referral_testimonials', 'select'),
+  'a signed-in user has no table-wide select');
+select ok(has_column_privilege('authenticated', 'public.referral_testimonials', 'user_id', 'select')
+      and has_column_privilege('authenticated', 'public.referral_testimonials', 'feedback', 'select')
+      and has_column_privilege('authenticated', 'public.referral_testimonials', 'consent', 'select')
+      and has_column_privilege('authenticated', 'public.referral_testimonials', 'approved_at', 'select')
+      and has_column_privilege('authenticated', 'public.referral_testimonials', 'rejected_at', 'select'),
+  'only the columns the questionnaire shows its owner, for RLS to filter');
+select ok(not has_column_privilege('authenticated', 'public.referral_testimonials', 'approved_by', 'select')
+      and not has_column_privilege('authenticated', 'public.referral_testimonials', 'consented_at', 'select')
+      and not has_column_privilege('authenticated', 'public.referral_testimonials', 'created_at', 'select')
+      and not has_column_privilege('authenticated', 'public.referral_testimonials', 'updated_at', 'select'),
+  'not who approved it, nor when it was consented to, made or changed');
 select ok(not has_table_privilege('authenticated', 'public.referral_testimonials', 'insert, update, delete'),
   'but not insert, update or delete');
 select ok(has_table_privilege('service_role', 'public.referral_testimonials', 'select, insert, update, delete'),
@@ -178,6 +190,14 @@ select results_eq(
   $$ select user_id, feedback, consent from public.referral_testimonials $$,
   $$ values ('63000000-0000-4000-8000-000000000001'::uuid, 'I used Doqtri to map my ideas!'::text, true) $$,
   'the owner reads their own row, and only that');
+select results_eq(
+  $$ select feedback, consent, approved_at, rejected_at from public.referral_testimonials $$,
+  $$ values ('I used Doqtri to map my ideas!'::text, true, null::timestamptz, null::timestamptz) $$,
+  'the owner reads the columns the questionnaire shows');
+select throws_ok($$ select approved_by from public.referral_testimonials $$,
+  '42501', null, 'but not who approved it');
+select throws_ok($$ select * from public.referral_testimonials $$,
+  '42501', null, 'nor every column at once');
 select throws_ok($$ update public.referral_testimonials set approved_at = now() $$,
   '42501', null, 'the owner can''t approve their own');
 select throws_ok($$ update public.referral_testimonials set feedback = 'Changed' $$,
@@ -278,7 +298,60 @@ select is(pg_temp.state(1), 'pending', 'a new name needs a new approval: the adm
 select is(pg_temp.review(1, true), 'approved', 'which it gets');
 
 select is(pg_temp.review(2, true), 'approved', 'someone else''s is approved too');
-select is(pg_temp.review(4, true), 'approved', 'and so is the nameless one');
+select is(pg_temp.review(4, true), 'no_name', 'one with no questionnaire name can''t be approved: there is no name to see');
+select is(pg_temp.state(4), 'pending', 'and stays waiting');
+select is(pg_temp.review(4, false), 'rejected', 'it can be rejected, which needs no name');
+update public.referral_testimonials set feedback = 'Nameless, edited.' where user_id = pg_temp.uid(4);
+
+-- ---------------------------------------------------------------------------
+-- A name saved after the fact (the questionnaire's first save is an insert)
+-- ---------------------------------------------------------------------------
+
+reset role;
+insert into auth.users (id, email) values (pg_temp.uid(5), 'later@example.com');
+set local role service_role;
+insert into public.referral_testimonials (user_id, feedback, consent) values (pg_temp.uid(5), 'Named later.', true);
+create temp table seen as select pg_temp.version(5) as version;
+grant select on seen to service_role;
+
+-- Approved some other way (a direct write), with no name yet: still not public.
+update public.referral_testimonials set approved_at = now(), approved_by = pg_temp.uid(9) where user_id = pg_temp.uid(5);
+select is((select count(*)::int from public.referral_testimonials_public() where feedback = 'Named later.'), 0,
+  'an approved row with no name to show isn''t public');
+insert into public.referral_payout_profiles (user_id, method, name, xlm_address)
+values (pg_temp.uid(5), 'xlm', 'Name Saved Later', 'G' || repeat('E', 55));
+select is(pg_temp.state(5), 'pending', 'saving a first questionnaire name clears the approval: nobody approved that name');
+select is((select count(*)::int from public.referral_testimonials_public() where feedback = 'Named later.'), 0,
+  'so it doesn''t go public under it');
+select is(
+  public.referral_testimonial_review(pg_temp.uid(5), (select version from seen), true, pg_temp.uid(9)),
+  'changed', 'a decision made on the list from before the name was saved is refused as changed');
+select is(pg_temp.review(5, true), 'approved', 'approved once the admin has seen the name');
+select is((select name from public.referral_testimonials_public() where feedback = 'Named later.'), 'Name Saved Later',
+  'and public under that name');
+
+-- A name change moves the version even while unapproved, so a stale list can't approve the new name.
+select is(pg_temp.review(5, false), 'rejected', 'rejected');
+update seen set version = pg_temp.version(5);
+update public.referral_payout_profiles set name = 'Another Name' where user_id = pg_temp.uid(5);
+select is(pg_temp.state(5), 'rejected', 'a new name leaves a rejection as it was');
+select is(
+  public.referral_testimonial_review(pg_temp.uid(5), (select version from seen), true, pg_temp.uid(9)),
+  'changed', 'but a decision on the list from before the new name is refused');
+
+select is(pg_temp.review(5, true), 'approved', 'approved under the new name');
+delete from public.referral_payout_profiles where user_id = pg_temp.uid(5);
+select is(pg_temp.state(5), 'pending', 'removing the questionnaire clears the approval');
+select is((select count(*)::int from public.referral_testimonials_public() where feedback = 'Named later.'), 0,
+  'and it is off the site');
+insert into public.referral_payout_profiles (user_id, method, name, xlm_address)
+values (pg_temp.uid(5), 'xlm', 'Another Name', 'G' || repeat('E', 55));
+select is(pg_temp.state(5), 'pending', 'and saving it again, even with the same name, needs a new approval');
+delete from public.referral_testimonials where user_id = pg_temp.uid(5);
+update seen set version = pg_temp.version(2);
+update public.referral_testimonials set consent = consent where user_id = pg_temp.uid(2);
+select ok(pg_temp.version(2) > (select version from seen),
+  'every write is a new, later version, however fast the next one comes');
 
 -- ---------------------------------------------------------------------------
 -- The public read (AC 2, AC 3)

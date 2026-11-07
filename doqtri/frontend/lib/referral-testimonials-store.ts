@@ -92,27 +92,54 @@ export async function saveTestimonial(
 }
 
 /** The approved, consented testimonials, as the landing page gets them: name and text only. */
-export async function loadPublicTestimonials(admin: Pick<SupabaseClient, "rpc">): Promise<PublicTestimonial[]> {
-  const { data, error } = await admin.rpc("referral_testimonials_public");
+export async function loadPublicTestimonials(
+  admin: Pick<SupabaseClient, "rpc">,
+  signal?: AbortSignal,
+): Promise<PublicTestimonial[]> {
+  const query = admin.rpc("referral_testimonials_public");
+  const { data, error } = await (signal ? query.abortSignal(signal) : query);
   if (error) throw storeError("Reading testimonials failed", error);
   return publicTestimonials(data);
 }
 
+/** How long the landing page waits for testimonials before showing none. */
+export const LANDING_TESTIMONIALS_TIMEOUT_MS = 2000;
+
 /**
  * The landing page's testimonials: none at all until the legal pages go live,
  * without asking the database, so the page stays prerendered as it was. Once
- * live, read on every request, so an approval, a rejection, a withdrawal or a
- * deleted account shows on the next page load (AC 4). A failure shows none
- * rather than break the page.
+ * live, read on every request and never cached, so an approval, a rejection,
+ * an edit, a withdrawal or a deleted account shows on the next page load
+ * (AC 4). The page streams this in under its own Suspense boundary, so nothing
+ * else waits on it. A failure, or no answer within the timeout, shows none and
+ * logs only a label and a code.
  */
-export async function landingTestimonials(): Promise<PublicTestimonial[]> {
+export async function landingTestimonials(
+  timeoutMs: number = LANDING_TESTIMONIALS_TIMEOUT_MS,
+): Promise<PublicTestimonial[]> {
   if (!referralDashboardLive()) return [];
   await connection();
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve("timeout");
+    }, timeoutMs);
+  });
   try {
-    return await loadPublicTestimonials(createSupabaseAdminClient());
+    const result = await Promise.race([loadPublicTestimonials(createSupabaseAdminClient(), controller.signal), timedOut]);
+    if (result === "timeout") {
+      console.error("[testimonials] landing page read timed out");
+      return [];
+    }
+    return result;
   } catch (error) {
-    logTestimonialFailure("[testimonials] landing page read failed", error);
+    if (controller.signal.aborted) console.error("[testimonials] landing page read timed out");
+    else logTestimonialFailure("[testimonials] landing page read failed", error);
     return [];
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -128,9 +155,9 @@ export async function loadTestimonialsForReview(admin: Pick<SupabaseClient, "rpc
   }
 }
 
-export type TestimonialReviewResult = "approved" | "rejected" | "changed" | "private" | "admin_gone";
+export type TestimonialReviewResult = "approved" | "rejected" | "changed" | "private" | "no_name" | "admin_gone";
 
-const RESULTS = new Set<TestimonialReviewResult>(["approved", "rejected", "changed", "private", "admin_gone"]);
+const RESULTS = new Set<TestimonialReviewResult>(["approved", "rejected", "changed", "private", "no_name", "admin_gone"]);
 
 /** An admin's decision on the version they read. `adminId` comes from the route's verified admin session. */
 export async function reviewTestimonial(

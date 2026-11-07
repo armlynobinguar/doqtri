@@ -9,6 +9,8 @@ const MAX_BODY_BYTES = 4 * 1024;
 const REFUSED: Record<Exclude<TestimonialReviewResult, "approved" | "rejected">, string> = {
   changed: "This feedback changed or was removed since the page loaded. Nothing was changed: reload to review it as it is now.",
   private: "This feedback isn't shared publicly, so it can't be approved or rejected. Reload to see it as it is now.",
+  no_name:
+    "This referrer has no name in their payout details, so there is no name to approve it under. Nothing was changed: it can be approved once they save one.",
   admin_gone: "Your admin account no longer exists, so nothing was changed. Sign in again.",
 };
 

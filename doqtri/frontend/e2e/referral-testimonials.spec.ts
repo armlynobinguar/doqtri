@@ -16,6 +16,7 @@ import { e2eKeypair, signedInContext } from "./wallet-session";
  * approval (the default session is the e2e admin), the landing page shows the
  * questionnaire's name and the text on the next load. An edit hides it until it
  * is approved again, and unticking the box or deleting the account takes it off.
+ * Other approved testimonials may be on the page: checks look for this spec's own.
  *
  * Needs LEGAL_OPERATOR_NAME on, as playwright.config.ts sets it. Cleanup deletes
  * accounts, not rows: the referred user and the referrer, whose testimonial goes
@@ -82,12 +83,18 @@ test.describe("referral testimonials", () => {
     if (referrer) await deleteUser(referrer);
   }
 
-  /** The landing page as a signed-out visitor sees it, freshly loaded. */
+  /**
+   * The landing page as a signed-out visitor sees it, freshly loaded. "load"
+   * waits for the whole streamed document, testimonials included.
+   */
   async function landing() {
-    await visitor.goto("/");
+    await visitor.goto("/", { waitUntil: "load" });
     await expect(visitor.getByRole("heading", { level: 1, name: "Doqtri" })).toBeVisible();
     return visitor.getByTestId("landing-testimonials");
   }
+
+  /** This spec's own card on the landing page: other testimonials may be there too. */
+  const card = (text: string) => visitor.getByTestId("landing-testimonial").filter({ hasText: text });
 
   /** The referrer's questionnaire, opened from their dashboard. */
   async function openQuestionnaire() {
@@ -158,10 +165,14 @@ test.describe("referral testimonials", () => {
     }
   });
 
-  test("with none approved, the landing page has no testimonials section at all (AC 6)", async () => {
+  test("the landing page has a testimonials section only when one is approved (AC 6)", async () => {
+    // Others may have been approved on this database: the section shows exactly when one is public.
+    const publicNow = await serviceRest<unknown[]>("rpc/referral_testimonials_public", { method: "POST", body: {} });
     const section = await landing();
-    await expect(section).toHaveCount(0);
-    await expect(visitor.getByRole("heading", { name: "What people map with Doqtri" })).toHaveCount(0);
+    await expect(section).toHaveCount(publicNow.length > 0 ? 1 : 0);
+    if (publicNow.length === 0) {
+      await expect(visitor.getByRole("heading", { name: "What people map with Doqtri" })).toHaveCount(0);
+    }
   });
 
   test("the questionnaire saves without feedback, with the box unticked (AC 1)", async () => {
@@ -198,7 +209,8 @@ test.describe("referral testimonials", () => {
     });
     expect(refused.status()).toBe(409);
 
-    await expect(await landing()).toHaveCount(0);
+    await landing();
+    await expect(card(FIRST)).toHaveCount(0);
     await expect(visitor.locator("body")).not.toContainText(FIRST);
   });
 
@@ -209,7 +221,8 @@ test.describe("referral testimonials", () => {
     await save(dialog);
 
     // Opted in, not yet approved: still nothing public.
-    await expect(await landing()).toHaveCount(0);
+    await landing();
+    await expect(card(FIRST)).toHaveCount(0);
 
     await page.goto("/admin/referrals/payouts");
     const row = adminRow(page);
@@ -221,8 +234,7 @@ test.describe("referral testimonials", () => {
     const section = await landing();
     await expect(section).toBeVisible();
     await expect(section.getByRole("heading", { name: "What people map with Doqtri" })).toBeVisible();
-    const card = section.getByTestId("landing-testimonial").filter({ hasText: FIRST });
-    await expect(card).toContainText(NAME);
+    await expect(section.getByTestId("landing-testimonial").filter({ hasText: FIRST })).toContainText(NAME);
     const html = await visitor.content();
     for (const secret of [referrerId!, REFERRER.publicKey()]) expect(html).not.toContain(secret);
 
@@ -238,8 +250,9 @@ test.describe("referral testimonials", () => {
     await expect(dialog.getByTestId("testimonial-status")).toHaveText("Saving sends your feedback for review again.");
     await save(dialog);
 
-    const hidden = await landing();
-    await expect(hidden).toHaveCount(0);
+    await landing();
+    await expect(card(FIRST)).toHaveCount(0);
+    await expect(card(EDITED)).toHaveCount(0);
     await expect(visitor.locator("body")).not.toContainText(FIRST);
     await expect(visitor.locator("body")).not.toContainText(EDITED);
 
@@ -258,7 +271,8 @@ test.describe("referral testimonials", () => {
     await dialog.getByTestId("testimonial-consent").uncheck();
     await save(dialog);
 
-    await expect(await landing()).toHaveCount(0);
+    await landing();
+    await expect(card(EDITED)).toHaveCount(0);
     await expect(visitor.locator("body")).not.toContainText(EDITED);
 
     await page.goto("/admin/referrals/payouts");
@@ -276,7 +290,8 @@ test.describe("referral testimonials", () => {
     await expect((await landing()).getByTestId("landing-testimonial").filter({ hasText: EDITED })).toBeVisible();
 
     await deleteUser(referrerId!);
-    await expect(await landing()).toHaveCount(0);
+    await landing();
+    await expect(card(EDITED)).toHaveCount(0);
     await expect(visitor.locator("body")).not.toContainText(EDITED);
   });
 });

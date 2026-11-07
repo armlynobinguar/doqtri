@@ -53,10 +53,14 @@ export function sendReview(request: TestimonialReviewRequest): Promise<Outcome<"
   );
 }
 
-/** Private feedback is never decided on; otherwise any decision but the one it already has. */
+/**
+ * Private feedback is never decided on, and nothing is approved without a
+ * questionnaire name to see; otherwise any decision but the one it already has.
+ */
 export function canDecide(row: TestimonialReviewRow, decision: TestimonialDecision): boolean {
   if (row.status === "private") return false;
-  return decision === "approve" ? row.status !== "approved" : row.status !== "rejected";
+  if (decision === "approve") return row.status !== "approved" && row.name !== null;
+  return row.status !== "rejected";
 }
 
 export const TESTIMONIAL_STATUS_LABEL: Record<TestimonialStatus, string> = {
@@ -69,7 +73,5 @@ export const TESTIMONIAL_STATUS_LABEL: Record<TestimonialStatus, string> = {
 export function reviewedMessage(row: TestimonialReviewRow, status: "approved" | "rejected"): string {
   const who = row.name ?? "this referrer";
   if (status === "rejected") return `Rejected ${who}'s testimonial. It isn't shown on the site.`;
-  return row.name
-    ? `Approved ${who}'s testimonial. It shows on the landing page once the legal pages are live.`
-    : "Approved. It won't show on the site until the referrer saves a name in their payout details.";
+  return `Approved ${who}'s testimonial. It shows on the landing page once the legal pages are live.`;
 }
