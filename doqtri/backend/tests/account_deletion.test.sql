@@ -21,12 +21,13 @@
 --   u  unconfirmed@example.com, never confirmed (D-49)
 --   m  market@example.com    editor of Acme, has a template draft and
 --                            has bought one of o's
---   r  referrer@example.com  referred four accounts (WP-4.6, DOQ-23)
+--   r  referrer@example.com  referred four accounts (WP-4.6, DOQ-23), and
+--                            saved payout details (DOQ-25)
 
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(49);
+select plan(51);
 
 insert into auth.users (id, email, email_confirmed_at) values
   ('00000000-0000-4000-8000-0000000000c1', 'owner@example.com', now()),
@@ -387,9 +388,21 @@ select results_eq(
   $$ values (null::uuid, '00000000-0000-4000-8000-0000000000c8'::uuid, 'eligible'::text, 30) $$,
   'and the reward stays, for the app to show as Former user');
 
+-- r's payout details (DOQ-25), written as the route writes them: as the service role.
+set local role service_role;
+insert into public.referral_payout_profiles (user_id, method, name, xlm_address, xlm_memo, xlm_memo_type)
+values ('00000000-0000-4000-8000-0000000000c8', 'xlm', 'Referrer Name', 'G' || repeat('R', 55), '4242', 'id');
+reset role;
+select is((select count(*)::int from public.referral_payout_profiles
+            where user_id = '00000000-0000-4000-8000-0000000000c8'),
+  1, 'the referrer has payout details saved');
+
 select lives_ok(
   $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c8' $$,
   'a referrer deletes themselves');
+select is((select count(*)::int from public.referral_payout_profiles
+            where user_id = '00000000-0000-4000-8000-0000000000c8'),
+  0, 'and their payout details go with the account (DOQ-25)');
 select results_eq(
   $$ select referred_wallet, referrer_user_id, status, void_reason from public.referral_rewards
       where referred_wallet in ('G' || repeat('A', 55), 'G' || repeat('B', 55), 'G' || repeat('C', 55))

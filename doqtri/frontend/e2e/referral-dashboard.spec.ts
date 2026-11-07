@@ -13,6 +13,9 @@ import { e2eKeypair, signedInContext } from "./wallet-session";
  * with the service role, and activity through the same record_referral_activity()
  * the relay and the sync call, so a referral qualifies the way it would for real.
  * playwright.config.ts turns the dashboard's switch on for the dev server.
+ *
+ * The payout questionnaire (DOQ-25, D-112) is filled in, reloaded and edited
+ * here too, once the first referral is eligible.
  */
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -89,6 +92,7 @@ test.describe("referral dashboard", () => {
     if (!allowed) return;
     await Promise.all((await leftoverUsers()).map(deleteUser));
     if (!referrerId) return;
+    await serviceRest(`referral_payout_profiles?user_id=eq.${referrerId}`, { method: "DELETE" });
     await serviceRest(`referral_rewards?referrer_user_id=eq.${referrerId}`, { method: "DELETE" });
     await serviceRest(`referrals?referrer_user_id=eq.${referrerId}`, { method: "DELETE" });
     await serviceRest(`referral_reward_limits?user_id=eq.${referrerId}`, { method: "DELETE" });
@@ -193,6 +197,168 @@ test.describe("referral dashboard", () => {
     const body = await res.text();
     for (const secret of [email, user.id, user.wallet, referrerId!]) expect(body).not.toContain(secret);
     expect(JSON.parse(body).rows[0].joinedOn).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  test("payout details: needed until saved, then submitted, reloaded and edited (DOQ-25)", async ({ browser }) => {
+    const card = page.getByTestId("referrals-payout-prompt");
+    const dialog = page.getByTestId("payout-dialog");
+    const field = (name: string) => dialog.getByTestId(`payout-${name}`);
+    const payoutTo = Keypair.random().publicKey();
+    const memo = "4242424242";
+    const accountNumber = "0917 555 4567";
+
+    await page.goto("/vault/referrals");
+    await expect(card).toContainText("Payout details needed");
+    await card.getByRole("button", { name: "Add details" }).click();
+    await expect(dialog.getByRole("heading", { name: "Payout details" })).toBeVisible();
+    await expect(field("name")).toHaveValue("");
+
+    // Nothing filled in, then a save: each required field says so, and focus goes to the first.
+    await dialog.getByRole("button", { name: "Save details" }).click();
+    await expect(field("name")).toBeFocused();
+    await expect(field("name")).toHaveAttribute("aria-invalid", "true");
+    await expect(dialog.getByRole("alert").filter({ hasText: "Enter your name." })).toBeVisible();
+    await expect(dialog.getByRole("alert").filter({ hasText: "Choose how you'd like to be paid." })).toBeVisible();
+
+    await field("name").fill("E2E Referrer");
+    await dialog.getByText("XLM", { exact: true }).click();
+    // The user's own wallet is a testnet one, and isn't offered.
+    await expect(field("address")).toHaveValue("");
+    await expect(dialog.getByTestId("payout-xlm-notes")).toContainText("rewards are real XLM on mainnet");
+    await expect(dialog.getByRole("link", { name: "Privacy Policy" })).toHaveAttribute("href", "/privacy");
+    await expect(dialog.getByRole("radio", { name: "Text" })).toBeChecked();
+
+    // A passkey address, then a text memo one byte over: both refused, in the form's words.
+    await field("address").fill(`C${payoutTo.slice(1)}`);
+    await field("memo").fill("x".repeat(29));
+    await expect(field("memo").locator("xpath=..")).toContainText("29/28 characters");
+    await dialog.getByRole("button", { name: "Save details" }).click();
+    await expect(field("address")).toBeFocused();
+    await expect(dialog).toContainText("This is a passkey wallet (C…) address, which can't receive payouts.");
+    await expect(dialog).toContainText("A text memo can be at most 28 characters.");
+
+    // An invisible character in a memo, then an ID one past 64 bits: refused too.
+    await field("address").fill(payoutTo);
+    await field("memo").fill("123456\u200b");
+    await dialog.getByRole("button", { name: "Save details" }).click();
+    await expect(dialog).toContainText("A text memo can use only English letters, digits, spaces and common symbols.");
+    // The radio itself is visually hidden inside its label, as the method cards' are: click what a user sees.
+    await dialog.getByText("ID (a number)", { exact: true }).click();
+    await expect(dialog.getByRole("radio", { name: "ID (a number)" })).toBeChecked();
+    await field("memo").fill("18446744073709551616");
+    await dialog.getByRole("button", { name: "Save details" }).click();
+    await expect(dialog).toContainText("An ID memo can be at most 18446744073709551615.");
+
+    await field("memo").fill(memo);
+    await dialog.getByRole("button", { name: "Save details" }).click();
+    await expect(dialog).toBeHidden();
+    const saved = page.getByTestId("referrals-payout-saved");
+    await expect(saved).toContainText("Payout details saved");
+    await expect(saved).toContainText(`XLM ending in ${payoutTo.slice(-4)}, with an ID memo`);
+    await expect(card).toHaveCount(0);
+    // Focus goes back to the button that opened the form, which is now Edit.
+    await expect(saved.getByRole("button", { name: "Edit" })).toBeFocused();
+
+    expect(
+      await serviceRest(`referral_payout_profiles?user_id=eq.${referrerId}&select=method,xlm_address,xlm_memo,xlm_memo_type`),
+    ).toEqual([{ method: "xlm", xlm_address: payoutTo, xlm_memo: memo, xlm_memo_type: "id" }]);
+
+    // Reload: still saved, still masked, and the prompt stays gone (AC 5, AC 8).
+    await page.reload();
+    await expect(saved).toContainText(`XLM ending in ${payoutTo.slice(-4)}`);
+    await expect(card).toHaveCount(0);
+    await expect(page.locator("main")).not.toContainText(payoutTo);
+    await expect(page.locator("main")).not.toContainText(memo);
+
+    // Edit: the form opens on what's saved, then switches to an e-wallet.
+    await saved.getByRole("button", { name: "Edit" }).click();
+    await expect(field("address")).toHaveValue(payoutTo);
+    await expect(field("memo")).toHaveValue(memo);
+    await expect(dialog.getByRole("radio", { name: "ID (a number)" })).toBeChecked();
+    await dialog.getByText("E-wallet or bank", { exact: true }).click();
+    await dialog.getByRole("combobox", { name: /Provider/ }).click();
+    await page.getByRole("option", { name: "Maya" }).click();
+    await field("accountName").fill("E2E Referrer");
+    await field("accountNumber").fill(accountNumber);
+    await dialog.getByRole("button", { name: "Save details" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(saved).toContainText("Maya ending in 4567");
+
+    await page.reload();
+    await expect(saved).toContainText("Maya ending in 4567");
+    await saved.getByRole("button", { name: "Edit" }).click();
+    await expect(field("accountNumber")).toHaveValue(accountNumber);
+    await expect(dialog.getByRole("combobox", { name: /Provider/ })).toContainText("Maya");
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toBeHidden();
+
+    // The stored row holds the e-wallet's details only: the XLM ones are gone (AC 4).
+    const rows = await serviceRest<Record<string, unknown>[]>(
+      `referral_payout_profiles?user_id=eq.${referrerId}&select=method,name,xlm_address,xlm_memo,xlm_memo_type,ewallet_provider,ewallet_account_number`,
+    );
+    expect(rows).toEqual([
+      {
+        method: "ewallet",
+        name: "E2E Referrer",
+        xlm_address: null,
+        xlm_memo: null,
+        xlm_memo_type: null,
+        ewallet_provider: "Maya",
+        ewallet_account_number: accountNumber,
+      },
+    ]);
+
+    // The route itself: never cached, and the dashboard's answer holds no details.
+    const own = await context!.request.get("/api/referrals/payout-profile");
+    expect(own.status()).toBe(200);
+    expect(own.headers()["cache-control"]).toBe("no-store");
+    const dashboard = await (await context!.request.get("/api/referrals")).text();
+    for (const secret of [accountNumber, "0917555", payoutTo, memo]) expect(dashboard).not.toContain(secret);
+
+    // Someone without an eligible referral can neither read nor write, whatever they send.
+    const other = await signedInContext(browser, STRANGER);
+    try {
+      const read = await other.request.get(`/api/referrals/payout-profile?user_id=${referrerId}`);
+      expect(read.status()).toBe(403);
+      expect(await read.text()).not.toContain(accountNumber);
+      const write = await other.request.put("/api/referrals/payout-profile", {
+        data: { user_id: referrerId, name: "Taken", method: "xlm", address: payoutTo },
+      });
+      expect(write.status()).toBe(403);
+    } finally {
+      await other.close();
+    }
+    expect(
+      (await serviceRest<{ name: string }[]>(`referral_payout_profiles?user_id=eq.${referrerId}&select=name`))[0].name,
+    ).toBe("E2E Referrer");
+
+    // Signed out: 401, with no session from the project's storageState.
+    const anonymous = await browser.newContext({ baseURL: E2E_DOQTRI_ORIGIN, storageState: SIGNED_OUT });
+    try {
+      expect((await anonymous.request.get("/api/referrals/payout-profile")).status()).toBe(401);
+      expect((await anonymous.request.put("/api/referrals/payout-profile", { data: {} })).status()).toBe(401);
+    } finally {
+      await anonymous.close();
+    }
+  });
+
+  test("on a phone, the payout form fits without scrolling sideways", async () => {
+    await page.setViewportSize({ width: 360, height: 740 });
+    await page.goto("/vault/referrals");
+    await page.getByTestId("referrals-payout-saved").getByRole("button", { name: "Edit" }).click();
+    const dialog = page.getByTestId("payout-dialog");
+    await expect(dialog.getByTestId("payout-accountNumber")).toBeVisible();
+    const overflow = await dialog.evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+    const box = await dialog.boundingBox();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(360);
+    // 16px text in the fields, so iOS doesn't zoom into them.
+    const size = await dialog.getByTestId("payout-accountNumber").evaluate((el) => getComputedStyle(el).fontSize);
+    expect(size).toBe("16px");
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await page.setViewportSize({ width: 1440, height: 900 });
   });
 
   test("the limit notice appears at the limit and not below it", async () => {

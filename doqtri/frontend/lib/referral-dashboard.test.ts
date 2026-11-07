@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  canEditPayout,
   joinedDay,
   loadReferralDashboard,
   maskedReferralIdentity,
@@ -317,9 +318,14 @@ describe("the page asked for", () => {
 });
 
 describe("loading", () => {
-  function client(all: ReferralDashboardRecord[], { used = 0, override = null as number | null } = {}) {
+  type Saved = Record<string, unknown> | null;
+  function client(
+    all: ReferralDashboardRecord[],
+    { used = 0, override = null as number | null, saved = null as Saved, payoutError = false } = {},
+  ) {
     const ranges: [number, number][] = [];
-    const filters: [string, unknown][] = [];
+    /** Every query, with its own columns and filters, so one can't be mistaken for another. */
+    const queries: { table: string; columns: string; filters: [string, unknown][] }[] = [];
     const admin = {
       rpc: () => ({
         range: async (from: number, to: number) => {
@@ -328,22 +334,34 @@ describe("loading", () => {
         },
       }),
       from: (table: string) => {
+        const entry = { table, columns: "", filters: [] as [string, unknown][] };
+        queries.push(entry);
         const query = {
-          select: () => query,
-          eq: (column: string, value: unknown) => {
-            filters.push([`${table}.${column}`, value]);
+          select: (columns: string) => {
+            entry.columns = columns;
             return query;
           },
-          maybeSingle: async () => ({ data: override === null ? null : { reward_limit: override }, error: null }),
+          eq: (column: string, value: unknown) => {
+            entry.filters.push([column, value]);
+            return query;
+          },
+          maybeSingle: async () => {
+            if (table !== "referral_payout_profiles") {
+              return { data: override === null ? null : { reward_limit: override }, error: null };
+            }
+            return payoutError
+              ? { data: null, error: { code: "XX000", message: "row (Account Holder, 09171234567)" } }
+              : { data: saved, error: null };
+          },
           in: async (column: string, value: unknown) => {
-            filters.push([`${table}.${column}`, value]);
+            entry.filters.push([column, value]);
             return { count: used, error: null };
           },
         };
         return query;
       },
     };
-    return { admin: admin as unknown as Parameters<typeof loadReferralDashboard>[0], ranges, filters };
+    return { admin: admin as unknown as Parameters<typeof loadReferralDashboard>[0], ranges, queries };
   }
 
   const many = (n: number) =>
@@ -386,12 +404,87 @@ describe("loading", () => {
 
   it("the limit counts the referrer's eligible and paid rewards on every network, as the database does", async () => {
     // One testnet row here, thirty rewards counted: the mainnet ones count too.
-    const { admin, filters } = client([record({ reward_status: "eligible", amount_php: 30 })], { used: 30 });
+    const { admin, queries } = client([record({ reward_status: "eligible", amount_php: 30 })], { used: 30 });
     const dashboard = await loadReferralDashboard(admin, "me", "testnet", 1);
     expect(dashboard.limit).toEqual({ limit: 30, used: 30, reached: true });
-    expect(filters).toContainEqual(["referral_rewards.referrer_user_id", "me"]);
-    expect(filters).toContainEqual(["referral_rewards.status", ["eligible", "paid"]]);
-    expect(filters.map(([name]) => name)).not.toContain("referral_rewards.network");
+    const counts = queries.filter((q) => q.table === "referral_rewards");
+    expect(counts.map((q) => q.filters)).toContainEqual([
+      ["referrer_user_id", "me"],
+      ["status", ["eligible", "paid"]],
+    ]);
+  });
+
+  it("opens the questionnaire on an eligible or paid reward, from the rows it already read", async () => {
+    const opens = async (rows: ReferralDashboardRecord[]) => {
+      const { admin, queries } = client(rows);
+      const dashboard = await loadReferralDashboard(admin, "me", "testnet", 1);
+      // No count of its own: the limit's is the only one.
+      expect(queries.filter((q) => q.table === "referral_rewards")).toHaveLength(1);
+      return dashboard.payout.canEdit;
+    };
+    expect(await opens([record({ reward_status: "eligible", amount_php: 30 })])).toBe(true);
+    expect(await opens([record({ reward_status: "paid", amount_php: 30 })])).toBe(true);
+    // A deleted referred user's reward still counts, as the route's own check counts it.
+    expect(await opens([record({ former_user: true, reward_status: "eligible", amount_php: 30 })])).toBe(true);
+    expect(await opens([record({ reward_status: "over_limit" }), record({ reward_status: "void" }), record()])).toBe(
+      false,
+    );
+    expect(await opens([])).toBe(false);
+  });
+
+  it("is the same rule as the route's", () => {
+    for (const status of ["eligible", "paid", "over_limit", "void", null]) {
+      expect(canEditPayout([{ reward_status: status }])).toBe(status === "eligible" || status === "paid");
+    }
+  });
+
+  const SAVED = {
+    method: "ewallet",
+    xlm_address: null,
+    xlm_memo_type: null,
+    ewallet_provider: "GCash",
+    ewallet_account_number: "09171234567",
+  };
+
+  it("an unpaid reward needs details until they're saved, then shows them masked, from the summary's columns only", async () => {
+    const unpaid = [record({ reward_status: "eligible", amount_php: 30 })];
+    expect((await loadReferralDashboard(client(unpaid).admin, "me", "testnet", 1)).payoutNeeded).toBe(true);
+    const { admin, queries } = client(unpaid, { saved: SAVED });
+    const dashboard = await loadReferralDashboard(admin, "me", "testnet", 1);
+    expect(dashboard.payoutNeeded).toBe(false);
+    expect(dashboard.payout).toEqual({ canEdit: true, summary: { label: "GCash", last4: "4567" } });
+    expect(JSON.stringify(dashboard)).not.toContain("09171234567");
+    const read = queries.find((q) => q.table === "referral_payout_profiles");
+    expect(read).toEqual({
+      table: "referral_payout_profiles",
+      columns: "method, xlm_address, xlm_memo_type, ewallet_provider, ewallet_account_number",
+      filters: [["user_id", "me"]],
+    });
+    for (const column of ["name", "xlm_memo,", "ewallet_account_name", "ewallet_details"]) {
+      expect(`${read!.columns},`).not.toContain(column);
+    }
+  });
+
+  it("an XLM summary carries the memo's type and never the memo", async () => {
+    const saved = { method: "xlm", xlm_address: G, xlm_memo_type: "id", ewallet_provider: null, ewallet_account_number: null };
+    const dashboard = await loadReferralDashboard(client([], { saved }).admin, "me", "testnet", 1);
+    expect(dashboard.payout.summary).toEqual({ label: "XLM", last4: "WXYZ", memoType: "id" });
+  });
+
+  it("still loads when the payout details can't be read, saying so, and logs the label alone", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const unpaid = [record({ reward_status: "eligible", amount_php: 30 })];
+      const dashboard = await loadReferralDashboard(client(unpaid, { payoutError: true }).admin, "me", "testnet", 1);
+      expect(dashboard.totals.unpaidPhp).toBe(30);
+      expect(dashboard.rows).toHaveLength(1);
+      expect(dashboard.payout).toEqual({ canEdit: true, summary: null, unavailable: true });
+      // Not "needed": whether details are saved is unknown, so it doesn't nag.
+      expect(dashboard.payoutNeeded).toBe(false);
+      expect(log.mock.calls).toEqual([["[referrals] payout details not loaded for the dashboard"]]);
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("uses the override that's stored", async () => {

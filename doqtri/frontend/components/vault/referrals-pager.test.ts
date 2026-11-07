@@ -12,6 +12,7 @@ const dashboard = (page: number): ReferralDashboard => ({
   totals: { referred: 45, eligible: 0, earnedPhp: 0, unpaidPhp: 0, paidPhp: 0 },
   limit: { limit: 30, used: 0, reached: false },
   payoutNeeded: false,
+  payout: { canEdit: false, summary: null },
 });
 
 const ready = (page: number): ReferralsRead => ({ kind: "ready", data: dashboard(page) });
