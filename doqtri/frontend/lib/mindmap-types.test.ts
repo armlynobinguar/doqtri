@@ -167,4 +167,23 @@ describe("mindmapFromHeadings", () => {
   it("is empty for a document with no headings", () => {
     expect(mindmapFromHeadings("Doc", "just prose\n").root.children).toEqual([]);
   });
+
+  it("folds a lone top heading that repeats the title into the root", () => {
+    const map = mindmapFromHeadings("Hackathon Project", "# Hackathon  project\n## Pitch\n### Idea\n## MVP\n");
+    expect(map.root.label).toBe("Hackathon Project");
+    expect(labels(map.root.children)).toEqual(["Pitch", "MVP"]);
+    expect(map.root.children[0].kind).toBe("theme");
+    expect(labels(map.root.children[0].children)).toEqual(["Idea"]);
+    expect(map.concepts).toEqual(["Pitch", "Idea", "MVP"]);
+  });
+
+  it("keeps a lone top heading that differs from the title", () => {
+    const map = mindmapFromHeadings("Doc", "# Plan\n## A\n");
+    expect(labels(map.root.children)).toEqual(["Plan"]);
+  });
+
+  it("keeps a title heading that has siblings", () => {
+    const map = mindmapFromHeadings("Doc", "# Doc\n## A\n# Other\n");
+    expect(labels(map.root.children)).toEqual(["Doc", "Other"]);
+  });
 });

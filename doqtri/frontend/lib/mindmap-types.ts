@@ -171,8 +171,26 @@ function parseNode(value: unknown, depth: number): ConceptNode | null {
  * document.
  */
 export function mindmapFromHeadings(title: string, markdown: string): DocMindmap {
-  const root = convert(buildMindmap(title, markdown), 0);
+  const root = convert(foldTitleHeading(buildMindmap(title, markdown)), 0);
   return { version: 1, root, concepts: flattenConcepts(root) };
+}
+
+/**
+ * Drops a lone top heading that only repeats the title.
+ *
+ * A note's markdown opens with `# <title>`, so the heading tree's root (the
+ * title) would otherwise have that heading as its only child, with every
+ * section one ring further out. The map folds it into the root instead.
+ *
+ * Display only: the heading tree itself keeps the heading, since its
+ * positional id (`h0`) is what links and node status are anchored on.
+ */
+function foldTitleHeading(root: MindmapNode): MindmapNode {
+  const [only] = root.children;
+  if (root.children.length !== 1 || normalizeConcept(only.label) !== normalizeConcept(root.label)) {
+    return root;
+  }
+  return { ...root, children: only.children };
 }
 
 function convert(node: MindmapNode, depth: number): ConceptNode {
