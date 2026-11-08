@@ -25,4 +25,10 @@ describe("the legal pages gate", () => {
     expect(legalOperatorName()).toBe("Test Operator");
     expect(legalPagesLive()).toBe(true);
   });
+
+  it("isn't fooled by a public variable", () => {
+    vi.stubEnv("LEGAL_OPERATOR_NAME", "");
+    vi.stubEnv("NEXT_PUBLIC_LEGAL_OPERATOR_NAME", "Test Operator");
+    expect(legalPagesLive()).toBe(false);
+  });
 });

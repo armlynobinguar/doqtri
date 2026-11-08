@@ -154,7 +154,7 @@ export function ProfileView({
 }: {
   joinedAt: string;
   referral: ReferralSummary | null;
-  /** The referral dashboard exists (lib/referral-dashboard.ts). */
+  /** The referral dashboard exists (the legal pages gate, lib/legal.ts). */
   referralsLive?: boolean;
   /** The active workspace, whose notes the vault shows and this page counts (WP-1.7). */
   workspaceId: string;

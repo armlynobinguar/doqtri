@@ -9,7 +9,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { connection } from "next/server";
-import { referralDashboardLive } from "@/lib/referral-dashboard";
+import { legalPagesLive } from "@/lib/legal";
 import {
   publicTestimonials,
   testimonialReviewRow,
@@ -117,7 +117,7 @@ export const LANDING_TESTIMONIALS_TIMEOUT_MS = 2000;
 export async function landingTestimonials(
   timeoutMs: number = LANDING_TESTIMONIALS_TIMEOUT_MS,
 ): Promise<PublicTestimonial[]> {
-  if (!referralDashboardLive()) return [];
+  if (!legalPagesLive()) return [];
   await connection();
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;

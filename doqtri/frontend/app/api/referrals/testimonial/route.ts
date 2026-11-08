@@ -1,4 +1,4 @@
-import { referralDashboardLive } from "@/lib/referral-dashboard";
+import { legalPagesLive } from "@/lib/legal";
 import { hasEligibleReferral } from "@/lib/referral-payout-profiles";
 import { readJsonBody } from "@/lib/referral-payouts-store";
 import { validateTestimonial } from "@/lib/referral-testimonial";
@@ -26,7 +26,7 @@ function answer(body: unknown, status = 200) {
  * stored, which the owner can still see.
  */
 export async function GET() {
-  if (!referralDashboardLive()) return answer({ error: "Not found" }, 404);
+  if (!legalPagesLive()) return answer({ error: "Not found" }, 404);
 
   const supabase = await createSupabaseServerClient();
   const {
@@ -57,7 +57,7 @@ export async function GET() {
  * feedback, but not write new words or opt in.
  */
 export async function PUT(request: Request) {
-  if (!referralDashboardLive()) return answer({ error: "Not found" }, 404);
+  if (!legalPagesLive()) return answer({ error: "Not found" }, 404);
 
   const supabase = await createSupabaseServerClient();
   const {

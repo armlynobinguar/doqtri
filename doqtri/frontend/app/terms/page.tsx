@@ -215,7 +215,8 @@ function sections(operator: string): LegalSection[] {
               </>,
               <>
                 <b>Changes and ending.</b> We can change or end the program. If it ends, rewards already eligible on the
-                end date are paid within 30 days of that date, if the questionnaire is complete.
+                end date are paid if the payout questionnaire is complete within 30 days of that date. We pay within
+                30 days of the end date or of the questionnaire being complete, whichever is later.
               </>,
               <>
                 <b>Tax.</b> {TAX_CLAUSE}

@@ -6,7 +6,7 @@ import { renderSVG } from "uqr";
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
 import { ProfileView, type ReferralSummary } from "@/components/vault/profile-view";
 import { referralUrl } from "@/lib/referral";
-import { referralDashboardLive } from "@/lib/referral-dashboard";
+import { legalPagesLive } from "@/lib/legal";
 import { getActiveWorkspace } from "@/lib/active-workspace";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ConnectedAppsData } from "@/components/vault/connected-apps";
@@ -40,7 +40,7 @@ export default async function ProfilePage() {
       <ProfileView
         joinedAt={user.created_at}
         referral={referral}
-        referralsLive={referralDashboardLive()}
+        referralsLive={legalPagesLive()}
         workspaceId={active.id}
         connectedApps={connectedApps}
       />

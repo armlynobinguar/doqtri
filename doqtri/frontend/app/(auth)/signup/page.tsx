@@ -7,7 +7,6 @@ import { SignUpNotice } from "@/components/legal/legal-links";
 import { legalPagesLive } from "@/lib/legal";
 import { safeNextPath, withNext } from "@/lib/email-auth";
 import { readReferralCookie, REFERRAL_COOKIE } from "@/lib/referral";
-import { referralDashboardLive } from "@/lib/referral-dashboard";
 
 export const metadata = { title: "Create account · Doqtri" };
 
@@ -30,7 +29,7 @@ export default async function SignUpPage({
         <EmailAuthForm mode="sign-up" next={next} />
         <WalletOption next={next} />
         {legalPagesLive() && <SignUpNotice className="mt-1" />}
-        <ReferralCodeField initialCode={referral?.code ?? null} dashboardLive={referralDashboardLive()} />
+        <ReferralCodeField initialCode={referral?.code ?? null} dashboardLive={legalPagesLive()} />
         <AuthSwitch prompt="Already have an account?" href={withNext("/login", next)} label="Sign in" />
       </AuthCard>
     </AuthPage>

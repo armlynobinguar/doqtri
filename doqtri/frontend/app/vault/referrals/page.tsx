@@ -3,12 +3,12 @@ import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { ReferralsView } from "@/components/vault/referrals-view";
 import { referralUrl } from "@/lib/referral";
-import { referralDashboardLive } from "@/lib/referral-dashboard";
+import { legalPagesLive } from "@/lib/legal";
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
 
 /** Nothing of its own while off, so it reads like any other unknown path under /vault. */
 export function generateMetadata(): Metadata {
-  if (!referralDashboardLive()) return {};
+  if (!legalPagesLive()) return {};
   return { title: "Referrals · Doqtri", robots: { index: false } };
 }
 
@@ -19,7 +19,7 @@ export function generateMetadata(): Metadata {
  * /api/referrals.
  */
 export default async function ReferralsPage() {
-  if (!referralDashboardLive()) notFound();
+  if (!legalPagesLive()) notFound();
 
   const supabase = await createSupabaseServerClient();
   const {

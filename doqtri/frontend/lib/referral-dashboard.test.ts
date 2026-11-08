@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   canEditPayout,
   joinedDay,
@@ -6,7 +6,6 @@ import {
   maskedReferralIdentity,
   maskEmail,
   maskWallet,
-  referralDashboardLive,
   referralLimit,
   referralListRow,
   referralPage,
@@ -39,30 +38,6 @@ const record = (over: Partial<ReferralDashboardRecord> = {}): ReferralDashboardR
 describe("the rules the page states", () => {
   it("are 3 activities, 30 PHP and a limit of 30", () => {
     expect([REFERRAL_ACTIVITY_THRESHOLD, REFERRAL_REWARD_PHP, REFERRAL_REWARD_LIMIT]).toEqual([3, 30, 30]);
-  });
-});
-
-describe("the switch", () => {
-  afterEach(() => vi.unstubAllEnvs());
-
-  it("is off while LEGAL_OPERATOR_NAME is unset, empty or blank", () => {
-    vi.stubEnv("LEGAL_OPERATOR_NAME", undefined as unknown as string);
-    expect(referralDashboardLive()).toBe(false);
-    vi.stubEnv("LEGAL_OPERATOR_NAME", "");
-    expect(referralDashboardLive()).toBe(false);
-    vi.stubEnv("LEGAL_OPERATOR_NAME", "   ");
-    expect(referralDashboardLive()).toBe(false);
-  });
-
-  it("is on once it names someone", () => {
-    vi.stubEnv("LEGAL_OPERATOR_NAME", "Test Operator");
-    expect(referralDashboardLive()).toBe(true);
-  });
-
-  it("isn't fooled by a public variable", () => {
-    vi.stubEnv("LEGAL_OPERATOR_NAME", "");
-    vi.stubEnv("NEXT_PUBLIC_LEGAL_OPERATOR_NAME", "Test Operator");
-    expect(referralDashboardLive()).toBe(false);
   });
 });
 

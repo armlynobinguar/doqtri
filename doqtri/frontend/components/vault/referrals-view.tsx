@@ -20,6 +20,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
+import { LegalLinks } from "@/components/legal/legal-links";
 import { Button } from "@/components/ui/button";
 import { StatusTag } from "@/components/ui/status-tag";
 import { payoutCard } from "@/components/vault/referral-payout-client";
@@ -125,6 +126,10 @@ export function ReferralsView({ inviteUrl }: { inviteUrl: string | null }) {
             <Loader2Icon className="size-4 animate-spin" /> Loading your referrals…
           </p>
         )}
+
+        <footer className="text-muted-foreground mt-10 text-[12px]" data-testid="referrals-legal-links">
+          <LegalLinks />
+        </footer>
       </main>
     </div>
   );

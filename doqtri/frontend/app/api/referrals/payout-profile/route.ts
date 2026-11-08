@@ -1,4 +1,4 @@
-import { referralDashboardLive } from "@/lib/referral-dashboard";
+import { legalPagesLive } from "@/lib/legal";
 import { payoutSummary, validatePayoutProfile } from "@/lib/referral-payout";
 import { hasEligibleReferral, PayoutStoreError, readPayoutProfile, savePayoutProfile } from "@/lib/referral-payout-profiles";
 import { NETWORK } from "@/lib/stellar/smart-wallet-config";
@@ -31,7 +31,7 @@ function logFailure(label: string, error: unknown) {
  * is already stored: then the owner can still see it, but not change it.
  */
 export async function GET() {
-  if (!referralDashboardLive()) return answer({ error: "Not found" }, 404);
+  if (!legalPagesLive()) return answer({ error: "Not found" }, 404);
 
   const supabase = await createSupabaseServerClient();
   const {
@@ -60,7 +60,7 @@ export async function GET() {
  * in the body goes nowhere: the validator keeps only the form's fields.
  */
 export async function PUT(request: Request) {
-  if (!referralDashboardLive()) return answer({ error: "Not found" }, 404);
+  if (!legalPagesLive()) return answer({ error: "Not found" }, 404);
 
   const supabase = await createSupabaseServerClient();
   const {

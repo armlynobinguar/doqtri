@@ -65,7 +65,7 @@ export function Ribbon({
   active?: RibbonAction;
   onAction: (action: RibbonAction) => void;
   isAdmin?: boolean;
-  /** The referral dashboard exists (lib/referral-dashboard.ts). */
+  /** The referral dashboard exists (the legal pages gate, lib/legal.ts). */
   referralsLive?: boolean;
   /** On an account page (profile, members): the profile button shows as current. */
   accountPage?: AccountPage;

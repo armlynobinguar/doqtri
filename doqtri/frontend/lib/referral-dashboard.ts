@@ -18,16 +18,9 @@ import { readPayoutSummary } from "@/lib/referral-payout-profiles";
 import { REFERRAL_REWARD_LIMIT } from "@/lib/referral-program";
 import { isReservedEmail, walletAddressFromEmail } from "@/lib/wallet-address";
 
-/**
- * Whether the dashboard exists yet. The same switch as the legal pages
- * (`lib/legal.ts`, DOQ-27 and DOQ-29, on another branch): it shows referred
- * users' masked emails and wallets and promises rewards, and neither may be
- * public before the Privacy Policy and Terms. Never a NEXT_PUBLIC_ variable:
- * client components get the answer as a prop.
- */
-export function referralDashboardLive(): boolean {
-  return Boolean(process.env.LEGAL_OPERATOR_NAME?.trim());
-}
+// Whether the dashboard exists yet is legalPagesLive() (lib/legal.ts): it
+// shows referred users' masked emails and wallets and promises rewards, and
+// neither may be public before the Privacy Policy and Terms.
 
 /** Rows on one page of the list. */
 export const REFERRAL_DASHBOARD_PAGE_SIZE = 20;

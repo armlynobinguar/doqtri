@@ -1,5 +1,6 @@
 import { logError } from "@/lib/log-error";
-import { loadReferralDashboard, referralDashboardLive, referralPage } from "@/lib/referral-dashboard";
+import { legalPagesLive } from "@/lib/legal";
+import { loadReferralDashboard, referralPage } from "@/lib/referral-dashboard";
 import { NETWORK } from "@/lib/stellar/smart-wallet-config";
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -15,7 +16,7 @@ function answer(body: unknown, status = 200) {
  * go live, signed in or not.
  */
 export async function GET(request: Request) {
-  if (!referralDashboardLive()) return answer({ error: "Not found" }, 404);
+  if (!legalPagesLive()) return answer({ error: "Not found" }, 404);
 
   const supabase = await createSupabaseServerClient();
   const {

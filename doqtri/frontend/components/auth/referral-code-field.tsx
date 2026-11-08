@@ -17,7 +17,7 @@ export function ReferralCodeField({
   dashboardLive = false,
 }: {
   initialCode: string | null;
-  /** The referral dashboard exists (lib/referral-dashboard.ts), so the inviter can see this account there. */
+  /** The referral dashboard exists (the legal pages gate, lib/legal.ts), so the inviter can see this account there. */
   dashboardLive?: boolean;
 }) {
   const [applied, setApplied] = useState(initialCode);

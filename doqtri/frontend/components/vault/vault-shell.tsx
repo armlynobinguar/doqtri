@@ -62,7 +62,7 @@ export function VaultShell({
   isAdmin: boolean;
   /** The legal pages are live (lib/legal.ts): shows their notice and links. */
   legalLive: boolean;
-  /** The referral dashboard exists (lib/referral-dashboard.ts). */
+  /** The referral dashboard exists: the same gate as the legal pages (lib/legal.ts). */
   referralsLive?: boolean;
   /** The workspace the vault shows, resolved on the server. */
   workspace: WorkspaceChoice;

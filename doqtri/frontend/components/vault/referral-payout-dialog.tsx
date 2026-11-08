@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import Link from "next/link";
 import { Loader2Icon, RotateCwIcon, SaveIcon, WalletIcon, XIcon } from "lucide-react";
 import { toast } from "sonner";
+import { PRIVACY_PATH, TERMS_PATH } from "@/components/legal/legal-links";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -95,7 +96,17 @@ export function ReferralPayoutDialog({
             <WalletIcon className="text-foreground size-4" strokeWidth={1.5} />
             Payout details
           </DialogTitle>
-          <DialogDescription>Where we send your referral rewards.</DialogDescription>
+          <DialogDescription>
+            Where we send your referral rewards. How we use these details is in the{" "}
+            <Link href={PRIVACY_PATH} className="text-foreground underline underline-offset-2">
+              Privacy Policy
+            </Link>
+            , and how payment works is in the{" "}
+            <Link href={TERMS_PATH} className="text-foreground underline underline-offset-2">
+              Terms of Service
+            </Link>
+            .
+          </DialogDescription>
         </DialogHeader>
         <PayoutFormLoader
           saving={saving}

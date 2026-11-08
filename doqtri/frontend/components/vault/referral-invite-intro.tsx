@@ -5,7 +5,7 @@ import { REFERRAL_ACTIVITY_THRESHOLD, REFERRAL_REWARD_PHP } from "@/lib/referral
 
 /**
  * The top of Profile → Invite. Until the referral dashboard goes live
- * (lib/referral-dashboard.ts) it stays exactly what it was: on a phone, its link
+ * (the legal pages gate, lib/legal.ts) it stays exactly what it was: on a phone, its link
  * is the way to the dashboard, since the ribbon is desktop-only.
  */
 export function ReferralInviteIntro({ live }: { live: boolean }) {
