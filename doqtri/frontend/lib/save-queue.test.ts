@@ -87,4 +87,48 @@ describe("createSaveQueue", () => {
 
     expect(writes).toEqual([]);
   });
+
+  it("runs a task after the write in flight and holds later writes until it settles", async () => {
+    const first = deferred();
+    const task = deferred();
+    const events: string[] = [];
+    const queue = createSaveQueue("a", async (text) => {
+      events.push(`write ${text}`);
+      if (text === "b") await first.promise;
+    });
+
+    const b = queue.save("b");
+    const ran = queue.run(async () => {
+      events.push("task");
+      await task.promise;
+      // What the task wrote itself becomes the baseline.
+      queue.markSaved("renamed");
+      return 7;
+    });
+    const c = queue.save("renamed");
+    await Promise.resolve();
+    expect(events).toEqual(["write b"]);
+
+    first.resolve();
+    await b;
+    await Promise.resolve();
+    expect(events).toEqual(["write b", "task"]);
+
+    task.resolve();
+    expect(await ran).toBe(7);
+    await c;
+    // The save queued during the task found its text already stored.
+    expect(events).toEqual(["write b", "task"]);
+  });
+
+  it("keeps writing after a task that failed", async () => {
+    const writes: string[] = [];
+    const queue = createSaveQueue("a", async (text) => {
+      writes.push(text);
+    });
+
+    await expect(queue.run(async () => Promise.reject(new Error("refused")))).rejects.toThrow("refused");
+    await queue.save("b");
+    expect(writes).toEqual(["b"]);
+  });
 });

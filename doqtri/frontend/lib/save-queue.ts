@@ -11,6 +11,12 @@ export type SaveQueue = {
   save(text: string): Promise<void>;
   /** Adopts `text` as saved without writing it, for text the server already has. */
   markSaved(text: string): void;
+  /**
+   * Runs `task` after any write in flight, and holds the writes queued
+   * meanwhile until it settles: for another write of the same row (a rename
+   * that rewrites the title heading) that must not race a save.
+   */
+  run<T>(task: () => Promise<T>): Promise<T>;
   /** The last text known to be stored. */
   readonly saved: string;
 };
@@ -36,6 +42,11 @@ export function createSaveQueue(
     },
     markSaved(text) {
       saved = text;
+    },
+    run(task) {
+      const next = tail.then(task, task);
+      tail = next.catch(() => {});
+      return next;
     },
     get saved() {
       return saved;

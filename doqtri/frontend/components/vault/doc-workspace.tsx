@@ -23,6 +23,9 @@ import { useDocLock } from "@/hooks/use-doc-lock";
 import { EditLockBanner } from "@/components/vault/edit-lock-banner";
 import { EDITING_ELSEWHERE, editingMessage } from "@/lib/doc-lock";
 import type { Doc } from "@/lib/types";
+import type { RenamedNote } from "@/lib/rename-note";
+import { rewriteTitleHeading } from "@/lib/title-heading";
+import { useRegisterOpenNote } from "@/components/vault/open-note";
 
 const SETTLE_MS = 700;
 
@@ -236,6 +239,54 @@ export function DocWorkspace({
     setSaveState(markdownRef.current === text ? "saved" : "saving");
     return text;
   }, [saves, setSaveState]);
+
+  /**
+   * Renames this note, for the shell's rename dialog (DOQ-35). The rename may
+   * rewrite the note's title heading on the server, so edits not yet saved
+   * are saved first (the server rewrites the text shown here, and nothing
+   * typed is lost), and the request runs in the save queue, so no autosave
+   * races it. The text it wrote then becomes the saved copy at its version,
+   * as for Regenerate, and the next save goes on from there. Anything typed
+   * while it ran is kept, with the same heading change made to it.
+   */
+  const renameHere = useCallback(
+    async (request: () => Promise<RenamedNote>) => {
+      if (!readOnly) {
+        try {
+          await saveNow();
+        } catch (e) {
+          const reason = e instanceof Error ? ` ${e.message}` : "";
+          throw new Error(`Your edits could not be saved, so the note was not renamed.${reason}`);
+        }
+      }
+      return saves.run(async () => {
+        const renamed = await request();
+        const { markdown: written, version, previousVersion } = renamed;
+        if (written === undefined || version === undefined) return renamed;
+        if (previousVersion !== saver.version) {
+          // This copy was already behind the note; load what it is now,
+          // unless it holds unsaved text or a conflict the user must see.
+          if (!conflictRef.current && markdownRef.current === saves.saved) void reloadLatest();
+          return renamed;
+        }
+        const flushed = saves.saved;
+        saver.setVersion(version);
+        saves.markSaved(written);
+        const current = markdownRef.current;
+        const next =
+          current === flushed
+            ? written
+            : (rewriteTitleHeading(current, renamed.previousTitle, renamed.title) ?? current);
+        markdownRef.current = next;
+        setMarkdown(next);
+        setSaveState(next === written ? "saved" : "saving");
+        return renamed;
+      });
+    },
+    [readOnly, reloadLatest, saveNow, saver, saves, setSaveState],
+  );
+  const openNote = useMemo(() => ({ docId: active.id, rename: renameHere }), [active.id, renameHere]);
+  useRegisterOpenNote(openNote);
 
   /**
    * The graph reads the settled text so the simulation is not restarted on

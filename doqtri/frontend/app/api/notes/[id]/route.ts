@@ -15,6 +15,7 @@ import { liveLockHolder } from "@/lib/doc-lock-server";
 import { afterNoteSaved, noteBeforeSave } from "@/lib/integrations/qdit-save-hook";
 import { qditIntegrationEnabled } from "@/lib/integrations/qdit-config";
 import { isTitleTaken, MAX_TITLE_LENGTH } from "@/lib/title";
+import { rewriteTitleHeading } from "@/lib/title-heading";
 import {
   loadMemberDocument,
   UNIQUE_VIOLATION,
@@ -160,15 +161,42 @@ export async function PUT(
   return NextResponse.json({ id, version: saved });
 }
 
+/** Saves that may land between a rename's read and its write before it gives up. */
+const RENAME_ATTEMPTS = 3;
+
+type RenameRow = { title: string; markdown: string; version: number };
+
 /**
- * Renames a note. Only the `title` column changes: the markdown is left alone,
- * so an anchored note's content hash still matches the ledger and stays
- * renameable. Titles are the graph's join key, so a clash with another note
- * in the same workspace is refused rather than silently suffixed — the user
- * picked this name and should see that it did not stick. Editors and above
- * of the note's workspace may rename it.
+ * Renames a note. Titles are the graph's join key, so a clash with another
+ * note in the same workspace is refused rather than silently suffixed — the
+ * user picked this name and should see that it did not stick. Editors and
+ * above of the note's workspace may rename it. Body: `{ title }`.
  *
- * Refused with 423 while someone else holds the note's edit lock (D-17).
+ * The note's own title heading follows the title (DOQ-35): when the first
+ * non-blank line is `# <old title>` (lib/title-heading.ts), it becomes
+ * `# <new title>` and nothing else in the text changes. Otherwise the user
+ * wrote their own heading, and the markdown is left alone. A heading that
+ * changes is an edit like any other: the version goes up by one (the
+ * database's save trigger), afterNoteSaved() remaps the note's links as for
+ * an editor save, a stored concept map reads as stale (its hash no longer
+ * matches), and an anchored note shows as changed since it was anchored
+ * until it is anchored again. The answer then also carries the new
+ * `markdown` and `version`, and the `previousVersion` they replace, for an
+ * open editor to adopt as its saved copy.
+ *
+ * Title and text are written together, in one UPDATE: a title clash (the
+ * unique index, when a teammate takes the name between the check and the
+ * write) leaves both as they were. That write is conditional on the version
+ * read here, which is the save path's version check: a save landing in
+ * between makes it match nothing, and the rename starts again from the newer
+ * text, checking the lock again, a few times before answering 409. It runs
+ * as the service role rather than through save_document(), which needs the
+ * caller's edit lock and session, and a rename from the explorer has
+ * neither; the lock is checked here instead, as for every service-role
+ * write of a note (D-17).
+ *
+ * Refused with 423, changing nothing, while someone else holds the note's
+ * edit lock (D-17).
  *
  * Other notes' [[wikilinks]] to the old title are not rewritten. Editing their
  * markdown would un-anchor any of them that are on the ledger.
@@ -213,14 +241,16 @@ export async function PATCH(
   const admin = createSupabaseAdminClient();
 
   // The service role skips RLS, so the workspace role is checked here.
-  const found = await loadMemberDocument<{ title: string }>(admin, {
-    userId: user.id,
-    docId: id,
-    columns: "title",
-    minRole: "editor",
-  });
+  const load = () =>
+    loadMemberDocument<RenameRow>(admin, {
+      userId: user.id,
+      docId: id,
+      columns: "title, markdown, version",
+      minRole: "editor",
+    });
+  const found = await load();
   if (!found.ok) return refusal(found);
-  const note = found.doc;
+  let note = found.doc;
 
   const locked = await refuseIfLockedByOther(admin, id, user.id);
   if (locked) return locked;
@@ -239,21 +269,73 @@ export async function PATCH(
     );
   if (isTitleTaken(title, others)) return taken();
 
-  if (title !== note.title) {
-    const { error: updateError } = await admin
+  if (title === note.title) {
+    return NextResponse.json({ id, title, previousTitle: note.title });
+  }
+
+  for (let attempt = 1; ; attempt++) {
+    const baseVersion = Number(note.version);
+    const markdown = rewriteTitleHeading(note.markdown, note.title, title);
+    // updated_at as save_document() sets it, for a change of text only.
+    const changes =
+      markdown === null ? { title } : { title, markdown, updated_at: new Date().toISOString() };
+
+    const { data: written, error: updateError } = await admin
       .from("documents")
-      .update({ title })
+      .update(changes)
       .eq("id", id)
-      .eq("workspace_id", note.workspace_id);
+      .eq("workspace_id", note.workspace_id)
+      .eq("version", baseVersion)
+      .select("version")
+      .maybeSingle();
 
     // A teammate took the title between the check and the write.
     if (updateError?.code === UNIQUE_VIOLATION) return taken();
     if (updateError) {
       return NextResponse.json({ error: updateError.message }, { status: 500 });
     }
-  }
 
-  return NextResponse.json({ id, title, previousTitle: note.title });
+    if (written) {
+      if (markdown === null) {
+        return NextResponse.json({ id, title, previousTitle: note.title });
+      }
+      const version = Number((written as { version: unknown }).version);
+      await afterNoteSaved({
+        userId: user.id,
+        docId: id,
+        baseVersion,
+        savedVersion: version,
+        markdown,
+        before: { title: note.title, markdown: note.markdown, version: baseVersion },
+        title,
+      });
+      return NextResponse.json({
+        id,
+        title,
+        previousTitle: note.title,
+        markdown,
+        version,
+        previousVersion: baseVersion,
+      });
+    }
+
+    // Saved since it was read (or gone): nothing was written. Start again
+    // from the newer text, unless the saves keep coming.
+    if (attempt >= RENAME_ATTEMPTS) {
+      return NextResponse.json(
+        { error: "This note was saved while it was being renamed. Try again.", code: "STALE_VERSION" },
+        { status: 409 },
+      );
+    }
+    const again = await load();
+    if (!again.ok) return refusal(again);
+    note = again.doc;
+    const lockedNow = await refuseIfLockedByOther(admin, id, user.id);
+    if (lockedNow) return lockedNow;
+    if (title === note.title) {
+      return NextResponse.json({ id, title, previousTitle: note.title });
+    }
+  }
 }
 
 /**
