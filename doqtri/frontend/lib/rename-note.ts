@@ -14,14 +14,16 @@ export type RenamedNote = {
 
 /**
  * A rename the server refused: its message, with the HTTP status and the
- * answer's `code` (TITLE_TAKEN, LOCKED, NOT_LOCK_HOLDER, BAD_TITLE, ...) for
- * a caller that handles some refusals itself (DOQ-36).
+ * answer's `code` (TITLE_TAKEN, TITLE_CHANGED, LOCKED, NOT_LOCK_HOLDER,
+ * BAD_TITLE, ...) for a caller that handles some refusals itself (DOQ-36).
+ * `title` is the note's current title, which TITLE_CHANGED carries.
  */
 export class RenameError extends Error {
   constructor(
     message: string,
     readonly status: number,
     readonly code?: string,
+    readonly title?: string,
   ) {
     super(message);
     this.name = "RenameError";
@@ -33,17 +35,24 @@ export class RenameError extends Error {
  * when another note already has the title, which the dialog shows inline.
  * `session` is the open editor's edit session, when the rename goes through
  * it: the server checks the note's lock against it before it rewrites the
- * title heading.
+ * title heading. `expectedTitle` is the title the caller believes the note
+ * has; when it has another by now, the server refuses with TITLE_CHANGED
+ * rather than overwrite that rename (DOQ-36).
  */
 export async function renameNote(
   id: string,
   title: string,
   session?: string,
+  expectedTitle?: string,
 ): Promise<RenamedNote> {
   const res = await fetch(`/api/notes/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(session ? { title, session } : { title }),
+    body: JSON.stringify({
+      title,
+      ...(session ? { session } : {}),
+      ...(expectedTitle !== undefined ? { expectedTitle } : {}),
+    }),
   });
   const payload = (await res.json().catch(() => null)) as {
     error?: string;
@@ -57,6 +66,7 @@ export async function renameNote(
       payload?.error ?? `Could not rename note (${res.status})`,
       res.status,
       typeof payload?.code === "string" ? payload.code : undefined,
+      !res.ok && typeof payload?.title === "string" ? payload.title : undefined,
     );
   }
 

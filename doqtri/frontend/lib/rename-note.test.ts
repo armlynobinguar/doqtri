@@ -29,6 +29,18 @@ describe("renameNote", () => {
     expect(error).toMatchObject({ message: "Another note is already called “Roadmap”", status: 409, code: "TITLE_TAKEN" });
   });
 
+  it("sends the title the caller expects the note to have, and reads the current one off TITLE_CHANGED", async () => {
+    answer(409, { error: "This note was renamed", code: "TITLE_CHANGED", title: "Their Title" });
+    const error = await renameNote("n1", "Roadmap", "s1", "Plan").catch((e: unknown) => e);
+    expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body))).toEqual({
+      title: "Roadmap",
+      session: "s1",
+      expectedTitle: "Plan",
+    });
+    expect(error).toBeInstanceOf(RenameError);
+    expect(error).toMatchObject({ status: 409, code: "TITLE_CHANGED", title: "Their Title" });
+  });
+
   it("still throws a RenameError, without a code, when the answer is not JSON", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("oops", { status: 502 })));
     const error = await renameNote("n1", "Roadmap").catch((e: unknown) => e);

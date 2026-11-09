@@ -235,6 +235,17 @@ function renameLockRefusal(error: { details?: string | null }) {
  *
  * Other notes' [[wikilinks]] to the old title are not rewritten. Editing their
  * markdown would un-anchor any of them that are on the ledger.
+ *
+ * `expectedTitle`, when sent, is the title the caller believes the note has
+ * (DOQ-36: an edit of the title heading renames from the title the editor
+ * last knew). When the note's title is not exactly that, someone renamed it
+ * meanwhile, and renaming on would quietly overwrite their rename: the
+ * answer is 409 TITLE_CHANGED with the note's current `title`, and nothing
+ * is written. The comparison is exact (after trimming), so a rename that only
+ * changed case is not overwritten either. It is checked on this route's read
+ * of the note, and again on each re-read; a rename landing between the last
+ * read and rename_document() is not caught. That window is a single request
+ * long, and the function's own checks still hold in it.
  */
 export async function PATCH(
   request: Request,
@@ -257,9 +268,11 @@ export async function PATCH(
 
   let title = "";
   let editSession: string | null = null;
+  let expectedTitle: string | null = null;
   try {
-    const body = (await request.json()) as { title?: unknown; session?: unknown };
+    const body = (await request.json()) as { title?: unknown; session?: unknown; expectedTitle?: unknown };
     if (typeof body.title === "string") title = body.title.trim();
+    if (typeof body.expectedTitle === "string") expectedTitle = body.expectedTitle.trim();
     if (body.session !== undefined && body.session !== null) {
       editSession = parseEditSession(body.session);
       if (!editSession) {
@@ -300,6 +313,18 @@ export async function PATCH(
   const found = await load();
   if (!found.ok) return refusal(found);
   let note = found.doc;
+
+  const changed = () =>
+    NextResponse.json(
+      {
+        error: `This note was renamed to “${note.title}” meanwhile, so it was not renamed.`,
+        code: "TITLE_CHANGED",
+        title: note.title,
+      },
+      { status: 409 },
+    );
+  const titleMovedOn = () => expectedTitle !== null && note.title.trim() !== expectedTitle;
+  if (titleMovedOn()) return changed();
 
   const { titles: others, error: titlesError } = await workspaceTitles(admin, note.workspace_id, {
     excludeId: id,
@@ -363,6 +388,7 @@ export async function PATCH(
       const again = await load();
       if (!again.ok) return refusal(again);
       note = again.doc;
+      if (titleMovedOn()) return changed();
       if (title === note.title) {
         return NextResponse.json({ id, title, previousTitle: note.title });
       }
