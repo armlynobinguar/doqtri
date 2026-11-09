@@ -1,15 +1,12 @@
 -- pgTAP tests for 20261110100000_documents_created_at.sql (WP-4.7, DOQ-39):
--- documents.created_at exists, is never null, defaults to now(), was
--- backfilled from updated_at, and a client role can neither choose it on
--- insert nor change it on update, while the service role can.
+-- documents.created_at exists, is never null, defaults to now() (which
+-- gave every pre-existing note the time the migration ran), and a client
+-- role can neither choose it on insert nor change it on update, while the
+-- service role can.
 --
 --   pg_prove -d "$DATABASE_URL" doqtri/backend/tests/documents_created_at.test.sql
 --
--- Everything runs in one transaction that is rolled back. The backfill check
--- holds for whatever rows the database had when the migration ran: every
--- row written before it has created_at = updated_at, unless something wrote
--- updated_at since, so it only checks that no row was created after it was
--- last updated.
+-- Everything runs in one transaction that is rolled back.
 
 begin;
 create extension if not exists pgtap with schema extensions;
@@ -24,8 +21,8 @@ select has_column('public', 'documents', 'created_at', 'documents has a created_
 select col_type_is('public', 'documents', 'created_at', 'timestamp with time zone', 'a timestamptz');
 select col_not_null('public', 'documents', 'created_at', 'which is never null');
 select col_default_is('public', 'documents', 'created_at', 'now()', 'and defaults to now()');
-select is((select count(*)::int from public.documents where created_at > updated_at), 0,
-  'no existing note was created after it was last updated (the backfill copies updated_at)');
+select is((select count(*)::int from public.documents where created_at is null), 0,
+  'every existing note has one');
 
 insert into auth.users (id, email) values
   ('60000000-0000-4000-8000-000000000001', 'writer@example.com');

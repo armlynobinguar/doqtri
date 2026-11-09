@@ -111,6 +111,19 @@ describe("serializeGlobalMindmap", () => {
     expect(once.nodes.every((n) => n.id.length <= HACKATHON_LIMITS.nodeIdChars)).toBe(true);
   });
 
+  it("cuts labels over 300 code points to 299 plus an ellipsis", () => {
+    const long = "🙂".repeat(400);
+    const exact = "é".repeat(300);
+    const { nodes } = serializeGlobalMindmap([doc(A, "Plan", long, exact)]);
+    const cut = nodes.find((n) => n.label.startsWith("🙂"))!;
+    expect([...cut.label]).toHaveLength(300);
+    expect(cut.label).toBe(`${"🙂".repeat(299)}…`);
+    expect(nodes.find((n) => n.label.startsWith("é"))!.label).toBe(exact);
+    expect(() =>
+      validateHackathonSnapshot(snapshot({ notes: [note(A)], global_mindmap: serializeGlobalMindmap([doc(A, "Plan", long)]) })),
+    ).not.toThrow();
+  });
+
   it("passes validation for the notes it was built from", () => {
     const global = serializeGlobalMindmap(docs);
     const notes = docs.map((d) => note(d.id, { title: d.title }));
@@ -155,6 +168,22 @@ describe("validateHackathonSnapshot", () => {
       expect(error.field, field).toBe(field);
       expect(error.problem, field).toMatch(/too_many|too_long/);
     }
+  });
+
+  it("counts title, label, kind and id lengths in code points", () => {
+    // Each emoji is two UTF-16 units but one code point.
+    const emoji = (n: number) => "🙂".repeat(n);
+    expect(() => validateHackathonSnapshot(snapshot({ notes: [note(A, { title: emoji(300) })] }))).not.toThrow();
+    expect(refusal(() => validateHackathonSnapshot(snapshot({ notes: [note(A, { title: emoji(301) })] })))).toMatchObject({
+      field: "notes[0].title",
+      actual: 301,
+    });
+    const node = (extra: Record<string, unknown>) =>
+      snapshot({ global_mindmap: { nodes: [{ id: "n", label: "", kind: "concept", depth: 1, doc_ids: [], ...extra }], links: [] } });
+    expect(() => validateHackathonSnapshot(node({ label: emoji(300), kind: emoji(32), id: emoji(128) }))).not.toThrow();
+    expect(refusal(() => validateHackathonSnapshot(node({ label: emoji(301) }))).field).toBe("global_mindmap.nodes[0].label");
+    expect(refusal(() => validateHackathonSnapshot(node({ kind: emoji(33) }))).field).toBe("global_mindmap.nodes[0].kind");
+    expect(refusal(() => validateHackathonSnapshot(node({ id: emoji(129) }))).field).toBe("global_mindmap.nodes[0].id");
   });
 
   it("counts markdown in UTF-8 bytes, not characters", () => {
@@ -286,8 +315,9 @@ describe("buildHackathonSnapshot", () => {
       },
       seen,
     );
-    const { snapshot: built, body } = await buildHackathonSnapshot({
+    const { snapshot: built, body, warnings } = await buildHackathonSnapshot({
       supabase,
+      sourceClient: supabase,
       workspaceId: WS,
       hackathonSlug: "stellar-build-2026",
       now: () => new Date("2026-11-20T15:04:05.000Z"),
@@ -305,6 +335,7 @@ describe("buildHackathonSnapshot", () => {
     expect(built.generated_at).toBe("2026-11-20T15:04:05.000Z");
     expect(built.workspace_id).toBe(WS);
     expect(body).toBe(JSON.stringify(built));
+    expect(warnings).toEqual([]);
     expect(seen[0]).toContain("created_at");
 
     expect(built.notes.map((n) => [n.title, n.source])).toEqual([
@@ -333,7 +364,7 @@ describe("buildHackathonSnapshot", () => {
 
   it("makes a new snapshot_id each time", async () => {
     const supabase = fakeSupabase({ documents: [row(A, "Payroll")], ingests: [] });
-    const args = { supabase, workspaceId: WS, hackathonSlug: "h" };
+    const args = { supabase, sourceClient: supabase, workspaceId: WS, hackathonSlug: "h" };
     const [one, two] = await Promise.all([buildHackathonSnapshot(args), buildHackathonSnapshot(args)]);
     expect(one.snapshot.snapshot_id).not.toBe(two.snapshot.snapshot_id);
   });
@@ -341,7 +372,12 @@ describe("buildHackathonSnapshot", () => {
   it("refuses a bad slug before reading anything", async () => {
     const seen: string[] = [];
     await expect(
-      buildHackathonSnapshot({ supabase: fakeSupabase({}, seen), workspaceId: WS, hackathonSlug: "Bad Slug" }),
+      buildHackathonSnapshot({
+        supabase: fakeSupabase({}, seen),
+        sourceClient: fakeSupabase({}, seen),
+        workspaceId: WS,
+        hackathonSlug: "Bad Slug",
+      }),
     ).rejects.toMatchObject({ field: "hackathon_slug" });
     expect(seen).toEqual([]);
   });
@@ -350,12 +386,29 @@ describe("buildHackathonSnapshot", () => {
     const documents = Array.from({ length: 205 }, (_, i) =>
       row(`a0000000-0000-4000-8000-${String(i).padStart(12, "0")}`, `Note ${String(i).padStart(3, "0")}`),
     );
+    const supabase = fakeSupabase({ documents, ingests: [] });
     await expect(
-      buildHackathonSnapshot({ supabase: fakeSupabase({ documents, ingests: [] }), workspaceId: WS, hackathonSlug: "h" }),
+      buildHackathonSnapshot({ supabase, sourceClient: supabase, workspaceId: WS, hackathonSlug: "h" }),
     ).rejects.toMatchObject({ field: "notes", problem: "too_many" });
   });
 
-  it("reads imports through sourceClient when given", async () => {
+  it("sends an over-64 KiB stored map as null, with a warning, and still sends the note", async () => {
+    const huge = map("Payroll", ...Array.from({ length: 900 }, (_, i) => `Concept number ${i} ${"x".repeat(60)}`));
+    expect(JSON.stringify(huge).length).toBeGreaterThan(HACKATHON_LIMITS.mindmapBytes);
+    const supabase = fakeSupabase({ documents: [row(A, "Payroll", { mindmap: huge }), row(B, "Small", { mindmap: map("Small", "Escrow") })], ingests: [] });
+    const { snapshot: built, body, warnings } = await buildHackathonSnapshot({ supabase, sourceClient: supabase, workspaceId: WS, hackathonSlug: "h" });
+    expect(built.notes.find((n) => n.doc_id === A)!.mindmap).toBeNull();
+    expect(built.notes.find((n) => n.doc_id === B)!.mindmap).not.toBeNull();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(A);
+    expect(warnings[0]).toContain("Payroll");
+    // The global mindmap still draws the big map's concepts.
+    expect(built.global_mindmap.nodes.some((n) => n.label.startsWith("Concept number 899"))).toBe(true);
+    expect(body).toBe(JSON.stringify(built));
+  });
+
+  it("reads imports through sourceClient, not the session client", async () => {
+    // The session client sees no ingests (RLS shows only the caller's own).
     const supabase = fakeSupabase({ documents: [row(A, "Payroll")], ingests: [] });
     const sourceClient = fakeSupabase({ ingests: [{ document_id: A }] });
     const { snapshot: built } = await buildHackathonSnapshot({ supabase, sourceClient, workspaceId: WS, hackathonSlug: "h" });

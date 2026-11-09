@@ -145,6 +145,19 @@ export class HackathonSnapshotError extends Error {
 }
 
 const utf8Bytes = (value: string) => Buffer.byteLength(value, "utf8");
+/** Lengths are Unicode code points, as the contract counts characters. */
+const codePoints = (value: string) => [...value].length;
+
+/**
+ * A global mindmap label qdit accepts: one over 300 code points keeps its
+ * first 299 and gains "…". Labels come from headings and concept names,
+ * which have no length limit of their own, and one long heading should not
+ * stop the whole snapshot.
+ */
+function wireLabel(label: string): string {
+  const chars = [...label];
+  return chars.length <= HACKATHON_LIMITS.labelChars ? label : `${chars.slice(0, HACKATHON_LIMITS.labelChars - 1).join("")}…`;
+}
 
 // ---------------------------------------------------------------------------
 // The global mindmap
@@ -157,7 +170,7 @@ const utf8Bytes = (value: string) => Buffer.byteLength(value, "utf8");
  * snapshots, and no original id starts with `c:`.
  */
 function wireNodeId(id: string): string {
-  if (id.length <= HACKATHON_LIMITS.nodeIdChars) return id;
+  if (codePoints(id) <= HACKATHON_LIMITS.nodeIdChars) return id;
   return `c:${createHash("sha256").update(id, "utf8").digest("hex").slice(0, 16)}`;
 }
 
@@ -172,7 +185,8 @@ const byString = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
  * target, and each node's `doc_ids` (the notes that reach it: a document
  * node's own note and the notes pointing at it, a concept's notes that name
  * it) are sorted. Only the contract's fields are sent: `href` and `summary`
- * stay behind.
+ * stay behind. Ids over 128 code points are shortened (wireNodeId) and labels
+ * over 300 cut (wireLabel), so the result always passes those two checks.
  */
 export function serializeGlobalMindmap(docs: Doc[]): HackathonGlobalMindmap {
   const ordered = [...docs].sort((a, b) => byString(a.id, b.id));
@@ -181,7 +195,7 @@ export function serializeGlobalMindmap(docs: Doc[]): HackathonGlobalMindmap {
   const nodes: HackathonMindmapNode[] = graph.nodes
     .map((node) => ({
       id: wireNodeId(node.id),
-      label: node.label,
+      label: wireLabel(node.label),
       kind: node.kind,
       depth: node.depth,
       doc_ids: [...(reachedBy.get(node.id) ?? [])].sort(byString),
@@ -219,11 +233,12 @@ function exactKeys(value: unknown, keys: readonly string[], field: string): Reco
 
 function maxChars(value: unknown, limit: number, field: string, min = 0): string {
   if (typeof value !== "string") throw new HackathonSnapshotError(field, "invalid", "must be a string");
-  if (value.length < min) throw new HackathonSnapshotError(field, "invalid", `must be at least ${min} character(s)`);
-  if (value.length > limit) {
-    throw new HackathonSnapshotError(field, "too_long", `is ${value.length} characters, at most ${limit}`, {
+  const length = codePoints(value);
+  if (length < min) throw new HackathonSnapshotError(field, "invalid", `must be at least ${min} character(s)`);
+  if (length > limit) {
+    throw new HackathonSnapshotError(field, "too_long", `is ${length} characters, at most ${limit}`, {
       limit,
-      actual: value.length,
+      actual: length,
     });
   }
   return value;
@@ -385,28 +400,39 @@ function storedMindmap(doc: Doc, raw: unknown): Record<string, unknown> | null {
     : null;
 }
 
+const mindmapTooLarge = (mindmap: Record<string, unknown>) =>
+  utf8Bytes(JSON.stringify(mindmap)) > HACKATHON_LIMITS.mindmapBytes;
+
 const iso = (value: string) => new Date(value).toISOString();
 
 /**
  * Builds and checks the snapshot of `workspaceId`'s notes for `hackathonSlug`.
  *
- * `supabase` must be session-bound: RLS is what limits the notes to the ones
- * the caller may read, exactly as loadVaultDocs() does for the vault pages.
- * `ingests` RLS shows a user only their own imports, so with that client a
- * teammate's imported note reads as `source: null`. Pass the service-role
- * client as `sourceClient` to see every import of the notes already loaded;
- * it is used for nothing else.
+ * @param params.supabase MUST be the caller's session client
+ *   (createSupabaseServerClient()): RLS is what limits the notes to the ones
+ *   the caller may read, exactly as loadVaultDocs() does for the vault pages.
+ *   Never pass the service role here: it would send notes the caller cannot
+ *   read.
+ * @param params.sourceClient the service-role client, used only to read the
+ *   `ingests` rows of the notes already loaded through `supabase`. `ingests`
+ *   RLS shows a user only their own imports, so through the session client a
+ *   teammate's imported note would read as `source: null`.
  *
- * Returns the snapshot and `body`, its serialized form: send `body`, and
- * resend that same string on a retry (see the top of this file).
+ * The caller must already have checked that the user is an admin of
+ * `workspaceId` (D-10); this function does not.
+ *
+ * Returns the snapshot, `body` (its serialized form: send `body`, and resend
+ * that same string on a retry, see the top of this file) and `warnings`: one
+ * line per note whose stored mindmap was over 64 KiB and was sent as null
+ * instead of failing the snapshot.
  */
 export async function buildHackathonSnapshot(params: {
   supabase: SupabaseClient;
   workspaceId: string;
   hackathonSlug: string;
-  sourceClient?: SupabaseClient;
+  sourceClient: SupabaseClient;
   now?: () => Date;
-}): Promise<{ snapshot: HackathonSnapshot; body: string }> {
+}): Promise<{ snapshot: HackathonSnapshot; body: string; warnings: string[] }> {
   const { supabase, workspaceId, hackathonSlug } = params;
   if (!HACKATHON_SLUG.test(hackathonSlug)) {
     throw new HackathonSnapshotError("hackathon_slug", "invalid", "must match ^[a-z0-9-]{1,64}$");
@@ -431,7 +457,7 @@ export async function buildHackathonSnapshot(params: {
 
   const imported = new Set<string>();
   if (rows.length > 0) {
-    const { data: ingests, error: ingestError } = await (params.sourceClient ?? supabase)
+    const { data: ingests, error: ingestError } = await params.sourceClient
       .from("ingests")
       .select("document_id")
       .in(
@@ -445,16 +471,26 @@ export async function buildHackathonSnapshot(params: {
   }
 
   const docs = rows.map(docFromRow);
-  const notes: HackathonNote[] = rows.map((row, i) => ({
-    doc_id: row.id,
-    title: row.title,
-    markdown: row.markdown,
-    mindmap: storedMindmap(docs[i], row.mindmap),
-    created_at: iso(row.created_at),
-    updated_at: iso(row.updated_at),
-    version: null,
-    source: row.source_template_id ? "template" : imported.has(row.id) ? "import" : null,
-  }));
+  const warnings: string[] = [];
+  const notes: HackathonNote[] = rows.map((row, i) => {
+    let mindmap = storedMindmap(docs[i], row.mindmap);
+    if (mindmap && mindmapTooLarge(mindmap)) {
+      // qdit takes at most 64 KiB per map. The global mindmap below still
+      // uses it; only this note's own copy is left out.
+      warnings.push(`"${row.title}" (${row.id}): its mindmap is over 64 KiB and was not sent.`);
+      mindmap = null;
+    }
+    return {
+      doc_id: row.id,
+      title: row.title,
+      markdown: row.markdown,
+      mindmap,
+      created_at: iso(row.created_at),
+      updated_at: iso(row.updated_at),
+      version: null,
+      source: row.source_template_id ? "template" : imported.has(row.id) ? "import" : null,
+    };
+  });
 
   const snapshot: HackathonSnapshot = {
     hackathon_slug: hackathonSlug,
@@ -464,5 +500,5 @@ export async function buildHackathonSnapshot(params: {
     notes,
     global_mindmap: serializeGlobalMindmap(docs),
   };
-  return { snapshot, body: validateHackathonSnapshot(snapshot) };
+  return { snapshot, body: validateHackathonSnapshot(snapshot), warnings };
 }

@@ -216,6 +216,8 @@ export type QditHackathonRefusal =
   | "hackathon_not_open"
   | "hackathon_closed"
   | "snapshot_conflict"
+  /** 409: the project already sent as many snapshots for this hackathon as qdit keeps. */
+  | "snapshot_limit"
   /** 400: a shape or limit problem; `fields` names them. */
   | "invalid_snapshot"
   /** 403: below admin on the project, or not doqtri's client. */
@@ -225,7 +227,12 @@ export type QditHackathonRefusal =
   /** 413 from the platform, or over 2 MiB before sending (then `status` is null). */
   | "too_large";
 
-const HACKATHON_CONFLICTS: ReadonlySet<string> = new Set(["hackathon_not_open", "hackathon_closed", "snapshot_conflict"]);
+const HACKATHON_CONFLICTS: ReadonlySet<string> = new Set([
+  "hackathon_not_open",
+  "hackathon_closed",
+  "snapshot_conflict",
+  "snapshot_limit",
+]);
 const HACKATHON_REFUSAL_BY_STATUS: Record<number, QditHackathonRefusal> = {
   400: "invalid_snapshot",
   403: "forbidden",
@@ -238,6 +245,8 @@ export class QditHackathonSnapshotError extends QditError {
   readonly refusal: QditHackathonRefusal;
   /** `details.fields` on a 400: the paths qdit names (`notes[3].markdown`, `body`). */
   readonly fields: string[];
+  /** What qdit said about each of `fields`, when it sent `details.fields` as a map (its usual form). */
+  readonly fieldProblems: Record<string, string>;
 
   constructor(refusal: QditHackathonRefusal, from: QditError) {
     super(from.kind, from.message, {
@@ -250,8 +259,20 @@ export class QditHackathonSnapshotError extends QditError {
     });
     this.name = "QditHackathonSnapshotError";
     this.refusal = refusal;
+    // qdit sends `{ "<path>": "<problem>" }` (web/src/lib/api/body.ts); a
+    // plain list of paths is read too.
     const fields = from.details?.fields;
-    this.fields = Array.isArray(fields) ? fields.filter((f): f is string => typeof f === "string") : [];
+    this.fieldProblems = {};
+    if (Array.isArray(fields)) {
+      this.fields = fields.filter((f): f is string => typeof f === "string");
+    } else if (fields && typeof fields === "object") {
+      this.fields = Object.keys(fields);
+      for (const [field, problem] of Object.entries(fields as Record<string, unknown>)) {
+        if (typeof problem === "string") this.fieldProblems[field] = problem;
+      }
+    } else {
+      this.fields = [];
+    }
   }
 }
 
@@ -336,6 +357,8 @@ export async function errorFromResponse(res: Response, now = Date.now()): Promis
 /** Refresh this long before the access token expires. */
 const EXPIRY_SKEW_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 10_000;
+/** pushHackathonSnapshot only: its body is up to 2 MiB (D-118). */
+const HACKATHON_TIMEOUT_MS = 30_000;
 
 /** One refresh at a time per user, per issuer, in this server instance. */
 const refreshing = new Map<string, Promise<string>>();
@@ -345,6 +368,8 @@ export type QditClientDeps = {
   store: ConnectionStore;
   fetch?: typeof fetch;
   timeoutMs?: number;
+  /** pushHackathonSnapshot's own timeout; 30 s unless set. */
+  hackathonTimeoutMs?: number;
   now?: () => number;
 };
 
@@ -383,6 +408,8 @@ export function createQditClient(userId: string, deps: QditClientDeps): QditClie
   const doFetch = deps.fetch ?? fetch;
   const now = deps.now ?? Date.now;
   const timeoutMs = deps.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  // Up to 2 MiB each way through qdit's validation: longer than the usual call.
+  const hackathonTimeoutMs = deps.hackathonTimeoutMs ?? HACKATHON_TIMEOUT_MS;
 
   /** Refreshes `conn`'s tokens and returns the new access token. */
   async function refresh(conn: StoredConnection): Promise<string> {
@@ -491,7 +518,13 @@ export function createQditClient(userId: string, deps: QditClientDeps): QditClie
     throw await errorFromResponse(res, now());
   }
 
-  async function send(method: string, path: string, token: string, body?: unknown): Promise<Response> {
+  async function send(
+    method: string,
+    path: string,
+    token: string,
+    body?: unknown,
+    callTimeoutMs = timeoutMs,
+  ): Promise<Response> {
     try {
       return await doFetch(`${config.apiBaseUrl}${path}`, {
         method,
@@ -503,7 +536,7 @@ export function createQditClient(userId: string, deps: QditClientDeps): QditClie
         body: body === undefined ? undefined : body instanceof RawJson ? body.text : JSON.stringify(body),
         cache: "no-store",
         redirect: "error",
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(callTimeoutMs),
       });
     } catch (error) {
       const name = (error as { name?: string } | null)?.name;
@@ -514,13 +547,18 @@ export function createQditClient(userId: string, deps: QditClientDeps): QditClie
     }
   }
 
-  async function call<T>(method: string, path: string, body?: unknown): Promise<{ status: number; json: T | null }> {
+  async function call<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    callTimeoutMs = timeoutMs,
+  ): Promise<{ status: number; json: T | null }> {
     const token = await accessToken();
-    let res = await send(method, path, token, body);
+    let res = await send(method, path, token, body, callTimeoutMs);
     if (res.status === 401) {
       // Section 5: refresh once, retry once.
       const fresh = await accessToken(token);
-      res = await send(method, path, fresh, body);
+      res = await send(method, path, fresh, body, callTimeoutMs);
       if (res.status === 401) await refusedAgain(fresh, res);
     }
     if (!res.ok) throw await errorFromResponse(res, now());
@@ -535,8 +573,8 @@ export function createQditClient(userId: string, deps: QditClientDeps): QditClie
     }
   }
 
-  async function data<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const { json } = await call<{ data?: T }>(method, path, body);
+  async function data<T>(method: string, path: string, body?: unknown, callTimeoutMs = timeoutMs): Promise<T> {
+    const { json } = await call<{ data?: T }>(method, path, body, callTimeoutMs);
     if (!json || json.data === undefined) {
       throw new QditError("bad_response", "qdit sent a response without data.");
     }
@@ -597,6 +635,7 @@ export function createQditClient(userId: string, deps: QditClientDeps): QditClie
           "POST",
           `/projects/${id(projectId)}/hackathon-snapshots`,
           new RawJson(body),
+          hackathonTimeoutMs,
         );
       } catch (error) {
         throw hackathonError(error);

@@ -6,13 +6,12 @@
 -- each note's created_at, and qdit's eligibility check counts only notes
 -- created inside the event window.
 --
---   created_at   timestamptz, not null, default now(). Rows written before
---                this migration get their updated_at: the true creation time
---                is lost, and updated_at is the latest it can have been, so
---                no old note can pass for one created during an event.
---                Imported notes keep their ingests.created_at too, which is
---                close to theirs, but the backfill does not use it: the same
---                rule for every row is easier to reason about.
+--   created_at   timestamptz, not null, default now(). Every note that
+--                exists when this migration runs gets the time it ran: the
+--                true creation time is lost. This migration MUST therefore
+--                be applied before any hackathon opens. Then every
+--                pre-existing note reads as created before the event, and
+--                none can count as written during it.
 --
 -- A client role (anon, authenticated) cannot choose or change it: an insert
 -- is stamped with now() whatever it sends, and an update that changes it is
@@ -29,11 +28,9 @@
 --   documents_before_insert                  unchanged (publish_headings).
 --   documents_before_update                  unchanged (author, workspace,
 --                                            publish_headings).
---   documents_before_save                    unchanged. The backfill's
---                                            UPDATE leaves markdown alone,
---                                            so it keeps every version as it
---                                            is; it also leaves updated_at
---                                            alone (nothing bumps it).
+--   documents_before_save                    unchanged; adding the column
+--                                            updates no row, so no version
+--                                            moves.
 --   delete triggers                          unchanged.
 --   save_document()                          writes markdown and updated_at
 --                                            only.
@@ -45,16 +42,16 @@
 --                                            created_at, so the default
 --                                            applies. No client sends it.
 --
--- Not applied to the hosted project by this change: the product owner
--- applies it, before the code that selects created_at is deployed
--- (loadVaultDocs selects it, so the vault pages fail without the column).
+-- Deploy order: migration first, then code. loadVaultDocs() and the snapshot
+-- builder select created_at, so the vault pages fail on a database without
+-- the column. Not applied to the hosted project by this change: the product
+-- owner applies it, before the code that selects it is deployed and before
+-- any hackathon opens.
 
-alter table public.documents add column if not exists created_at timestamptz;
-
-update public.documents set created_at = updated_at where created_at is null;
-
-alter table public.documents alter column created_at set default now();
-alter table public.documents alter column created_at set not null;
+-- now() is stable, so Postgres stores it as the column's fast default: no
+-- table rewrite, no UPDATE of existing rows, no trigger fires, and every
+-- existing row reads the time this statement ran.
+alter table public.documents add column if not exists created_at timestamptz not null default now();
 
 -- Not security definer: current_user must be the writer's own role. It reads
 -- no tables.

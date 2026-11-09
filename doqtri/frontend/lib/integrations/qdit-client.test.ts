@@ -418,6 +418,7 @@ describe("pushHackathonSnapshot", () => {
     [409, "conflict", { reason: "hackathon_not_open" }, "hackathon_not_open"],
     [409, "conflict", { reason: "hackathon_closed" }, "hackathon_closed"],
     [409, "conflict", { reason: "snapshot_conflict" }, "snapshot_conflict"],
+    [409, "conflict", { reason: "snapshot_limit" }, "snapshot_limit"],
     [400, "invalid_request", { fields: ["notes[3].markdown", "body"] }, "invalid_snapshot"],
     [403, "forbidden", undefined, "forbidden"],
     [404, "not_found", undefined, "not_found"],
@@ -428,6 +429,30 @@ describe("pushHackathonSnapshot", () => {
     expect(failure).toBeInstanceOf(QditError);
     expect(failure).toMatchObject({ refusal, status, code, requestId: "req-1" });
     if (status === 400) expect((failure as QditHackathonSnapshotError).fields).toEqual(["notes[3].markdown", "body"]);
+  });
+
+  it("reads details.fields in qdit's map form", async () => {
+    const { result } = await push(
+      error(400, "invalid_request", { fields: { "notes[3].markdown": "at most 102400 bytes", body: "too large" } }),
+    );
+    const failure = (await result.catch((e: unknown) => e)) as QditHackathonSnapshotError;
+    expect(failure.refusal).toBe("invalid_snapshot");
+    expect(failure.fields).toEqual(["notes[3].markdown", "body"]);
+    expect(failure.fieldProblems).toEqual({ "notes[3].markdown": "at most 102400 bytes", body: "too large" });
+  });
+
+  it("gives this call 30 seconds, and every other call the usual 10", async () => {
+    const spy = vi.spyOn(AbortSignal, "timeout");
+    try {
+      const fetch = mockFetch((url) => (url.includes("hackathon") ? json(201, { data: RECEIPT }) : json(200, { data: ME })));
+      const client = createQditClient(ANA, { config, store: memoryStore({}), fetch, now: () => NOW });
+      await client.pushHackathonSnapshot("p1", BODY);
+      expect(spy).toHaveBeenLastCalledWith(30_000);
+      await client.me();
+      expect(spy).toHaveBeenLastCalledWith(10_000);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("maps the platform's bare 413 to too_large", async () => {
