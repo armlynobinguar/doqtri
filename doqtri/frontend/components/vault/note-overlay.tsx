@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { NoResponseError } from "@/lib/no-response";
+import { isServerReachable, NoResponseError } from "@/lib/no-response";
 
 /*
  * Vault actions used to wait for two round trips before the screen changed:
@@ -209,6 +209,8 @@ export type RefreshEnv = {
   refresh: () => void;
   isNavigating: () => boolean;
   isOffline: () => boolean;
+  /** Whether the server answers; asked before refreshing after a lost answer. */
+  probe: () => Promise<boolean>;
 };
 
 function isOffline(): boolean {
@@ -219,10 +221,28 @@ export function createRefreshScheduler(initial: RefreshEnv) {
   let env = initial;
   let wanted = false;
   let inFlight = false;
+  // A request got no answer since server data last arrived: the server may
+  // be unreachable even though the browser says it is online.
+  let unverified = false;
+  let probing = false;
   let giveUp: ReturnType<typeof setTimeout> | undefined;
 
   function flush() {
-    if (!wanted || inFlight || env.isNavigating() || env.isOffline()) return;
+    if (!wanted || inFlight || probing || env.isNavigating() || env.isOffline()) return;
+    if (unverified) {
+      probing = true;
+      void env
+        .probe()
+        .catch(() => false)
+        .then((reachable) => {
+          probing = false;
+          // Unreachable: keep waiting for the next chance, and ask again then.
+          if (!reachable) return;
+          unverified = false;
+          flush();
+        });
+      return;
+    }
     wanted = false;
     inFlight = true;
     clearTimeout(giveUp);
@@ -249,7 +269,20 @@ export function createRefreshScheduler(initial: RefreshEnv) {
       wanted = true;
       if (now) flush();
     },
+    /**
+     * Asks for a refresh after a request got no answer: at the next chance,
+     * once the server is seen to answer.
+     */
+    wantAfterNoAnswer() {
+      wanted = true;
+      unverified = true;
+    },
     settled,
+    /** New server data arrived: the server answers, and the refresh out is over. */
+    serverData() {
+      unverified = false;
+      settled();
+    },
     /** A chance to run one that was asked for: back online, back in view. */
     flush,
     dispose() {
@@ -283,7 +316,8 @@ export function createRefreshScheduler(initial: RefreshEnv) {
  * A request that got no answer may still have done its work, but asking for
  * a refresh at once would likely fail the same way. It is left until the
  * next navigation commits, the tab comes back into view, or the browser
- * comes back online. And after each navigation (`location` is the pathname),
+ * comes back online, and even then runs only once a cheap request shows the
+ * server answering. And after each navigation (`location` is the pathname),
  * while accepted changes still wait, the refresh is asked for again, since
  * the navigation may have discarded the earlier one.
  */
@@ -311,10 +345,10 @@ export function useNoteOverlayState({
   // Made once; its callbacks are swapped in after each change to them. No
   // request can answer before the first effect runs, so none is missed.
   const [scheduler] = useState(() =>
-    createRefreshScheduler({ refresh: () => {}, isNavigating: () => true, isOffline }),
+    createRefreshScheduler({ refresh: () => {}, isNavigating: () => true, isOffline, probe: isServerReachable }),
   );
   useEffect(() => {
-    scheduler.setEnv({ refresh, isNavigating, isOffline });
+    scheduler.setEnv({ refresh, isNavigating, isOffline, probe: isServerReachable });
   }, [scheduler, refresh, isNavigating]);
 
   const nextToken = useRef(0);
@@ -329,7 +363,7 @@ export function useNoteOverlayState({
           setRaw((prev) => dropChange(prev, change, token));
           onError(error);
           // Not now: see above.
-          if (error instanceof NoResponseError) scheduler.want(false);
+          if (error instanceof NoResponseError) scheduler.wantAfterNoAnswer();
           return;
         }
         setRaw((prev) => confirmChange(prev, change, token, Date.now()));
@@ -341,7 +375,7 @@ export function useNoteOverlayState({
 
   // New server data: the refresh out, if any, is done.
   useEffect(() => {
-    scheduler.settled();
+    scheduler.serverData();
   }, [notes, failedImports, scheduler]);
 
   const latest = useRef(overlay);

@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -49,22 +50,29 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
   const [holding, setHolding] = useState(false);
   const startedAt = useRef(0);
   const navigatingNow = useRef(false);
+  // Navigations started: the ref counts at once, the state with the render.
+  const startedNow = useRef(0);
+  const [started, setStarted] = useState(0);
 
   const navigate = useCallback<Navigate>(
     (href) => {
       startedAt.current = Date.now();
       navigatingNow.current = true;
+      startedNow.current += 1;
+      setStarted((count) => count + 1);
       setHolding(true);
       startTransition(() => router.push(href));
     },
     [router],
   );
 
-  // navigate() renders this provider with the transition pending, so the
-  // first render after that without it is the navigation done.
-  useEffect(() => {
-    if (!isPending) navigatingNow.current = false;
-  });
+  // The navigation is done once this provider renders without the
+  // transition pending and no navigate() has run since that render. A layout
+  // effect, because those all run before any passive effect: code below that
+  // reacts to `navigating` going false in an effect must see it cleared.
+  useLayoutEffect(() => {
+    if (!isPending && startedNow.current === started) navigatingNow.current = false;
+  }, [isPending, started]);
   const isNavigating = useCallback(() => navigatingNow.current, []);
   const status = useMemo(() => ({ navigating: isPending, isNavigating }), [isPending, isNavigating]);
 

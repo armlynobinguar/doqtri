@@ -1,4 +1,4 @@
-import { act, createElement, startTransition, useState } from "react";
+import { Suspense, act, createElement, startTransition, use, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -18,6 +18,15 @@ import {
   type RunChange,
 } from "@/components/vault/note-overlay";
 import { NoResponseError } from "@/lib/no-response";
+import { NavigationProvider, useNavigate, useNavigationStatus } from "@/components/vault/navigation";
+
+/*
+ * NavigationProvider pushes through Next's router; here a push sets a route
+ * that suspends until the test lets the navigation finish, which keeps the
+ * provider's transition pending the way a real push does.
+ */
+const router = vi.hoisted(() => ({ push: (() => {}) as (href: string) => void, refresh: () => {} }));
+vi.mock("next/navigation", () => ({ useRouter: () => router }));
 import type { FailedImport, NoteSummary } from "@/lib/types";
 
 const notes: NoteSummary[] = [
@@ -120,6 +129,7 @@ describe("createRefreshScheduler", () => {
       refresh,
       isNavigating: () => navigating,
       isOffline: () => offline,
+      probe: async () => true,
     });
 
     navigating = true;
@@ -146,6 +156,37 @@ describe("createRefreshScheduler", () => {
     expect(refresh).toHaveBeenCalledTimes(2);
     scheduler.flush();
     expect(refresh).toHaveBeenCalledTimes(3);
+    scheduler.dispose();
+  });
+
+  it("after a lost answer, refreshes only once the server is seen to answer", async () => {
+    let reachable = false;
+    const probe = vi.fn(async () => reachable);
+    const refresh = vi.fn();
+    const scheduler = createRefreshScheduler({
+      refresh,
+      isNavigating: () => false,
+      isOffline: () => false,
+      probe,
+    });
+
+    scheduler.wantAfterNoAnswer();
+    expect(probe).not.toHaveBeenCalled();
+    // The tab comes back into view; the server still does not answer.
+    scheduler.flush();
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(refresh).not.toHaveBeenCalled();
+
+    reachable = true;
+    scheduler.flush();
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+
+    // New server data proves the server answers: no probe the next time.
+    scheduler.wantAfterNoAnswer();
+    scheduler.serverData();
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(probe).toHaveBeenCalledTimes(2);
     scheduler.dispose();
   });
 });
@@ -363,9 +404,17 @@ describe("useNoteOverlayState", () => {
     // A refresh now would likely fail too, and Next answers that with a reload.
     expect(v.refresh).not.toHaveBeenCalled();
 
-    // The next navigation, or the tab coming back into view, catches up.
-    await act(async () => testDocument.dispatchEvent(new Event("visibilitychange")));
-    expect(v.refresh).toHaveBeenCalledTimes(1);
+    // The next navigation, or the tab coming back into view, catches up,
+    // once a cheap request shows the server answering.
+    const probe = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", probe);
+    try {
+      await act(async () => testDocument.dispatchEvent(new Event("visibilitychange")));
+      expect(probe).toHaveBeenCalledWith("/api/stats", expect.objectContaining({ method: "OPTIONS" }));
+      expect(v.refresh).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("waits for the browser to come back online before refreshing", async () => {
@@ -383,5 +432,60 @@ describe("useNoteOverlayState", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("with the real NavigationProvider", () => {
+  let root: Root | null = null;
+
+  afterEach(async () => {
+    await act(async () => root?.unmount());
+    root = null;
+  });
+
+  it("runs a refresh held back during a navigation once it commits", async () => {
+    const refresh = vi.fn();
+    let finishNavigation!: () => void;
+    let setRoute!: (route: string | Promise<string>) => void;
+    router.push = (href) =>
+      setRoute(new Promise<string>((resolve) => (finishNavigation = () => resolve(href))));
+    let run!: RunChange;
+    let navigate!: (href: string) => void;
+    const overlays: NoteOverlay[] = [];
+
+    // Reads the route, as the shell reads the pathname; suspends mid-push.
+    function Shell({ route }: { route: string | Promise<string> }) {
+      const location = typeof route === "string" ? route : use(route);
+      const { navigating, isNavigating } = useNavigationStatus();
+      const state = useNoteOverlayState({ notes, failedImports: imports, location, navigating, isNavigating, refresh });
+      run = state.run;
+      navigate = useNavigate();
+      overlays.push(state.overlay);
+      return null;
+    }
+    function Router() {
+      const [route, set] = useState<string | Promise<string>>("/vault/a");
+      setRoute = set;
+      return createElement(NavigationProvider, null, createElement(Suspense, { fallback: null }, createElement(Shell, { route })));
+    }
+
+    root = createRoot(stubContainer());
+    await act(async () => root!.render(createElement(Router)));
+
+    // Delete the open note: navigate away at once, then the DELETE answers
+    // while the navigation is still out.
+    const del = deferred();
+    await act(async () => {
+      navigate("/vault");
+      run(remove("a"), del.action, () => {});
+    });
+    await act(async () => del.resolve());
+    expect(refresh).not.toHaveBeenCalled();
+
+    // The provider clears its flag in a layout effect, before the shell's
+    // passive effects see `navigating` go false, so the refresh runs now.
+    await act(async () => finishNavigation());
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(isNotePending(overlays.at(-1)!, "a")).toBe(true);
   });
 });

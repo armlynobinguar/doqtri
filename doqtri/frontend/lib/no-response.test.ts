@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { NoResponseError } from "@/lib/no-response";
+import { isNoAnswer, isServerReachable, NoResponseError } from "@/lib/no-response";
 import { renameNote } from "@/lib/rename-note";
 import { deleteNote, DeleteNoteError } from "@/lib/delete-note";
 
@@ -83,6 +83,25 @@ describe("no answer from the server", () => {
     const refusal = await deleteNote("a").catch((error: unknown) => error);
     expect(refusal).toBeInstanceOf(DeleteNoteError);
     expect((refusal as DeleteNoteError).code).toBe("CHAIN_UNREACHABLE");
+  });
+
+  it("takes only a string `error` as the app's own refusal", () => {
+    expect(isNoAnswer(503, { error: "Could not reach Stellar" })).toBe(false);
+    expect(isNoAnswer(503, { error: { code: 503 } })).toBe(true);
+    expect(isNoAnswer(502, null)).toBe(true);
+    expect(isNoAnswer(500, null)).toBe(false);
+  });
+
+  it("checks the server answers with a cheap OPTIONS before a risky refresh", async () => {
+    const fetch = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+    expect(await isServerReachable()).toBe(true);
+    expect(fetch).toHaveBeenCalledWith("/api/stats", expect.objectContaining({ method: "OPTIONS" }));
+
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 504 })));
+    expect(await isServerReachable()).toBe(false);
+    vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new TypeError("Failed to fetch"))));
+    expect(await isServerReachable()).toBe(false);
   });
 
   it("sends the request with a timeout, so a hung request ends", async () => {

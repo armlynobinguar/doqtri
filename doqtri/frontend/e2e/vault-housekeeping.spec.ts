@@ -168,6 +168,9 @@ test.describe("notes housekeeping", () => {
     await expect(page.getByRole("tab", { name: other })).toBeVisible({ timeout: 5_000 });
     await expect(page.getByRole("link", { name: renamed })).toBeVisible();
     await expect.poll(async () => (await readNote(id)).title).toBe(renamed);
+    // The row's actions come back only once a refresh after the navigation
+    // has brought the new title and settled the pending rename.
+    await expect(page.getByRole("button", { name: `Rename ${renamed}` })).toBeEnabled({ timeout: 15_000 });
   });
 
   test("a rename that gets no answer says it may not have saved", async ({ page }) => {
@@ -211,6 +214,18 @@ test.describe("notes housekeeping", () => {
     const title = uniqueTitle("Delete Me");
     const id = await seedNote(title, "# Delete Me\n\nBody.\n");
     notes.push(id);
+    // The navigation away takes a moment, so the DELETE answers while it is out.
+    const vaultRequests: string[] = [];
+    await page.route(
+      (url) => url.pathname === "/vault",
+      async (route) => {
+        if (route.request().headers()["rsc"] !== undefined) {
+          vaultRequests.push(route.request().url());
+          if (vaultRequests.length === 1) await new Promise((resolve) => setTimeout(resolve, 1_500));
+        }
+        await route.fallback();
+      },
+    );
     await page.goto(`/vault/${id}`);
 
     await page.getByRole("button", { name: `Delete ${title}` }).click();
@@ -224,6 +239,9 @@ test.describe("notes housekeeping", () => {
     await expect(page).toHaveURL(/\/vault$/);
     await expect(page.getByText(`Deleted “${title}”`)).toBeVisible();
     await expect.poll(async () => (await readNote(id)) ?? null).toBeNull();
+    // The refresh held back during the navigation runs once it commits: a
+    // second request for /vault after the navigation's own.
+    await expect.poll(() => vaultRequests.length, { timeout: 15_000 }).toBeGreaterThanOrEqual(2);
   });
 
   test("a refused delete brings the row back, with the chain icon and a way back to the note", async ({ page }) => {

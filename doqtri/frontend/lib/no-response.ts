@@ -38,7 +38,30 @@ const GATEWAY_STATUSES = new Set([0, 408, 502, 503, 504]);
 
 export function isNoAnswer(status: number, payload: unknown = null): boolean {
   if (!GATEWAY_STATUSES.has(status)) return false;
-  return !(payload && typeof payload === "object" && "error" in payload);
+  const refusal =
+    payload !== null && typeof payload === "object" && typeof (payload as { error?: unknown }).error === "string";
+  return !refusal;
+}
+
+/**
+ * Whether the app's server answers at all, before a router.refresh() that
+ * would make Next reload the whole page if it did not. Next answers OPTIONS
+ * on a route handler itself, without running the handler, so this costs the
+ * server next to nothing; `navigator.onLine` alone misses a server that is
+ * down or a network that only reaches a captive portal.
+ */
+export async function isServerReachable(): Promise<boolean> {
+  try {
+    const res = await fetch("/api/stats", {
+      method: "OPTIONS",
+      cache: "no-store",
+      redirect: "error",
+      signal: AbortSignal.timeout(5_000),
+    });
+    return res.status < 500;
+  } catch {
+    return false;
+  }
 }
 
 /**
