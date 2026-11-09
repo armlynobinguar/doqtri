@@ -219,7 +219,11 @@ test.describe("notes housekeeping", () => {
     await page.route(
       (url) => url.pathname === "/vault",
       async (route) => {
-        if (route.request().headers()["rsc"] !== undefined) {
+        const headers = route.request().headers();
+        // A prefetch carries the rsc header too; only navigations and refreshes count.
+        const prefetch =
+          headers["next-router-prefetch"] !== undefined || headers["next-router-segment-prefetch"] !== undefined;
+        if (headers["rsc"] !== undefined && !prefetch) {
           vaultRequests.push(route.request().url());
           if (vaultRequests.length === 1) await new Promise((resolve) => setTimeout(resolve, 1_500));
         }

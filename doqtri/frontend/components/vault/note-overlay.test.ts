@@ -187,6 +187,13 @@ describe("createRefreshScheduler", () => {
     scheduler.serverData();
     expect(refresh).toHaveBeenCalledTimes(2);
     expect(probe).toHaveBeenCalledTimes(2);
+
+    // So does a later request that was answered.
+    scheduler.wantAfterNoAnswer();
+    scheduler.answered();
+    scheduler.serverData();
+    expect(refresh).toHaveBeenCalledTimes(3);
+    expect(probe).toHaveBeenCalledTimes(2);
     scheduler.dispose();
   });
 });

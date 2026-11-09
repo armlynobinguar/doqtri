@@ -269,6 +269,10 @@ export function createRefreshScheduler(initial: RefreshEnv) {
       wanted = true;
       if (now) flush();
     },
+    /** A request was answered: the server answers, whatever an earlier one met. */
+    answered() {
+      unverified = false;
+    },
     /**
      * Asks for a refresh after a request got no answer: at the next chance,
      * once the server is seen to answer.
@@ -364,9 +368,12 @@ export function useNoteOverlayState({
           onError(error);
           // Not now: see above.
           if (error instanceof NoResponseError) scheduler.wantAfterNoAnswer();
+          // A refusal is an answer too.
+          else scheduler.answered();
           return;
         }
         setRaw((prev) => confirmChange(prev, change, token, Date.now()));
+        scheduler.answered();
         scheduler.want(true);
       })();
     },
