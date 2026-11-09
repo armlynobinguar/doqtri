@@ -370,6 +370,7 @@ export function DocWorkspace({
         <div className={cn("min-h-0 flex-1", mobileView !== "note" && "hidden")}>
           <EditorPane
             compact
+            docId={active.id}
             title={active.title}
             markdown={markdown}
             onChange={handleChange}
@@ -408,13 +409,16 @@ export function DocWorkspace({
   return (
     <>
       <ResizablePanelGroup orientation="horizontal" className="min-h-0">
-        <ResizablePanel id="editor" minSize={320} className="min-h-0">
+        <ResizablePanel id="editor" minSize={320} className="flex min-h-0 flex-col">
           <EditorPane
+            docId={active.id}
             title={active.title}
             markdown={markdown}
             onChange={handleChange}
             onRegenerate={() => setRegenerateOpen(true)}
             linkTitles={linkTitles}
+            mindmap={active.mindmap ?? null}
+            mindmapStale={active.mindmapStale ?? false}
             readOnly={readOnly}
             pending={lockPending}
             banner={lockBanner}

@@ -82,8 +82,9 @@ test.describe("mobile vault", () => {
   test("a note splits into Note, Map and Ship views", async ({ page }) => {
     await page.goto(`/vault/${noteId}`);
 
-    // The same live-preview editor as on desktop.
+    // The same live-preview editor as on desktop, alone: no mindmap beside it.
     await expect(noteEditor(page)).toBeVisible();
+    await expect(page.getByTestId("live-mindmap")).toHaveCount(0);
     // At 16px or more, iOS does not zoom the page when the editor is focused.
     const fontSize = await noteEditor(page).evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
     expect(fontSize).toBeGreaterThanOrEqual(16);

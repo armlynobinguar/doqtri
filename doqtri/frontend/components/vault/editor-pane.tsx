@@ -1,12 +1,16 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 import dynamic from "next/dynamic";
-import { FileTextIcon, SparklesIcon } from "lucide-react";
+import { FileTextIcon, NetworkIcon, SparklesIcon } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { DoqtriLoader } from "@/components/brand/doqtri-loader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { LiveMindmapPane } from "@/components/vault/live-mindmap-pane";
+import type { DocMindmap } from "@/lib/mindmap-types";
+import { cn } from "@/lib/utils";
 
 // CodeMirror measures the DOM, so the editor is never server-rendered — and
 // none of it lands in the server bundle.
@@ -21,24 +25,71 @@ const MarkdownEditor = dynamic(() => import("@/components/vault/live-editor/mark
 
 const PLACEHOLDER = "Write markdown. Wrap concepts in [[double brackets]].";
 
+/*
+ * Whether the live mindmap shows beside the editor: a per-browser choice, on
+ * by default. Storage can be unavailable (private windows, blocked site
+ * data); the toggle then still works for the session, it just is not kept.
+ */
+const MINDMAP_KEY = "doqtri:editor-mindmap";
+const mindmapListeners = new Set<() => void>();
+let mindmapFallback = true;
+
+function readMindmapShown(): boolean {
+  try {
+    const stored = window.localStorage.getItem(MINDMAP_KEY);
+    return stored === null ? mindmapFallback : stored !== "hidden";
+  } catch {
+    return mindmapFallback;
+  }
+}
+
+function setMindmapShown(shown: boolean) {
+  mindmapFallback = shown;
+  try {
+    window.localStorage.setItem(MINDMAP_KEY, shown ? "shown" : "hidden");
+  } catch {
+    // Kept in memory only; see above.
+  }
+  for (const listener of mindmapListeners) listener();
+}
+
+function subscribeMindmapShown(listener: () => void) {
+  mindmapListeners.add(listener);
+  window.addEventListener("storage", listener);
+  return () => {
+    mindmapListeners.delete(listener);
+    window.removeEventListener("storage", listener);
+  };
+}
+
 export function EditorPane({
+  docId,
   title,
   markdown,
   onChange,
   onRegenerate,
   linkTitles,
+  mindmap = null,
+  mindmapStale = false,
   compact = false,
   readOnly = false,
   pending = false,
   banner,
 }: {
+  docId: string;
   title: string;
   markdown: string;
   /** Titles offered when a `[[link` is being typed. */
   linkTitles: string[];
   onChange: (markdown: string) => void;
   onRegenerate: () => void;
-  /** The phone layout: the title and Regenerate live in the surrounding chrome. */
+  /** The note's stored AI concept map, for the live mindmap's Concept map view. */
+  mindmap?: DocMindmap | null;
+  mindmapStale?: boolean;
+  /**
+   * The phone layout: the title and Regenerate live in the surrounding chrome,
+   * and there is no room for the mindmap beside the text — it is the Map view.
+   */
   compact?: boolean;
   /**
    * Someone else holds the edit lock, or the caller may only read (D-17):
@@ -50,6 +101,9 @@ export function EditorPane({
   /** Shown between the tab strip and the editor, e.g. "<name> is editing". */
   banner?: ReactNode;
 }) {
+  const mindmapShown = useSyncExternalStore(subscribeMindmapShown, readMindmapShown, () => true);
+  const showMindmap = !compact && mindmapShown;
+
   const editor = (
     <MarkdownEditor
       value={markdown}
@@ -87,6 +141,30 @@ export function EditorPane({
             <Tooltip>
               <TooltipTrigger
                 render={
+                  <button
+                    type="button"
+                    aria-label={mindmapShown ? "Hide mindmap" : "Show mindmap"}
+                    aria-pressed={mindmapShown}
+                    onClick={() => setMindmapShown(!mindmapShown)}
+                    className={cn(
+                      "focus-visible:ring-ring flex size-7 items-center justify-center rounded-md transition-colors duration-150 focus-visible:ring-1 focus-visible:outline-hidden pointer-coarse:size-11",
+                      mindmapShown
+                        ? "text-foreground bg-[var(--glass-strong)] shadow-[inset_0_1px_0_0_var(--glass-hi)]"
+                        : "text-muted-foreground hover:text-foreground hover:bg-[var(--glass-strong)]",
+                    )}
+                  />
+                }
+              >
+                <NetworkIcon className="size-3.5" strokeWidth={1.75} />
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {mindmapShown ? "Hide the live mindmap" : "Show the live mindmap beside the note"}
+              </TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger
+                render={
                   <Button
                     variant="ghost"
                     size="sm"
@@ -111,7 +189,39 @@ export function EditorPane({
 
       {banner}
 
-      <div className="min-h-0 flex-1">{editor}</div>
+      {compact ? (
+        <div className="min-h-0 flex-1">{editor}</div>
+      ) : (
+        /*
+          One group whether or not the mindmap shows, so hiding it never
+          remounts the editor (and loses its caret and undo history). The
+          canvas is unmounted when hidden, which stops its simulation.
+        */
+        <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+          <ResizablePanel id="note-text" minSize={300} className="flex min-h-0 flex-col">
+            {editor}
+          </ResizablePanel>
+          {showMindmap && (
+            <>
+              <ResizableHandle className="hover:bg-foreground/25 transition-colors" />
+              <ResizablePanel
+                id="note-mindmap"
+                defaultSize="42%"
+                minSize={220}
+                className="flex min-h-0 flex-col"
+              >
+                <LiveMindmapPane
+                  docId={docId}
+                  title={title}
+                  markdown={markdown}
+                  mindmap={mindmap}
+                  stale={mindmapStale}
+                />
+              </ResizablePanel>
+            </>
+          )}
+        </ResizablePanelGroup>
+      )}
     </div>
   );
 }
