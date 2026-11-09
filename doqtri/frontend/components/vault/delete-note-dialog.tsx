@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Loader2Icon, Trash2Icon } from "lucide-react";
+import { useEffect, useRef } from "react";
+import { Trash2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -19,39 +19,45 @@ import {
  *
  * Anchored notes never reach this dialog: the explorer shows a chain icon
  * instead of the delete button, and the API refuses them.
+ *
+ * The delete is optimistic: `onConfirm` starts it and the dialog closes as
+ * the row goes. A refusal brings the row back with a toast.
  */
 export function DeleteNoteDialog({
   open,
   title,
   onOpenChange,
   onConfirm,
+  focusAfterConfirm,
 }: {
   open: boolean;
   title: string;
   onOpenChange: (open: boolean) => void;
-  onConfirm: () => Promise<void>;
+  onConfirm: () => void;
+  /**
+   * Where focus goes when the dialog closes after a confirm; null, or a
+   * cancel, leaves it to Base UI, which returns it to the trigger.
+   */
+  focusAfterConfirm?: () => HTMLElement | null;
 }) {
-  const [busy, setBusy] = useState(false);
+  // Whether this opening ended in a delete; reset on each opening.
+  const confirmed = useRef(false);
+  useEffect(() => {
+    if (open) confirmed.current = false;
+  }, [open]);
 
-  async function confirm() {
-    setBusy(true);
-    try {
-      await onConfirm();
-      onOpenChange(false);
-    } finally {
-      setBusy(false);
-    }
+  function confirm() {
+    onConfirm();
+    confirmed.current = true;
+    onOpenChange(false);
   }
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (busy) return;
-        onOpenChange(next);
-      }}
-    >
-      <DialogContent className="sm:max-w-[440px]">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className="sm:max-w-[440px]"
+        finalFocus={() => (confirmed.current ? (focusAfterConfirm?.() ?? true) : true)}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Trash2Icon className="text-destructive size-4" strokeWidth={1.75} />
@@ -72,22 +78,11 @@ export function DeleteNoteDialog({
         </DialogHeader>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button
-            onClick={confirm}
-            disabled={busy}
-            className="bg-destructive text-white hover:bg-destructive/90"
-          >
-            {busy ? (
-              <>
-                <Loader2Icon className="animate-spin" />
-                Deleting…
-              </>
-            ) : (
-              "Delete permanently"
-            )}
+          <Button onClick={confirm} className="bg-destructive text-white hover:bg-destructive/90">
+            Delete permanently
           </Button>
         </DialogFooter>
       </DialogContent>
