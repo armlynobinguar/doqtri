@@ -42,9 +42,24 @@ describe("rendered counts", () => {
     expect(counts("```js\nconst a = 1;\n```").words).toBe(4);
   });
 
+  it("hide the syntax inside link text and table cells too", () => {
+    expect(counts("[**bold** link](u)")).toEqual({ words: 2, chars: 9 });
+    expect(counts("[![alt](img)](url)").words).toBe(0);
+    expect(rendered("| **a** | [x](https://u.example/long/path) |\n| - | - |")).toBe("a x");
+  });
+
   it("count a selection the same way", () => {
     const doc = "intro **bold words** and [a link](https://x.example)";
     expect(textCounts(rendered(doc, 6, 20))).toEqual({ words: 2, chars: 10 });
     expect(rendered(doc, 25, doc.length)).toBe("a link");
+  });
+
+  it("count a selection from the syntax around it alone, as the whole note does", () => {
+    const doc = "# Head\n\n" + "word **bold** [link](https://x.example) ".repeat(200) + "\n\nend";
+    const tree = previewParser.parse(doc);
+    const from = 300;
+    const to = 900;
+    const local = renderedText(doc, hiddenSyntax(tree, doc, from, to), from, to);
+    expect(local).toBe(renderedText(doc, hiddenSyntax(tree, doc), from, to));
   });
 });

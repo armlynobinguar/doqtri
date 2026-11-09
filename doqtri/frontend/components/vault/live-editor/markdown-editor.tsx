@@ -74,35 +74,61 @@ function snapshotOf(state: EditorState): Snapshot {
   };
 }
 
+/** How long typing pauses before the whole note is counted again. */
+const RECOUNT_MS = 200;
+
 /**
  * The status bar's counts, of the rendered text (lib/text-stats.ts). The
- * note's own counts are kept until its text or parse tree changes, so a
- * caret move only counts the selection.
+ * caret's place and a selection's counts are live; the whole note's words
+ * and characters are counted again once typing pauses, since that walks
+ * the whole parse tree.
  */
-function statsReader() {
-  type Counted = {
-    doc: EditorState["doc"];
-    tree: ReturnType<typeof syntaxTree>;
-    text: string;
-    hidden: ReturnType<typeof hiddenSyntax>;
-    counts: ReturnType<typeof textCounts>;
+function statsReporter(emit: (stats: EditorStats) => void, current: () => EditorState | null) {
+  let note: { words: number; chars: number } | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let last = "";
+  const countNote = (state: EditorState) => {
+    const text = state.doc.toString();
+    note = textCounts(renderedText(text, hiddenSyntax(syntaxTree(state), text)));
   };
-  let last: Counted | null = null;
-  return (state: EditorState): EditorStats => {
-    const tree = syntaxTree(state);
-    if (!last || last.doc !== state.doc || last.tree !== tree) {
-      const text = state.doc.toString();
-      const hidden = hiddenSyntax(tree, text);
-      last = { doc: state.doc, tree, text, hidden, counts: textCounts(renderedText(text, hidden)) };
-    }
+  const send = (state: EditorState) => {
+    if (!note) return;
     const { main } = state.selection;
     const line = state.doc.lineAt(main.head);
-    return {
-      ...last.counts,
-      line: line.number,
-      col: main.head - line.from + 1,
-      selection: main.empty ? null : textCounts(renderedText(last.text, last.hidden, main.from, main.to)),
-    };
+    let selection: EditorStats["selection"] = null;
+    if (!main.empty) {
+      // Only the syntax around the selection: cheap however long the note.
+      const text = state.doc.toString();
+      selection = textCounts(renderedText(text, hiddenSyntax(syntaxTree(state), text, main.from, main.to), main.from, main.to));
+    }
+    const stats = { ...note, line: line.number, col: main.head - line.from + 1, selection };
+    const key = JSON.stringify(stats);
+    if (key === last) return;
+    last = key;
+    emit(stats);
+  };
+  return {
+    /** Counts everything now: when the editor opens. */
+    now(state: EditorState) {
+      countNote(state);
+      send(state);
+    },
+    /** After an update: the caret now, the note once typing pauses. */
+    update(state: EditorState, noteChanged: boolean) {
+      if (noteChanged) {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          const latest = current();
+          if (!latest) return;
+          countNote(latest);
+          send(latest);
+        }, RECOUNT_MS);
+      }
+      send(state);
+    },
+    destroy() {
+      clearTimeout(timer);
+    },
   };
 }
 
@@ -172,6 +198,10 @@ export default function MarkdownEditor({
   });
   const [mode, setMode] = useState<EditorMode>(storedMode);
   const [fullscreen, setFullscreen] = useState(false);
+  // A copy that turns read-only (someone took the lock over) leaves full
+  // screen at once: its toolbar, and so the way out, goes, and the lock
+  // banner with Take over is behind the overlay.
+  if (fullscreen && readOnly && !pending) setFullscreen(false);
   const [snapshot, setSnapshot] = useState<Snapshot>(EMPTY);
   // A note nobody may edit reads rendered whatever the chosen view (but
   // one waiting for its lock already shows the view it will be edited in).
@@ -203,24 +233,21 @@ export default function MarkdownEditor({
     const host = hostRef.current;
     if (!host) return;
     let lastSnapshot = "";
-    let lastStats = "";
-    const statsOf = statsReader();
-    const report = (state: EditorState, docOrSelection: boolean) => {
+    let created: EditorView | null = null;
+    const stats = statsReporter(
+      (next) => statsRef.current?.(next),
+      () => created?.state ?? null,
+    );
+    const report = (state: EditorState, noteChanged: boolean, selectionChanged: boolean) => {
       const next = snapshotOf(state);
       const key = JSON.stringify(next);
       if (key !== lastSnapshot) {
         lastSnapshot = key;
         setSnapshot(next);
       }
-      if (!docOrSelection) return;
-      const stats = statsOf(state);
-      const statsKey = JSON.stringify(stats);
-      if (statsKey !== lastStats) {
-        lastStats = statsKey;
-        statsRef.current?.(stats);
-      }
+      if (noteChanged || selectionChanged) stats.update(state, noteChanged);
     };
-    const created = new EditorView({
+    created = new EditorView({
       parent: host,
       state: EditorState.create({
         doc: reportedRef.current,
@@ -253,9 +280,8 @@ export default function MarkdownEditor({
           EditorView.updateListener.of((update) => {
             // Scrolling and measuring change nothing the toolbar shows.
             if (update.transactions.length > 0) {
-              const counted =
-                update.docChanged || update.selectionSet || syntaxTree(update.startState) !== syntaxTree(update.state);
-              report(update.state, counted);
+              const noteChanged = update.docChanged || syntaxTree(update.startState) !== syntaxTree(update.state);
+              report(update.state, noteChanged, update.selectionSet);
             }
             if (!update.docChanged) return;
             if (update.transactions.every((tr) => tr.annotation(external))) return;
@@ -273,10 +299,13 @@ export default function MarkdownEditor({
     if (process.env.NODE_ENV !== "production") {
       Object.defineProperty(created.dom, "__doqtriEditor", { value: created });
     }
-    report(created.state, true);
-    setView(created);
+    report(created.state, false, false);
+    stats.now(created.state);
+    const mounted = created;
+    setView(mounted);
     return () => {
-      created.destroy();
+      stats.destroy();
+      mounted.destroy();
       setView(null);
     };
     // Mount only: see the comment above.
@@ -365,8 +394,13 @@ export default function MarkdownEditor({
     return () => {
       document.removeEventListener("keydown", onTab);
       for (const element of made) element.removeAttribute("inert");
-      if (before?.isConnected && !before.closest("[inert]")) before.focus();
-      else view?.focus();
+      // A frame later, once a lock change has made the text read-only (and
+      // so unfocusable), focus goes back where it was, or stays by the note.
+      requestAnimationFrame(() => {
+        if (before?.isConnected && !before.closest("[inert]")) before.focus();
+        else view?.focus();
+        if (!document.activeElement || document.activeElement === document.body) root.focus();
+      });
     };
   }, [fullscreen, view]);
 
@@ -380,11 +414,12 @@ export default function MarkdownEditor({
       ref={rootRef}
       data-view={shownMode}
       data-fullscreen={fullscreen || undefined}
+      tabIndex={-1}
       role={fullscreen ? "dialog" : undefined}
       aria-modal={fullscreen || undefined}
       aria-label={fullscreen ? "Full screen editor" : undefined}
       className={cn(
-        "doqtri-editor flex flex-col",
+        "doqtri-editor flex flex-col outline-none",
         !autoHeight && "h-full min-h-0",
         fullscreen && "bg-background fixed inset-0 z-50 h-dvh",
       )}

@@ -57,11 +57,17 @@ function children(node: SyntaxNode, name: string): SyntaxNode[] {
   return out;
 }
 
-/** The syntax in `doc` that does not render as text, in order. */
-export function hiddenSyntax(tree: Tree, doc: string): Hidden[] {
+/**
+ * The syntax in `doc` that does not render as text, in order — for all of
+ * it, or only what touches `from`–`to` (a selection), which is far cheaper
+ * on a long note.
+ */
+export function hiddenSyntax(tree: Tree, doc: string, from = 0, to = doc.length): Hidden[] {
   const hidden: Hidden[] = [];
   const space = (ch: string | undefined) => ch === " " || ch === "\t";
   tree.iterate({
+    from,
+    to,
     enter(ref) {
       const { name, from, to } = ref;
       if (LINE_MARKS.has(name)) {
@@ -80,11 +86,9 @@ export function hiddenSyntax(tree: Tree, doc: string): Hidden[] {
         case "Link": {
           const node = ref.node;
           const marks = children(node, "LinkMark");
-          // `[text](url "title")`: the text stays, everything from `]` on goes.
-          if (marks.length >= 2) {
-            hidden.push({ from: marks[0].from, to: marks[0].to }, { from: marks[1].from, to });
-            return false;
-          }
+          // `[text](url "title")`: the text stays, everything from `]` on goes;
+          // the text's own syntax (emphasis, an image) is hidden in turn.
+          if (marks.length >= 2) hidden.push({ from: marks[0].from, to: marks[0].to }, { from: marks[1].from, to });
           return;
         }
         case "WikiLink": {
@@ -107,13 +111,14 @@ export function hiddenSyntax(tree: Tree, doc: string): Hidden[] {
           ref.node.cursor().iterate((cell) => {
             if (cell.name === "TableCell") cells.push({ from: cell.from, to: cell.to });
           });
-          let at = from;
+          let at = ref.from;
           for (const cell of cells) {
-            if (cell.from > at) hidden.push({ from: at, to: cell.from, space: at !== from });
+            if (cell.from > at) hidden.push({ from: at, to: cell.from, space: at !== ref.from });
             at = cell.to;
           }
-          if (to > at) hidden.push({ from: at, to });
-          return false;
+          if (ref.to > at) hidden.push({ from: at, to: ref.to });
+          // The cells' own syntax (emphasis, links) is hidden in turn.
+          return;
         }
       }
     },

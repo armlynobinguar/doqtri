@@ -612,6 +612,8 @@ export function FormatToolbar({
         prev.folded === next.folded && prev.style === next.style && prev.fullscreenButton === next.fullscreenButton ? prev : next,
       );
     };
+    // Once now, before the first paint, so the unfolded bar never shows for a frame.
+    update();
     const observer = new ResizeObserver(update);
     observer.observe(root);
     return () => observer.disconnect();

@@ -25,8 +25,7 @@ import { useDocLock } from "@/hooks/use-doc-lock";
 import { EditLockBanner } from "@/components/vault/edit-lock-banner";
 import { EDITING_ELSEWHERE, editingMessage } from "@/lib/doc-lock";
 import type { Doc } from "@/lib/types";
-import { hiddenSyntax, renderedText, textCounts } from "@/lib/text-stats";
-import { previewParser } from "@/lib/live-preview/syntax";
+import type { EditorStats } from "@/lib/text-stats";
 
 const SETTLE_MS = 700;
 
@@ -181,11 +180,16 @@ export function DocWorkspace({
   // Keeps the Supabase write and the force simulation off the keystroke path.
   const settled = useDebouncedValue(markdown, SETTLE_MS);
 
-  // The note's rendered words (lib/text-stats.ts), off the keystroke path;
-  // the editor's own count takes over in the status bar once it reports.
-  useEffect(() => {
-    setWordCount(textCounts(renderedText(settled, hiddenSyntax(previewParser.parse(settled), settled))).words);
-  }, [settled, setWordCount]);
+  // The status bar's counts come from the editor, which has the note's
+  // parse tree already (lib/text-stats.ts); a same-number word count
+  // re-renders nothing.
+  const handleStats = useCallback(
+    (stats: EditorStats) => {
+      setEditorStats(stats);
+      setWordCount(stats.words);
+    },
+    [setEditorStats, setWordCount],
+  );
 
   useEffect(() => {
     markdownRef.current = markdown;
@@ -392,7 +396,7 @@ export function DocWorkspace({
             readOnly={readOnly}
             pending={lockPending}
             onOpenNote={openNote}
-            onStats={setEditorStats}
+            onStats={handleStats}
             banner={lockBanner}
           />
         </div>
@@ -437,7 +441,7 @@ export function DocWorkspace({
             readOnly={readOnly}
             pending={lockPending}
             onOpenNote={openNote}
-            onStats={setEditorStats}
+            onStats={handleStats}
             banner={lockBanner}
           />
         </ResizablePanel>
