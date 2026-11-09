@@ -45,6 +45,18 @@ export function uniqueTitle(title: string, taken: string[]): string {
 export const MAX_TITLE_LENGTH = 120;
 
 /**
+ * Whether `title` holds a line break, tab or other control character. A
+ * title is one line: it becomes the note's `# <title>` heading (DOQ-35), where
+ * a line break would add headings and move the ones after it.
+ */
+export function hasControlCharacters(title: string): boolean {
+  return /[\u0000-\u001f\u007f]/.test(title);
+}
+
+/** Why a title with control characters is refused. */
+export const TITLE_ONE_LINE = "A title is one line of text, without line breaks or control characters";
+
+/**
  * Whether `title` would collide with one of `taken`, under the same
  * case- and trim-insensitive comparison as uniqueTitle. A rename passes the
  * other notes' titles only, so changing just the case of a title is allowed.

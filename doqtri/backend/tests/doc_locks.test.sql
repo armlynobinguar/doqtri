@@ -29,7 +29,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(84);
+select plan(85);
 
 -- The calling user's first tab. Created in the rolled-back transaction.
 create function public._t_session() returns uuid language sql stable as $$
@@ -342,9 +342,14 @@ select throws_ok(
   'P0002', 'note not found', 'an outsider cannot save');
 
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000003","role":"authenticated"}';
-with u as (update public.documents set title = 'Roadmap 2027'
-            where id = '30000000-0000-4000-8000-000000000010' returning version)
-select is((select version from u), 4::bigint, 'an editor still renames with a plain update, version unchanged');
+-- Since DOQ-35 (20261109100000_rename_document.sql) a rename goes through
+-- rename_document(); a plain update of the title is refused.
+select throws_ok(
+  $$ update public.documents set title = 'Roadmap 2027'
+      where id = '30000000-0000-4000-8000-000000000010' $$,
+  '42501', null, 'an editor can no longer rename with a plain update');
+select is(public.rename_document('30000000-0000-4000-8000-000000000010', 'Roadmap 2027', null, null, null),
+  4::bigint, 'an editor renames through rename_document(), version unchanged');
 
 
 -- ---------------------------------------------------------------------------

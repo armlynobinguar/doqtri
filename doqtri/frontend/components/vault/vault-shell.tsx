@@ -15,6 +15,7 @@ import { QuickSwitcher } from "@/components/vault/quick-switcher";
 import { UploadDialog, type RetryTarget } from "@/components/vault/upload-dialog";
 import { DeleteNoteDialog } from "@/components/vault/delete-note-dialog";
 import { RenameNoteDialog } from "@/components/vault/rename-note-dialog";
+import { OpenNoteProvider, useOpenNoteSlot } from "@/components/vault/open-note";
 import { SettingsDialog } from "@/components/vault/settings-dialog";
 import type { AccountPage } from "@/components/vault/account-menu";
 import type { NoteTemplate } from "@/lib/templates";
@@ -290,7 +291,9 @@ function VaultShellInner({
   // A title another note already has is refused here, before any request,
   // with the route's own rule and wording; the dialog shows the throw beside
   // the field. Anything the server refuses later comes back as a toast, since
-  // the dialog has closed by then.
+  // the dialog has closed by then. The note open in the editor is renamed
+  // through it (DOQ-35), since the rename may rewrite its title heading.
+  const openNote = useOpenNoteSlot();
   const handleRenameNote = useCallback(
     (note: NoteSummary, title: string) => {
       const others = shownNotes.filter((other) => other.id !== note.id).map((other) => other.title);
@@ -318,7 +321,7 @@ function VaultShellInner({
       run(
         { kind: "rename", id: note.id, title, previousTitle: note.title },
         async () => {
-          await renameNote(note.id, title);
+          await openNote.rename(note.id, (session) => renameNote(note.id, title, session));
         },
         (error) => {
           if (error instanceof NoResponseError) {
@@ -329,7 +332,7 @@ function VaultShellInner({
         },
       );
     },
-    [run, shownNotes],
+    [openNote, run, shownNotes],
   );
 
   const handleDismissImport = useCallback(
@@ -490,7 +493,7 @@ function VaultShellInner({
             )}
 
             <ResizablePanel id="main" className="relative min-h-0">
-              {children}
+              <OpenNoteProvider slot={openNote}>{children}</OpenNoteProvider>
               <NavigationOverlay />
             </ResizablePanel>
           </ResizablePanelGroup>

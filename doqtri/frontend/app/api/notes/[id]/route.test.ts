@@ -16,19 +16,52 @@ const session = {
 
 /** What the service role reads, per table, for the lock checks before a rename or delete. */
 const adminRows: Record<string, unknown> = {};
+/** Rows a table answers on its next single-row reads, before falling back to adminRows. */
+const adminReads: Record<string, unknown[]> = {};
+/** What a list read of a table answers (the workspace's titles). */
+const adminLists: Record<string, unknown[]> = {};
 const adminWrites: string[] = [];
+/** Every UPDATE the service role sent: the columns it set and the filters it was conditional on. */
+const adminUpdates: { table: string; changes: Record<string, unknown>; filters: Record<string, unknown> }[] = [];
+/** How the next UPDATE ... RETURNING answers; by default it matches and bumps a changed text's version. */
+const updateAnswers: RpcResult[] = [];
 
 function adminQuery(table: string) {
+  let mode: "select" | "update" | "delete" | null = null;
+  const filters: Record<string, unknown> = {};
+  let changes: Record<string, unknown> = {};
   const query = {
-    select: () => query,
-    eq: () => query,
+    select: () => {
+      mode ??= "select";
+      return query;
+    },
+    eq: (column: string, value: unknown) => {
+      filters[column] = value;
+      return query;
+    },
     neq: () => query,
-    maybeSingle: async () => ({ data: adminRows[table] ?? null, error: null }),
-    update: () => {
+    maybeSingle: async (): Promise<RpcResult> => {
+      if (mode === "update") {
+        const answer = updateAnswers.shift();
+        if (answer) return answer;
+        const base = Number(filters.version ?? 1);
+        return { data: { version: "markdown" in changes ? base + 1 : base }, error: null };
+      }
+      const queued = adminReads[table];
+      if (queued?.length) return { data: queued.shift(), error: null };
+      return { data: adminRows[table] ?? null, error: null };
+    },
+    then: (resolve: (result: RpcResult) => unknown) =>
+      resolve({ data: mode === "select" ? (adminLists[table] ?? []) : null, error: null }),
+    update: (next: Record<string, unknown>) => {
+      mode = "update";
+      changes = next;
       adminWrites.push(`update ${table}`);
+      adminUpdates.push({ table, changes: next, filters });
       return query;
     },
     delete: () => {
+      mode = "delete";
       adminWrites.push(`delete ${table}`);
       return query;
     },
@@ -74,8 +107,13 @@ beforeEach(() => {
   session.rpc.mockReset();
   readDocument.mockReset();
   adminWrites.length = 0;
-  for (const key of Object.keys(adminRows)) delete adminRows[key];
-  adminRows.documents = { id: DOC, workspace_id: WS, user_id: ME, title: "Roadmap" };
+  adminUpdates.length = 0;
+  updateAnswers.length = 0;
+  saveHook.afterNoteSaved.mockClear();
+  for (const store of [adminRows, adminReads, adminLists]) {
+    for (const key of Object.keys(store)) delete store[key];
+  }
+  adminRows.documents = { id: DOC, workspace_id: WS, user_id: ME, title: "Roadmap", markdown: "Body.\n", version: 3 };
   adminRows.workspace_members = { role: "editor" };
 });
 
@@ -205,38 +243,8 @@ describe("PUT /api/notes/[id] (save)", () => {
   });
 });
 
-describe("rename and delete while someone else is editing", () => {
+describe("delete while someone else is editing", () => {
   const live = () => new Date(Date.now() - 60_000).toISOString();
-  const lapsed = () => new Date(Date.now() - 11 * 60_000).toISOString();
-
-  function patch(title: string) {
-    return new Request(`http://localhost/api/notes/${DOC}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title }),
-    });
-  }
-
-  it("refuses a rename while another member holds the lock", async () => {
-    adminRows.doc_locks = { holder: ANA, heartbeat_at: live() };
-    const res = await PATCH(patch("Roadmap 2027"), ctx());
-    expect(res.status).toBe(423);
-    expect((await res.json()).code).toBe("LOCKED");
-    expect(adminWrites).toEqual([]);
-  });
-
-  it("lets the lock holder rename", async () => {
-    adminRows.doc_locks = { holder: ME, heartbeat_at: live() };
-    const res = await PATCH(patch("Roadmap 2027"), ctx());
-    expect(res.status).toBe(200);
-    expect(adminWrites).toEqual(["update documents"]);
-  });
-
-  it("ignores a lapsed lock", async () => {
-    adminRows.doc_locks = { holder: ANA, heartbeat_at: lapsed() };
-    const res = await PATCH(patch("Roadmap 2027"), ctx());
-    expect(res.status).toBe(200);
-  });
 
   it("refuses a delete while another member holds the lock, before asking the ledger", async () => {
     adminRows.doc_locks = { holder: ANA, heartbeat_at: live() };
@@ -244,6 +252,238 @@ describe("rename and delete while someone else is editing", () => {
     expect(res.status).toBe(423);
     expect(readDocument).not.toHaveBeenCalled();
     expect(adminWrites).toEqual([]);
+  });
+});
+
+/*
+ * PATCH writes through rename_document() (20261109100000_rename_document.sql)
+ * as the caller. The lock, role, version and unique-title rules are the
+ * function's, and backend/tests/rename_document.test.sql covers every branch
+ * of them against a real database. These tests stub the function: they
+ * check what the route sends it, and how each of its answers reaches the
+ * client.
+ */
+describe("PATCH /api/notes/[id] renames the title heading with the title (DOQ-35)", () => {
+  const OLD = "# Roadmap\r\n\r\n## Scope\r\nKeep  this   spacing.\r\n";
+  const NEW = "# Plan 2027\r\n\r\n## Scope\r\nKeep  this   spacing.\r\n";
+
+  function rename(title: string, extra: Record<string, unknown> = {}) {
+    return new Request(`http://localhost/api/notes/${DOC}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, ...extra }),
+    });
+  }
+
+  /** The arguments of every rename_document() call. */
+  const renameCalls = () =>
+    session.rpc.mock.calls.filter(([fn]) => fn === "rename_document").map(([, args]) => args);
+
+  /**
+   * Answers rename_document() in turn with `answers`; past them, as the real
+   * function does when every check passes. The version bump is faked here:
+   * in the database the documents_before_save trigger makes it, and the
+   * rename e2e (e2e/rename-heading.spec.ts) sees the real one.
+   */
+  function renameAnswers(...answers: RpcResult[]) {
+    session.rpc.mockImplementation(async (fn, args) => {
+      if (fn !== "rename_document") return { data: null, error: { message: `unexpected ${fn}` } };
+      const answer = answers.shift();
+      if (answer) return answer;
+      const base = Number(args.p_base_version);
+      return { data: args.p_markdown === null ? base : base + 1, error: null };
+    });
+  }
+
+  beforeEach(() => {
+    adminRows.documents = { id: DOC, workspace_id: WS, user_id: ME, title: "Roadmap", markdown: OLD, version: 3 };
+    renameAnswers();
+  });
+
+  it("sends the title and the rewritten heading in one call, with the version they were read at", async () => {
+    const res = await PATCH(rename("Plan 2027"), ctx());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      id: DOC,
+      title: "Plan 2027",
+      previousTitle: "Roadmap",
+      markdown: NEW,
+      version: 4,
+      previousVersion: 3,
+    });
+    expect(renameCalls()).toEqual([
+      { p_document_id: DOC, p_title: "Plan 2027", p_markdown: NEW, p_base_version: 3, p_session: null },
+    ]);
+    // The service role writes nothing: the function does, as the caller.
+    expect(adminWrites).toEqual([]);
+  });
+
+  it("names the editor's session when the rename comes from the open editor", async () => {
+    await PATCH(rename("Plan 2027", { session: TAB }), ctx());
+    expect(renameCalls()[0]).toMatchObject({ p_session: TAB });
+  });
+
+  it("refuses a session that is not one, calling nothing", async () => {
+    const res = await PATCH(rename("Plan 2027", { session: "tab-1" }), ctx());
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe("BAD_SESSION");
+    expect(renameCalls()).toEqual([]);
+  });
+
+  it("runs the same after-save hook as a PUT, with the same arguments", async () => {
+    // Parity with PUT, not an on-chain write: afterNoteSaved() remaps the
+    // note's links and, only with the qdit integration on, tells qdit. An
+    // anchored note's ledger entry is not touched by a save either; it shows
+    // as changed until it is anchored again.
+    await PATCH(rename("Plan 2027"), ctx());
+    expect(saveHook.afterNoteSaved).toHaveBeenCalledTimes(1);
+    expect(saveHook.afterNoteSaved).toHaveBeenCalledWith({
+      userId: ME,
+      docId: DOC,
+      baseVersion: 3,
+      savedVersion: 4,
+      markdown: NEW,
+      before: { title: "Roadmap", markdown: OLD, version: 3 },
+      title: "Plan 2027",
+    });
+  });
+
+  it("leaves a stored concept map's hash alone, so the map reads as stale", async () => {
+    const { hashMarkdown, isMindmapStale } = await import("@/lib/mindmap-hash");
+    const storedHash = hashMarkdown(OLD);
+    expect(isMindmapStale(OLD, storedHash)).toBe(false);
+
+    const body = await (await PATCH(rename("Plan 2027"), ctx())).json();
+    expect(Object.keys(renameCalls()[0]).sort()).toEqual(
+      ["p_base_version", "p_document_id", "p_markdown", "p_session", "p_title"],
+    );
+    expect(isMindmapStale(body.markdown, storedHash)).toBe(true);
+  });
+
+  it("sends no text when the first line is the user's own heading", async () => {
+    for (const markdown of ["# Something else\n", "Intro\n# Roadmap\n", "No heading at all.\n", "## Roadmap\n"]) {
+      session.rpc.mockClear();
+      adminRows.documents = { id: DOC, workspace_id: WS, user_id: ME, title: "Roadmap", markdown, version: 3 };
+      const res = await PATCH(rename("Plan 2027"), ctx());
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ id: DOC, title: "Plan 2027", previousTitle: "Roadmap" });
+      expect(renameCalls()).toEqual([
+        { p_document_id: DOC, p_title: "Plan 2027", p_markdown: null, p_base_version: 3, p_session: null },
+      ]);
+    }
+    expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
+  });
+
+  it("refuses a title another note has before calling anything", async () => {
+    adminLists.documents = [{ title: " plan 2027 " }];
+    const res = await PATCH(rename("Plan 2027"), ctx());
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe("TITLE_TAKEN");
+    expect(renameCalls()).toEqual([]);
+  });
+
+  it("answers 409 TITLE_TAKEN when a teammate took the title first (the function's unique violation)", async () => {
+    renameAnswers({ data: null, error: { code: "23505", message: "duplicate key value" } });
+    const res = await PATCH(rename("Plan 2027"), ctx());
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe("TITLE_TAKEN");
+    expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
+  });
+
+  it("answers 423 LOCKED when another member holds the lock", async () => {
+    renameAnswers({ data: null, error: { code: "DQLCK", message: "someone else is editing this note", details: "other" } });
+    const res = await PATCH(rename("Plan 2027"), ctx());
+    expect(res.status).toBe(423);
+    expect(await res.json()).toMatchObject({ code: "LOCKED", error: "Someone else is editing this note. Try again when they are done." });
+    expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
+  });
+
+  it("answers 423 as Regenerate does when the caller is editing the note in another tab", async () => {
+    renameAnswers({
+      data: null,
+      error: { code: "DQLCK", message: "you are editing this note in another tab or window", details: "elsewhere" },
+    });
+    const res = await PATCH(rename("Plan 2027"), ctx());
+    expect(res.status).toBe(423);
+    expect(await res.json()).toEqual({
+      code: "NOT_LOCK_HOLDER",
+      error: "You are editing this note in another tab or window, so it cannot be renamed here.",
+    });
+    expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
+  });
+
+  it("refuses a viewer before calling anything, and maps the function's own role refusal", async () => {
+    adminRows.workspace_members = { role: "viewer" };
+    expect((await PATCH(rename("Plan 2027"), ctx())).status).toBe(403);
+    expect(renameCalls()).toEqual([]);
+
+    adminRows.workspace_members = { role: "editor" };
+    renameAnswers({ data: null, error: { code: "42501", message: "you can read this note but not rename it" } });
+    expect((await PATCH(rename("Plan 2027"), ctx())).status).toBe(403);
+    renameAnswers({ data: null, error: { code: "P0002", message: "note not found" } });
+    expect((await PATCH(rename("Plan 2027"), ctx())).status).toBe(404);
+  });
+
+  it("starts again from the newer text when a save lands between the read and the call", async () => {
+    const saved = "# Roadmap\n\nTyped meanwhile.\n";
+    renameAnswers({ data: null, error: { code: "DQVER", message: "stale", details: "4" } });
+    adminReads.documents = [
+      adminRows.documents,
+      { id: DOC, workspace_id: WS, user_id: ME, title: "Roadmap", markdown: saved, version: 4 },
+    ];
+    const res = await PATCH(rename("Plan 2027"), ctx());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ markdown: "# Plan 2027\n\nTyped meanwhile.\n", version: 5, previousVersion: 4 });
+    expect(renameCalls().map((args) => [args.p_base_version, args.p_markdown])).toEqual([
+      [3, "# Plan 2027\r\n\r\n## Scope\r\nKeep  this   spacing.\r\n"],
+      [4, "# Plan 2027\n\nTyped meanwhile.\n"],
+    ]);
+    expect(saveHook.afterNoteSaved).toHaveBeenCalledWith(
+      expect.objectContaining({ baseVersion: 4, savedVersion: 5, before: expect.objectContaining({ markdown: saved }) }),
+    );
+  });
+
+  it("answers 409 when saves keep landing", async () => {
+    const stale = { data: null, error: { code: "DQVER", message: "stale", details: "9" } };
+    renameAnswers(stale, stale, stale);
+    const res = await PATCH(rename("Plan 2027"), ctx());
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe("STALE_VERSION");
+    expect(renameCalls()).toHaveLength(3);
+    expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
+  });
+
+  it("calls nothing when the title does not change", async () => {
+    const res = await PATCH(rename("Roadmap"), ctx());
+    expect(res.status).toBe(200);
+    expect(renameCalls()).toEqual([]);
+  });
+
+  it("refuses a title with a line break or other control character (400), calling nothing", async () => {
+    for (const title of ["New\n## Injected", "New\r## X", "Tab\there", "Bell\u0007", "Del\u007f"]) {
+      const res = await PATCH(rename(title), ctx());
+      expect(res.status, JSON.stringify(title)).toBe(400);
+      expect((await res.json()).code).toBe("BAD_TITLE");
+    }
+    expect(renameCalls()).toEqual([]);
+  });
+
+  it("renames the title alone if the function refuses the rewritten text", async () => {
+    renameAnswers({ data: null, error: { code: "22023", message: "markdown may only change the title heading" } });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const res = await PATCH(rename("Plan 2027"), ctx());
+    warn.mockRestore();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: DOC, title: "Plan 2027", previousTitle: "Roadmap" });
+    expect(renameCalls().map((args) => args.p_markdown)).toEqual([NEW, null]);
+    expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
+  });
+
+  it("maps the function's own one-line refusal to the same 400", async () => {
+    renameAnswers({ data: null, error: { code: "23514", message: "a note's title is one line of text" } });
+    const res = await PATCH(rename("Plan 2027"), ctx());
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe("BAD_TITLE");
   });
 });
 

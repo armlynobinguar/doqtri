@@ -65,6 +65,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261107110000_referral_dashboard.sql     # NOT yet applied (WP-4.6, DOQ-24): needs 20261107100000_referral_eligibility.sql first
 20261107120000_referral_payout_profiles.sql  # NOT yet applied (WP-4.6, DOQ-25): needs 20261107110000_referral_dashboard.sql first
 20261107140000_referral_testimonials.sql     # NOT yet applied (WP-4.6, DOQ-28): needs 20261107120000_referral_payout_profiles.sql first
+20261109100000_rename_document.sql        # applied to staging, not prod (WP-1.7, DOQ-35): apply before deploying; /api/notes/[id] PATCH needs it
 ```
 
 Files marked "NOT recorded" were added without updating this list, so whether they are
@@ -227,13 +228,18 @@ Two supporting tables:
   names it, so a user's second tab is read-only and cannot release the
   first's); it frees after ten minutes without a heartbeat, and an admin or
   owner may take it over (anyone may take over their own lock from another
-  tab). Written only by `take_doc_lock()`, `release_doc_lock()` and
-  `save_document()`; workspace members read who holds it, and only editors
+  tab). Written only by `take_doc_lock()`, `release_doc_lock()`,
+  `save_document()` and `rename_document()`; workspace members read who holds it, and only editors
   and above are told the holder's name. `documents.version` counts saves,
   and the browser saves text only through
   `save_document(id, markdown, base_version, session)`, which refuses a
   caller without the lock in that session (`DQLCK`) or with a stale version
-  (`DQVER`). A plain client UPDATE of `markdown` is refused. Removing or
+  (`DQVER`). A rename goes through
+  `rename_document(id, title, markdown, base_version, session)` (DOQ-35),
+  which writes the title and, when the note's `# <title>` heading changes
+  with it, the new text in one UPDATE: refused while another user holds the
+  lock, and, when the text changes, unless the lock is free or held from
+  that session. A plain client UPDATE of `markdown` is refused. Removing or
   demoting a member drops their locks. A tab that closes or reloads releases
   its lock with a keepalive request; when that request never arrives, the old
   session's lock stays live, and a reloaded tab shows the note as being
