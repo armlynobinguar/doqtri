@@ -184,6 +184,56 @@ export const editorTheme = EditorView.theme({
   },
   ".cm-lp-image-hint": { color: "var(--label)", fontSize: "0.85em" },
 
+  // The line under the title heading (heading-notice.ts, DOQ-36). One fixed
+  // line height and size, whatever the text size, so the text below moves
+  // once when it appears and never as it changes. The warning tint marks
+  // only the icon and the edge: --warning text is under 4.5:1 on the light
+  // page, so the words use --foreground and --label.
+  ".cm-heading-notice": {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: "6px",
+    margin: "0 0 6px",
+    padding: "1px 0 1px 8px",
+    borderLeft: "2px solid var(--label)",
+    fontSize: "12px",
+    lineHeight: "18px",
+    color: "var(--foreground)",
+    cursor: "default",
+    userSelect: "none",
+  },
+  ".cm-heading-notice[data-kind='clash']": { borderLeftColor: "var(--warning)" },
+  ".cm-heading-notice-icon": {
+    display: "flex",
+    flexShrink: "0",
+    height: "18px",
+    alignItems: "center",
+    color: "var(--label)",
+  },
+  ".cm-heading-notice[data-kind='clash'] .cm-heading-notice-icon": { color: "var(--warning)" },
+  ".cm-heading-notice-text": { minWidth: "0" },
+  ".cm-heading-notice-hint": { color: "var(--label)" },
+  ".cm-heading-notice-dismiss": {
+    display: "flex",
+    flexShrink: "0",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "18px",
+    height: "18px",
+    marginLeft: "2px",
+    padding: "0",
+    border: "none",
+    borderRadius: "4px",
+    background: "transparent",
+    color: "var(--label)",
+    cursor: "pointer",
+    position: "relative",
+  },
+  // A finger-sized target around the small mark, without a taller line.
+  ".cm-heading-notice-dismiss::before": { content: "''", position: "absolute", inset: "-13px" },
+  ".cm-heading-notice-dismiss:hover": { color: "var(--foreground)", background: "var(--glass-strong)" },
+  ".cm-heading-notice-dismiss:focus-visible": { outline: "1px solid var(--ring)", outlineOffset: "1px" },
+
   // The `[[` list: the vault's floating glass panel.
   ".cm-tooltip.cm-wikilink-suggest": {
     width: "300px",
