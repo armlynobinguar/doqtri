@@ -2,6 +2,7 @@
 
 import { CheckIcon, Loader2Icon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useEditorStats } from "@/components/vault/vault-status";
 
 export type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -43,11 +44,7 @@ export function StatusBar({
       <span className="tabular-nums">
         {noteCount} {noteCount === 1 ? "note" : "notes"}
       </span>
-      {wordCount !== undefined && (
-        <span className="tabular-nums">
-          {wordCount} {wordCount === 1 ? "word" : "words"}
-        </span>
-      )}
+      {wordCount !== undefined && <EditorCounts wordCount={wordCount} />}
       {saveState !== "idle" && (
         <span
           className={
@@ -67,5 +64,39 @@ export function StatusBar({
       <span className="ml-auto">Doqtri Dark</span>
       {trailing}
     </footer>
+  );
+}
+
+const plural = (n: number, one: string, many: string) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
+
+/**
+ * Words, characters and the caret's line and column, as Word's status bar
+ * shows them: with text selected, the selection's counts of the whole.
+ */
+function EditorCounts({ wordCount: fallback }: { wordCount: number }) {
+  const stats = useEditorStats();
+  const selection = stats?.selection;
+  // The editor's count of the rendered text, once it has one.
+  const wordCount = stats?.words ?? fallback;
+  return (
+    <>
+      <span className="tabular-nums" data-testid="status-words">
+        {selection
+          ? `${selection.words.toLocaleString()} of ${plural(wordCount, "word", "words")}`
+          : plural(wordCount, "word", "words")}
+      </span>
+      {stats ? (
+        <>
+          <span className="tabular-nums" data-testid="status-chars">
+            {selection
+              ? `${selection.chars.toLocaleString()} of ${plural(stats.chars, "character", "characters")}`
+              : plural(stats.chars, "character", "characters")}
+          </span>
+          <span className="tabular-nums" data-testid="status-cursor" title={`Line ${stats.line}, column ${stats.col}`}>
+            Ln {stats.line}, Col {stats.col}
+          </span>
+        </>
+      ) : null}
+    </>
   );
 }

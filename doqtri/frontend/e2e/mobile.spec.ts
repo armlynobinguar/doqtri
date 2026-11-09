@@ -105,6 +105,31 @@ test.describe("mobile vault", () => {
     await expectNoHorizontalScroll(page);
   });
 
+  test("the formatting bar scrolls sideways with finger-sized targets", async ({ page }) => {
+    await page.goto(`/vault/${noteId}`);
+    const bar = page.getByRole("toolbar", { name: "Formatting" });
+    await expect(bar).toBeVisible();
+    // No More menu on a phone: every group is in the one scrolling row.
+    await expect(bar.getByRole("button", { name: "More formatting" })).toHaveCount(0);
+    // 20 tools, the style menu, the View menu and full screen.
+    await expect(bar.locator("[data-tool-id]")).toHaveCount(23);
+    for (const control of await bar.locator("[data-tool-id]").all()) {
+      const box = (await control.boundingBox())!;
+      expect(box.width).toBeGreaterThanOrEqual(44);
+      expect(box.height).toBeGreaterThanOrEqual(44);
+    }
+    const scroll = await bar.evaluate((el) => {
+      const before = el.scrollLeft;
+      el.scrollLeft = el.scrollWidth;
+      return { room: el.scrollWidth - el.clientWidth, moved: el.scrollLeft - before };
+    });
+    expect(scroll.room).toBeGreaterThan(0);
+    expect(scroll.moved).toBeGreaterThan(0);
+    // The last control scrolls into reach; the page itself never scrolls sideways.
+    await expect(bar.getByRole("button", { name: "Full screen", exact: true })).toBeInViewport();
+    await expectNoHorizontalScroll(page);
+  });
+
   test("the tab bar reaches the vault-wide views", async ({ page }) => {
     await page.goto("/vault");
     const tabs = page.getByRole("navigation", { name: "Primary" });

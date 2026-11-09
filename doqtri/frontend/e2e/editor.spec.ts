@@ -41,13 +41,13 @@ test.describe("editor", () => {
     await page.goto(`/vault/${noteId}`);
     await editableEditor(page);
 
-    // "# Editor Note\n\nOriginal body." -> 5 words
-    await expect(page.getByText(/^\d+ words?$/)).toContainText("5 words");
+    // "# Editor Note\n\nOriginal body." -> 4 words: the rendered text, not the "#".
+    await expect(page.getByText(/^\d+ words?$/)).toContainText("4 words");
 
     await placeCaretAfter(page, "Original body.");
     await page.keyboard.type(" plus three more words");
 
-    await expect(page.getByText(/^\d+ words?$/)).toContainText("9 words");
+    await expect(page.getByText(/^\d+ words?$/)).toContainText("8 words");
   });
 
   test("an edit debounce-saves and survives a reload", async ({ page }) => {

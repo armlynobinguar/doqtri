@@ -11,6 +11,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { LiveMindmapPane } from "@/components/vault/live-mindmap-pane";
 import type { MindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
 import { cn } from "@/lib/utils";
+import type { EditorStats } from "@/lib/text-stats";
 
 // CodeMirror measures the DOM, so the editor is never server-rendered — and
 // none of it lands in the server bundle.
@@ -73,6 +74,7 @@ export function EditorPane({
   readOnly = false,
   pending = false,
   onOpenNote,
+  onStats,
   banner,
 }: {
   title: string;
@@ -100,6 +102,8 @@ export function EditorPane({
   pending?: boolean;
   /** Opens the note a followed `[[wikilink]]` names. */
   onOpenNote?: (title: string) => void;
+  /** The editor's caret and selection counts, for the status bar. */
+  onStats?: (stats: EditorStats) => void;
   /** Shown between the tab strip and the editor, e.g. "<name> is editing". */
   banner?: ReactNode;
 }) {
@@ -116,6 +120,7 @@ export function EditorPane({
       placeholder={PLACEHOLDER}
       compact={compact}
       onOpenNote={onOpenNote}
+      onStats={onStats}
     />
   );
 
