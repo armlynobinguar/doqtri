@@ -248,7 +248,8 @@ export function DocWorkspace({
    * races it. The text it wrote then becomes the saved copy at its version,
    * as for Regenerate, and the next save goes on from there. Anything typed
    * while it ran is kept, with the same heading change made to it
-   * (lib/rename-adopt.ts).
+   * (lib/rename-adopt.ts), and an autosave queued meanwhile saves that text,
+   * not the pre-rename one it was queued with (SaveQueue.run).
    *
    * The request names this editor's edit session, so the server lets the
    * heading change only when this tab holds the lock, or nobody does
@@ -286,7 +287,9 @@ export function DocWorkspace({
         setMarkdown(adopted.text);
         setSaveState(adopted.text === adopted.saved ? "saved" : "saving");
         return renamed;
-      });
+        // An autosave queued while this ran writes the editor's text as it is
+        // now, rebased, rather than the pre-rename text it was queued with.
+      }, () => markdownRef.current);
     },
     [controller, readOnly, reloadLatest, saveNow, saver, saves, setSaveState],
   );

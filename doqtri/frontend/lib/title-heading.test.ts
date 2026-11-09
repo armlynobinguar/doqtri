@@ -24,9 +24,16 @@ describe("rewriteTitleHeading (DOQ-35)", () => {
     expect(rewriteTitleHeading("# Old ###   \nBody", "Old", "New")).toBe("# New\nBody");
   });
 
-  it("closes the heading when the new title ends in ' #', so it reads back whole", () => {
-    expect(rewriteTitleHeading("# Old\n", "Old", "Take #")).toBe("# Take # #\n");
+  it("writes exactly '# <title>', as rename_document() checks", () => {
+    expect(rewriteTitleHeading("# Old\n", "Old", "Take #")).toBe("# Take #\n");
     expect(rewriteTitleHeading("# Old\n", "Old", "C#")).toBe("# C#\n");
+  });
+
+  it("counts the same lines as blank as the database does", () => {
+    // A no-break space is not blank to title_heading_rewrite(), so it is the
+    // first line here too, and the rename leaves the text alone.
+    expect(rewriteTitleHeading("\u00a0\n# Old\n", "Old", "New")).toBeNull();
+    expect(rewriteTitleHeading("\f\v \t\n# Old\n", "Old", "New")).toBe("\f\v \t\n# New\n");
   });
 
   it("skips blank lines before the heading and keeps them", () => {

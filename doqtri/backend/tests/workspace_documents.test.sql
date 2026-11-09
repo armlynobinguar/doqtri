@@ -306,11 +306,12 @@ select lives_ok(
        ('30000000-0000-4000-8000-000000000012', '00000000-0000-4000-8000-000000000003',
         '10000000-0000-4000-8000-000000000001', 'Notes') $$,
   'a free title is fine');
+-- Renames go through rename_document() since DOQ-35 (20261109100000).
 select throws_ok(
-  $$ update public.documents set title = 'ROADMAP' where id = '30000000-0000-4000-8000-000000000012' $$,
+  $$ select public.rename_document('30000000-0000-4000-8000-000000000012', 'ROADMAP', null, null, null) $$,
   '23505', null, 'renaming onto a taken title is refused');
 select lives_ok(
-  $$ update public.documents set title = 'NOTES' where id = '30000000-0000-4000-8000-000000000012' $$,
+  $$ select public.rename_document('30000000-0000-4000-8000-000000000012', 'NOTES', null, null, null) $$,
   'changing only the case of a document''s own title is fine');
 
 
@@ -396,9 +397,9 @@ set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","
 
 select is((select count(*)::int from public.documents),
   3, 'an owner reads the team''s documents and their own');
-with u as (update public.documents set title = 'Roadmap 2027'
-               where id = '30000000-0000-4000-8000-000000000010' returning 1)
-select is(count(*)::int, 1, 'an owner renames a team document') from u;
+select lives_ok(
+  $$ select public.rename_document('30000000-0000-4000-8000-000000000010', 'Roadmap 2027', null, null, null) $$,
+  'an owner renames a team document');
 select lives_ok(
   $$ insert into public.documents (id, user_id, workspace_id, title) values
        ('30000000-0000-4000-8000-000000000014', '00000000-0000-4000-8000-000000000001',

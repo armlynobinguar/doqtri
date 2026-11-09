@@ -98,13 +98,16 @@ describe("createSaveQueue", () => {
     });
 
     const b = queue.save("b");
-    const ran = queue.run(async () => {
-      events.push("task");
-      await task.promise;
-      // What the task wrote itself becomes the baseline.
-      queue.markSaved("renamed");
-      return 7;
-    });
+    const ran = queue.run(
+      async () => {
+        events.push("task");
+        await task.promise;
+        // What the task wrote itself becomes the baseline.
+        queue.markSaved("renamed");
+        return 7;
+      },
+      () => "renamed",
+    );
     const c = queue.save("renamed");
     await Promise.resolve();
     expect(events).toEqual(["write b"]);
@@ -127,8 +130,55 @@ describe("createSaveQueue", () => {
       writes.push(text);
     });
 
-    await expect(queue.run(async () => Promise.reject(new Error("refused")))).rejects.toThrow("refused");
+    await expect(queue.run(async () => Promise.reject(new Error("refused")), () => "a")).rejects.toThrow(
+      "refused",
+    );
     await queue.save("b");
     expect(writes).toEqual(["b"]);
+  });
+
+  it("writes the current text, not its own, for a save queued while a task ran (DOQ-35)", async () => {
+    const task = deferred();
+    const writes: string[] = [];
+    let editor = "# Old\nBody typed";
+    const queue = createSaveQueue("# Old\nBody", async (text) => {
+      writes.push(text);
+    });
+
+    const ran = queue.run(async () => {
+      await task.promise;
+      // The task wrote the renamed heading; the editor adopts it and keeps
+      // what was typed meanwhile.
+      queue.markSaved("# New\nBody");
+      editor = "# New\nBody typed";
+    }, () => editor);
+    // An autosave of the pre-rename text, queued while the rename ran.
+    const stale = queue.save("# Old\nBody typed");
+    task.resolve();
+    await ran;
+    await stale;
+
+    expect(writes).toEqual(["# New\nBody typed"]);
+    expect(queue.saved).toBe("# New\nBody typed");
+
+    // Saves queued after the task settled write their own text, as before.
+    await queue.save("# New\nBody typed more");
+    expect(writes).toEqual(["# New\nBody typed", "# New\nBody typed more"]);
+  });
+
+  it("drops a save queued during a task when the current text is already saved", async () => {
+    const task = deferred();
+    const writes: string[] = [];
+    const queue = createSaveQueue("# Old", async (text) => {
+      writes.push(text);
+    });
+    const ran = queue.run(async () => {
+      await task.promise;
+      queue.markSaved("# New");
+    }, () => "# New");
+    const stale = queue.save("# Old typed");
+    task.resolve();
+    await Promise.all([ran, stale]);
+    expect(writes).toEqual([]);
   });
 });

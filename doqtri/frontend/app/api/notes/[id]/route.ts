@@ -29,6 +29,8 @@ export const runtime = "nodejs";
 
 /** Postgres check_violation: rename_document() refusing a title that is not one line. */
 const CHECK_VIOLATION = "23514";
+/** Postgres invalid_parameter_value: rename_document() refusing the rewritten text. */
+const INVALID_PARAMETER = "22023";
 
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -212,6 +214,16 @@ function renameLockRefusal(error: { details?: string | null }) {
  *   - free, or held by the caller from `session`: goes on
  * A save landing between this route's read and the call (DQVER) makes it
  * read again and redo the rewrite, a few times before answering 409.
+ * The function also checks that the text differs from what is stored only
+ * in its first non-blank line, which must read `# <title>`, so it cannot be
+ * used to save other text past save_document(); were it ever to refuse the
+ * text this route computed, the title is renamed alone.
+ *
+ * A copy of the note open elsewhere without the lock (another member's, or
+ * this user's idle tab) learns of the new text on its next lock poll and
+ * loads it. One that is typed into before that poll saves on the version it
+ * had, and gets the conflict banner, with its text kept to copy: the same as
+ * after any save from elsewhere.
  *
  * A heading that changes is an edit like any other: documents_before_save
  * bumps the version, afterNoteSaved() runs exactly as after a PUT (the
@@ -307,9 +319,11 @@ export async function PATCH(
     return NextResponse.json({ id, title, previousTitle: note.title });
   }
 
+  // Cleared if the database refuses the rewritten text (below).
+  let rewriteHeading = true;
   for (let attempt = 1; ; attempt++) {
     const baseVersion = Number(note.version);
-    const markdown = rewriteTitleHeading(note.markdown, note.title, title);
+    const markdown = rewriteHeading ? rewriteTitleHeading(note.markdown, note.title, title) : null;
 
     const { data, error } = await supabase.rpc("rename_document", {
       p_document_id: id,
@@ -325,6 +339,14 @@ export async function PATCH(
       if (error.code === LOCK_NOT_HELD) return renameLockRefusal(error);
       if (error.code === CHECK_VIOLATION) {
         return NextResponse.json({ error: TITLE_ONE_LINE, code: "BAD_TITLE" }, { status: 400 });
+      }
+      // The function rewrites the heading itself to check the text this route
+      // sends; should the two ever disagree, the title is still renamed and
+      // the text left alone, rather than refusing the rename.
+      if (error.code === INVALID_PARAMETER && markdown !== null) {
+        console.warn(`[rename] heading rewrite of ${id} refused by rename_document(): ${error.message}`);
+        rewriteHeading = false;
+        continue;
       }
       if (error.code !== STALE_VERSION) {
         const answer = lockErrorAnswer(error);

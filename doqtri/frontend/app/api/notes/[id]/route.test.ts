@@ -468,6 +468,17 @@ describe("PATCH /api/notes/[id] renames the title heading with the title (DOQ-35
     expect(renameCalls()).toEqual([]);
   });
 
+  it("renames the title alone if the function refuses the rewritten text", async () => {
+    renameAnswers({ data: null, error: { code: "22023", message: "markdown may only change the title heading" } });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const res = await PATCH(rename("Plan 2027"), ctx());
+    warn.mockRestore();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: DOC, title: "Plan 2027", previousTitle: "Roadmap" });
+    expect(renameCalls().map((args) => args.p_markdown)).toEqual([NEW, null]);
+    expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
+  });
+
   it("maps the function's own one-line refusal to the same 400", async () => {
     renameAnswers({ data: null, error: { code: "23514", message: "a note's title is one line of text" } });
     const res = await PATCH(rename("Plan 2027"), ctx());

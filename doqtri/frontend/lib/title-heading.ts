@@ -4,8 +4,12 @@ import { hasControlCharacters } from "@/lib/title";
 
 /** A level-1 ATX heading, read the way lib/mindmap.ts reads headings. */
 const H1_RE = /^#[ \t]+(.*)$/;
-/** A closing run of `#`s, which is not part of the heading's text. */
-const CLOSING_HASHES_RE = /\s+#+\s*$/;
+/**
+ * A blank line: spaces, tabs, form feeds and vertical tabs only. The same
+ * class as title_heading_rewrite() in 20261109100000_rename_document.sql, so
+ * both pick the same first non-blank line.
+ */
+const BLANK_RE = /^[ \t\f\v]*$/;
 
 /**
  * The note's text after a rename from `oldTitle` to `newTitle` (DOQ-35), or
@@ -43,7 +47,7 @@ export function rewriteTitleHeading(
     const lineEnd = end > start && markdown[end - 1] === "\r" ? end - 1 : end;
     const line = markdown.slice(start, lineEnd);
 
-    if (line.trim() !== "") {
+    if (!BLANK_RE.test(line)) {
       const match = H1_RE.exec(line);
       if (!match) return null;
       if (normalizeConcept(cleanLabel(match[1])) !== wanted) return null;
@@ -60,10 +64,11 @@ export function rewriteTitleHeading(
 }
 
 /**
- * `# <title>`. A title that itself ends in ` #` gets a closing `#`, so the
- * heading still reads back as the whole title rather than losing its tail.
+ * `# <title>`, exactly what rename_document() accepts in place of the old
+ * heading. A title ending in ` #` reads back without that tail (as a
+ * closing sequence); that is left as it is rather than written differently
+ * from what the database checks.
  */
 function titleHeading(title: string): string {
-  const text = title.trim();
-  return CLOSING_HASHES_RE.test(text) ? `# ${text} #` : `# ${text}`;
+  return `# ${title.trim()}`;
 }
