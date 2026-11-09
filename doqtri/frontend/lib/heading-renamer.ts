@@ -148,7 +148,7 @@ export function createHeadingRenamer(init: {
           // The text that named the new title is what the next edit is compared with.
           baseline = text;
           latest = renamed.title;
-          pending = [...pending, renamed.title];
+          pending = renamed.title === pageTitle ? [] : [...pending, renamed.title];
           const previousTitle = renamed.previousTitle || current;
           setNotice(backlinks > 0 ? { kind: "renamed", title: renamed.title, previousTitle, backlinks } : null);
           emit();

@@ -21,7 +21,11 @@ function setup(title: string, options: { canRename?: () => boolean; backlinks?: 
   const ctx: HeadingCheck = {
     text: () => editor.text,
     canRename: options.canRename ?? (() => true),
-    rename: (request) => request("session-1"),
+    rename: async (request) => {
+      const result = await request("session-1");
+      renamer.noteRenamed(result, editor.text);
+      return result;
+    },
     backlinks: () => options.backlinks ?? 0,
     refresh,
   };
@@ -173,6 +177,30 @@ describe("createHeadingRenamer", () => {
       expect(t.shown("C")).toBe("D");
       t.renamer.setPageTitle("D");
       expect(t.renamer.getSnapshot().overlay).toBeNull();
+    });
+
+    it("predicts nothing after renaming back to the page's title, so a later B is from outside", async () => {
+      const t = setup("A");
+      t.editor.text = note("B");
+      t.renamer.check(t.ctx);
+      await settle();
+      t.editor.text = note("A");
+      t.renamer.check(t.ctx);
+      await settle();
+      expect(t.renamer.getSnapshot().overlay).toBeNull();
+
+      t.renamer.setPageTitle("B");
+      expect(t.shown("B")).toBe("B");
+      expect(t.renamer.title).toBe("B");
+      t.renamer.reset(note("B"));
+      t.editor.text = note("C");
+      t.renamer.check(t.ctx);
+      await settle();
+      expect(t.renameNote.mock.calls.map(([, title, , expected]) => [title, expected])).toEqual([
+        ["B", "A"],
+        ["A", "B"],
+        ["C", "B"],
+      ]);
     });
   });
 
