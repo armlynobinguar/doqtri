@@ -8,7 +8,10 @@ import { deleteNote, editableEditor, fakeMindmap, readNote, seedNote, uniqueTitl
  * it, and its next save goes on without a conflict.
  */
 
-const EDITOR = "textarea.w-md-editor-text-input";
+/** What the note's editor shows. The one place that knows which editor it is. */
+async function expectEditor(page: Page, text: string) {
+  await expect(page.locator("textarea.w-md-editor-text-input")).toHaveValue(text);
+}
 
 /** The labels directly under the side panel mindmap's root. */
 function topLevelLabels(page: Page) {
@@ -66,7 +69,7 @@ test.describe("rename keeps the title heading in step (DOQ-35)", () => {
 
     // The editor shows the new heading at once, the rest untouched.
     const rewritten = created.markdown.replace(`# ${created.title}\n`, `# ${renamed}\n`);
-    await expect(page.locator(EDITOR)).toHaveValue(rewritten);
+    await expectEditor(page, rewritten);
     await expect.poll(async () => readNote(id)).toEqual({ title: renamed, markdown: rewritten });
 
     // Sections sit directly around the renamed root: no lone old or new title node.
@@ -111,7 +114,7 @@ test.describe("rename keeps the title heading in step (DOQ-35)", () => {
     await rename(page, title, renamed);
 
     const expected = `# ${renamed}${body} Typed before the rename.`;
-    await expect(page.locator(EDITOR)).toHaveValue(expected);
+    await expectEditor(page, expected);
     await expect.poll(async () => readNote(id)).toEqual({ title: renamed, markdown: expected });
     await expect(page.getByTestId("edit-conflict-banner")).toHaveCount(0);
 
@@ -151,6 +154,6 @@ test.describe("rename keeps the title heading in step (DOQ-35)", () => {
     const renamed = uniqueTitle("Own Renamed");
     await rename(page, title, renamed);
     await expect.poll(async () => readNote(id)).toEqual({ title: renamed, markdown });
-    await expect(page.locator(EDITOR)).toHaveValue(markdown);
+    await expectEditor(page, markdown);
   });
 });
