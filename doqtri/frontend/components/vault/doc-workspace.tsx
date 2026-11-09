@@ -297,7 +297,7 @@ export function DocWorkspace({
           saved: saves.saved,
           current: markdownRef.current,
         });
-        noteRenamed(renamed.title, adopted?.text);
+        noteRenamed(renamed, adopted?.text);
         if (!adopted) {
           // A rewrite this copy was already behind: load what the note is
           // now, unless it holds unsaved text or a conflict the user must see.
@@ -335,7 +335,7 @@ export function DocWorkspace({
       canRename: () => !readOnlyRef.current,
       rename: renameHere,
       backlinks: () => buildBacklinks(docs, active.id).length,
-      onRenamed: () => router.refresh(),
+      refresh: () => router.refresh(),
     });
   }, [checkHeadingNow, renameHere, docs, active.id, router]);
   const checkHeadingRef = useRef(checkHeading);
