@@ -22,9 +22,12 @@ import {
   toggleOrderedList,
   toggleStrikethrough,
   toggleTaskList,
+  markdownTree,
   type FormatCommand,
 } from "@/lib/live-preview/commands";
-import { previewParser } from "@/lib/live-preview/syntax";
+import { PREVIEW_MARKDOWN_EXTENSIONS, previewParser } from "@/lib/live-preview/syntax";
+import { commonmarkLanguage, markdown } from "@codemirror/lang-markdown";
+import { language } from "@codemirror/language";
 import { parseTable } from "@/lib/live-preview/table";
 
 /** `|` marks the caret, `[` `]` a selection. */
@@ -275,7 +278,8 @@ describe("blocks", () => {
 
   it("inserts a table that parses as one, the first header selected", () => {
     const { text, selected } = runOn(insertTable(3, 2), "Intro", 5);
-    expect(text).toBe(`Intro\n\n${tableMarkdown(3, 2)}\n`);
+    // A blank line after it, so the next line typed does not join the table.
+    expect(text).toBe(`Intro\n\n${tableMarkdown(3, 2)}\n\n`);
     expect(selected).toBe("Column 1");
     let tables = 0;
     previewParser.parse(text).iterate({ enter: (node) => void (node.name === "Table" && tables++) });
@@ -330,5 +334,160 @@ describe("formatState", () => {
     expect(at("Ti|tle\n---").style).toBe("h2");
     expect(at("```\nco|de\n```")).toMatchObject({ style: "codeblock", codeBlock: true });
     expect(at("> ## Ti|tle").style).toBe("h2");
+  });
+});
+
+/*
+ * The review's findings (DOQ-34 round 2), each pinned: partly formatted
+ * selections, code and addresses, list nesting and conversions, code blocks,
+ * closing hashes, link text, block placement, CRLF and the editor's own tree.
+ */
+describe("partly formatted selections merge into one", () => {
+  it("drops the markers inside and wraps the whole stretch once", () => {
+    expect(runOn(toggleBold, "**bo**ld", 0, 8)).toMatchObject({ text: "**bold**", selected: "bold" });
+    expect(runOn(toggleItalic, "*ab*cd", 1, 6).text).toBe("*abcd*");
+    expect(runOn(toggleStrikethrough, "a ~~b~~", 0, 7).text).toBe("~~a b~~");
+    expect(runOn(toggleCode, "a `b` c", 0, 7).text).toBe("`a b c`");
+    expect(runOn(toggleBold, "one **two** three", 0, 17).text).toBe("**one two three**");
+  });
+
+  it("takes formatting off when the selection holds it with its markers", () => {
+    expect(runOn(toggleBold, "***word***", 0, 10).text).toBe("*word*");
+  });
+
+  it("fences code that holds backticks with a longer run", () => {
+    expect(runOn(toggleCode, "a`b", 0, 3).text).toBe("``a`b``");
+    expect(runOn(toggleCode, "`x", 0, 2).text).toBe("`` `x ``");
+  });
+});
+
+describe("code and web addresses stay literal", () => {
+  it("adds no markers at a caret in a URL, inline code or a fence", () => {
+    expect(runOn(toggleBold, "[t](https://example.com)", 10).text).toBe("[t](https://example.com)");
+    expect(runOn(toggleBold, "see https://example.com/x now", 12).text).toBe("see https://example.com/x now");
+    expect(runOn(toggleBold, "`co*de`", 3).text).toBe("`co*de`");
+    expect(runOn(toggleItalic, "`code`", 3).text).toBe("`code`");
+    expect(runOn(toggleBold, "```\ncode\n```", 6).text).toBe("```\ncode\n```");
+  });
+
+  it("adds none to a selection in code either", () => {
+    expect(runOn(toggleBold, "```\nx = 1\n```", 4, 9).text).toBe("```\nx = 1\n```");
+    expect(runOn(toggleStrikethrough, "a `b c` d", 3, 6).text).toBe("a `b c` d");
+  });
+
+  it("still takes inline code off from inside it", () => {
+    expect(runOn(toggleCode, "`code`", 3).text).toBe("code");
+  });
+
+  it("puts no link or wikilink in code", () => {
+    expect(runOn(insertLink, "`some code`", 3).text).toBe("`some code`");
+    expect(runOn(insertWikilink, "```\nnote\n```", 6).text).toBe("```\nnote\n```");
+  });
+});
+
+describe("list nesting", () => {
+  it("indents only under a sibling, to its text's column, however often", () => {
+    expect(run(indentList, "- fir|st")).toBe("- fir|st");
+    let state = EditorState.create({ doc: "- a\n- b", selection: EditorSelection.cursor(7) });
+    for (let i = 0; i < 3; i++) state = state.update(indentList(state)).state;
+    expect(state.doc.toString()).toBe("- a\n  - b");
+    state = EditorState.create({ doc: "1. a\n2. b", selection: EditorSelection.cursor(9) });
+    for (let i = 0; i < 3; i++) state = state.update(indentList(state)).state;
+    expect(state.doc.toString()).toBe("1. a\n   1. b");
+    // Never into code or into the paragraph above.
+    const tree = previewParser.parse(state.doc.toString());
+    let code = 0;
+    tree.iterate({ enter: (node) => void (node.name === "CodeBlock" && code++) });
+    expect(code).toBe(0);
+  });
+
+  it("moves an item's nested lines with it, in and out", () => {
+    expect(runOn(indentList, "- a\n- b\n  - c", 6).text).toBe("- a\n  - b\n    - c");
+    expect(runOn(outdentList, "- a\n  - b\n    - c", 8).text).toBe("- a\n- b\n  - c");
+  });
+
+  it("keeps nesting when bullets become numbers and back", () => {
+    expect(runOn(toggleOrderedList, "- a\n  - b\n- c", 0, 13).text).toBe("1. a\n   1. b\n2. c");
+    expect(runOn(toggleBulletList, "1. a\n   1. b\n2. c", 0, 16).text).toBe("- a\n  - b\n- c");
+    expect(runOn(toggleOrderedList, "- a\n  - b", 0, 9).text).toBe("1. a\n   1. b");
+    // Only the parent changes: its child moves to stay under it.
+    expect(runOn(toggleOrderedList, "- a\n  - b", 1).text).toBe("1. a\n   - b");
+    expect(runOn(toggleBulletList, "9. x\n10. y\n    - z", 10).text).toBe("9. x\n- y\n  - z");
+    // The tree agrees: still nested.
+    const tree = previewParser.parse("1. a\n   1. b\n2. c");
+    let lists = 0;
+    tree.iterate({ enter: (node) => void (node.name === "OrderedList" && lists++) });
+    expect(lists).toBe(2);
+  });
+
+  it("leaves lines in code alone", () => {
+    expect(runOn(toggleBulletList, "```\na\n```", 4).text).toBe("```\na\n```");
+    expect(runOn(toggleOrderedList, "    code", 6).text).toBe("    code");
+    expect(runOn(indentList, "- a\n```\n- b\n```", 11).text).toBe("- a\n```\n- b\n```");
+  });
+});
+
+describe("code blocks and headings", () => {
+  it("joins a fence the selection only partly covers, leaving none open", () => {
+    const { text } = runOn(setParagraphStyle("codeblock"), "```\na\n```\nb", 4, 11);
+    expect(text).toBe("```\na\nb\n```");
+    let fenced = 0;
+    previewParser.parse(text).iterate({ enter: (node) => void (node.name === "FencedCode" && fenced++) });
+    expect(fenced).toBe(1);
+  });
+
+  it("turns indented code back into text, by the button or Normal", () => {
+    expect(formatState(runOn(() => ({}), "    code", 6).state)).toMatchObject({ codeBlock: true, style: "codeblock" });
+    expect(runOn(toggleCodeBlock, "    code\n    more", 6).text).toBe("code\nmore");
+    expect(runOn(setParagraphStyle("normal"), "    code", 6).text).toBe("code");
+  });
+
+  it("takes closing hashes off with the opening ones", () => {
+    expect(run(setParagraphStyle("normal"), "## Ti|tle ##")).toBe("Ti|tle");
+    expect(run(setParagraphStyle("quote"), "# Ti|tle #")).toBe("> Ti|tle");
+  });
+});
+
+describe("links and blocks", () => {
+  it("escapes brackets in a link's text", () => {
+    expect(runOn(insertLink, "a [b] c", 0, 7)).toMatchObject({ text: "[a \\[b\\] c](url)", selected: "url" });
+  });
+
+  it("puts a block after the last line a triple-click selected, not the next one", () => {
+    expect(runOn(insertHorizontalRule, "a\nb", 0, 2).text).toBe("a\n\n---\n\nb");
+    expect(runOn(insertTable(1, 1), "a\nb", 0, 2).text).toBe("a\n\n| Column 1 |\n| -------- |\n\nb");
+  });
+
+  it("ends a table at the end of the note with a blank line, so typing does not join it", () => {
+    const { state } = runOn(insertTable(2, 2), "Intro", 5);
+    const end = state.update({ changes: { from: state.doc.length, insert: "next" } }).state.doc.toString();
+    let rows = 0;
+    previewParser.parse(end).iterate({ enter: (node) => void (node.name === "TableRow" && rows++) });
+    expect(rows).toBe(1);
+  });
+});
+
+describe("documents from elsewhere", () => {
+  it("works on CRLF text, which the editor holds with plain line breaks", () => {
+    expect(runOn(toggleBulletList, "a\r\nb", 0, 3).text).toBe("- a\n- b");
+    expect(runOn(setParagraphStyle("h1"), "x\r\ny", 3).text).toBe("x\n# y");
+  });
+
+  it("reads the editor's own parse tree when the state has the language", () => {
+    const withLanguage = (doc: string, anchor: number, head = anchor) =>
+      EditorState.create({
+        doc,
+        selection: EditorSelection.single(anchor, head),
+        extensions: markdown({ base: commonmarkLanguage, extensions: PREVIEW_MARKDOWN_EXTENSIONS }),
+      });
+    const state = withLanguage("a **bold** b\n\n- item", 5);
+    expect(state.facet(language)).not.toBeNull();
+    expect(markdownTree(state).length).toBe(state.doc.length);
+    expect(formatState(state)).toMatchObject({ bold: true });
+    expect(state.update(toggleBold(state)).state.doc.toString()).toBe("a bold b\n\n- item");
+    const partial = withLanguage("**bo**ld", 0, 8);
+    expect(partial.update(toggleBold(partial)).state.doc.toString()).toBe("**bold**");
+    const list = withLanguage("- a\n  - b\n- c", 0, 13);
+    expect(list.update(toggleOrderedList(list)).state.doc.toString()).toBe("1. a\n   1. b\n2. c");
   });
 });

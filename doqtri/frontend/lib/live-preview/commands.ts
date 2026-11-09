@@ -110,13 +110,16 @@ const listEnd = (start: LineStart) =>
 
 const blank = (line: Line) => line.text.trim().length === 0;
 
+/** Where a range ends, for line purposes: one ending at the very start of a line does not take that line. */
+function lineEnd(state: EditorState, range: { from: number; to: number }): number {
+  return range.to > range.from && state.doc.lineAt(range.to).from === range.to ? range.to - 1 : range.to;
+}
+
 /** The lines the selection covers, each once, in order. */
 function selectedLines(state: EditorState): Line[] {
   const byNumber = new Map<number, Line>();
   for (const range of state.selection.ranges) {
-    // A selection that ends at the very start of a line does not take that line.
-    const end = range.to > range.from && state.doc.lineAt(range.to).from === range.to ? range.to - 1 : range.to;
-    const last = state.doc.lineAt(end).number;
+    const last = state.doc.lineAt(lineEnd(state, range)).number;
     for (let n = state.doc.lineAt(range.from).number; n <= last; n++) byNumber.set(n, state.doc.line(n));
   }
   return [...byNumber.values()].sort((a, b) => a.number - b.number);
@@ -206,6 +209,76 @@ function unwrap(node: SyntaxNode, mark: string): Edit[] {
 }
 
 /**
+ * Where formatting markers would be literal text, not formatting: code
+ * (fenced, indented or inline) and web addresses. Strictly inside, so a
+ * caret right after a code span is outside it.
+ */
+const LITERAL = new Set(["FencedCode", "CodeBlock", "InlineCode", "URL", "Autolink"]);
+
+const CODE = new Set(["FencedCode", "CodeBlock", "InlineCode"]);
+
+function inside(tree: Tree, pos: number, names: Set<string>): boolean {
+  for (const side of [-1, 1] as const) {
+    for (let node: SyntaxNode | null = tree.resolveInner(pos, side); node; node = node.parent) {
+      if (names.has(node.name) && node.from < pos && pos < node.to) return true;
+    }
+  }
+  return false;
+}
+
+/** Strictly inside code of any kind. */
+export function inCode(tree: Tree, pos: number): boolean {
+  return inside(tree, pos, CODE);
+}
+
+export function inLiteral(tree: Tree, pos: number): boolean {
+  return inside(tree, pos, LITERAL);
+}
+
+/**
+ * The `name` node a selection part counts as being in: one holding all of
+ * it, or one it covers with nothing beside it but marker characters (the
+ * selection took in `**` around `***bold italic***`, say).
+ */
+function formatNode(state: EditorState, tree: Tree, part: { from: number; to: number }, name: string): SyntaxNode | null {
+  const holding = enclosing(tree, part.from, part.to, name);
+  if (holding) return holding;
+  let inner: SyntaxNode | null = null;
+  tree.iterate({
+    from: part.from,
+    to: part.to,
+    enter(ref) {
+      if (!inner && ref.name === name && ref.from >= part.from && ref.to <= part.to) inner = ref.node;
+    },
+  });
+  const found = inner as SyntaxNode | null;
+  if (!found) return null;
+  const beside = state.sliceDoc(part.from, found.from) + state.sliceDoc(found.to, part.to);
+  return /^[*_~`]*$/.test(beside) ? found : null;
+}
+
+/** Every `name` node that overlaps the part, inside it or reaching out of it. */
+function overlapping(tree: Tree, part: { from: number; to: number }, name: string): SyntaxNode[] {
+  const nodes: SyntaxNode[] = [];
+  tree.iterate({
+    from: part.from,
+    to: part.to,
+    enter(ref) {
+      if (ref.name === name && ref.from < part.to && ref.to > part.from) nodes.push(ref.node);
+    },
+  });
+  return nodes;
+}
+
+/** Backticks that can hold `text`: one more than its longest run, padded when it starts or ends with one. */
+function codeFence(text: string): { open: string; close: string } {
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  const ticks = "`".repeat(longest + 1);
+  const pad = text.startsWith("`") || text.endsWith("`") ? " " : "";
+  return { open: ticks + pad, close: pad + ticks };
+}
+
+/**
  * Bold, italic, strikethrough or inline code, on or off, for every selection
  * range:
  *
@@ -214,7 +287,11 @@ function unwrap(node: SyntaxNode, mark: string): Edit[] {
  * - a bare caret anywhere else opens an empty pair to type into, and a
  *   second press with nothing typed takes the pair back out;
  * - a selection wraps each line's part of it, without its block syntax and
- *   outer spaces.
+ *   outer spaces; where it overlaps that formatting already, the markers
+ *   inside go and the whole stretch is wrapped once, as Google Docs does.
+ *
+ * In code and web addresses, where markers would be literal characters,
+ * nothing changes (except inline code coming off).
  *
  * Bold and italic share `*`. Where the parse tree cannot tell (a pair still
  * being typed), the run of asterisks does: one (or three) for italic, two
@@ -243,6 +320,7 @@ export function toggleInline(format: InlineFormat): FormatCommand {
         if (range.empty) {
           const node = enclosing(tree, from, from, nodeName);
           if (node) return apply(unwrap(node, mark));
+          if (inLiteral(tree, from)) return { range };
           const word = wordAround(state, from);
           if (word) return apply([{ from: word.from, insert: marker }, { from: word.to, insert: marker }], from + size);
           if (carries(runAt(state, from, ch, -1)) && carries(runAt(state, from, ch, 1))) {
@@ -251,14 +329,16 @@ export function toggleInline(format: InlineFormat): FormatCommand {
           return apply([{ from, insert: marker + marker }], from + size);
         }
 
-        const parts = segments(state, from, to);
+        const parts = segments(state, from, to)
+          .map((part) => ({ ...part, node: formatNode(state, tree, part, nodeName) }))
+          // Formatting already there may come off; none goes into code or an address.
+          .filter((part) => part.node || (!inLiteral(tree, part.from) && !inLiteral(tree, part.to)));
         if (parts.length === 0) return { range };
-        const nodes = parts.map((part) => enclosing(tree, part.from, part.to, nodeName));
 
-        if (nodes.every((node) => node !== null)) {
+        if (parts.every((part) => part.node)) {
           const seen = new Set<number>();
           return apply(
-            nodes.flatMap((node) => {
+            parts.flatMap(({ node }) => {
               if (seen.has(node!.from)) return [];
               seen.add(node!.from);
               return unwrap(node!, mark);
@@ -266,9 +346,12 @@ export function toggleInline(format: InlineFormat): FormatCommand {
           );
         }
 
+        const plain = parts.filter((part) => !part.node);
+        const merged = plain.map((part) => ({ part, nodes: overlapping(tree, part, nodeName) }));
+
         // What the tree does not call formatted, the marker runs still may:
         // the selection includes the markers, or they are mid-typing.
-        if (parts.length === 1) {
+        if (parts.length === 1 && merged[0].nodes.length === 0) {
           const part = parts[0];
           const span = part.to - part.from;
           if (
@@ -289,20 +372,30 @@ export function toggleInline(format: InlineFormat): FormatCommand {
           }
         }
 
-        const changes = state.changes(
-          parts.flatMap((part, i) =>
-            nodes[i]
-              ? []
-              : [
-                  { from: part.from, insert: marker },
-                  { from: part.to, insert: marker },
-                ],
-          ),
-        );
+        // First the markers inside go, then each stretch is wrapped once.
+        const spans = merged.map(({ part, nodes }) => ({
+          from: Math.min(part.from, ...nodes.map((n) => n.from)),
+          to: Math.max(part.to, ...nodes.map((n) => n.to)),
+        }));
+        const strip = state.changes(dedupe(merged.flatMap(({ nodes }) => nodes.flatMap((n) => unwrap(n, mark)))));
+        const stripped = strip.apply(state.doc);
+        const wraps = spans.flatMap((span) => {
+          const start = strip.mapPos(span.from, -1);
+          const end = strip.mapPos(span.to, 1);
+          const fence = format === "code" ? codeFence(stripped.sliceString(start, end)) : { open: marker, close: marker };
+          return [
+            { from: start, insert: fence.open },
+            { from: end, insert: fence.close },
+          ];
+        });
+        const wrap = ChangeSet.of(wraps, strip.newLength);
         // The selection keeps to the text, now inside its markers.
-        const start = changes.mapPos(parts[0].from, 1);
-        const end = changes.mapPos(parts[parts.length - 1].to, -1);
-        return { changes, range: range.anchor <= range.head ? EditorSelection.range(start, end) : EditorSelection.range(end, start) };
+        const first = wrap.mapPos(strip.mapPos(spans[0].from, -1), 1);
+        const last = wrap.mapPos(strip.mapPos(spans[spans.length - 1].to, 1), -1);
+        return {
+          changes: strip.compose(wrap),
+          range: range.anchor <= range.head ? EditorSelection.range(first, last) : EditorSelection.range(last, first),
+        };
       }),
     };
   };
@@ -342,6 +435,8 @@ export const insertLink: FormatCommand = (state) => {
         : enclosing(tree, range.from, range.to, "Link");
       const url = link?.getChild("URL");
       if (url) return { range: EditorSelection.range(url.from, url.to) };
+      // Inside code a link would be literal text.
+      if (inCode(tree, range.from) || inCode(tree, range.to)) return { range };
 
       let { from, to } = range;
       if (range.empty) {
@@ -355,9 +450,11 @@ export const insertLink: FormatCommand = (state) => {
       if (URL_LIKE.test(text)) {
         return { changes: { from, to, insert: `[](${text})` }, range: EditorSelection.cursor(from + 1) };
       }
-      const urlAt = from + text.length + 3;
+      // Brackets in the text would end it early.
+      const label = text.replace(/(?<!\\)[[\]]/g, "\\$&");
+      const urlAt = from + label.length + 3;
       return {
-        changes: { from, to, insert: `[${text}](url)` },
+        changes: { from, to, insert: `[${label}](url)` },
         range: EditorSelection.range(urlAt, urlAt + 3),
       };
     }),
@@ -368,23 +465,27 @@ export const insertLink: FormatCommand = (state) => {
  * A `[[wikilink]]` around the selection (or the word at a bare caret), with
  * the caret before the closing brackets, where the note list opens.
  */
-export const insertWikilink: FormatCommand = (state) => ({
-  ...FORMAT,
-  ...state.changeByRange((range) => {
-    let { from, to } = range;
-    if (range.empty) {
-      const word = wordAround(state, from);
-      if (word) ({ from, to } = word);
-    }
-    // A link cannot span lines: only the first line's part goes in.
-    to = Math.min(to, state.doc.lineAt(from).to);
-    const text = state.sliceDoc(from, to).replace(/[[\]|]/g, "").trim();
-    return {
-      changes: { from, to, insert: `[[${text}]]` },
-      range: EditorSelection.cursor(from + 2 + text.length),
-    };
-  }),
-});
+export const insertWikilink: FormatCommand = (state) => {
+  const tree = markdownTree(state);
+  return {
+    ...FORMAT,
+    ...state.changeByRange((range) => {
+      if (inCode(tree, range.from) || inCode(tree, range.to)) return { range };
+      let { from, to } = range;
+      if (range.empty) {
+        const word = wordAround(state, from);
+        if (word) ({ from, to } = word);
+      }
+      // A link cannot span lines: only the first line's part goes in.
+      to = Math.min(to, state.doc.lineAt(from).to);
+      const text = state.sliceDoc(from, to).replace(/[[\]|]/g, "").trim();
+      return {
+        changes: { from, to, insert: `[[${text}]]` },
+        range: EditorSelection.cursor(from + 2 + text.length),
+      };
+    }),
+  };
+};
 
 /** Alt text that cannot close the brackets around it. */
 function escapeAlt(alt: string) {
@@ -415,13 +516,18 @@ export function insertImage(url: string, alt: string): FormatCommand {
  * so it cannot run into the paragraphs around it — `---` right under a line
  * of text would turn that line into a heading. Returns where `text` lands.
  */
-function insertBlock(state: EditorState, text: string): { edit: Edit; start: number; end: number } {
-  const line = state.doc.lineAt(state.selection.main.to);
+function insertBlock(
+  state: EditorState,
+  text: string,
+  blankAfter = false,
+): { edit: Edit; start: number; end: number } {
+  const line = state.doc.lineAt(lineEnd(state, state.selection.main));
   const prev = line.number > 1 ? state.doc.line(line.number - 1) : null;
   const next = line.number < state.doc.lines ? state.doc.line(line.number + 1) : null;
   const from = blank(line) ? line.from : line.to;
   const lead = blank(line) ? (prev && !blank(prev) ? "\n" : "") : "\n\n";
-  const trail = next && blank(next) ? "" : "\n";
+  // A table runs on into any line that follows it: it needs a blank one after.
+  const trail = next ? (blank(next) ? "" : "\n") : blankAfter ? "\n\n" : "\n";
   const start = from + lead.length;
   return { edit: { from, to: line.to, insert: lead + text + trail }, start, end: start + text.length };
 }
@@ -451,7 +557,7 @@ export function tableMarkdown(columns: number, rows: number): string {
  */
 export function insertTable(columns: number, rows: number): FormatCommand {
   return (state) => {
-    const block = insertBlock(state, tableMarkdown(columns, rows));
+    const block = insertBlock(state, tableMarkdown(columns, rows), true);
     const first = block.start + 2;
     return { ...FORMAT, changes: block.edit, selection: EditorSelection.range(first, first + "Column 1".length) };
   };
@@ -505,15 +611,49 @@ function withLinesOf(state: EditorState, lines: Line[], nodes: SyntaxNode[]): Li
   return [...byNumber.values()].sort((a, b) => a.number - b.number);
 }
 
-/** Deletions that turn a fenced code block back into plain lines. */
+/** The first and last line numbers of a node. */
+function linesOf(state: EditorState, node: SyntaxNode): { first: number; last: number } {
+  return { first: state.doc.lineAt(node.from).number, last: state.doc.lineAt(node.to).number };
+}
+
+function covers(state: EditorState, node: SyntaxNode, line: Line): boolean {
+  const { first, last } = linesOf(state, node);
+  return first <= line.number && line.number <= last;
+}
+
+/** The opening and closing fence lines of fenced code blocks. */
+function fenceLines(state: EditorState, nodes: SyntaxNode[]): Set<number> {
+  const lines = new Set<number>();
+  for (const node of nodes) {
+    if (node.name !== "FencedCode") continue;
+    const { first, last } = linesOf(state, node);
+    lines.add(first);
+    if (children(node, "CodeMark").length > 1 && last > first) lines.add(last);
+  }
+  return lines;
+}
+
+/**
+ * Edits that turn a code block back into plain lines: a fenced one loses its
+ * fence lines, an indented one up to four spaces (or a tab) on each line.
+ */
 function unfence(state: EditorState, node: SyntaxNode): Edit[] {
-  if (node.name !== "FencedCode") return [];
-  const open = state.doc.lineAt(node.from);
-  const close = state.doc.lineAt(node.to);
+  const { first, last } = linesOf(state, node);
+  if (node.name === "CodeBlock") {
+    const edits: Edit[] = [];
+    for (let n = first; n <= last; n++) {
+      const line = state.doc.line(n);
+      const m = /^(?: {1,4}|\t)/.exec(line.text);
+      if (m) edits.push({ from: line.from, to: line.from + m[0].length });
+    }
+    return edits;
+  }
+  const open = state.doc.line(first);
+  const close = state.doc.line(last);
   // The opening fence line with its line break…
   const edits: Edit[] = [{ from: open.from, to: Math.min(open.to + 1, state.doc.length) }];
   // …and the closing one with the break before it, when the block is closed.
-  if (children(node, "CodeMark").length > 1 && close.number > open.number) edits.push({ from: close.from - 1, to: close.to });
+  if (children(node, "CodeMark").length > 1 && last > first) edits.push({ from: close.from - 1, to: close.to });
   return edits;
 }
 
@@ -539,6 +679,17 @@ function unsetext(state: EditorState, tree: Tree, lines: Line[]): Edit[] {
   });
 }
 
+/** A heading's hashes, both the opening ones and any closing `##`. */
+function unheading(line: Line): Edit[] {
+  const start = lineStart(line.text);
+  if (!start.hashes) return [];
+  const at = listEnd(start);
+  const edits: Edit[] = [{ from: line.from + at, to: line.from + at + start.hashes.length + start.hashSpace.length }];
+  const closing = /[ \t]+#+[ \t]*$/.exec(line.text);
+  if (closing && closing.index >= at + start.hashes.length) edits.push({ from: line.from + closing.index, to: line.to });
+  return edits;
+}
+
 /**
  * Sets the paragraph style of every selected line, as the style menu in
  * Docs does: Normal text, Heading 1–6, Quote or Code block, each replacing
@@ -549,22 +700,21 @@ export function setParagraphStyle(style: ParagraphStyle): FormatCommand {
   return (state) => {
     const tree = markdownTree(state);
     const all = selectedLines(state);
-    const fenced = blocksOn(tree, all, CODE_BLOCKS);
+    const code = blocksOn(tree, all, CODE_BLOCKS);
+    const inCodeBlock = (line: Line) => code.some((node) => covers(state, node, line));
     const edits: Edit[] = [];
 
     if (style === "codeblock") {
-      const inside = (line: Line) => fenced.some((node) => node.from <= line.from && line.to <= node.to);
-      if (all.every(inside)) return {};
-      edits.push(...unquote(state, tree, all, false), ...unsetext(state, tree, all));
-      for (const line of all) {
-        const start = lineStart(line.text);
-        const at = line.from + listEnd(start);
-        if (start.hashes) edits.push({ from: at, to: at + start.hashes.length + start.hashSpace.length });
-      }
+      if (code.length === 1 && all.every(inCodeBlock)) return {};
+      // Every code block the selection touches joins the new one, so no fence is left open.
+      const region = withLinesOf(state, all, code);
+      const text = region.filter((line) => !code.some((node) => covers(state, node, line)));
+      for (const node of code) edits.push(...unfence(state, node));
+      edits.push(...unquote(state, tree, text, false), ...unsetext(state, tree, text), ...text.flatMap(unheading));
       // In steps, so the selection stays on the text between the fences.
       const strip = state.changes(dedupe(edits));
-      const open = ChangeSet.of([{ from: strip.mapPos(all[0].from, -1), insert: "```\n" }], strip.newLength);
-      const end = open.mapPos(strip.mapPos(all[all.length - 1].to, 1), 1);
+      const open = ChangeSet.of([{ from: strip.mapPos(region[0].from, -1), insert: "```\n" }], strip.newLength);
+      const end = open.mapPos(strip.mapPos(region[region.length - 1].to, 1), 1);
       const close = ChangeSet.of([{ from: end, insert: "\n```" }], open.newLength);
       return {
         ...FORMAT,
@@ -573,8 +723,8 @@ export function setParagraphStyle(style: ParagraphStyle): FormatCommand {
       };
     }
 
-    const fenceLines = new Set(fenced.flatMap((node) => [state.doc.lineAt(node.from).number, state.doc.lineAt(node.to).number]));
-    for (const node of fenced) edits.push(...unfence(state, node));
+    const fences = fenceLines(state, code);
+    for (const node of code) edits.push(...unfence(state, node));
     if (style === "normal") edits.push(...unquote(state, tree, all, true));
     else if (style !== "quote") edits.push(...unquote(state, tree, all, false));
     edits.push(...unsetext(state, tree, all));
@@ -582,14 +732,14 @@ export function setParagraphStyle(style: ParagraphStyle): FormatCommand {
     const level = Number(/^h([1-6])$/.exec(style)?.[1] ?? 0);
     const lines = style === "quote" ? all : textLines(state);
     for (const line of lines) {
-      if (fenceLines.has(line.number)) continue;
+      if (fences.has(line.number)) continue;
       const start = lineStart(line.text);
-      const at = line.from + listEnd(start);
-      const end = at + start.hashes.length + start.hashSpace.length;
       if (level) {
+        const at = line.from + listEnd(start);
+        const end = at + start.hashes.length + start.hashSpace.length;
         if (start.hashes.length !== level || !start.hashSpace) edits.push({ from: at, to: end, insert: `${"#".repeat(level)} ` });
-      } else if (start.hashes) {
-        edits.push({ from: at, to: end });
+      } else {
+        edits.push(...unheading(line));
       }
       if (style === "quote" && !start.quote) edits.push({ from: line.from, insert: blank(line) ? ">" : "> " });
     }
@@ -611,11 +761,11 @@ export const toggleBlockquote: FormatCommand = (state) => {
   return setParagraphStyle("quote")(state);
 };
 
-/** Code block on (fences around the lines), or off (the fences go). */
+/** Code block on (fences around the lines), or off (the fences, or the indentation, go). */
 export const toggleCodeBlock: FormatCommand = (state) => {
   const tree = markdownTree(state);
-  const fenced = blocksOn(tree, selectedLines(state), CODE_BLOCKS);
-  if (fenced.length > 0) return withEdits(state, fenced.flatMap((node) => unfence(state, node)));
+  const code = blocksOn(tree, selectedLines(state), CODE_BLOCKS);
+  if (code.length > 0) return withEdits(state, code.flatMap((node) => unfence(state, node)));
   return setParagraphStyle("codeblock")(state);
 };
 
@@ -627,6 +777,29 @@ function listKind(start: LineStart): ListKind | null {
   if (!start.marker) return null;
   if (start.task) return "task";
   return isOrdered(start.marker) ? "ordered" : "bullet";
+}
+
+/** How far an item's children are indented past it: its marker and the space after. */
+const nestWidth = (marker: string, space: string) => marker.length + Math.max(1, space.length);
+
+/** A line's indentation after its quote markers. */
+function indentOf(line: Line): { quote: number; indent: number } {
+  const start = lineStart(line.text);
+  const rest = line.text.slice(start.quote.length);
+  return { quote: start.quote.length, indent: /^[ \t]*/.exec(rest)![0].length };
+}
+
+/** The lines nested under `line`: indented past it, up to the first line that is not. */
+function childrenOf(state: EditorState, line: Line): Line[] {
+  const own = indentOf(line).indent;
+  const out: Line[] = [];
+  for (let n = line.number + 1; n <= state.doc.lines; n++) {
+    const next = state.doc.line(n);
+    if (blank(next)) continue;
+    if (indentOf(next).indent <= own) break;
+    out.push(next);
+  }
+  return out;
 }
 
 /**
@@ -653,36 +826,76 @@ function numberAfter(state: EditorState, line: Line, indent: number, fallback: n
   return prev && prev.indent.length === indent && isOrdered(prev.marker) ? parseInt(prev.marker, 10) + 1 : fallback;
 }
 
+/** The selected lines a list command acts on: not blank (in a multi-line selection), not code. */
+function listLines(state: EditorState): Line[] {
+  const tree = markdownTree(state);
+  return textLines(state).filter((line) => blocksOn(tree, [line], CODE_BLOCKS).length === 0);
+}
+
+/**
+ * Applies per-line indentation shifts and marker rewrites as edits: each
+ * line's leading indentation (after any quote) becomes `indent + shift`
+ * spaces, and a rewritten line's list marker becomes `marker`.
+ */
+function relist(state: EditorState, shifts: Map<number, number>, markers: Map<number, string>): Edit[] {
+  const edits: Edit[] = [];
+  for (const n of new Set([...shifts.keys(), ...markers.keys()])) {
+    const line = state.doc.line(n);
+    const start = lineStart(line.text);
+    const { quote, indent } = indentOf(line);
+    const shift = shifts.get(n) ?? 0;
+    const spaces = " ".repeat(Math.max(0, indent + shift));
+    const marker = markers.get(n);
+    if (marker === undefined) {
+      if (shift) edits.push({ from: line.from + quote, to: line.from + quote + indent, insert: spaces });
+    } else {
+      edits.push({ from: line.from + quote, to: line.from + listEnd(start), insert: spaces + marker });
+    }
+  }
+  return edits;
+}
+
 /**
  * Bulleted list, numbered list or checklist on every selected line: off when
  * every line is that kind already, otherwise on, turning other kinds into
- * this one. Blank lines in a multi-line selection are left alone.
+ * this one — and moving the items nested under a changed marker with it, so
+ * `1.` for `-` keeps them nested. Blank lines in a multi-line selection and
+ * code are left alone.
  */
 export function toggleList(kind: ListKind): FormatCommand {
   return (state) => {
-    const lines = textLines(state);
-    const allHave = lines.length > 0 && lines.every((line) => listKind(lineStart(line.text)) === kind);
-    const edits: Edit[] = [];
+    const lines = listLines(state);
+    if (lines.length === 0) return {};
+    const allHave = lines.every((line) => listKind(lineStart(line.text)) === kind);
+    if (allHave) {
+      // Off: the marker, and the indentation that nested it.
+      return withEdits(
+        state,
+        lines.map((line) => {
+          const start = lineStart(line.text);
+          return { from: line.from + start.quote.length, to: line.from + listEnd(start) };
+        }),
+      );
+    }
+    const shifts = new Map<number, number>();
+    const markers = new Map<number, string>();
     const counters = new Map<number, number>();
     for (const line of lines) {
       const start = lineStart(line.text);
-      const end = line.from + listEnd(start);
-      if (allHave) {
-        // Off: the marker, and the indentation that nested it.
-        edits.push({ from: line.from + start.quote.length, to: end });
-        continue;
-      }
       if (listKind(start) === kind) continue;
       let marker = kind === "task" ? "- [ ] " : "- ";
+      const indent = start.indent.length + (shifts.get(line.number) ?? 0);
       if (kind === "ordered") {
-        const indent = start.indent.length;
-        const n = counters.get(indent) ?? numberAfter(state, line, indent, 1);
+        const n = counters.get(indent) ?? numberAfter(state, line, start.indent.length, 1);
         counters.set(indent, n + 1);
         marker = `${n}. `;
       }
-      edits.push({ from: line.from + listAt(start), to: end, insert: marker });
+      markers.set(line.number, marker);
+      if (!start.marker) continue;
+      const delta = nestWidth(marker.trimEnd().split(" ")[0], " ") - nestWidth(start.marker, start.markerSpace);
+      if (delta) for (const child of childrenOf(state, line)) shifts.set(child.number, (shifts.get(child.number) ?? 0) + delta);
     }
-    return withEdits(state, edits);
+    return withEdits(state, relist(state, shifts, markers));
   };
 }
 
@@ -692,43 +905,44 @@ export const toggleTaskList = toggleList("task");
 
 /**
  * Nests the selected list items one level deeper, or brings them one level
- * out. A level is what puts an item under the one above it: that sibling's
- * marker and space. Numbered items renumber against their new level. Lines
- * that are not list items stay put — markdown has no indented paragraphs
- * (four spaces would make code).
+ * out, with everything nested under them. In is only ever under the item
+ * above at the same level, to its text's column — so it can never go so
+ * deep that it turns into code or into that item's paragraph; out is to
+ * the parent's level. Numbered items renumber against their new level.
+ * Lines that are not list items stay put — markdown has no indented
+ * paragraphs.
  */
 function shiftList(direction: 1 | -1): FormatCommand {
   return (state) => {
-    const edits: Edit[] = [];
+    const shifts = new Map<number, number>();
+    const markers = new Map<number, string>();
     const counters = new Map<number, number>();
-    for (const line of textLines(state)) {
+    for (const line of listLines(state)) {
+      // Moved already, nested under an item moved before it.
+      if (shifts.has(line.number)) continue;
       const start = lineStart(line.text);
       if (!start.marker) continue;
       const indent = start.indent.length;
       let target: number;
       if (direction === 1) {
-        const above = itemAbove(state, line, (i) => i <= indent);
-        const sibling = above && above.indent.length === indent ? above : start;
-        target = indent + sibling.marker.length + Math.max(1, sibling.markerSpace.length);
+        const sibling = itemAbove(state, line, (i) => i <= indent);
+        if (!sibling || sibling.indent.length !== indent) continue;
+        target = indent + nestWidth(sibling.marker, sibling.markerSpace);
       } else {
         if (indent === 0) continue;
         target = itemAbove(state, line, (i) => i < indent)?.indent.length ?? 0;
       }
-      const at = line.from + start.quote.length;
-      if (!isOrdered(start.marker)) {
-        edits.push({ from: at, to: at + indent, insert: " ".repeat(target) });
-        continue;
+      const delta = target - indent;
+      shifts.set(line.number, delta);
+      for (const child of childrenOf(state, line)) shifts.set(child.number, (shifts.get(child.number) ?? 0) + delta);
+      if (isOrdered(start.marker)) {
+        const fallback = direction === 1 ? 1 : parseInt(start.marker, 10);
+        const n = counters.get(target) ?? numberAfter(state, line, target, fallback);
+        counters.set(target, n + 1);
+        markers.set(line.number, `${n}${start.marker.slice(-1)}${start.markerSpace}${start.task}${start.taskSpace}`);
       }
-      const fallback = direction === 1 ? 1 : parseInt(start.marker, 10);
-      const n = counters.get(target) ?? numberAfter(state, line, target, fallback);
-      counters.set(target, n + 1);
-      edits.push({
-        from: at,
-        to: at + indent + start.marker.length,
-        insert: `${" ".repeat(target)}${n}${start.marker.slice(-1)}`,
-      });
     }
-    return withEdits(state, edits);
+    return withEdits(state, relist(state, shifts, markers));
   };
 }
 
@@ -828,7 +1042,7 @@ export function formatState(state: EditorState, tree: Tree = markdownTree(state)
     const name = INLINE[format].node;
     if (range.empty) return enclosing(tree, range.from, range.from, name) !== null;
     const parts = segments(state, range.from, range.to);
-    return parts.length > 0 && parts.every((part) => enclosing(tree, part.from, part.to, name) !== null);
+    return parts.length > 0 && parts.every((part) => formatNode(state, tree, part, name) !== null);
   };
 
   const line = state.doc.lineAt(range.head);
