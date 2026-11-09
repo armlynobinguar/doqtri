@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { PencilIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,18 +35,23 @@ export function RenameNoteDialog({
   initialValue,
   onOpenChange,
   onConfirm,
-  finalFocus,
+  focusAfterConfirm,
 }: {
   open: boolean;
   title: string;
   initialValue?: string;
   onOpenChange: (open: boolean) => void;
   onConfirm: (title: string) => void;
-  /** Where focus goes when the dialog closes; see Base UI's Dialog.Popup. */
-  finalFocus?: () => HTMLElement | boolean;
+  /**
+   * Where focus goes when the dialog closes after a confirm; null, or a
+   * cancel, leaves it to Base UI, which returns it to the trigger.
+   */
+  focusAfterConfirm?: () => HTMLElement | null;
 }) {
   const [value, setValue] = useState(initialValue ?? title);
   const [error, setError] = useState<string | null>(null);
+  // Mounted per opening (see above), so this starts false each time.
+  const confirmed = useRef(false);
 
   const trimmed = value.trim();
   const unchanged = trimmed === title;
@@ -64,12 +69,16 @@ export function RenameNoteDialog({
       setError(e instanceof Error ? e.message : "Could not rename note");
       return;
     }
+    confirmed.current = true;
     onOpenChange(false);
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[440px]" finalFocus={finalFocus}>
+      <DialogContent
+        className="sm:max-w-[440px]"
+        finalFocus={() => (confirmed.current ? (focusAfterConfirm?.() ?? true) : true)}
+      >
         <form onSubmit={confirm} className="grid gap-4">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">

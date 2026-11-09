@@ -1,4 +1,4 @@
-import { fetchOrNoResponse, readJson } from "@/lib/no-response";
+import { fetchOrNoResponse, isNoAnswer, NoResponseError, readJson } from "@/lib/no-response";
 
 /** Carries the server's refusal code, so the UI can react to `ANCHORED`. */
 export class DeleteNoteError extends Error {
@@ -35,6 +35,7 @@ export async function deleteNote(id: string): Promise<{
     purgedUploads?: number;
   } | null;
 
+  if (isNoAnswer(res.status, payload)) throw new NoResponseError();
   if (!res.ok) {
     throw new DeleteNoteError(
       payload?.error ?? `Could not delete note (${res.status})`,

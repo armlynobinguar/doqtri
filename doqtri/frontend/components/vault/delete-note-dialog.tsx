@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { Trash2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,23 +28,36 @@ export function DeleteNoteDialog({
   title,
   onOpenChange,
   onConfirm,
-  finalFocus,
+  focusAfterConfirm,
 }: {
   open: boolean;
   title: string;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
-  /** Where focus goes when the dialog closes; see Base UI's Dialog.Popup. */
-  finalFocus?: () => HTMLElement | boolean;
+  /**
+   * Where focus goes when the dialog closes after a confirm; null, or a
+   * cancel, leaves it to Base UI, which returns it to the trigger.
+   */
+  focusAfterConfirm?: () => HTMLElement | null;
 }) {
+  // Whether this opening ended in a delete; reset on each opening.
+  const confirmed = useRef(false);
+  useEffect(() => {
+    if (open) confirmed.current = false;
+  }, [open]);
+
   function confirm() {
     onConfirm();
+    confirmed.current = true;
     onOpenChange(false);
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[440px]" finalFocus={finalFocus}>
+      <DialogContent
+        className="sm:max-w-[440px]"
+        finalFocus={() => (confirmed.current ? (focusAfterConfirm?.() ?? true) : true)}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Trash2Icon className="text-destructive size-4" strokeWidth={1.75} />

@@ -22,14 +22,16 @@ import { NoResponseError } from "@/lib/no-response";
  * - the request is refused: that entry alone is dropped, so the old title or
  *   row comes back while other changes stay;
  * - server data shows the change (the layout's notes have the new title, or
- *   no longer have the note; the failed import is gone): it is no longer
- *   needed, and dropping it on that same render means no frame shows the
- *   old value;
+ *   no longer have the note; the failed import is gone), or for an accepted
+ *   rename, shows any title but the old one (a teammate renamed it after
+ *   us): it is no longer needed, and dropping it on that same render means
+ *   no frame shows the old value;
  * - it was confirmed but server data has not shown it for CONFIRMED_TTL_MS:
  *   a fallback, so an entry whose refresh got lost cannot pin a title for
- *   good. A navigation can discard a refresh in flight and reuse the cached
- *   layout, so a refresh is issued again after each navigation while
- *   confirmed entries are still waiting.
+ *   good.
+ *
+ * The refreshes that bring that server data are scheduled with care; see
+ * useNoteOverlayState.
  */
 
 /** One pending change. `confirmedAt` is set when the server accepted it. */
@@ -37,8 +39,8 @@ type Pending = { token: number; confirmedAt: number | null };
 
 /** What the client has asked the server for and not yet seen back. */
 export type NoteOverlay = {
-  /** Note id → the title it is being renamed to. */
-  titles: ReadonlyMap<string, Pending & { title: string }>;
+  /** Note id → the title it is being renamed to, and the one it had. */
+  titles: ReadonlyMap<string, Pending & { title: string; previousTitle: string }>;
   /** Notes being deleted. */
   deleted: ReadonlyMap<string, Pending>;
   /** Failed imports (ingest ids) being dismissed. */
@@ -46,7 +48,7 @@ export type NoteOverlay = {
 };
 
 export type NoteChange =
-  | { kind: "rename"; id: string; title: string }
+  | { kind: "rename"; id: string; title: string; previousTitle: string }
   | { kind: "delete"; id: string }
   | { kind: "dismiss"; id: string };
 
@@ -66,7 +68,14 @@ export function applyChange(overlay: NoteOverlay, change: NoteChange, token: num
   const pending: Pending = { token, confirmedAt: null };
   switch (change.kind) {
     case "rename":
-      return { ...overlay, titles: new Map(overlay.titles).set(change.id, { ...pending, title: change.title }) };
+      return {
+        ...overlay,
+        titles: new Map(overlay.titles).set(change.id, {
+          ...pending,
+          title: change.title,
+          previousTitle: change.previousTitle,
+        }),
+      };
     case "delete":
       return { ...overlay, deleted: new Map(overlay.deleted).set(change.id, pending) };
     case "dismiss":
@@ -114,8 +123,9 @@ function rebuilt(overlay: NoteOverlay, parts: NoteOverlay): NoteOverlay {
 
 /**
  * Without the entries server data already shows: a rename once the note has
- * that title (or is gone), a delete once the note is gone, a dismissal once
- * the failed import is gone. The same overlay when there are none.
+ * that title (or is gone), or once accepted, any title but the one it had; a
+ * delete once the note is gone; a dismissal once the failed import is gone.
+ * The same overlay when there are none.
  */
 export function settleOverlay(
   overlay: NoteOverlay,
@@ -126,7 +136,13 @@ export function settleOverlay(
   const titles = new Map(notes.map((note) => [note.id, note.title]));
   const imports = new Set(failedImports.map((item) => item.id));
   return rebuilt(overlay, {
-    titles: prune(overlay.titles, (id, entry) => !titles.has(id) || titles.get(id) === entry.title),
+    titles: prune(overlay.titles, (id, entry) => {
+      const title = titles.get(id);
+      if (title === undefined || title === entry.title) return true;
+      // Accepted, and the server has moved on from the old title: to ours,
+      // or to a teammate's since, which is the one to show.
+      return entry.confirmedAt !== null && title !== entry.previousTitle;
+    }),
     deleted: prune(overlay.deleted, (id) => !titles.has(id)),
     dismissed: prune(overlay.dismissed, (id) => !imports.has(id)),
   });
@@ -182,30 +198,108 @@ export type RunChange = (
   onError: (error: unknown) => void,
 ) => void;
 
+/** How long a refresh may take before another may start regardless. */
+export const REFRESH_WAIT_MS = 10_000;
+
+/**
+ * Decides when router.refresh() may run; see useNoteOverlayState. Plain code,
+ * not hooks: its state is a few flags that no render reads.
+ */
+export type RefreshEnv = {
+  refresh: () => void;
+  isNavigating: () => boolean;
+  isOffline: () => boolean;
+};
+
+function isOffline(): boolean {
+  return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+
+export function createRefreshScheduler(initial: RefreshEnv) {
+  let env = initial;
+  let wanted = false;
+  let inFlight = false;
+  let giveUp: ReturnType<typeof setTimeout> | undefined;
+
+  function flush() {
+    if (!wanted || inFlight || env.isNavigating() || env.isOffline()) return;
+    wanted = false;
+    inFlight = true;
+    clearTimeout(giveUp);
+    // A refresh that never shows up (lost some way not seen here) must not
+    // block every later one.
+    giveUp = setTimeout(settled, REFRESH_WAIT_MS);
+    env.refresh();
+  }
+
+  /** The refresh out, if any, is over: new server data came, or a navigation replaced it. */
+  function settled() {
+    inFlight = false;
+    clearTimeout(giveUp);
+    flush();
+  }
+
+  return {
+    /** Swaps in the latest callbacks; the flags stay. */
+    setEnv(next: RefreshEnv) {
+      env = next;
+    },
+    /** Asks for a refresh: now if `now` and it is safe, else at the next chance. */
+    want(now: boolean) {
+      wanted = true;
+      if (now) flush();
+    },
+    settled,
+    /** A chance to run one that was asked for: back online, back in view. */
+    flush,
+    dispose() {
+      clearTimeout(giveUp);
+    },
+  };
+}
+
 /**
  * Owns the overlay; the vault shell calls it once and provides the result.
  *
  * `notes` and `failedImports` are the layout's server data, which entries are
- * settled against. `location` is the current pathname: when it changes (a
- * navigation committed) while confirmed entries still wait, `refresh` runs
- * again, since the navigation may have discarded the earlier one.
+ * settled against. `run` applies `change` at once and calls `action` (the API
+ * request) outside any transition. When it resolves, the entry is confirmed
+ * and a refresh is asked for, to bring the server data that settles it. When
+ * it throws, that entry alone is dropped and `onError` gets the error.
  *
- * `run` applies `change` at once and calls `action` (the API request)
- * outside any transition. When it resolves, the entry is confirmed and
- * `refresh` (router.refresh) fetches the server data that will settle it.
- * When it throws, that entry alone is dropped and `onError` gets the error;
- * when no answer came at all the server may have done the work anyway, so
- * `refresh` runs then too.
+ * Refreshes (`refresh` is router.refresh) are only asked for, and run when
+ * that is safe:
+ * - never while a vault navigation is under way (`navigating`,
+ *   `isNavigating`): Next would run the refresh in the same batch as the
+ *   push, and the page would not change until it came back. One asked for
+ *   meanwhile runs once the navigation commits;
+ * - never while the browser says it is offline: a refresh that cannot reach
+ *   the server makes Next reload the whole page, losing unsaved text. It
+ *   runs on the `online` event instead;
+ * - one at a time: a refresh counts as done when new server data arrives or
+ *   a navigation commits (which may have discarded it), and one asked for
+ *   meanwhile runs after.
+ *
+ * A request that got no answer may still have done its work, but asking for
+ * a refresh at once would likely fail the same way. It is left until the
+ * next navigation commits, the tab comes back into view, or the browser
+ * comes back online. And after each navigation (`location` is the pathname),
+ * while accepted changes still wait, the refresh is asked for again, since
+ * the navigation may have discarded the earlier one.
  */
 export function useNoteOverlayState({
   notes,
   failedImports,
   location,
+  navigating,
+  isNavigating,
   refresh,
 }: {
   notes: { id: string; title: string }[];
   failedImports: { id: string }[];
   location: string;
+  navigating: boolean;
+  isNavigating: () => boolean;
   refresh: () => void;
 }): { overlay: NoteOverlay; run: RunChange } {
   const [raw, setRaw] = useState(EMPTY_OVERLAY);
@@ -213,6 +307,15 @@ export function useNoteOverlayState({
   // Settled entries leave the state on this same render, so one cannot
   // linger and later cover a title that changed again on the server.
   if (overlay !== raw) setRaw(overlay);
+
+  // Made once; its callbacks are swapped in after each change to them. No
+  // request can answer before the first effect runs, so none is missed.
+  const [scheduler] = useState(() =>
+    createRefreshScheduler({ refresh: () => {}, isNavigating: () => true, isOffline }),
+  );
+  useEffect(() => {
+    scheduler.setEnv({ refresh, isNavigating, isOffline });
+  }, [scheduler, refresh, isNavigating]);
 
   const nextToken = useRef(0);
   const run = useCallback<RunChange>(
@@ -225,15 +328,50 @@ export function useNoteOverlayState({
         } catch (error) {
           setRaw((prev) => dropChange(prev, change, token));
           onError(error);
-          if (error instanceof NoResponseError) refresh();
+          // Not now: see above.
+          if (error instanceof NoResponseError) scheduler.want(false);
           return;
         }
         setRaw((prev) => confirmChange(prev, change, token, Date.now()));
-        refresh();
+        scheduler.want(true);
       })();
     },
-    [refresh],
+    [scheduler],
   );
+
+  // New server data: the refresh out, if any, is done.
+  useEffect(() => {
+    scheduler.settled();
+  }, [notes, failedImports, scheduler]);
+
+  const latest = useRef(overlay);
+  useEffect(() => {
+    latest.current = overlay;
+  }, [overlay]);
+
+  // A navigation committed: it may have discarded the refresh out, so ask
+  // again while accepted changes wait, and run whatever waited for it.
+  const lastLocation = useRef(location);
+  useEffect(() => {
+    if (navigating) return;
+    if (lastLocation.current !== location && confirmedTimes(latest.current).length > 0) scheduler.want(false);
+    lastLocation.current = location;
+    scheduler.settled();
+  }, [location, navigating, scheduler]);
+
+  // Back online, or back in view: run a refresh that waited for it.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") scheduler.flush();
+    };
+    window.addEventListener("online", scheduler.flush);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("online", scheduler.flush);
+      document.removeEventListener("visibilitychange", onVisible);
+      scheduler.dispose();
+    };
+  }, [scheduler]);
 
   // The fallback for a confirmed entry that server data never shows.
   useEffect(() => {
@@ -243,17 +381,6 @@ export function useNoteOverlayState({
     const timer = setTimeout(() => setRaw((prev) => expireOverlay(prev, Date.now())), wait);
     return () => clearTimeout(timer);
   }, [overlay]);
-
-  const latest = useRef(overlay);
-  useEffect(() => {
-    latest.current = overlay;
-  }, [overlay]);
-  const lastLocation = useRef(location);
-  useEffect(() => {
-    if (lastLocation.current === location) return;
-    lastLocation.current = location;
-    if (confirmedTimes(latest.current).length > 0) refresh();
-  }, [location, refresh]);
 
   return { overlay, run };
 }

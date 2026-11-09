@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { parseDocMindmap, type DocMindmap } from "@/lib/mindmap-types";
+import { useNavigationStatus } from "@/components/vault/navigation";
 
 /**
  * Rebuilds a note's concept map through /api/mindmap and shows the map the
@@ -27,7 +28,16 @@ export function useMindmapRebuild({
   stale: boolean;
 }) {
   const router = useRouter();
+  const { navigating, isNavigating } = useNavigationStatus();
   const [building, setBuilding] = useState(false);
+  // A refresh asked for during a navigation, which Next would batch with it
+  // and so hold the navigation up; it runs once the navigation commits.
+  const refreshAfterNavigation = useRef(false);
+  useEffect(() => {
+    if (navigating || !refreshAfterNavigation.current) return;
+    refreshAfterNavigation.current = false;
+    router.refresh();
+  }, [navigating, router]);
   const [rebuilt, setRebuilt] = useState<{ base: string; map: DocMindmap } | null>(null);
 
   const storedKey = useMemo(() => mindmapKey(stored), [stored]);
@@ -65,7 +75,8 @@ export function useMindmapRebuild({
       if (map) setRebuilt({ base: latestKey.current, map });
 
       toast.success("Mindmap rebuilt");
-      router.refresh();
+      if (isNavigating()) refreshAfterNavigation.current = true;
+      else router.refresh();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Mindmap failed");
     } finally {

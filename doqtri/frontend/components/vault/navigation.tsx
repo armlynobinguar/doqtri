@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useTransition,
@@ -29,6 +30,17 @@ type Navigate = (href: string) => void;
 const NavigateContext = createContext<Navigate | null>(null);
 const PendingContext = createContext(false);
 
+/**
+ * Whether a vault navigation is under way, for code that must not start a
+ * router.refresh() meanwhile: Next runs a refresh dispatched during a push
+ * in the same batch, so the page would not change until the refresh came
+ * back. `navigating` is the rendered state, to react to it ending;
+ * `isNavigating` is exact from the moment navigate() is called.
+ */
+type NavigationStatus = { navigating: boolean; isNavigating: () => boolean };
+
+const StatusContext = createContext<NavigationStatus>({ navigating: false, isNavigating: () => false });
+
 export function NavigationProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -36,15 +48,25 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
   // sooner, e.g. a route the router already has cached.
   const [holding, setHolding] = useState(false);
   const startedAt = useRef(0);
+  const navigatingNow = useRef(false);
 
   const navigate = useCallback<Navigate>(
     (href) => {
       startedAt.current = Date.now();
+      navigatingNow.current = true;
       setHolding(true);
       startTransition(() => router.push(href));
     },
     [router],
   );
+
+  // navigate() renders this provider with the transition pending, so the
+  // first render after that without it is the navigation done.
+  useEffect(() => {
+    if (!isPending) navigatingNow.current = false;
+  });
+  const isNavigating = useCallback(() => navigatingNow.current, []);
+  const status = useMemo(() => ({ navigating: isPending, isNavigating }), [isPending, isNavigating]);
 
   useEffect(() => {
     if (!holding || isPending) return;
@@ -55,9 +77,16 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
 
   return (
     <NavigateContext.Provider value={navigate}>
-      <PendingContext.Provider value={isPending || holding}>{children}</PendingContext.Provider>
+      <StatusContext.Provider value={status}>
+        <PendingContext.Provider value={isPending || holding}>{children}</PendingContext.Provider>
+      </StatusContext.Provider>
     </NavigateContext.Provider>
   );
+}
+
+/** Whether a vault navigation is under way; see NavigationStatus. */
+export function useNavigationStatus(): NavigationStatus {
+  return useContext(StatusContext);
 }
 
 /** Push a vault route with the loader up until the new page commits. */

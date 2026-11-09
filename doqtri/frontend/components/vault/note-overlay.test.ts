@@ -3,9 +3,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CONFIRMED_TTL_MS,
+  REFRESH_WAIT_MS,
   EMPTY_OVERLAY,
   applyChange,
   confirmChange,
+  createRefreshScheduler,
   dropChange,
   expireOverlay,
   isNotePending,
@@ -24,7 +26,12 @@ const notes: NoteSummary[] = [
 ];
 const imports: FailedImport[] = [{ id: "ingest-1", filename: "broken.docx", error_code: "PARSE" }];
 
-const rename = (id: string, title: string) => ({ kind: "rename" as const, id, title });
+const rename = (id: string, title: string) => ({
+  kind: "rename" as const,
+  id,
+  title,
+  previousTitle: notes.find((note) => note.id === id)?.title ?? "",
+});
 const remove = (id: string) => ({ kind: "delete" as const, id });
 const dismiss = (id: string) => ({ kind: "dismiss" as const, id });
 
@@ -75,6 +82,18 @@ describe("the overlay, as data", () => {
     expect(settleOverlay(applyChange(EMPTY_OVERLAY, rename("b", "Bravo"), 4), [notes[0]], []).titles.size).toBe(0);
   });
 
+  it("lets an accepted rename go once the server has any title but the old one", () => {
+    const sent = applyChange(EMPTY_OVERLAY, rename("a", "Apex"), 1);
+    const teammate = [{ ...notes[0], title: "Aardvark" }, notes[1]];
+    // Not yet accepted: the server may still apply ours over theirs.
+    expect(settleOverlay(sent, teammate, imports)).toBe(sent);
+    const accepted = confirmChange(sent, rename("a", "Apex"), 1, 1);
+    // Still the old title: the refresh has not caught up.
+    expect(settleOverlay(accepted, notes, imports)).toBe(accepted);
+    // A teammate renamed it after us: theirs is the title to show.
+    expect(settleOverlay(accepted, teammate, imports).titles.size).toBe(0);
+  });
+
   it("expires confirmed entries server data never showed, and only those", () => {
     let overlay = applyChange(EMPTY_OVERLAY, rename("a", "Apex"), 1);
     overlay = applyChange(overlay, remove("b"), 2);
@@ -87,13 +106,61 @@ describe("the overlay, as data", () => {
   });
 });
 
+describe("createRefreshScheduler", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("runs one refresh at a time, never mid-navigation or offline, and gives up on a lost one", () => {
+    vi.useFakeTimers();
+    let navigating = false;
+    let offline = false;
+    const refresh = vi.fn();
+    const scheduler = createRefreshScheduler({
+      refresh,
+      isNavigating: () => navigating,
+      isOffline: () => offline,
+    });
+
+    navigating = true;
+    scheduler.want(true);
+    expect(refresh).not.toHaveBeenCalled();
+    navigating = false;
+    offline = true;
+    scheduler.settled();
+    expect(refresh).not.toHaveBeenCalled();
+    offline = false;
+    scheduler.flush();
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    // Asked again while that one is out: it waits for it.
+    scheduler.want(true);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    // That refresh never showed up: after a while the next one goes anyway.
+    vi.advanceTimersByTime(REFRESH_WAIT_MS);
+    expect(refresh).toHaveBeenCalledTimes(2);
+
+    // Asked for later, not now: only the next chance runs it.
+    scheduler.settled();
+    scheduler.want(false);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    scheduler.flush();
+    expect(refresh).toHaveBeenCalledTimes(3);
+    scheduler.dispose();
+  });
+});
+
 /*
  * The hook, rendered for real. The unit tests run in Node without a DOM, so
  * the root is a stub that React DOM accepts as a container; the components
  * render nothing, so React never asks it for more than this.
  */
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-(globalThis as { window?: unknown }).window ??= globalThis;
+// The hook listens on window and document for `online` and visibility.
+const testWindow = new EventTarget();
+const testDocument = Object.assign(new EventTarget(), { visibilityState: "visible" });
+(globalThis as { window?: unknown }).window = testWindow;
+(globalThis as { document?: unknown }).document = testDocument;
 
 function stubContainer(): Element {
   const document: Record<string, unknown> = {
@@ -113,7 +180,7 @@ function stubContainer(): Element {
   } as unknown as Element;
 }
 
-type Server = { notes: NoteSummary[]; failedImports: FailedImport[]; location: string };
+type Server = { notes: NoteSummary[]; failedImports: FailedImport[]; location: string; navigating: boolean };
 
 /** A request the test answers by hand. */
 function deferred() {
@@ -140,7 +207,7 @@ function mountVault() {
   let setRoute!: (route: string) => void;
 
   function Vault(server: Server) {
-    const state = useNoteOverlayState({ ...server, refresh });
+    const state = useNoteOverlayState({ ...server, isNavigating: () => server.navigating, refresh });
     const [route, set] = useState("note-a");
     run = state.run;
     setRoute = set;
@@ -151,7 +218,7 @@ function mountVault() {
   }
 
   const root: Root = createRoot(stubContainer());
-  let server: Server = { notes, failedImports: imports, location: "/vault/a" };
+  let server: Server = { notes, failedImports: imports, location: "/vault/a", navigating: false };
   return {
     frames,
     overlays,
@@ -259,18 +326,62 @@ describe("useNoteOverlayState", () => {
     expect(v.refresh).toHaveBeenCalledTimes(2);
   });
 
-  it("drops a change that got no answer, and refreshes to see what the server did", async () => {
+  it("holds a refresh asked for mid-navigation until the navigation commits", async () => {
+    const v = await mount();
+    const del = deferred();
+    await act(async () => v.run(remove("a"), del.action, () => {}));
+    // The open note was deleted: the shell navigates away at once.
+    await v.serve({ navigating: true });
+    await act(async () => del.resolve());
+    // Next would batch a refresh with the push and hold the page up.
+    expect(v.refresh).not.toHaveBeenCalled();
+
+    await v.serve({ navigating: false, location: "/vault" });
+    expect(v.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs one refresh at a time, and one more after if asked meanwhile", async () => {
+    const v = await mount();
+    await act(async () => v.run(remove("a"), async () => {}, () => {}));
+    await act(async () => v.run(remove("b"), async () => {}, () => {}));
+    expect(v.refresh).toHaveBeenCalledTimes(1);
+
+    // The first refresh's data arrives (before the second delete): one more.
+    await v.serve({ notes: [notes[1]] });
+    expect(v.refresh).toHaveBeenCalledTimes(2);
+    await v.serve({ notes: [] });
+    expect(v.refresh).toHaveBeenCalledTimes(2);
+    expect(v.overlays.at(-1)).toEqual(EMPTY_OVERLAY);
+  });
+
+  it("drops a change that got no answer, and refreshes later rather than at once", async () => {
     const v = await mount();
     const onError = vi.fn();
-    await act(async () =>
-      v.run(
-        rename("a", "Apex"),
-        () => Promise.reject(new NoResponseError()),
-        onError,
-      ),
-    );
+    await act(async () => v.run(rename("a", "Apex"), () => Promise.reject(new NoResponseError()), onError));
     expect(onError).toHaveBeenCalledWith(expect.any(NoResponseError));
     expect(v.frames.at(-1)).toEqual(["Alpha", "Beta"]);
+    // A refresh now would likely fail too, and Next answers that with a reload.
+    expect(v.refresh).not.toHaveBeenCalled();
+
+    // The next navigation, or the tab coming back into view, catches up.
+    await act(async () => testDocument.dispatchEvent(new Event("visibilitychange")));
     expect(v.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for the browser to come back online before refreshing", async () => {
+    const v = await mount();
+    vi.stubGlobal("navigator", { onLine: false });
+    try {
+      await act(async () => v.run(dismiss("ingest-1"), async () => {}, () => {}));
+      await v.serve({ navigating: true });
+      await v.serve({ navigating: false, location: "/vault/b" });
+      expect(v.refresh).not.toHaveBeenCalled();
+
+      vi.stubGlobal("navigator", { onLine: true });
+      await act(async () => testWindow.dispatchEvent(new Event("online")));
+      expect(v.refresh).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

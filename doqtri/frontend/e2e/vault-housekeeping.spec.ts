@@ -125,6 +125,51 @@ test.describe("notes housekeeping", () => {
     await expect(page.getByRole("link", { name: renamed })).toBeVisible();
   });
 
+  test("a rename answered while a navigation is out does not hold the navigation up", async ({ page }) => {
+    const title = uniqueTitle("Answered Midway");
+    const other = uniqueTitle("Destination");
+    const id = await seedNote(title, "# Answered Midway\n\nBody.\n");
+    const otherId = await seedNote(other, "# Destination\n\nBody.\n");
+    notes.push(id, otherId);
+    const patch = holdRequest(page, id);
+    const isRsc = (route: Route) => route.request().headers()["rsc"] !== undefined;
+    // A refresh of the note being left is slowed right down: had the
+    // navigation been batched with one, it would wait this long too.
+    await page.route(
+      (url) => url.pathname === `/vault/${id}`,
+      async (route) => {
+        if (isRsc(route)) await new Promise((resolve) => setTimeout(resolve, 8_000));
+        await route.fallback();
+      },
+    );
+    // The navigation's own request takes a moment, so the PATCH answers while it is out.
+    await page.route(
+      (url) => url.pathname === `/vault/${otherId}`,
+      async (route) => {
+        if (isRsc(route)) await new Promise((resolve) => setTimeout(resolve, 1_500));
+        await route.fallback();
+      },
+    );
+    await page.goto(`/vault/${id}`);
+
+    await page.getByRole("button", { name: `Rename ${title}` }).click();
+    const dialog = page.getByRole("dialog");
+    const renamed = uniqueTitle("Renamed Midway");
+    await dialog.getByLabel("Note title").fill(renamed);
+    await dialog.getByRole("button", { name: "Rename", exact: true }).click();
+
+    await page.getByRole("link", { name: other }).click();
+    const answered = page.waitForResponse(
+      (res) => res.request().method() === "PATCH" && new URL(res.url()).pathname === `/api/notes/${id}`,
+    );
+    patch.release();
+    await answered;
+    await expect(page).toHaveURL(new RegExp(`/vault/${otherId}$`), { timeout: 5_000 });
+    await expect(page.getByRole("tab", { name: other })).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole("link", { name: renamed })).toBeVisible();
+    await expect.poll(async () => (await readNote(id)).title).toBe(renamed);
+  });
+
   test("a rename that gets no answer says it may not have saved", async ({ page }) => {
     const title = uniqueTitle("Lost Rename");
     const id = await seedNote(title, "# Lost Rename\n\nBody.\n");

@@ -30,7 +30,7 @@ import {
 import { createBlankNote } from "@/lib/create-note";
 import { deleteNote, DeleteNoteError } from "@/lib/delete-note";
 import { renameNote } from "@/lib/rename-note";
-import { NoResponseError, REQUEST_TIMEOUT_MS } from "@/lib/no-response";
+import { isNoAnswer, NoResponseError, REQUEST_TIMEOUT_MS } from "@/lib/no-response";
 import { isTitleTaken } from "@/lib/title";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { anchoredDocIds } from "@/lib/stellar/anchored";
@@ -42,6 +42,7 @@ import {
   NavigationOverlay,
   NavigationProvider,
   useNavigate,
+  useNavigationStatus,
 } from "@/components/vault/navigation";
 import {
   NoteOverlayProvider,
@@ -109,6 +110,7 @@ function VaultShellInner({
   const pathname = usePathname();
   const router = useRouter();
   const navigate = useNavigate();
+  const { navigating, isNavigating } = useNavigationStatus();
   const { wordCount, saveState } = useVaultStatus();
   const { active: workspace, canCreate } = useActiveWorkspace();
 
@@ -134,7 +136,14 @@ function VaultShellInner({
   // reads the overlaid list, and the pages under `children` read the same
   // overlay from context.
   const refresh = useCallback(() => router.refresh(), [router]);
-  const { overlay, run } = useNoteOverlayState({ notes, failedImports, location: pathname, refresh });
+  const { overlay, run } = useNoteOverlayState({
+    notes,
+    failedImports,
+    location: pathname,
+    navigating,
+    isNavigating,
+    refresh,
+  });
   const shownNotes = useMemo(() => overlayNotes(notes, overlay), [notes, overlay]);
   const shownImports = useMemo(
     () => failedImports.filter((item) => !overlay.dismissed.has(item.id)),
@@ -278,7 +287,10 @@ function VaultShellInner({
             // Read now, not when the toast was made: the note may have been
             // renamed, deleted or be mid-change since.
             const current = latest.current.shownNotes.find((other) => other.id === note.id);
-            if (!current) return;
+            if (!current) {
+              toast.info("That note has been deleted since.");
+              return;
+            }
             if (isNotePending(latest.current.overlay, note.id)) {
               toast.info(`“${current.title}” is still being changed. Try again in a moment.`);
               return;
@@ -288,7 +300,7 @@ function VaultShellInner({
         },
       };
       run(
-        { kind: "rename", id: note.id, title },
+        { kind: "rename", id: note.id, title, previousTitle: note.title },
         async () => {
           await renameNote(note.id, title);
         },
@@ -311,16 +323,23 @@ function VaultShellInner({
         async () => {
           // RLS allows the owner to delete their own ingest rows; a row it
           // hides is not an error, just nothing deleted, so ask for the ids.
-          const { data, error } = await createSupabaseBrowserClient()
+          const { data, error, status } = await createSupabaseBrowserClient()
             .from("ingests")
             .delete()
             .eq("id", id)
             .select("id")
             .abortSignal(AbortSignal.timeout(REQUEST_TIMEOUT_MS));
+          // supabase-js reports a lost answer as an error with status 0
+          // rather than throwing.
+          if (error && isNoAnswer(status)) throw new NoResponseError();
           if (error) throw new Error(error.message);
           if (!data?.length) throw new Error("That import could not be dismissed");
         },
         (error) => {
+          if (error instanceof NoResponseError) {
+            toast.warning("Could not reach doqtri, so that import may not have been dismissed.");
+            return;
+          }
           toast.error(error instanceof Error ? error.message : "Could not dismiss that import");
         },
       );
@@ -503,8 +522,8 @@ function VaultShellInner({
         />
         <DeleteNoteDialog
           open={pendingDelete !== null}
-          // The row is gone by now; land on the explorer's list instead.
-          finalFocus={() => noteRowLink() ?? true}
+          // After a delete the row is gone; land on the explorer's list.
+          focusAfterConfirm={() => noteRowLink()}
           title={pendingDelete?.title ?? ""}
           onOpenChange={(next) => {
             if (!next) setPendingDelete(null);
@@ -518,9 +537,9 @@ function VaultShellInner({
           open={pendingRename !== null}
           title={pendingRename?.note.title ?? ""}
           initialValue={pendingRename?.draft}
-          // The trigger may be disabled now (the rename is in flight), which
-          // would drop focus to the page; the row's link is the next best.
-          finalFocus={() => noteRowLink(pendingRename?.note.id) ?? true}
+          // After a rename the trigger is disabled (the rename is in flight),
+          // which would drop focus to the page; the row's link is next best.
+          focusAfterConfirm={() => noteRowLink(pendingRename?.note.id)}
           onOpenChange={(next) => {
             if (!next) setPendingRename(null);
           }}
@@ -541,9 +560,12 @@ function VaultShellInner({
 
 /**
  * A note's link in the explorer (`id`), or its first one, to move focus to
- * when a dialog closes; null when the explorer is not on screen.
+ * when a dialog closes; null when the explorer is not on screen (a phone,
+ * with the drawer closed).
  */
 function noteRowLink(id?: string): HTMLElement | null {
-  const links = [...document.querySelectorAll<HTMLElement>("[data-note-link]")];
+  const links = [...document.querySelectorAll<HTMLElement>("[data-note-link]")].filter(
+    (link) => link.getClientRects().length > 0,
+  );
   return (id ? links.find((link) => link.dataset.noteLink === id) : links[0]) ?? null;
 }

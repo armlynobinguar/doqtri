@@ -1,4 +1,4 @@
-import { fetchOrNoResponse, readJson } from "@/lib/no-response";
+import { fetchOrNoResponse, isNoAnswer, NoResponseError, readJson } from "@/lib/no-response";
 
 /**
  * Renames a note through the API. Throws with the server's reason — notably
@@ -24,6 +24,7 @@ export async function renameNote(
     previousTitle?: string;
   } | null;
 
+  if (isNoAnswer(res.status, payload)) throw new NoResponseError();
   if (!res.ok) {
     throw new Error(payload?.error ?? `Could not rename note (${res.status})`);
   }

@@ -63,6 +63,28 @@ describe("no answer from the server", () => {
     await expect(renameNote("a", "Apex")).rejects.toBeInstanceOf(NoResponseError);
   });
 
+  it("is a NoResponseError for a gateway's timeout or outage, but not for the app's own 503", async () => {
+    for (const status of [408, 502, 503, 504]) {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>Bad gateway</html>", { status })));
+      await expect(renameNote("a", "Apex")).rejects.toBeInstanceOf(NoResponseError);
+      await expect(deleteNote("a")).rejects.toBeInstanceOf(NoResponseError);
+    }
+
+    // The delete route's own refusal when Stellar is down: nothing was deleted.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          { error: "Could not reach Stellar to check whether this note is anchored. Try again.", code: "CHAIN_UNREACHABLE" },
+          { status: 503 },
+        ),
+      ),
+    );
+    const refusal = await deleteNote("a").catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(DeleteNoteError);
+    expect((refusal as DeleteNoteError).code).toBe("CHAIN_UNREACHABLE");
+  });
+
   it("sends the request with a timeout, so a hung request ends", async () => {
     const fetch = vi.fn(async () => Response.json({ title: "Apex", previousTitle: "Alpha" }));
     vi.stubGlobal("fetch", fetch);

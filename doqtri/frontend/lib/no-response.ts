@@ -27,6 +27,21 @@ export async function fetchOrNoResponse(url: string, init: RequestInit = {}): Pr
 }
 
 /**
+ * Statuses a gateway or proxy answers with when the app itself did not (a
+ * timeout, or the server unreachable behind it), plus 0, which supabase-js
+ * reports when the request never got an answer. They say nothing about
+ * whether the change happened. The app's own routes use 503 too (Stellar
+ * unreachable, nothing changed), so one only counts as no answer when its
+ * body is not one of the app's JSON refusals.
+ */
+const GATEWAY_STATUSES = new Set([0, 408, 502, 503, 504]);
+
+export function isNoAnswer(status: number, payload: unknown = null): boolean {
+  if (!GATEWAY_STATUSES.has(status)) return false;
+  return !(payload && typeof payload === "object" && "error" in payload);
+}
+
+/**
  * The response's JSON body, or null when it is not JSON. A body cut off on
  * the way (the timeout, or the network dropping mid-read) rejects with
  * NoResponseError: the status arrived, but the rest of the answer did not.
