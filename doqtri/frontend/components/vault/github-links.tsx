@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { startTransition, useCallback, useEffect, useOptimistic, useState } from "react";
 import { ArrowRightIcon, GitPullRequestIcon, Loader2Icon, RefreshCwIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,8 @@ import { loadWriteTarget, reportWorkspaceAssignment } from "@/lib/stellar/write-
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { formatRef, parseGitHubRef, refUrl } from "@/lib/github/refs";
 import { isReadyToSync, type GitHubItem, type Suggestion } from "@/lib/github/status";
-import { GITHUB_LINK_COLUMNS, linkableNodes } from "@/lib/node-links";
+import { GITHUB_LINK_COLUMNS, linkableNodes, withoutLink } from "@/lib/node-links";
+import { mayHaveLanded, supabaseWriteError, UNCONFIRMED_WRITE } from "@/lib/write-outcome";
 
 type Node = { id: string; label: string };
 
@@ -85,7 +86,10 @@ export function GitHubLinks({
   onLinkedChange?: (nodeIds: string[]) => void;
 }) {
   const wallet = useWallet();
-  const [links, setLinks] = useState<LinkRow[]>([]);
+  // The rows last loaded, and the ones shown: those minus any link whose
+  // delete has not answered yet (DOQ-33).
+  const [stored, setLinks] = useState<LinkRow[]>([]);
+  const [links, hideLink] = useOptimistic<LinkRow[], string>(stored, withoutLink);
   const [checks, setChecks] = useState<Record<string, CheckResult>>({});
   const [chain, setChain] = useState<Record<string, string | null>>({});
   const [busy, setBusy] = useState<"check" | "link" | "sync" | null>(null);
@@ -205,13 +209,23 @@ export function GitHubLinks({
     }
   }
 
-  async function removeLink(link: LinkRow) {
-    const { error } = await createSupabaseBrowserClient().from("node_links").delete().eq("id", link.id);
-    if (error) {
-      toast.error("Could not remove the link");
-      return;
-    }
-    await loadLinks();
+  // The row goes before the delete answers. A refused delete brings it back
+  // with the error; no answer brings it back too and reloads to see whether
+  // the delete landed anyway.
+  function removeLink(link: LinkRow) {
+    startTransition(async () => {
+      hideLink(link.id);
+      try {
+        const { error, status } = await createSupabaseBrowserClient().from("node_links").delete().eq("id", link.id);
+        if (error) throw supabaseWriteError(error, status);
+        setLinks((rows) => withoutLink(rows, link.id));
+      } catch (e) {
+        const unanswered = mayHaveLanded(e);
+        toast.error(unanswered ? UNCONFIRMED_WRITE : "Could not remove the link");
+        if (!unanswered) return;
+      }
+      await loadLinks();
+    });
   }
 
   /** Links whose heading moved since they were made; never synced. */
@@ -292,7 +306,7 @@ export function GitHubLinks({
             chainStatus={chain[link.node_id] ?? null}
             drifted={drifted(link)}
             anchored={anchored}
-            onRemove={() => void removeLink(link)}
+            onRemove={() => removeLink(link)}
           />
         ))}
       </LinkList>

@@ -64,6 +64,15 @@ export function linkableNodes(
   );
 }
 
+/**
+ * The links without the one being removed, shown before its delete answers
+ * (DOQ-33). A new list each time, so a failed delete rolls back to the rows
+ * it started from.
+ */
+export function withoutLink<T extends { id: string }>(rows: T[], id: string): T[] {
+  return rows.filter((r) => r.id !== id);
+}
+
 export function isHeadingId(id: string): boolean {
   return HEADING_ID.test(id);
 }
