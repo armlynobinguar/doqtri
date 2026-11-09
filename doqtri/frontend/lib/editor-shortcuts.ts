@@ -90,6 +90,10 @@ export function matchesShortcut(shortcut: Shortcut, event: KeyEventLike, mac: bo
   if (event.metaKey !== meta || event.ctrlKey !== ctrl || event.altKey !== !!keys.alt || event.shiftKey !== !!keys.shift) {
     return false;
   }
+  // Ctrl+Alt off the Mac is AltGr to many layouts, and not every browser
+  // says so (getModifierState): a key that typed a character other than its
+  // own digit (German Ctrl+Alt+0 is "}") is that character, not a shortcut.
+  if (!mac && event.ctrlKey && event.altKey && /^[\x20-\x7e]$/.test(event.key) && event.key !== keys.key) return false;
   if (/^\d$/.test(keys.key)) return event.code === `Digit${keys.key}`;
   const produced = event.key.length === 1 ? event.key.toLowerCase() : event.key;
   if (produced === keys.key) return true;

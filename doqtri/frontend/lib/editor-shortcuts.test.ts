@@ -84,6 +84,17 @@ describe("matching shortcuts on a keydown", () => {
     expect(matchesShortcut(h1, altGr1, false)).toBe(true);
   });
 
+  it("takes no AltGr character for a heading, even when the browser does not report AltGr", () => {
+    const normal: Shortcut = { key: "0", mod: true, alt: true };
+    // German Windows: Ctrl+Alt+0 types "}", with no AltGraph state.
+    expect(matchesShortcut(normal, ev({ key: "}", code: "Digit0", ctrlKey: true, altKey: true }), false)).toBe(false);
+    expect(matchesShortcut(h1, ev({ key: "1", code: "Digit1", ctrlKey: true, altKey: true }), false)).toBe(true);
+    // A key that types nothing printable is still the shortcut.
+    expect(matchesShortcut(h1, ev({ key: "Unidentified", code: "Digit1", ctrlKey: true, altKey: true }), false)).toBe(true);
+    // The Mac's ⌥ characters are not AltGr: ⌥⌘5 types "∞" or "[" and is still Heading 5.
+    expect(matchesShortcut({ key: "5", mod: true, alt: true }, ev({ key: "∞", code: "Digit5", metaKey: true, altKey: true }), true)).toBe(true);
+  });
+
   it("falls back to the place when the layout types another letter", () => {
     // ⌥⌘F types "ƒ" on a Mac; a Cyrillic layout types "и" on the B key.
     expect(matchesShortcut({ key: "f", mod: true, alt: true }, ev({ key: "ƒ", code: "KeyF", metaKey: true, altKey: true }), true)).toBe(true);
