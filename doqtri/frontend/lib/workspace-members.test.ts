@@ -174,7 +174,12 @@ describe("pending removals and handovers", () => {
   });
 });
 
-describe("changes shown before their RPC answers (DOQ-33)", () => {
+// The reducer only: React's useOptimistic does the rollback itself, by
+// dropping a settled change and showing the server data again. These pin down
+// what that relies on: a change applies to the shown lists, never alters the
+// data it is applied to, and can be re-applied safely. The rollback on screen
+// is covered end to end in e2e/workspaces.spec.ts.
+describe("applying changes before their RPC answers (DOQ-33)", () => {
   const lists = () => ({
     roster: [owner, editor, viewer],
     invites: [{ id: "i1" }, { id: "i2" }],
@@ -182,28 +187,27 @@ describe("changes shown before their RPC answers (DOQ-33)", () => {
     emailInvites: true,
   });
   // What useOptimistic shows: every change still waiting, applied over the
-  // latest server data. A change leaves `pending` once its write settles.
+  // latest server data.
   const shown = (base: ReturnType<typeof lists>, pending: RosterChange[]) => pending.reduce(applyRosterChange, base);
   const roles = (s: { roster: RosterMember[] }) => s.roster.map((m) => `${m.userId}:${m.role}`);
 
-  it("shows a role change at once and rolls back to the old role when the RPC refuses it", () => {
+  it("applies a role change to the shown roster and leaves the data it started from as it was", () => {
     const base = lists();
     const before = structuredClone(base);
     const change: RosterChange = { kind: "role", userId: "viewer", role: "editor" };
     expect(roles(shown(base, [change]))).toEqual(["owner:owner", "editor:editor", "viewer:editor"]);
-    // Refused: the change leaves `pending`, and the base never took it.
     expect(shown(base, [])).toEqual(before);
     expect(base).toEqual(before);
   });
 
-  it("keeps a role change that succeeded, and a reload that has it changes nothing more", () => {
+  it("changes nothing more when a role change is applied again, or over a reload that has it", () => {
     const change: RosterChange = { kind: "role", userId: "viewer", role: "admin" };
     const kept = applyRosterChange(lists(), change);
     expect(roles(kept)).toEqual(["owner:owner", "editor:editor", "viewer:admin"]);
     expect(shown(kept, [change])).toEqual(kept);
   });
 
-  it("hides a removed member at once and brings them back when the RPC refuses", () => {
+  it("drops a removed member from the shown roster and leaves the data it started from as it was", () => {
     const base = lists();
     const before = structuredClone(base);
     const change: RosterChange = { kind: "remove", userId: "editor" };
@@ -212,7 +216,7 @@ describe("changes shown before their RPC answers (DOQ-33)", () => {
     expect(base).toEqual(before);
   });
 
-  it("keeps a removal that succeeded, and re-applies a pending one over a reload that lands meanwhile", () => {
+  it("changes nothing more when a removal is applied again, and still applies over a newer reload", () => {
     const change: RosterChange = { kind: "remove", userId: "editor" };
     const kept = applyRosterChange(lists(), change);
     expect(shown(kept, [change])).toEqual(kept);
@@ -220,7 +224,7 @@ describe("changes shown before their RPC answers (DOQ-33)", () => {
     expect(roles(shown(reloaded, [change]))).toEqual(["owner:owner", "viewer:viewer", "new:admin"]);
   });
 
-  it("withdraws or declines an invite at once, and rolls it back", () => {
+  it("drops a withdrawn or declined invite from either list and leaves the lists it started from as they were", () => {
     const base = lists();
     expect(shown(base, [{ kind: "cancel-invite", inviteId: "i2" }]).invites).toEqual([{ id: "i1" }]);
     expect(shown(base, [{ kind: "cancel-invite", inviteId: "m1" }]).myInvites).toEqual([]);

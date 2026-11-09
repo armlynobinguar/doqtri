@@ -20,7 +20,8 @@ import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { formatRef, parseGitHubRef, refUrl } from "@/lib/github/refs";
 import { isReadyToSync, type GitHubItem, type Suggestion } from "@/lib/github/status";
 import { GITHUB_LINK_COLUMNS, linkableNodes, withoutLink } from "@/lib/node-links";
-import { mayHaveLanded, supabaseWriteError, UNCONFIRMED_WRITE } from "@/lib/write-outcome";
+import { ReadSequence } from "@/lib/read-sequence";
+import { mayHaveLanded, supabaseWriteError, WRITE_TIMEOUT_MS, writeFailureMessage } from "@/lib/write-outcome";
 
 type Node = { id: string; label: string };
 
@@ -99,7 +100,12 @@ export function GitHubLinks({
 
   const labelOf = useCallback((id: string) => nodes.find((n) => n.id === id)?.label, [nodes]);
 
+  // An unlink reloads without waiting, so loads can overlap; one overtaken
+  // by a newer load or a successful delete keeps its rows to itself.
+  const [reads] = useState(() => new ReadSequence());
+
   const loadLinks = useCallback(async (): Promise<LinkRow[]> => {
+    const ticket = reads.start();
     const { data, error } = await createSupabaseBrowserClient()
       .from("node_links")
       .select(GITHUB_LINK_COLUMNS)
@@ -111,10 +117,12 @@ export function GitHubLinks({
       return [];
     }
     const rows = (data ?? []) as LinkRow[];
-    setLinks(rows);
-    onLinkedChange?.(rows.map((r) => r.node_id));
+    if (reads.isCurrent(ticket)) {
+      setLinks(rows);
+      onLinkedChange?.(rows.map((r) => r.node_id));
+    }
     return rows;
-  }, [docId, onLinkedChange]);
+  }, [docId, onLinkedChange, reads]);
 
   const readChain = useCallback(
     async (rows: LinkRow[]) => {
@@ -210,21 +218,37 @@ export function GitHubLinks({
   }
 
   // The row goes before the delete answers. A refused delete brings it back
-  // with the error; no answer brings it back too and reloads to see whether
-  // the delete landed anyway.
+  // with the server's message. No answer brings it back too, and reloads to
+  // see whether the delete landed anyway. The reload runs after the
+  // transition, not inside it: React holds every pending action until all of
+  // them finish, so awaiting it here would keep another unlink's refused row
+  // hidden.
   function removeLink(link: LinkRow) {
     startTransition(async () => {
       hideLink(link.id);
       try {
-        const { error, status } = await createSupabaseBrowserClient().from("node_links").delete().eq("id", link.id);
+        const { data, error, status } = await createSupabaseBrowserClient()
+          .from("node_links")
+          .delete()
+          .eq("id", link.id)
+          .select("id")
+          .abortSignal(AbortSignal.timeout(WRITE_TIMEOUT_MS));
         if (error) throw supabaseWriteError(error, status);
+        // Row-level security turns a delete it refuses into one that matches
+        // nothing, with no error: only the note's editors may unlink. A link
+        // someone else already removed matches nothing too; the reload shows which.
+        if (!data?.length) {
+          toast.error("This link wasn't removed: only editors of this note can unlink it.");
+          void loadLinks();
+          return;
+        }
+        reads.invalidate();
         setLinks((rows) => withoutLink(rows, link.id));
+        void loadLinks();
       } catch (e) {
-        const unanswered = mayHaveLanded(e);
-        toast.error(unanswered ? UNCONFIRMED_WRITE : "Could not remove the link");
-        if (!unanswered) return;
+        toast.error(writeFailureMessage(e, "Could not remove the link"));
+        if (mayHaveLanded(e)) void loadLinks();
       }
-      await loadLinks();
     });
   }
 

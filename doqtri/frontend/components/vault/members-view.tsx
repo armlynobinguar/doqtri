@@ -56,7 +56,8 @@ import {
   type RosterChange,
   type RosterMember,
 } from "@/lib/workspace-members";
-import { mayHaveLanded, supabaseWriteError, writeFailureMessage } from "@/lib/write-outcome";
+import { ReadSequence } from "@/lib/read-sequence";
+import { mayHaveLanded, supabaseWriteError, WRITE_TIMEOUT_MS, writeFailureMessage } from "@/lib/write-outcome";
 
 /** A workspace the user belongs to, for the picker. */
 export type WorkspaceChoice = { id: string; name: string; personal: boolean; role: WorkspaceRole; former?: boolean };
@@ -204,19 +205,29 @@ export function MembersView({
 
   const chainShown = REGISTRY_EDITORS && !personal;
 
+  // Reloads run behind optimistic changes without being awaited, so they can
+  // overlap; one overtaken by a newer reload or a successful write drops its
+  // answer rather than bring back a row that is already gone.
+  const [reads] = useState(() => new ReadSequence());
+
   const reload = useCallback(async () => {
+    const ticket = reads.start();
     try {
-      setServer(await loadAll(workspaceId));
+      const next = await loadAll(workspaceId);
+      if (!reads.isCurrent(ticket)) return;
+      setServer(next);
       setLoadError(null);
     } catch (error) {
+      if (!reads.isCurrent(ticket)) return;
       setLoadError(error instanceof Error ? error.message : "Members couldn't be loaded.");
     } finally {
       setLoaded(true);
     }
     if (chainShown) {
-      setChain(await DoqtriRegistry.readWorkspace(workspaceId).catch(() => "unreachable" as const));
+      const read = await DoqtriRegistry.readWorkspace(workspaceId).catch(() => "unreachable" as const);
+      if (reads.isCurrent(ticket)) setChain(read);
     }
-  }, [workspaceId, chainShown]);
+  }, [workspaceId, chainShown, reads]);
 
   useEffect(() => {
     const timer = setTimeout(() => void reload(), 0);
@@ -257,6 +268,7 @@ export function MembersView({
       showChange(change);
       try {
         await write();
+        reads.invalidate();
         setServer((current) => applyRosterChange(current, change));
         void after();
       } catch (error) {
@@ -272,6 +284,14 @@ export function MembersView({
     const { data: result, error, status } = await createSupabaseBrowserClient().rpc(fn, args);
     if (error) throw supabaseWriteError(error, status);
     return result as unknown;
+  }
+
+  /** rpc() for an optimistic change: it gives up after WRITE_TIMEOUT_MS, so the change cannot hang on screen. */
+  async function optimisticRpc(fn: string, args: Record<string, unknown>) {
+    const { error, status } = await createSupabaseBrowserClient()
+      .rpc(fn, args)
+      .abortSignal(AbortSignal.timeout(WRITE_TIMEOUT_MS));
+    if (error) throw supabaseWriteError(error, status);
   }
 
   /** Works the chain follow-ups a role change or removal queued, then rereads everything. */
@@ -307,7 +327,7 @@ export function MembersView({
       `role:${member.userId}`,
       { kind: "role", userId: member.userId, role },
       async () => {
-        await rpc("set_workspace_member_role", { p_workspace_id: workspaceId, p_user_id: member.userId, p_role: role });
+        await optimisticRpc("set_workspace_member_role", { p_workspace_id: workspaceId, p_user_id: member.userId, p_role: role });
         toast.success(`${nameOf(member.label, member.address)} is now ${ROLE_LABELS[role].toLowerCase()}.`);
       },
       syncThenReload,
@@ -328,7 +348,7 @@ export function MembersView({
           `remove:${member.userId}`,
           { kind: "remove", userId: member.userId },
           async () => {
-            await rpc("remove_workspace_member", { p_workspace_id: workspaceId, p_user_id: member.userId });
+            await optimisticRpc("remove_workspace_member", { p_workspace_id: workspaceId, p_user_id: member.userId });
             toast.success(`${nameOf(member.label, member.address)} was removed.`);
           },
           syncThenReload,
@@ -436,7 +456,7 @@ export function MembersView({
       `cancel:${id}`,
       { kind: "cancel-invite", inviteId: id },
       async () => {
-        await rpc("cancel_workspace_invite", { p_invite_id: id });
+        await optimisticRpc("cancel_workspace_invite", { p_invite_id: id });
         toast.success(mine ? "Invite declined." : "Invite withdrawn.");
       },
       reload,

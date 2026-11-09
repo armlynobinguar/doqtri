@@ -24,6 +24,13 @@ export class UnconfirmedWriteError extends Error {
 export const UNCONFIRMED_WRITE = "No answer from the server, so this change may not have saved. Refresh to check.";
 
 /**
+ * How long an optimistic write waits before giving up. Without a limit a hung
+ * request would keep the change on screen, and the row busy, with no word of
+ * what happened. supabase-js reports the abort as status 0: unanswered.
+ */
+export const WRITE_TIMEOUT_MS = 15_000;
+
+/**
  * Whether an HTTP status means the request got no real answer. supabase-js
  * reports a fetch that never reached PostgREST as status 0; 408, 502 to 504
  * and Cloudflare's 520 to 524 are timeouts and gateway failures in front of
@@ -39,13 +46,14 @@ export function supabaseWriteError(error: { message: string }, status: number): 
 }
 
 /**
- * Whether a failed write may still have landed. A plain Error is a refusal
- * we raised from the server's answer. An unconfirmed write may have landed,
- * and so may anything else thrown: fetch rejects with a TypeError when the
- * network drops.
+ * Whether a failed write may still have landed: an unconfirmed write, or
+ * something thrown that is not an Error at all. Any other Error is a refusal
+ * we raised from the server's answer, or a bug, and is shown as it is.
+ * supabase-js already turns a failed fetch into status 0, so a TypeError here
+ * is a bug, not a dropped network.
  */
 export function mayHaveLanded(error: unknown): boolean {
-  return error instanceof UnconfirmedWriteError || error instanceof TypeError || !(error instanceof Error);
+  return error instanceof UnconfirmedWriteError || !(error instanceof Error);
 }
 
 /** What to tell someone whose optimistic change was rolled back. */

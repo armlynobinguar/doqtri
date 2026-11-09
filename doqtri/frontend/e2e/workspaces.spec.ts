@@ -247,6 +247,32 @@ test.describe("members screen", () => {
     await page.unroute(RPC);
   });
 
+  test("removing someone hides their row before the RPC answers, and a refusal brings it back", async ({ page }) => {
+    await setMember(team, bId, "viewer");
+    await page.goto(`/vault/workspace/members?ws=${team}`);
+    const row = page.getByTestId("member-row").filter({ hasText: B_SHORT });
+    await expect(row).toBeVisible();
+
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route("**/rest/v1/rpc/remove_workspace_member", async (route) => {
+      await held;
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "P0001", message: "E2E refused this removal", details: null, hint: null }),
+      });
+    });
+    await page.getByRole("button", { name: `Remove ${B_SHORT}` }).click();
+    await expect(row).toHaveCount(0);
+    expect(await memberRole(team, bId)).toBe("viewer");
+    release();
+
+    await expect(page.getByText("E2E refused this removal")).toBeVisible();
+    await expect(row).toBeVisible();
+    expect(await memberRole(team, bId)).toBe("viewer");
+  });
+
   // The RPCs behind these controls refuse the same callers; that is covered
   // per role in backend/tests/workspace_members_management.test.sql.
   test("an editor gets no invite or role controls; an owner can grant up to admin only", async ({ page }) => {

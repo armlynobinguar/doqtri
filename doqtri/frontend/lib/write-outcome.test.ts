@@ -28,8 +28,15 @@ describe("refused or unanswered writes (DOQ-33)", () => {
     expect(lost).toBeInstanceOf(UnconfirmedWriteError);
     expect(mayHaveLanded(lost)).toBe(true);
     expect(writeFailureMessage(lost, "role failed")).toBe(UNCONFIRMED_WRITE);
-    // A bare fetch rejects with a TypeError; anything not an Error is just as unknown.
-    expect(writeFailureMessage(new TypeError("Failed to fetch"), "x")).toBe(UNCONFIRMED_WRITE);
+    // A write that hit WRITE_TIMEOUT_MS is aborted, which supabase-js also reports as status 0.
+    expect(mayHaveLanded(supabaseWriteError({ message: "AbortError: signal timed out" }, 0))).toBe(true);
+    // Something thrown that is not an Error says nothing about the write.
     expect(writeFailureMessage("boom", "x")).toBe(UNCONFIRMED_WRITE);
+  });
+
+  it("shows a TypeError as it is: supabase-js reports a failed fetch as status 0, so this is a bug", () => {
+    const bug = new TypeError("Cannot read properties of undefined (reading 'label')");
+    expect(mayHaveLanded(bug)).toBe(false);
+    expect(writeFailureMessage(bug, "x")).toBe(bug.message);
   });
 });
