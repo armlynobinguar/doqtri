@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { shortenAddress } from "@/lib/wallet";
-import { E2E_WALLET, deleteNote, seedNote, uniqueTitle } from "./helpers";
+import { E2E_WALLET, deleteNote, editableEditor, editorSelection, seedNote, setEditorSelection, uniqueTitle } from "./helpers";
 
 test.describe("vault shell", () => {
   let noteId: string;
@@ -162,6 +162,38 @@ test.describe("vault shell", () => {
       await expect(page.getByRole("contentinfo")).toContainText(`${before + 1} notes`);
     } finally {
       await deleteNote(createdId);
+    }
+  });
+
+  test("on a Mac, Ctrl-N in the editor only moves the caret; ⌘N and Ctrl-N elsewhere make a note", async ({ page }) => {
+    await page.goto(`/vault/${noteId}`);
+    const mac = await page.evaluate(() => /Mac/.test(navigator.platform));
+    test.skip(!mac, "Ctrl-N is the editor's own caret key only on the Mac");
+    const explorer = page.getByRole("complementary");
+    const before = await explorer.locator('a[href^="/vault/"]').count();
+
+    // In the note: emacs-style line down, and nothing else.
+    await editableEditor(page);
+    await setEditorSelection(page, 0);
+    await page.keyboard.press("Control+n");
+    await expect.poll(async () => (await editorSelection(page)).head).toBeGreaterThan(0);
+    await page.waitForTimeout(1_000);
+    expect(new URL(page.url()).pathname).toBe(`/vault/${noteId}`);
+    await expect(explorer.locator('a[href^="/vault/"]')).toHaveCount(before);
+
+    // Outside the editor, both still make a note.
+    for (const combo of ["Meta+n", "Control+n"]) {
+      await page.goto(`/vault/${noteId}`);
+      await expect(page.getByRole("button", { name: "New note" })).toBeVisible();
+      // Retried: a key pressed before hydration has no listener to reach.
+      await expect(async () => {
+        await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+        await page.keyboard.press(combo);
+        await page.waitForURL((url) => /^\/vault\/[0-9a-f-]{36}$/.test(url.pathname) && !url.pathname.endsWith(noteId), {
+          timeout: 3_000,
+        });
+      }).toPass({ timeout: 20_000 });
+      await deleteNote(new URL(page.url()).pathname.split("/")[2]);
     }
   });
 

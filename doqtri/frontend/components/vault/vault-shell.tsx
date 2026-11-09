@@ -35,6 +35,7 @@ import type { FailedImport, NoteSummary, VaultIdentity } from "@/lib/types";
 import type { WorkspaceChoice } from "@/lib/workspace-scope";
 import { ActiveWorkspaceProvider, useActiveWorkspace } from "@/components/vault/workspace-context";
 import { WorkspaceSwitcher } from "@/components/vault/workspace-switcher";
+import { vaultShortcut } from "@/lib/vault-shortcuts";
 import {
   NavigationOverlay,
   NavigationProvider,
@@ -244,14 +245,11 @@ function VaultShellInner({
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "k" && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault();
-        setSwitcherOpen((open) => !open);
-      }
-      if (event.key === "n" && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault();
-        void handleNewNote();
-      }
+      const shortcut = vaultShortcut(event);
+      if (!shortcut) return;
+      event.preventDefault();
+      if (shortcut === "switcher") setSwitcherOpen((open) => !open);
+      else void handleNewNote();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);

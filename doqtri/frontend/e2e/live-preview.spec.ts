@@ -322,6 +322,49 @@ test.describe("live preview", () => {
     await other.close();
   });
 
+  test("while the lock status loads, the focusable editor takes no edits and sends no save", async ({ page, context }) => {
+    const id = await seedNote(uniqueTitle("Pending lock"), "Body.\n\n- [ ] todo");
+    ids.push(id);
+    // Hold the lock status back, so the editor stays in its pending state:
+    // focusable, caret and all, but read-only. Every status request until
+    // the release: the dev server's strict mode starts the lock twice.
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route(`**/api/notes/${id}/lock**`, async (route) => {
+      if (route.request().method() === "GET") await held;
+      await route.continue();
+    });
+    const saves: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() === "PUT" && new URL(request.url()).pathname.startsWith("/api/notes/")) saves.push(request.url());
+    });
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+
+    await page.goto(`/vault/${id}`);
+    const content = noteEditor(page);
+    await expect(content).toHaveAttribute("contenteditable", "true");
+    await expect(content).toHaveAttribute("aria-readonly", "true");
+    // The toolbar is there, disabled, so it does not push the text down later.
+    await expect(page.getByRole("toolbar", { name: "Formatting" }).getByRole("button", { name: "Bold" })).toBeDisabled();
+
+    await setEditorSelection(page, (await editorText(page)).indexOf("Body.") + 5);
+    await page.keyboard.type(" typed");
+    await page.evaluate(() => navigator.clipboard.writeText(" pasted"));
+    await page.keyboard.press("ControlOrMeta+v");
+    await page.keyboard.press("ControlOrMeta+b");
+    await content.locator(".cm-lp-task").click();
+    await page.waitForTimeout(800);
+    expect(await editorText(page)).toBe("Body.\n\n- [ ] todo");
+    expect(saves).toEqual([]);
+
+    // The lock arrives: the caret is still there, and typing works at once.
+    release();
+    await expect(content).not.toHaveAttribute("aria-readonly", "true");
+    await setEditorSelection(page, 5);
+    await page.keyboard.type(" now");
+    await expect.poll(() => editorText(page)).toBe("Body. now\n\n- [ ] todo");
+  });
+
   test("a task's checkbox toggles it once the note has loaded", async ({ page }) => {
     const id = await openNote(page, "- [ ] todo\n- [x] done\n\nend");
     await setEditorSelection(page, -1);

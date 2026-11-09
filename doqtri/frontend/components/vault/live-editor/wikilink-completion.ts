@@ -48,8 +48,14 @@ const dismissed = StateField.define<number | null>({
 });
 
 /** Completes the link being typed with `title`, as lib/wikilinks.ts says to. */
-function completeWith(view: EditorView, link: LinkQuery, title: string, picked?: Completion) {
-  if (view.state.readOnly) return;
+/** Exported for tests. False, and nothing sent, when the editor is read-only. */
+export function completeWith(
+  view: Pick<EditorView, "state" | "dispatch">,
+  link: LinkQuery,
+  title: string,
+  picked?: Completion,
+): boolean {
+  if (view.state.readOnly) return false;
   const caret = view.state.selection.main.head;
   const line = view.state.doc.lineAt(caret);
   const edit = completeLink(line.text, caret - line.from, { start: link.start - line.from, query: link.query }, title);
@@ -62,6 +68,7 @@ function completeWith(view: EditorView, link: LinkQuery, title: string, picked?:
     annotations: picked ? pickedCompletion.of(picked) : undefined,
     userEvent: "input.complete",
   });
+  return true;
 }
 
 /** Contiguous runs of matched characters, as [from, to, from, to, …]. */
@@ -104,7 +111,8 @@ function wikilinkSource(getTitles: () => string[]) {
  * the text as it is now — the best match for it — rather than falling through
  * to a newline, as the textarea version did.
  */
-function acceptLink(getTitles: () => string[]) {
+/** Exported for tests. */
+export function acceptLink(getTitles: () => string[]) {
   return (view: EditorView): boolean => {
     if (view.state.readOnly) return false;
     const status = completionStatus(view.state);

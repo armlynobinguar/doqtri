@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ComponentType, type SVGProps } from "react";
-import { Annotation, Compartment, EditorState, Prec, Transaction } from "@codemirror/state";
+import { Compartment, EditorState, Prec, Transaction } from "@codemirror/state";
 import { drawSelection, dropCursor, EditorView, keymap, placeholder as placeholderText } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { commonmarkLanguage, markdown } from "@codemirror/lang-markdown";
@@ -22,9 +22,8 @@ import { livePreview } from "@/components/vault/live-editor/live-preview";
 import { editorTheme } from "@/components/vault/live-editor/theme";
 import { wikilinkCompletion } from "@/components/vault/live-editor/wikilink-completion";
 import { linkFollowing, noteOpener } from "@/components/vault/live-editor/link-following";
+import { external, readOnlyGuard } from "@/components/vault/live-editor/read-only";
 
-/** Marks the transactions that load text from outside, so they are not echoed back. */
-const external = Annotation.define<boolean>();
 
 /** The smallest single change that turns `from` into `to`. */
 function diff(from: string, to: string) {
@@ -149,9 +148,7 @@ export default function MarkdownEditor({
             autocorrect: "off",
           }),
           editorTheme,
-          // Read-only means no edits from anywhere but outside: not a key, a
-          // paste, a completion or a checkbox. CodeMirror only blocks typing.
-          EditorState.changeFilter.of((tr) => !tr.startState.readOnly || tr.annotation(external) === true),
+          readOnlyGuard,
           EditorView.updateListener.of((update) => {
             if (!update.docChanged) return;
             if (update.transactions.every((tr) => tr.annotation(external))) return;

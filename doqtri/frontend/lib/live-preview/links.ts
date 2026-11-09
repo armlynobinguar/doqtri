@@ -13,20 +13,35 @@ import type { SyntaxNode, Tree } from "@lezer/common";
 
 export type LinkTarget = { kind: "url"; url: string } | { kind: "wiki"; title: string };
 
-const EMAIL = /^[^\s@<>()]+@[^\s@<>()]+\.[^\s@<>()]+$/;
+/**
+ * Longer than any address worth following, and short enough that no pattern
+ * below can spend real time on it: checked before any of them run.
+ */
+export const MAX_LINK_LENGTH = 2048;
+
+/** An address: no part of the domain may contain a dot, so nothing backtracks. */
+const EMAIL = /^[^\s@<>()]+@[^\s@<>().]+(\.[^\s@<>().]+)+$/;
+const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 
 /** The address a link may open, normalized, or null if it must not open. */
 export function openableLinkUrl(raw: string): string | null {
+  if (raw.length > MAX_LINK_LENGTH) return null;
   let url = raw.trim().replace(/^<(.*)>$/, "$1");
-  // GFM reads `www.example.com` as a link; it means the web address.
-  if (/^www\./i.test(url)) url = `https://${url}`;
-  else if (!/^mailto:/i.test(url) && EMAIL.test(url)) url = `mailto:${url}`;
+  // A bare address is mail — checked first, so `www.alice@example.com` is
+  // an address rather than a web link to example.com — and GFM reads
+  // `www.example.com` as the web address. Anything with a scheme already
+  // says what it is: `https://medium.com/@someone` is not mail.
+  if (!SCHEME.test(url) && EMAIL.test(url)) url = `mailto:${url}`;
+  else if (/^www\./i.test(url)) url = `https://${url}`;
   if (!/^(https?:\/\/|mailto:)/i.test(url)) return null;
   try {
     const parsed = new URL(url);
     if (parsed.protocol === "mailto:") return parsed.pathname.includes("@") ? parsed.href : null;
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
     if (!parsed.hostname) return null;
+    // `https://good.example@evil.example` goes to evil.example: whatever sits
+    // before an `@` in the host part only exists to mislead the reader.
+    if (parsed.username || parsed.password) return null;
     return parsed.href;
   } catch {
     return null;
@@ -64,8 +79,9 @@ function targetOf(node: SyntaxNode, doc: Text): LinkTarget | null | undefined {
       return href ? { kind: "url", url: href } : null;
     }
     case "Image":
-      // An image is not a link; clicking it edits it.
-      return null;
+      // An image is not a link — unless it is the content of one, as a
+      // badge is: then the link around it decides.
+      return node.parent?.name === "Link" ? undefined : null;
   }
   return undefined;
 }

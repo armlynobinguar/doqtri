@@ -1,3 +1,5 @@
+import { MAX_LINK_LENGTH } from "@/lib/live-preview/links";
+
 /**
  * Which image URLs the live preview may load.
  *
@@ -9,6 +11,8 @@
  * reading it from the image host's logs beyond an IP address.
  */
 export function loadableImageUrl(raw: string): string | null {
+  // The same cap as links (see links.ts): nothing that long is an image address.
+  if (raw.length > MAX_LINK_LENGTH) return null;
   const url = raw.trim().replace(/^<(.*)>$/, "$1");
   if (!/^https?:\/\//i.test(url)) return null;
   try {
