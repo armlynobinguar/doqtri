@@ -49,6 +49,12 @@ export type NoRenameReason =
   | "emptied"
   /** The first line is no longer a `#` heading (a `##`, prose). */
   | "not-heading"
+  /**
+   * The title heading line was deleted or moved down, and a `#` heading that
+   * was already further down is now first: that is another section, not a
+   * new title.
+   */
+  | "heading-removed"
   /** The new heading would be refused as a title: control characters, or too long. */
   | "invalid-title";
 
@@ -66,6 +72,14 @@ export type HeadingRenameDecision =
  *   - that text is a title the server takes: one line, at most
  *     MAX_TITLE_LENGTH characters
  * The new title is the heading's text, trimmed, as the server would store it.
+ *
+ * The title heading's line must also still be the one that was edited.
+ * Deleting it, or cutting it to paste it lower, brings up a `#` heading that
+ * was already further down; renaming the note after that section would be
+ * wrong, so it renames nothing (see movedUp). Editing the first line into
+ * text that some later heading also has is still an edit of that line, and
+ * renames: the note then has two headings saying its title, which is the
+ * student's to tidy up.
  */
 export function decideHeadingRename(before: string, after: string, title: string): HeadingRenameDecision {
   if (!opensWithTitle(before, title)) return { rename: false, reason: "not-title-heading" };
@@ -73,6 +87,8 @@ export function decideHeadingRename(before: string, after: string, title: string
   const first = readFirstLine(after);
   if (first.kind === "blank" || first.kind === "empty-heading") return { rename: false, reason: "emptied" };
   if (first.kind === "other") return { rename: false, reason: "not-heading" };
+
+  if (movedUp(before, after)) return { rename: false, reason: "heading-removed" };
 
   const next = first.label.trim();
   if (normalizeConcept(next) === normalizeConcept(title)) return { rename: false, reason: "unchanged" };
@@ -82,6 +98,28 @@ export function decideHeadingRename(before: string, after: string, title: string
   return { rename: true, title: next };
 }
 
+/** The note's lines, without their line endings. */
+function lines(markdown: string): string[] {
+  return markdown.split("\n").map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
+}
+
+/**
+ * Whether the first non-blank line of `after` is a line that was already in
+ * `before` below its first non-blank line, moved up rather than typed: it is
+ * there no more often in `after` than it was further down in `before`. Line
+ * identity is the whole line's text, so typing it anew (one more copy than
+ * before) does not count as moved.
+ */
+function movedUp(before: string, after: string): boolean {
+  const opening = firstNonBlankLine(after);
+  const title = firstNonBlankLine(before);
+  if (!opening || !title) return false;
+  const later = lines(before.slice(title.to)).slice(1);
+  const wasBelow = later.filter((line) => line === opening.text).length;
+  if (wasBelow === 0) return false;
+  return lines(after).filter((line) => line === opening.text).length <= wasBelow;
+}
+
 /**
  * Whether, after a decision that renames nothing, `after` becomes the text
  * the next edit is compared with.
@@ -89,8 +127,11 @@ export function decideHeadingRename(before: string, after: string, title: string
  * A heading emptied or not yet a valid title is a heading being retyped: the
  * comparison stays with the text from before, so typing a new heading once it
  * is gone still renames. Anything definite moves it on: the heading saying
- * the title, a heading that was never the title, or a first line that is no
- * longer a `#` heading (the student made it something else).
+ * the title, a heading that was never the title, a first line that is no
+ * longer a `#` heading (the student made it something else), or a title
+ * heading deleted or moved down. Then an edit of the heading now first,
+ * another section's, cannot rename the note: the title heading is gone, and
+ * one typed again that says the title links them again.
  */
 export function movesBaseline(reason: NoRenameReason): boolean {
   return reason !== "emptied" && reason !== "invalid-title";

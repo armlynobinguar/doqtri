@@ -82,6 +82,19 @@ describe("decideHeadingRename", () => {
     });
   });
 
+  it("renames when the title line itself is edited into a later heading's text", () => {
+    // One more `# Second part` than before: the first line was typed, not moved up.
+    expect(decideHeadingRename("# Old\n\n# Second part\n", "# Second part\n\n# Second part\n", "Old")).toEqual({
+      rename: true,
+      title: "Second part",
+    });
+    // A later heading that merely says the same thing differently is another line.
+    expect(decideHeadingRename("# Old\n\n#  Second part\n", "# Second part\n\n#  Second part\n", "Old")).toEqual({
+      rename: true,
+      title: "Second part",
+    });
+  });
+
   it("renames back on undo, by the same rule", () => {
     expect(decideHeadingRename(note("# Roadmap"), note("# Plan"), "Roadmap")).toEqual({ rename: true, title: "Plan" });
   });
@@ -128,6 +141,34 @@ describe("decideHeadingRename", () => {
       }
     });
 
+    it("a deleted title heading line, bringing up a # heading from further down", () => {
+      const before = "# Old\n\n# Second part\n\nbody";
+      expect(decideHeadingRename(before, "\n\n# Second part\n\nbody", "Old")).toEqual({
+        rename: false,
+        reason: "heading-removed",
+      });
+      expect(decideHeadingRename(before, "# Second part\n\nbody", "Old")).toEqual({
+        rename: false,
+        reason: "heading-removed",
+      });
+      // CRLF text: the line is the same without its \r.
+      expect(decideHeadingRename("# Old\r\n\r\n# Second\r\n", "# Second\r\n", "Old")).toEqual({
+        rename: false,
+        reason: "heading-removed",
+      });
+    });
+
+    it("a title heading cut and pasted lower", () => {
+      expect(decideHeadingRename("# Old\n# Other\n", "# Other\n# Old\n", "Old")).toEqual({
+        rename: false,
+        reason: "heading-removed",
+      });
+      expect(decideHeadingRename("# Old\n\n# Other\n\n# Other\n", "# Other\n\n# Other\n", "Old")).toEqual({
+        rename: false,
+        reason: "heading-removed",
+      });
+    });
+
     it("a first line that stops being a # heading", () => {
       for (const after of [note("## Roadmap"), note("Roadmap"), note("#Roadmap"), `## Scope\n\nText.`, note("- Roadmap")]) {
         expect(decideHeadingRename(note("# Plan"), after, "Plan")).toEqual({ rename: false, reason: "not-heading" });
@@ -169,6 +210,7 @@ describe("movesBaseline", () => {
     expect(movesBaseline("unchanged")).toBe(true);
     expect(movesBaseline("not-title-heading")).toBe(true);
     expect(movesBaseline("not-heading")).toBe(true);
+    expect(movesBaseline("heading-removed")).toBe(true);
   });
 });
 
