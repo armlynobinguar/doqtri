@@ -17,6 +17,15 @@ export function qditIntegrationEnabled(): boolean {
 }
 
 /**
+ * "Send to qdit hackathon" on the global mindmap and its route (WP-4.7,
+ * D-117): off unless NEXT_PUBLIC_QDIT_HACKATHON is "1", and only on top of
+ * the integration itself. Safe for the browser, like the check above.
+ */
+export function qditHackathonEnabled(): boolean {
+  return qditIntegrationEnabled() && process.env.NEXT_PUBLIC_QDIT_HACKATHON === "1";
+}
+
+/**
  * What doqtri asks qdit for. Supabase Auth's scopes are identity claims, not
  * data access: what a token may read and write in qdit is decided by qdit's
  * client_id guards (D-03), whatever the scope. doqtri needs no identity claim

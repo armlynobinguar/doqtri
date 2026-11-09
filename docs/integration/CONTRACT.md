@@ -1,6 +1,6 @@
 # doqtri x qdit integration contract
 
-Status: v1.1.3, WP-2.0 (history in section 13, Changelog). This file is
+Status: v1.2.0, WP-2.0 (history in section 13, Changelog). This file is
 byte-identical in both repos (`qdit/docs/integration/CONTRACT.md`,
 `doqtri/docs/integration/CONTRACT.md`).
 Change it in both repos in the same phase, through the masterplan's decision
@@ -125,6 +125,7 @@ sides of one pair MUST agree on them:
 | Projects, milestones, milestone status, approvals, proofs, project roles | qdit | doqtri: `doc_project_links` and `node_links` rows with `provider = 'qdit'`, `external_ref = '<project_id>/<milestone_id>'` |
 | OAuth grant | qdit (user can revoke in qdit settings; section 5, D-59) | doqtri: access and refresh tokens, encrypted, server-only, in `integration_connections` |
 | Webhook secret | qdit, encrypted in `integration_webhooks` | doqtri: same value in `QDIT_WEBHOOK_SECRET` |
+| Notes and global mindmap sent in a hackathon snapshot (D-117) | doqtri | qdit: an insert-only copy in `hackathon_doqtri_snapshots`, for review of that project's hackathon entry, readable by the project's members and the hackathon's staff only, deleted 90 days after the hackathon closes; never sent back or synced |
 
 Rules that follow from the decisions:
 
@@ -156,9 +157,26 @@ Rules that follow from the decisions:
   tables or RPCs; PostgREST reads keep the window in section 5's known
   limit. A token whose `client_id` is not a UUID counts as revoked there
   (D-96).
+- Exception: hackathon snapshots (D-117, WP-4.7). doqtri's own OAuth client
+  (`DOQTRI_OAUTH_CLIENT_ID`, D-61), and no other client, may also send a
+  snapshot of doqtri notes to the qdit hackathon entry of a project
+  the user administers (`POST /projects/{id}/hackathon-snapshots`,
+  section 8). The pushing admin chooses what to send; qdit does not bind the
+  project to a doqtri workspace. qdit stores it insert-only and uses it only
+  to review that entry. Its readers are the project's members (any role) and
+  the hackathon's staff (admin and judge), in qdit's own UI, and nobody else:
+  no OAuth app ever reads it, through `/api/v1` or PostgREST. qdit deletes it
+  90 days after the hackathon's `closes_at`; until then deleting a doqtri
+  account (D-63) does not reach it. It is a copy doqtri chose to send, not a
+  read: qdit still never reads doqtri's database and still holds no doqtri
+  token, and the integration still runs doqtri to qdit only (D-02
+  unchanged). The write
+  refuses a revoked token like every other writing path above (D-75, D-96).
+  Everything else on the D-03 list stays closed.
 - Within that, the caller's qdit project role decides (D-23): admins and
-  owners link and unlink docs, members and above create and rename milestones
-  and write links, viewers only read. Section 8 lists the role per endpoint.
+  owners link and unlink docs and send hackathon snapshots (D-117), members
+  and above create and rename milestones and write links, viewers only read.
+  Section 8 lists the role per endpoint.
 
 ## 3. Versioning
 
@@ -176,7 +194,10 @@ Rules that follow from the decisions:
 ## 4. Conventions
 
 - JSON over HTTPS, `Content-Type: application/json; charset=utf-8`. Request
-  bodies are at most 64 KiB. Field names are `snake_case`.
+  bodies are at most 64 KiB, except on
+  `POST /projects/{id}/hackathon-snapshots`, which takes at most 2 MiB
+  (2,097,152 bytes, D-118). A larger body is `400 invalid_request` with
+  `body` in `details.fields`. Field names are `snake_case`.
 - Ids are UUIDs in lowercase canonical form (`8-4-4-4-12` hex). doqtri's
   `doc_id` is `documents.id`. `node_id` is doqtri's positional node id (`root`,
   `h0`, `h1`, ...), 1 to 64 characters.
@@ -194,7 +215,13 @@ Rules that follow from the decisions:
   authorization code grant with PKCE (`S256`) and a client secret
   (`client_secret_basic`, section 1). Authorize at
   `<issuer>/oauth/authorize`; exchange and refresh at `<issuer>/oauth/token`.
-  qdit's consent screen is `https://qdit.app/oauth/consent`.
+  qdit's consent screen is `https://qdit.app/oauth/consent`. It lists what a
+  connected app can and cannot do in the words of section 2. From v1.2.0,
+  when the client is doqtri's (`DOQTRI_OAUTH_CLIENT_ID`, D-61), the "can"
+  list adds "Send a snapshot of its documents to a hackathon entry for
+  projects you administer" (D-117). Other apps' consent screens do not show
+  that line, since no other client may send one. Grants given before v1.2.0
+  saw the older wording; qdit does not ask them to consent again.
 - qdit MUST accept a token only when all of these hold:
   - the signature verifies against `<issuer>/.well-known/jwks.json`;
   - `iss` equals the issuer above and `exp` is in the future;
@@ -322,11 +349,12 @@ server-to-server only and sends no CORS headers, so no preflight is needed.[^1]
 
 | HTTP | `code` | When |
 | --- | --- | --- |
-| 400 | `invalid_request` | Malformed JSON, wrong content type, unknown or invalid field. `details.fields` maps field name to problem. |
+| 400 | `invalid_request` | Malformed JSON, wrong content type, a body over its size limit (section 4), unknown or invalid field. `details.fields` maps field name to problem. |
 | 401 | `unauthorized` | Missing, malformed, expired, revoked (D-59) or non-OAuth token, or a `client_id` that is not a UUID (D-77). Response has `WWW-Authenticate: Bearer error="invalid_token"`. |
 | 403 | `forbidden` | Valid token, but the user's qdit role or the D-03 guard does not allow the action on a resource the user can see. |
 | 404 | `not_found` | Unknown path or id, a resource the user cannot see, or a method a known path does not support (D-27). Never reveals existence. |
 | 409 | `conflict` | State conflict. `details.reason` is one of the reasons listed per endpoint. |
+| 413 | none | Never from qdit. The hosting platform may answer it, with its own body and not the JSON error above, for a request over the platform's own limit (about 4.5 MB), before qdit runs. No conforming request is that large (section 4). |
 | 429 | `rate_limited` | Over the rate limit. `Retry-After` gives seconds. |
 | 500 | `internal_error` | Bug on qdit's side. Safe to retry with backoff. |
 | 503 | `unavailable` | qdit or its database is down, including when the D-59 revoke check cannot run. Safe to retry; may carry `Retry-After`. |
@@ -447,6 +475,7 @@ they can see and `404 not_found` on one they cannot.
 | `PATCH /milestones/{id}` | member | 200 |
 | `PATCH /links/{id}` | member | 200 |
 | `DELETE /links/{id}` | member | 204 |
+| `POST /projects/{id}/hackathon-snapshots` | admin, doqtri's client only (D-117) | 201 created, 200 already received |
 
 These are the only method and path pairs in v1. Any other method on one of
 these paths, `HEAD` and `OPTIONS` included, is `404 not_found` (D-27,
@@ -467,7 +496,7 @@ link left behind by a D-68 forget, below.
 
 ```json
 { "data": {
-    "user": { "id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", "username": "tyron", "display_name": "Tyron", "avatar_url": null, "wallet_address": "GABC...XYZ" },
+    "user": { "id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", "username": "example_user", "display_name": "Example User", "avatar_url": null, "wallet_address": "GABC...XYZ" },
     "client_id": "9b8a7c6d-5e4f-4a3b-2c1d-0e9f8a7b6c5d" } }
 ```
 
@@ -635,6 +664,206 @@ becomes editable in qdit again. `204` with no body. A repeated delete is
 treats a `404` as already done only when `GET /milestones/{milestone_id}`
 succeeds and its `link` is `null` or has a different `id`; otherwise it
 reports the failure and keeps its `node_links` row.
+
+### POST /api/v1/projects/{id}/hackathon-snapshots
+
+Sends qdit a snapshot of doqtri notes and their global mindmap for the
+project's entry in a qdit hackathon (WP-4.7, D-117, section 2). Only doqtri's
+OAuth client may call it: a token whose `client_id` is not
+`DOQTRI_OAUTH_CLIENT_ID` (section 1, D-61) is `403 forbidden`, and while that
+setting is unset every caller is. doqtri calls it only for a workspace admin
+(D-10), and its server builds the body from doqtri's own database, never from
+what a browser sent.
+
+The pushing admin chooses what to send. qdit does not bind a project to a
+doqtri workspace and does not check the notes against `project_doc_links` or
+any other link row: `workspace_id` is stored as sent and not interpreted.
+Whatever the admin sends becomes readable by every member of the project (any
+role) and by the hackathon's staff (admin and judge), and by nobody else
+(section 2). doqtri says so in its Send dialog.
+
+```json
+{
+  "hackathon_slug": "stellar-build-2026",
+  "snapshot_id": "4e7d2c1b-9a8f-4b6e-8d5c-3f2a1e0d9c8b",
+  "workspace_id": "6b5a4c3d-2e1f-4a0b-9c8d-7e6f5a4b3c2d",
+  "generated_at": "2026-11-20T15:04:05.000Z",
+  "notes": [
+    {
+      "doc_id": "c2d1e0f9-8a7b-4c6d-9e5f-4a3b2c1d0e9f",
+      "title": "Payroll v1 plan",
+      "markdown": "# Payroll v1 plan\n\n## Escrow contract\n",
+      "mindmap": { "...": "doqtri's stored concept map for this note" },
+      "created_at": "2026-11-20T09:12:00.000Z",
+      "updated_at": "2026-11-20T14:58:31.000Z",
+      "version": 3,
+      "source": "editor"
+    }
+  ],
+  "global_mindmap": {
+    "nodes": [
+      { "id": "doc:c2d1e0f9-8a7b-4c6d-9e5f-4a3b2c1d0e9f", "label": "Payroll v1 plan", "kind": "document", "depth": 0, "doc_ids": ["c2d1e0f9-8a7b-4c6d-9e5f-4a3b2c1d0e9f"] },
+      { "id": "concept:escrow contract", "label": "Escrow contract", "kind": "concept", "depth": 1, "doc_ids": ["c2d1e0f9-8a7b-4c6d-9e5f-4a3b2c1d0e9f"] }
+    ],
+    "links": [ { "source": "doc:c2d1e0f9-8a7b-4c6d-9e5f-4a3b2c1d0e9f", "target": "concept:escrow contract" } ]
+  }
+}
+```
+
+In this subsection a "character" is one Unicode code point, and a byte
+length is the length in UTF-8.
+
+- `hackathon_slug`: 1 to 64 characters, `^[a-z0-9-]+$`, the slug of a qdit
+  hackathon.
+- `snapshot_id`: a UUID doqtri generates once per press of Send. With the
+  project it is the idempotency key (below).
+- `workspace_id`: the doqtri workspace the notes come from, a UUID, stored
+  as sent (above).
+- `generated_at`: when doqtri built the snapshot.
+- `notes`: 0 to 200 notes, each `doc_id` at most once. Each note:
+  - `doc_id`: doqtri's `documents.id` (section 4).
+  - `title`: a string of at most 300 characters, stored as sent; it may be
+    empty.
+  - `markdown`: the note's markdown exactly as saved in doqtri, at most
+    102,400 bytes (100 KiB).
+  - `mindmap`: doqtri's stored per-note concept map, a JSON object, or `null`
+    when none is stored. Its limit is 65,536 bytes (64 KiB), measured as the
+    byte length of the value after qdit re-serializes it with
+    `JSON.stringify` (no whitespace). qdit stores it as sent and does not
+    check its inner shape: the unknown-field rule below does not apply
+    inside `mindmap`.
+  - `created_at`, `updated_at`: the note's own timestamps in doqtri.
+  - `version`: the note's `DoqtriRegistry` `Document.version` when the note
+    is anchored, integer >= 1 (versions start at 1), or `null`.
+  - `source`: how the note started in doqtri: `editor` (written in doqtri),
+    `template`, `import`, or `null` when doqtri does not know.
+- `global_mindmap`: the global mindmap of the notes sent, as doqtri draws
+  it, computed on doqtri's server from the same notes.
+  - `nodes`: at most 5,000 of `{id, label, kind, depth, doc_ids}`. `id` is 1
+    to 128 characters and unique within `nodes`; `label` at most 300
+    characters; `kind` 1 to 32 characters (doqtri's node kind, for example
+    `document`, `concept` or `hub`); `depth` an integer >= 0; `doc_ids` the
+    notes that reach the node, each a `doc_id` in `notes`.
+  - `links`: at most 20,000 of `{source, target}`, each naming an `id` in
+    `nodes`.
+
+Every field is present (optional ones as `null`, section 4), and any other
+field is `400 invalid_request`, as on every endpoint, except inside
+`mindmap` (above). `details.fields` names a nested field by its path, for
+example `notes[3].markdown` or `global_mindmap.links[12].target`.
+
+Body size (D-118). The whole body is at most 2,097,152 bytes (2 MiB,
+section 4), and the per-field limits can add up to more than that. doqtri
+serializes the body and checks its byte length before sending. A body over
+2 MiB is not sent, even when every field is within its own limit: doqtri
+tells the user the snapshot is too large to send and to remove notes from
+it or shorten them, and sends nothing until it fits.
+
+Check order. qdit checks a request in this order and answers with the first
+failure:
+
+1. Bearer token (section 5): `401 unauthorized`. Then the client: a token
+   that is not doqtri's client is `403 forbidden`.
+2. The project: unknown, or one the caller cannot see, is `404 not_found`.
+3. The caller's role: below admin is `403 forbidden`.
+4. The body: size, then shape and limits, `400 invalid_request`.
+5. Replay or conflict on `(project, snapshot_id)` (below): `200` with the
+   stored answer, or `409 snapshot_conflict`.
+6. The hackathon: no hackathon with that `hackathon_slug`, or one the
+   caller cannot see, is `404 not_found`.
+7. The snapshot cap: `409 snapshot_limit`.
+8. The window: `409 hackathon_not_open` or `409 hackathon_closed`.
+
+This keeps section 6's rule that a `404` never reveals existence. Step 1
+does not depend on the project. Step 3 answers only on a project step 2 found
+visible, as on every endpoint (section 8). Step 5 matches only snapshots
+stored for this project, which a project admin may read anyway. Step 6 gives
+an unknown slug and a hackathon the caller cannot see the same `404`.
+
+Idempotency. The key is `(project, snapshot_id)`. qdit stores each snapshot
+once and gives it its own `id`, and keeps the SHA-256 of the raw body bytes
+with it. A second request with the same key and the same body bytes is a
+replay: `200` with the `id`, `note_count` and `received_at` of the first
+answer, and no new snapshot. The same key with any other body is
+`409 snapshot_conflict`. The same `snapshot_id` in another project is a
+different key: it is unrelated, stored on its own, and neither request
+learns anything about the other. When requests with the same key arrive at
+the same time, exactly one stores the snapshot; each other one is then a
+replay (`200`) when its body hash matches and `409 snapshot_conflict` when
+it does not. doqtri therefore retries with the same bytes and makes a new
+`snapshot_id` for every press of Send. A replay is answered before the cap
+and the window (steps 5 to 8), so a retry of a send that landed before the
+close, or that was the 30th, still gets `200`.
+
+Limits per entry. qdit stores at most 30 snapshots per project per
+hackathon. A new snapshot past that is `409 snapshot_limit`; a replay is not
+counted again.
+
+Window. A hackathon is open from its `opens_at` to its `closes_at`. Before
+`opens_at` a new snapshot is `409 hackathon_not_open`; after `closes_at` it is
+`409 hackathon_closed`, unless the project holds a late pass. A late pass is
+granted in qdit by a hackathon admin, one per project, with an `until` time:
+while the current time is at or before `until`, `closes_at` does not apply to
+that project. A project may push before it has an entry in the hackathon
+(`submission_state` is then `none`).
+
+Response `201` (`200` on a replay):
+
+```json
+{ "data": { "id": "8f7e6d5c-4b3a-4c2d-9e1f-0a9b8c7d6e5f", "note_count": 1, "received_at": "2026-11-20T15:04:06.120Z", "submission_state": "none" } }
+```
+
+- `id`: qdit's id for the stored snapshot (not the `snapshot_id`).
+- `note_count`: the number of notes stored, the length of `notes`.
+- `received_at`: when qdit first stored the snapshot.
+- `submission_state`: the project's entry in this hackathon against this
+  snapshot, as of the answer:
+  - `none`: the project has no submission in this hackathon yet;
+  - `submitted_older`: the project has a submission, and its current version
+    does not include this snapshot; doqtri tells the user to resubmit in qdit
+    to include it;
+  - `current`: the submission's current version froze this snapshot (seen
+    only on a replay after the team submitted).
+
+A push is not a submission (D-117). A snapshot becomes part of an entry only
+when the team submits or resubmits the entry in qdit: qdit then freezes into
+the new submission version the project's newest snapshot for that hackathon,
+newest meaning the latest `received_at`. A later push changes no existing
+submission until the team resubmits.
+
+Chain check. After answering, qdit computes for each note the SHA-256 of
+`markdown` as section 12 defines `content_hash` (lowercase hex of the
+markdown's UTF-8 bytes exactly as saved), and compares it with
+`DoqtriRegistry.get_document(doc_id)` `content_hash` on the registry of
+section 1. It records, per note, `matched` (equal), `mismatch` (the document
+is on the registry with another hash) or `not_anchored` (the document is not
+on the registry). A registry read that fails is recorded as not checked,
+never as `matched` (D-93). The result is for review in qdit only: it is not
+in the response and never refuses a snapshot.
+
+Retention (D-117). qdit deletes every stored snapshot of a hackathon 90 days
+after that hackathon's `closes_at`, in a daily job; a submission version
+that froze a snapshot loses its copy of the doqtri content then too. Until
+then a copy stays even if the note is changed or deleted in doqtri, and
+deleting a doqtri account (D-63) does not reach copies already sent: the 90
+days are the bound.
+
+Errors (section 6), by the check order above:
+
+- `400 invalid_request`: any size, shape or limit problem above, with
+  `details.fields` (`body` for a body over 2 MiB, D-118).
+- `403 forbidden`: the token is not doqtri's client (D-61), or the caller is
+  below admin on a project they can see.
+- `404 not_found`: an unknown project or one the caller cannot see
+  (section 8), or no hackathon with that `hackathon_slug` that the caller can
+  see.
+- 409 reasons: `snapshot_conflict` (the same key with another body, above),
+  `snapshot_limit` (30 snapshots already stored for this project in this
+  hackathon), `hackathon_not_open` (before `opens_at`), `hackathon_closed`
+  (after `closes_at`, with no late pass in force).
+- `413`: never from qdit. Only the hosting platform answers it, above its own
+  request limit (section 6); doqtri's size check above means it does not
+  meet one.
 
 ## 9. Webhook
 
@@ -876,6 +1105,10 @@ For a node `N` of doc `D` linked to milestone `M` of project `P`, whose
 | 2 | Submitted | `milestone_proof.get_milestone_status(P, M)` on `<contract-id>` over RPC on `<network>`: `version`, `proof_hash`, `submitter`, `timestamp`, `status` | qdit (anchor history); doqtri (receipt) |
 | 3 | Approved | the same record with `status = Approved` at version `V` | both |
 | 4 | Verified | `DoqtriRegistry.get_node(D, N)` with `tool = "qdit"`, `status = Verified` and the `artifact_ref` above | doqtri; qdit in its "Planned in doqtri" block |
+
+`content_hash` in a `Document` is the lowercase hex SHA-256 of the note's
+markdown in UTF-8, exactly as saved in doqtri. qdit's check of a hackathon
+snapshot (section 8) computes the same hash over the snapshot's `markdown`.
 
 Both contracts store only the current record: the current `Document`, the
 current `NodeRecord` per node, the current `MilestoneRecord` per milestone.
@@ -1121,6 +1354,40 @@ Every change here is additive within v1 (section 3), except that v1.0.2
 narrows what `doc_url` accepts (D-45). Section 3 allows that because
 doqtri only ever sent its own URLs.
 
+- v1.2.0 (2026-11-09): minor version for one new endpoint (WP-4.7). Every
+  existing request and response stays as it was.
+  - Section 2: exception to D-03 (D-117). doqtri's client, and no other, may
+    send a snapshot of notes to the hackathon entry of a project the user
+    administers. The pushing admin chooses what to send; qdit binds no
+    workspace. qdit stores it insert-only for review; its readers are the
+    project's members and the hackathon's staff, never an OAuth app; it is
+    deleted 90 days after the hackathon closes, the bound on a copy that a
+    doqtri account deletion (D-63) does not reach. qdit still never reads
+    doqtri's database and holds no doqtri token (D-02 unchanged). New data
+    ownership row for the copy.
+  - Section 4: request bodies stay at most 64 KiB, except
+    `POST /projects/{id}/hackathon-snapshots` at 2 MiB (D-118); an oversized
+    body is `400 invalid_request` with `body` in `details.fields`, as before.
+    Section 6's `400` row says so, and a new `413` row says only the hosting
+    platform answers `413`, above its own limit.
+  - Section 5: on doqtri's consent screen only, the "can" list adds "Send a
+    snapshot of its documents to a hackathon entry for projects you
+    administer" (D-117); earlier grants are not asked to consent again.
+  - Section 8: new `POST /projects/{id}/hackathon-snapshots` (admin, doqtri's
+    client only): body and limits in code points and UTF-8 bytes, doqtri's
+    own size check before sending, the check order, idempotency on
+    `(project, snapshot_id)` including concurrent requests, at most 30
+    snapshots per project per hackathon, the window and late passes,
+    `submission_state`, 409 reasons `snapshot_conflict`, `snapshot_limit`,
+    `hackathon_not_open` and `hackathon_closed`, retention, and qdit's
+    per-note check of the markdown hash against `DoqtriRegistry`
+    (`matched`, `mismatch`, `not_anchored`). A push reaches an entry only
+    when the team submits or resubmits in qdit, which freezes the snapshot
+    with the latest `received_at`. The `GET /me` example uses a placeholder
+    username, which also ends a drift between the two copies of this file on
+    that line.
+  - Section 12: `content_hash` is defined as the lowercase hex SHA-256 of
+    the note's markdown in UTF-8, exactly as saved.
 - v1.1.3 (2026-10-29): qdit's production origin moves from
   `https://qdit.atalusan.com` to `https://qdit.app` (WP-2.15). Section 1's
   qdit API and qdit origin, section 5's consent screen and the section 7

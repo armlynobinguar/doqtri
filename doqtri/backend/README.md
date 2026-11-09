@@ -66,6 +66,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261107120000_referral_payout_profiles.sql  # NOT yet applied (WP-4.6, DOQ-25): needs 20261107110000_referral_dashboard.sql first
 20261107140000_referral_testimonials.sql     # NOT yet applied (WP-4.6, DOQ-28): needs 20261107120000_referral_payout_profiles.sql first
 20261109100000_rename_document.sql        # applied to staging, not prod (WP-1.7, DOQ-35): apply before deploying; /api/notes/[id] PATCH needs it
+20261110100000_documents_created_at.sql   # applied to staging 2026-11-10, not prod (WP-4.7, DOQ-39): apply before deploying (loadVaultDocs selects created_at) and before any hackathon opens
 ```
 
 Files marked "NOT recorded" were added without updating this list, so whether they are

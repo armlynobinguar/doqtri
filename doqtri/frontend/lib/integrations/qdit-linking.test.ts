@@ -262,6 +262,10 @@ function fakeQdit(state: {
       const m = byLink(linkId);
       m.link = null;
     },
+    async pushHackathonSnapshot(projectId) {
+      calls.push(`POST /projects/${projectId}/hackathon-snapshots`);
+      throw new Error("linking never sends a hackathon snapshot");
+    },
   };
   return { client, calls, state };
 }

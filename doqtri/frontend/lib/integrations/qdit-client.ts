@@ -125,6 +125,15 @@ export type CreateMilestoneInput = {
 
 export type UpdateLinkInput = { node_id?: string; doc_version?: number | null };
 
+/** qdit's answer to a hackathon snapshot (section 8, `POST /projects/{id}/hackathon-snapshots`). */
+export type QditHackathonSnapshotReceipt = {
+  /** qdit's id for the stored snapshot, not the snapshot_id. */
+  id: string;
+  note_count: number;
+  received_at: string;
+  submission_state: "none" | "submitted_older" | "current";
+};
+
 // ---------------------------------------------------------------------------
 // Errors (section 6)
 // ---------------------------------------------------------------------------
@@ -139,6 +148,8 @@ export type QditErrorKind =
   | "forbidden"
   | "not_found"
   | "conflict"
+  /** 413: the hosting platform refused the body before qdit ran. */
+  | "payload_too_large"
   | "rate_limited"
   /** 500, or another 5xx: safe to retry with backoff. */
   | "server"
@@ -197,12 +208,102 @@ export class QditNotConnectedError extends QditError {
   }
 }
 
+/**
+ * Why qdit refused a hackathon snapshot: one of the endpoint's 409 reasons,
+ * or the status it answered with.
+ */
+export type QditHackathonRefusal =
+  | "hackathon_not_open"
+  | "hackathon_closed"
+  | "snapshot_conflict"
+  /** 409: the project already sent as many snapshots for this hackathon as qdit keeps. */
+  | "snapshot_limit"
+  /** 400: a shape or limit problem; `fields` names them. */
+  | "invalid_snapshot"
+  /** 403: below admin on the project, or not doqtri's client. */
+  | "forbidden"
+  /** 404: no such project the user can see, or no such hackathon. */
+  | "not_found"
+  /** 413 from the platform, or over 2 MiB before sending (then `status` is null). */
+  | "too_large";
+
+const HACKATHON_CONFLICTS: ReadonlySet<string> = new Set([
+  "hackathon_not_open",
+  "hackathon_closed",
+  "snapshot_conflict",
+  "snapshot_limit",
+]);
+const HACKATHON_REFUSAL_BY_STATUS: Record<number, QditHackathonRefusal> = {
+  400: "invalid_snapshot",
+  403: "forbidden",
+  404: "not_found",
+  413: "too_large",
+};
+
+/** A hackathon snapshot qdit refused, or doqtri would not send. */
+export class QditHackathonSnapshotError extends QditError {
+  readonly refusal: QditHackathonRefusal;
+  /** `details.fields` on a 400: the paths qdit names (`notes[3].markdown`, `body`). */
+  readonly fields: string[];
+  /** What qdit said about each of `fields`, when it sent `details.fields` as a map (its usual form). */
+  readonly fieldProblems: Record<string, string>;
+
+  constructor(refusal: QditHackathonRefusal, from: QditError) {
+    super(from.kind, from.message, {
+      status: from.status,
+      code: from.code,
+      reason: from.reason,
+      details: from.details,
+      requestId: from.requestId,
+      retryAfterSeconds: from.retryAfterSeconds,
+    });
+    this.name = "QditHackathonSnapshotError";
+    this.refusal = refusal;
+    // qdit sends `{ "<path>": "<problem>" }` (web/src/lib/api/body.ts); a
+    // plain list of paths is read too.
+    const fields = from.details?.fields;
+    this.fieldProblems = {};
+    if (Array.isArray(fields)) {
+      this.fields = fields.filter((f): f is string => typeof f === "string");
+    } else if (fields && typeof fields === "object") {
+      this.fields = Object.keys(fields);
+      for (const [field, problem] of Object.entries(fields as Record<string, unknown>)) {
+        if (typeof problem === "string") this.fieldProblems[field] = problem;
+      }
+    } else {
+      this.fields = [];
+    }
+  }
+}
+
+/** The endpoint's typed error for `error`, or `error` itself when it is not one of the endpoint's refusals. */
+function hackathonError(error: unknown): unknown {
+  if (!(error instanceof QditError) || error instanceof QditNotConnectedError || error.status === null) return error;
+  if (error.status === 409) {
+    return error.reason && HACKATHON_CONFLICTS.has(error.reason)
+      ? new QditHackathonSnapshotError(error.reason as QditHackathonRefusal, error)
+      : error;
+  }
+  const refusal = HACKATHON_REFUSAL_BY_STATUS[error.status];
+  return refusal ? new QditHackathonSnapshotError(refusal, error) : error;
+}
+
+/** Most a hackathon snapshot body may be (section 4, D-118). */
+const HACKATHON_BODY_BYTES = 2 * 1024 * 1024;
+const SUBMISSION_STATES: ReadonlySet<unknown> = new Set(["none", "submitted_older", "current"]);
+
+/** A request body already serialized, sent byte for byte. */
+class RawJson {
+  constructor(readonly text: string) {}
+}
+
 const KIND_BY_STATUS: Record<number, QditErrorKind> = {
   400: "invalid_request",
   401: "unauthorized",
   403: "forbidden",
   404: "not_found",
   409: "conflict",
+  413: "payload_too_large",
   429: "rate_limited",
   500: "server",
   503: "unavailable",
@@ -256,6 +357,8 @@ export async function errorFromResponse(res: Response, now = Date.now()): Promis
 /** Refresh this long before the access token expires. */
 const EXPIRY_SKEW_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 10_000;
+/** pushHackathonSnapshot only: its body is up to 2 MiB (D-118). */
+const HACKATHON_TIMEOUT_MS = 30_000;
 
 /** One refresh at a time per user, per issuer, in this server instance. */
 const refreshing = new Map<string, Promise<string>>();
@@ -265,6 +368,8 @@ export type QditClientDeps = {
   store: ConnectionStore;
   fetch?: typeof fetch;
   timeoutMs?: number;
+  /** pushHackathonSnapshot's own timeout; 30 s unless set. */
+  hackathonTimeoutMs?: number;
   now?: () => number;
 };
 
@@ -288,6 +393,14 @@ export type QditClient = {
   renameMilestone(milestoneId: string, title: string): Promise<QditMilestone>;
   updateLink(linkId: string, input: UpdateLinkInput): Promise<QditMilestone>;
   deleteLink(linkId: string): Promise<void>;
+  /**
+   * Sends a hackathon snapshot to `projectId`'s entry. `body` is the JSON
+   * from buildHackathonSnapshot() (qdit-hackathon.ts), sent byte for byte: a
+   * retry must resend the same string, since qdit treats the same
+   * snapshot_id with other bytes as `snapshot_conflict`. Refusals throw
+   * QditHackathonSnapshotError.
+   */
+  pushHackathonSnapshot(projectId: string, body: string): Promise<QditHackathonSnapshotReceipt>;
 };
 
 export function createQditClient(userId: string, deps: QditClientDeps): QditClient {
@@ -295,6 +408,8 @@ export function createQditClient(userId: string, deps: QditClientDeps): QditClie
   const doFetch = deps.fetch ?? fetch;
   const now = deps.now ?? Date.now;
   const timeoutMs = deps.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  // Up to 2 MiB each way through qdit's validation: longer than the usual call.
+  const hackathonTimeoutMs = deps.hackathonTimeoutMs ?? HACKATHON_TIMEOUT_MS;
 
   /** Refreshes `conn`'s tokens and returns the new access token. */
   async function refresh(conn: StoredConnection): Promise<string> {
@@ -403,7 +518,13 @@ export function createQditClient(userId: string, deps: QditClientDeps): QditClie
     throw await errorFromResponse(res, now());
   }
 
-  async function send(method: string, path: string, token: string, body?: unknown): Promise<Response> {
+  async function send(
+    method: string,
+    path: string,
+    token: string,
+    body?: unknown,
+    callTimeoutMs = timeoutMs,
+  ): Promise<Response> {
     try {
       return await doFetch(`${config.apiBaseUrl}${path}`, {
         method,
@@ -412,10 +533,10 @@ export function createQditClient(userId: string, deps: QditClientDeps): QditClie
           Accept: "application/json",
           ...(body === undefined ? {} : { "Content-Type": "application/json; charset=utf-8" }),
         },
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body: body === undefined ? undefined : body instanceof RawJson ? body.text : JSON.stringify(body),
         cache: "no-store",
         redirect: "error",
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(callTimeoutMs),
       });
     } catch (error) {
       const name = (error as { name?: string } | null)?.name;
@@ -426,13 +547,18 @@ export function createQditClient(userId: string, deps: QditClientDeps): QditClie
     }
   }
 
-  async function call<T>(method: string, path: string, body?: unknown): Promise<{ status: number; json: T | null }> {
+  async function call<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    callTimeoutMs = timeoutMs,
+  ): Promise<{ status: number; json: T | null }> {
     const token = await accessToken();
-    let res = await send(method, path, token, body);
+    let res = await send(method, path, token, body, callTimeoutMs);
     if (res.status === 401) {
       // Section 5: refresh once, retry once.
       const fresh = await accessToken(token);
-      res = await send(method, path, fresh, body);
+      res = await send(method, path, fresh, body, callTimeoutMs);
       if (res.status === 401) await refusedAgain(fresh, res);
     }
     if (!res.ok) throw await errorFromResponse(res, now());
@@ -447,8 +573,8 @@ export function createQditClient(userId: string, deps: QditClientDeps): QditClie
     }
   }
 
-  async function data<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const { json } = await call<{ data?: T }>(method, path, body);
+  async function data<T>(method: string, path: string, body?: unknown, callTimeoutMs = timeoutMs): Promise<T> {
+    const { json } = await call<{ data?: T }>(method, path, body, callTimeoutMs);
     if (!json || json.data === undefined) {
       throw new QditError("bad_response", "qdit sent a response without data.");
     }
@@ -492,6 +618,43 @@ export function createQditClient(userId: string, deps: QditClientDeps): QditClie
     updateLink: (linkId, input) => data<QditMilestone>("PATCH", `/links/${id(linkId)}`, input),
     async deleteLink(linkId) {
       await call<never>("DELETE", `/links/${id(linkId)}`);
+    },
+
+    async pushHackathonSnapshot(projectId, body) {
+      if (Buffer.byteLength(body, "utf8") > HACKATHON_BODY_BYTES) {
+        throw new QditHackathonSnapshotError(
+          "too_large",
+          new QditError("invalid_request", "The snapshot is larger than qdit accepts (2 MiB).", {
+            details: { fields: ["body"] },
+          }),
+        );
+      }
+      let receipt: QditHackathonSnapshotReceipt;
+      try {
+        receipt = await data<QditHackathonSnapshotReceipt>(
+          "POST",
+          `/projects/${id(projectId)}/hackathon-snapshots`,
+          new RawJson(body),
+          hackathonTimeoutMs,
+        );
+      } catch (error) {
+        throw hackathonError(error);
+      }
+      if (
+        !receipt ||
+        typeof receipt.id !== "string" ||
+        typeof receipt.note_count !== "number" ||
+        typeof receipt.received_at !== "string" ||
+        !SUBMISSION_STATES.has(receipt.submission_state)
+      ) {
+        throw new QditError("bad_response", "qdit sent a snapshot receipt doqtri could not read.");
+      }
+      return {
+        id: receipt.id,
+        note_count: receipt.note_count,
+        received_at: receipt.received_at,
+        submission_state: receipt.submission_state,
+      };
     },
   };
   return client;
