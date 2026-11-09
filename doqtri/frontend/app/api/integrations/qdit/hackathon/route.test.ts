@@ -139,6 +139,14 @@ describe("who may send", () => {
     expect(await (await send()).json()).toMatchObject({ ok: false, code: "QDIT_NOT_CONNECTED" });
   });
 
+  it("is 503 when qdit's public origin is unknown, even for a bare slug", async () => {
+    vi.stubEnv("QDIT_API_BASE_URL", "");
+    const res = await send();
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ ok: false, code: "QDIT_NOT_CONFIGURED" });
+    expect(build).not.toHaveBeenCalled();
+  });
+
   it("is 503 when qdit isn't configured", async () => {
     configured = false;
     expect((await send()).status).toBe(503);
@@ -261,7 +269,12 @@ describe("a send", () => {
       "This project has reached the snapshot limit for this hackathon",
     ],
     [refusal("conflict", "snapshot_conflict"), 409, "SNAPSHOT_CONFLICT", COPY.conflict],
-    [refusal("forbidden", "forbidden"), 403, "QDIT_FORBIDDEN", "You need to be an admin of that qdit project"],
+    [
+      refusal("forbidden", "forbidden"),
+      403,
+      "QDIT_FORBIDDEN",
+      "qdit refused this: you need to be an admin of that qdit project. If you are, ask the organisers to check the doqtri connection.",
+    ],
     [refusal("not_found", "not_found"), 404, "QDIT_NOT_FOUND", "Hackathon or project not found"],
     [
       refusal("payload_too_large", "too_large"),
@@ -287,7 +300,7 @@ describe("a send", () => {
       "QDIT_RATE_LIMITED",
       COPY.rateLimited,
     ],
-    [new QditError("timeout", "late"), 502, "QDIT_UNAVAILABLE", COPY.unavailable],
+    [new QditError("server", "boom", { status: 500 }), 502, "QDIT_UNAVAILABLE", COPY.unavailable],
     [new QditError("not_configured", "bad client"), 503, "QDIT_NOT_CONFIGURED", COPY.notConfigured],
   ])("maps %o to %i %s", async (error, status, code, message) => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -304,4 +317,31 @@ describe("a send", () => {
     warn.mockRestore();
     log.mockRestore();
   });
+
+  it("logs only the kind when qdit answers 403", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    qdit.pushHackathonSnapshot.mockRejectedValue(refusal("forbidden", "forbidden"));
+    await send();
+    expect(warn.mock.calls).toEqual([["[qdit-hackathon] push refused: kind=forbidden"]]);
+    warn.mockRestore();
+  });
+
+  it.each(["timeout", "network"] as const)(
+    "after a %s, says qdit may have it and links the entry, without retrying",
+    async (kind) => {
+      const log = vi.spyOn(console, "error").mockImplementation(() => {});
+      qdit.pushHackathonSnapshot.mockRejectedValue(new QditError(kind, "no answer"));
+      const res = await send();
+      expect(res.status).toBe(502);
+      expect(await res.json()).toEqual({
+        ok: false,
+        code: "QDIT_UNCERTAIN",
+        message: "qdit may have received this. Check your entry in qdit before sending again.",
+        qdit_url: `https://qdit.test/hackathons/${SLUG}`,
+      });
+      expect(qdit.pushHackathonSnapshot).toHaveBeenCalledTimes(1);
+      expect(log.mock.calls).toEqual([[`[qdit-hackathon] push got no answer: kind=${kind}`]]);
+      log.mockRestore();
+    },
+  );
 });

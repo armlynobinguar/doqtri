@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   projectChoices,
+  SendError,
   SendResult,
   SendToHackathonButton,
   type HackathonSendSetup,
@@ -120,5 +121,21 @@ describe("SendResult", () => {
     const html = result({ qdit_url: null, warnings: ["A warning"] });
     expect(html).toContain("<li>A warning</li>");
     expect(html).not.toContain("href=");
+  });
+});
+
+describe("SendError", () => {
+  const render = (checkUrl: string | null) =>
+    renderToStaticMarkup(createElement(SendError, { message: "qdit may have received this.", checkUrl }));
+
+  it("links the entry in qdit after no answer", () => {
+    const html = render("https://qdit.test/hackathons/stellar-build-2026");
+    expect(html).toContain("qdit may have received this.");
+    expect(html).toContain("Check your entry in qdit");
+    expect(html).toContain('href="https://qdit.test/hackathons/stellar-build-2026"');
+  });
+
+  it("is only the message otherwise", () => {
+    expect(render(null)).not.toContain("href=");
   });
 });

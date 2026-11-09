@@ -17,8 +17,9 @@ const bareHost = (host: string) => host.toLowerCase().replace(/^www\./, "");
 /**
  * The hackathon slug in what the user pasted: the slug itself, or a qdit
  * link like `https://qdit.app/hackathons/<slug>` (a deeper path, a query or a
- * fragment are ignored). With `qditOrigin`, a link must be on qdit's host
- * (`www.` or not). Null when there is no valid slug in it.
+ * fragment are ignored). A link must be on qdit's host (`www.` or not), so
+ * with `qditOrigin` unknown only a bare slug is taken. Null when there is no
+ * valid slug in it.
  */
 export function parseHackathonInput(input: unknown, qditOrigin: string | null): string | null {
   if (typeof input !== "string") return null;
@@ -32,15 +33,14 @@ export function parseHackathonInput(input: unknown, qditOrigin: string | null): 
     return null;
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-  if (qditOrigin) {
-    let origin: URL;
-    try {
-      origin = new URL(qditOrigin);
-    } catch {
-      return null;
-    }
-    if (bareHost(url.host) !== bareHost(origin.host)) return null;
+  if (!qditOrigin) return null;
+  let origin: URL;
+  try {
+    origin = new URL(qditOrigin);
+  } catch {
+    return null;
   }
+  if (bareHost(url.host) !== bareHost(origin.host)) return null;
   const slug = HACKATHON_PATH.exec(url.pathname)?.[1] ?? null;
   return slug && HACKATHON_SLUG_PATTERN.test(slug) ? slug : null;
 }
@@ -76,6 +76,8 @@ export type HackathonSendCode =
   | "QDIT_NOT_FOUND"
   | "QDIT_REFUSED"
   | "QDIT_RATE_LIMITED"
+  /** No answer from qdit (network or timeout): the snapshot may have landed. */
+  | "QDIT_UNCERTAIN"
   | "QDIT_UNAVAILABLE"
   | "FAILED";
 
@@ -89,7 +91,13 @@ export type HackathonSendSuccess = {
   warnings: string[];
 };
 
-export type HackathonSendFailure = { ok: false; code: HackathonSendCode; message: string };
+export type HackathonSendFailure = {
+  ok: false;
+  code: HackathonSendCode;
+  message: string;
+  /** With QDIT_UNCERTAIN: the hackathon's page, to check the entry before sending again. */
+  qdit_url?: string | null;
+};
 
 export type HackathonSendResponse = HackathonSendSuccess | HackathonSendFailure;
 
@@ -98,7 +106,8 @@ export const HACKATHON_SEND_COPY = {
   closed: "Submissions are closed",
   notOpen: "This hackathon hasn't opened yet",
   snapshotLimit: "This project has reached the snapshot limit for this hackathon",
-  qditForbidden: "You need to be an admin of that qdit project",
+  qditForbidden:
+    "qdit refused this: you need to be an admin of that qdit project. If you are, ask the organisers to check the doqtri connection.",
   notFound: "Hackathon or project not found",
   conflict: "Something went wrong sending the snapshot. Press Send to try again.",
   tooLarge: (field: string) => `Too much to send: remove or shorten notes (${field})`,
@@ -108,6 +117,7 @@ export const HACKATHON_SEND_COPY = {
   pickProject: "Pick a qdit project",
   rateLimited: "qdit is busy. Try again in a moment.",
   unavailable: "qdit couldn't be reached. Try again.",
+  uncertain: "qdit may have received this. Check your entry in qdit before sending again.",
   failed: "Something went wrong building the snapshot. Try again.",
   notConfigured: "qdit isn't set up on this deployment.",
   /** After a send: what the team does next. */

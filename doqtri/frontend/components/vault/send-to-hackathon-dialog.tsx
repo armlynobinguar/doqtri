@@ -109,6 +109,8 @@ export function SendToHackathonDialog({
   const [link, setLink] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // After no answer from qdit: where to check whether the snapshot landed.
+  const [checkUrl, setCheckUrl] = useState<string | null>(null);
   const [result, setResult] = useState<HackathonSendSuccess | null>(null);
 
   // qdit's project list, once per opening (the dialog is remounted each time).
@@ -148,6 +150,7 @@ export function SendToHackathonDialog({
     }
     setBusy(true);
     setError(null);
+    setCheckUrl(null);
     try {
       const res = await fetch(`${API}/hackathon`, {
         method: "POST",
@@ -156,9 +159,13 @@ export function SendToHackathonDialog({
       });
       const payload = (await res.json().catch(() => null)) as HackathonSendResponse | null;
       if (payload?.ok === true) setResult(payload);
-      else setError(payload?.message ?? COPY.unavailable);
+      else {
+        setError(payload?.message ?? COPY.unavailable);
+        if (payload?.code === "QDIT_UNCERTAIN") setCheckUrl(payload.qdit_url ?? null);
+      }
     } catch {
-      setError(COPY.unavailable);
+      // The request may have reached doqtri, and doqtri qdit.
+      setError(COPY.uncertain);
     } finally {
       setBusy(false);
     }
@@ -228,22 +235,19 @@ export function SendToHackathonDialog({
                 autoFocus
                 value={link}
                 disabled={busy}
-                placeholder={`${setup.qditOrigin ?? "https://qdit.app"}/hackathons/…`}
+                placeholder={setup.qditOrigin ? `${setup.qditOrigin}/hackathons/…` : "hackathon-name"}
                 aria-invalid={error ? true : undefined}
                 onChange={(event) => {
                   setLink(event.target.value);
                   setError(null);
+                  setCheckUrl(null);
                 }}
               />
             </div>
 
             <p className="text-muted-foreground text-[12px] leading-relaxed">{COPY.visibility}</p>
 
-            {error ? (
-              <p role="alert" className="text-destructive text-[12px]">
-                {error}
-              </p>
-            ) : null}
+            {error ? <SendError message={error} checkUrl={checkUrl} /> : null}
 
             <DialogFooter>
               <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
@@ -298,5 +302,28 @@ export function SendResult({ result }: { result: HackathonSendSuccess }) {
         </ul>
       ) : null}
     </div>
+  );
+}
+
+/** A refusal, and after no answer from qdit, the link to check the entry there. */
+export function SendError({ message, checkUrl }: { message: string; checkUrl: string | null }) {
+  return (
+    <p role="alert" className="text-destructive text-[12px]">
+      {message}
+      {checkUrl ? (
+        <>
+          {" "}
+          <a
+            href={checkUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 underline underline-offset-3"
+          >
+            Check your entry in qdit
+            <ExternalLinkIcon className="size-3" />
+          </a>
+        </>
+      ) : null}
+    </p>
   );
 }

@@ -42,15 +42,17 @@ export default async function GlobalMindmapPage() {
 
 /**
  * What "Send to qdit hackathon" needs (WP-4.7, D-117), or null when the
- * button is hidden: the flag off, the user below admin here (D-10), or qdit
- * not connected. Read as the user: my_integration_connections() returns no
+ * button is hidden: the flag off, qdit's origin unknown, the user below admin
+ * here (D-10), or qdit not connected. Read as the user: my_integration_connections() returns no
  * tokens, and RLS shows the workspace's note links to its members.
  */
 async function hackathonSetup(
   supabase: SupabaseClient,
   workspace: Pick<WorkspaceChoice, "id" | "name" | "role">,
 ): Promise<HackathonSendSetup | null> {
-  if (!qditHackathonEnabled() || !roleAtLeast(workspace.role, "admin")) return null;
+  // Without qdit's origin the route refuses every send (503), so no button.
+  const qditOrigin = qditPublicOrigin();
+  if (!qditHackathonEnabled() || !qditOrigin || !roleAtLeast(workspace.role, "admin")) return null;
 
   const [{ data: conns, error: connError }, { data: links, error: linkError }] = await Promise.all([
     supabase.rpc("my_integration_connections"),
@@ -74,7 +76,7 @@ async function hackathonSetup(
   return {
     workspaceId: workspace.id,
     workspaceName: workspace.name,
-    qditOrigin: qditPublicOrigin(),
+    qditOrigin,
     linkedProjects: [...linked.values()].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
   };
 }

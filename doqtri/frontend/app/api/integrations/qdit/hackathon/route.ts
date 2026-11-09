@@ -49,8 +49,8 @@ const reply = (status: number, body: HackathonSendResponse, headers: Record<stri
 const refuse = (status: number, code: HackathonSendCode, message: string, headers?: Record<string, string>) =>
   reply(status, { ok: false, code, message }, headers);
 
-/** The answer for a failed push. */
-function pushFailure(error: unknown): NextResponse {
+/** The answer for a failed push; `qditUrl` is the hackathon's page in qdit. */
+function pushFailure(error: unknown, qditUrl: string | null): NextResponse {
   if (error instanceof QditHackathonSnapshotError) {
     switch (error.refusal) {
       case "hackathon_closed":
@@ -62,6 +62,9 @@ function pushFailure(error: unknown): NextResponse {
       case "snapshot_conflict":
         return refuse(409, "SNAPSHOT_CONFLICT", COPY.conflict);
       case "forbidden":
+        // Below admin on the project, or doqtri's client not the one qdit
+        // expects (D-61): the copy covers both, the log only the kind.
+        console.warn("[qdit-hackathon] push refused: kind=forbidden");
         return refuse(403, "QDIT_FORBIDDEN", COPY.qditForbidden);
       case "not_found":
         return refuse(404, "QDIT_NOT_FOUND", COPY.notFound);
@@ -86,6 +89,12 @@ function pushFailure(error: unknown): NextResponse {
         COPY.rateLimited,
         error.retryAfterSeconds !== null ? { "Retry-After": String(error.retryAfterSeconds) } : undefined,
       );
+    }
+    if (error.kind === "network" || error.kind === "timeout") {
+      // No answer: qdit may have stored it. Nothing retries here, and a new
+      // press sends a new snapshot_id, so the user checks qdit first.
+      console.error(`[qdit-hackathon] push got no answer: kind=${error.kind}`);
+      return reply(502, { ok: false, code: "QDIT_UNCERTAIN", message: COPY.uncertain, qdit_url: qditUrl });
     }
     // Kind, status and request id only: qdit's text is not logged.
     console.error(
@@ -117,7 +126,9 @@ export async function POST(request: Request) {
 
   const setup = qditServerSetup();
   if (!setup) return refuse(503, "QDIT_NOT_CONFIGURED", COPY.notConfigured);
+  // Links are checked against qdit's origin, and the dialog links back to it.
   const origin = qditPublicOrigin();
+  if (!origin) return refuse(503, "QDIT_NOT_CONFIGURED", COPY.notConfigured);
 
   const body = await readBody(request);
   if (!body || !isUuid(body.project_id)) return refuse(400, "BAD_REQUEST", COPY.pickProject);
@@ -167,7 +178,7 @@ export async function POST(request: Request) {
       built.body,
     );
   } catch (error) {
-    return pushFailure(error);
+    return pushFailure(error, hackathonUrl(origin, slug));
   }
 
   return reply(200, {
