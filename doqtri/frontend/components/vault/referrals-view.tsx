@@ -29,7 +29,7 @@ import { createReferralsPager, type ReferralsRead } from "@/components/vault/ref
 import { useIsCompactVault } from "@/hooks/use-mobile";
 import type { ReferralDashboard, ReferralLimit, ReferralListRow, ReferralStatus } from "@/lib/referral-dashboard";
 import type { PayoutState, PayoutSummary } from "@/lib/referral-payout";
-import { REFERRAL_ACTIVITY_THRESHOLD, REFERRAL_REWARD_PHP } from "@/lib/referral-program";
+import { REFERRAL_ACTIVITY_THRESHOLD, REFERRAL_RESYNC_MINUTES, REFERRAL_REWARD_PHP } from "@/lib/referral-program";
 import { cn } from "@/lib/utils";
 
 /** The commitment in the Terms (DOQ-29), which the rules panel will link to once they merge. */
@@ -534,6 +534,7 @@ function Rules({ limit }: { limit: number }) {
           A referral becomes eligible once the person you invited has made {REFERRAL_ACTIVITY_THRESHOLD} or more on-chain
           activities, counted from when they signed up with your link.
         </li>
+        <li>New activity can take up to {REFERRAL_RESYNC_MINUTES} minutes to show here.</li>
         <li>You earn {REFERRAL_REWARD_PHP} PHP for each eligible referral.</li>
         <li>
           Rewards are paid manually, within {PAYOUT_WITHIN_DAYS} days of a referral being eligible and your payout

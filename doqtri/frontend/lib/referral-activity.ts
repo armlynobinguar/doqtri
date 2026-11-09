@@ -34,7 +34,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { Address, scValToNative, xdr } from "@stellar/stellar-sdk";
 import { logError } from "@/lib/log-error";
-import { REFERRAL_ACTIVITY_THRESHOLD, REFERRAL_REWARD_LIMIT, REFERRAL_REWARD_PHP } from "@/lib/referral-program";
+import {
+  REFERRAL_ACTIVITY_THRESHOLD,
+  REFERRAL_RESYNC_MINUTES,
+  REFERRAL_REWARD_LIMIT,
+  REFERRAL_REWARD_PHP,
+} from "@/lib/referral-program";
 import { statsContracts } from "@/lib/site-stats";
 import { HORIZON_URL } from "@/lib/stellar/config";
 import type { HorizonOperation } from "@/lib/stellar/history";
@@ -56,8 +61,8 @@ const REFERRAL_SYNC_TIMEOUT_MS = 8_000;
 const REFERRAL_SYNC_PAGE_SIZE = 200;
 const REFERRAL_SYNC_MAX_PAGES = 3;
 
-/** A referred user who was just synced waits this long for their next turn. */
-const REFERRAL_RESYNC_SECONDS = 15 * 60;
+/** A referred user who was just synced waits this long for their next turn; the dashboard says so. */
+const REFERRAL_RESYNC_SECONDS = REFERRAL_RESYNC_MINUTES * 60;
 
 /** How Horizon names a call to a contract; deployments carry `parameters` too. */
 const INVOKE_CONTRACT = "HostFunctionTypeHostFunctionTypeInvokeContract";

@@ -249,6 +249,7 @@ describe("the rules panel", () => {
   it("pins every number it states", () => {
     const html = text(render(dashboard()));
     expect(html).toContain("3 or more on-chain activities");
+    expect(html).toContain("New activity can take up to 15 minutes to show here.");
     expect(html).toContain("You earn 30 PHP for each eligible referral.");
     expect(html).toContain("paid manually, within 30 days of a referral being eligible and your payout questionnaire being complete");
     expect(html).toContain("You can earn up to 30 rewards.");
