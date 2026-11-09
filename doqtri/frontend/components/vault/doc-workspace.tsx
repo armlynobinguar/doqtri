@@ -17,6 +17,8 @@ import { useIsCompactVault } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 import { useVaultStatus } from "@/components/vault/vault-status";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { useNavigate } from "@/components/vault/navigation";
+import { resolveLinkTitle } from "@/lib/wikilinks";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { createNoteSaver } from "@/lib/note-saver";
 import { useDocLock } from "@/hooks/use-doc-lock";
@@ -253,6 +255,17 @@ export function DocWorkspace({
     [docs, active.id, settled],
   );
 
+  // A followed [[link]] opens the note it names, as the graph would. A ghost
+  // link names no note, and does nothing.
+  const navigate = useNavigate();
+  const openNote = useCallback(
+    (title: string) => {
+      const target = resolveLinkTitle(docs, title);
+      if (target && target.id !== active.id) navigate(`/vault/${target.id}`);
+    },
+    [docs, active.id, navigate],
+  );
+
   // Every other note, offered by the editor's `[[` autocomplete.
   const linkTitles = useMemo(
     () => docs.filter((doc) => doc.id !== active.id).map((doc) => doc.title),
@@ -378,6 +391,7 @@ export function DocWorkspace({
             linkTitles={linkTitles}
             readOnly={readOnly}
             pending={lockPending}
+            onOpenNote={openNote}
             banner={lockBanner}
           />
         </div>
@@ -421,6 +435,7 @@ export function DocWorkspace({
             mindmapStale={active.mindmapStale ?? false}
             readOnly={readOnly}
             pending={lockPending}
+            onOpenNote={openNote}
             banner={lockBanner}
           />
         </ResizablePanel>

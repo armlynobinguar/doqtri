@@ -3,6 +3,8 @@
 import { useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { resolveLinkTitle } from "@/lib/wikilinks";
 import { FileTextIcon, LockIcon, NetworkIcon } from "lucide-react";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { DoqtriLoader } from "@/components/brand/doqtri-loader";
@@ -36,6 +38,7 @@ const secondary =
  * nothing that writes. Anchoring is shown as the next step after signing up.
  */
 export function DemoVault({ notes, active }: { notes: readonly DemoNote[]; active: DemoNote }) {
+  const router = useRouter();
   const [view, setView] = useState<View>("note");
   const graph = useMemo(
     () => graphFromMindmap(mindmapFromHeadings(active.title, active.markdown)),
@@ -127,6 +130,11 @@ export function DemoVault({ notes, active }: { notes: readonly DemoNote[]; activ
                 readOnly
                 placeholder=""
                 autoHeight
+                // Wikilinks between demo notes open them, as in a real vault.
+                onOpenNote={(title) => {
+                  const target = resolveLinkTitle(notes, title);
+                  if (target && target.id !== active.id) router.push(`/demo/${target.id}`);
+                }}
               />
             </div>
             <aside className="border-border mt-8 rounded-xl border p-4 text-sm">

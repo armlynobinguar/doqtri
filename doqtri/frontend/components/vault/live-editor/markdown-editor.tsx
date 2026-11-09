@@ -21,6 +21,7 @@ import {
 import { livePreview } from "@/components/vault/live-editor/live-preview";
 import { editorTheme } from "@/components/vault/live-editor/theme";
 import { wikilinkCompletion } from "@/components/vault/live-editor/wikilink-completion";
+import { linkFollowing, noteOpener } from "@/components/vault/live-editor/link-following";
 
 /** Marks the transactions that load text from outside, so they are not echoed back. */
 const external = Annotation.define<boolean>();
@@ -66,6 +67,7 @@ export default function MarkdownEditor({
   placeholder,
   compact = false,
   autoHeight = false,
+  onOpenNote,
 }: {
   value: string;
   onChange: (markdown: string) => void;
@@ -83,6 +85,8 @@ export default function MarkdownEditor({
   compact?: boolean;
   /** Grow with the text instead of filling and scrolling (the demo's read-only note). */
   autoHeight?: boolean;
+  /** Opens the note a followed `[[wikilink]]` names; none, and wikilinks do not open. */
+  onOpenNote?: (title: string) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<EditorView | null>(null);
@@ -91,11 +95,13 @@ export default function MarkdownEditor({
   // Read by CodeMirror callbacks, which outlive a render.
   const onChangeRef = useRef(onChange);
   const titlesRef = useRef(linkTitles);
+  const openNoteRef = useRef(onOpenNote);
   /** The text this editor last reported, so its own echo is not re-applied. */
   const reportedRef = useRef(value);
   useEffect(() => {
     onChangeRef.current = onChange;
     titlesRef.current = linkTitles;
+    openNoteRef.current = onOpenNote;
   });
 
   const lockExtensions = (locked: boolean, focusable: boolean) => [
@@ -125,6 +131,8 @@ export default function MarkdownEditor({
             completeHTMLTags: false,
           }),
           livePreview(),
+          linkFollowing(),
+          noteOpener.of((title) => openNoteRef.current?.(title)),
           wikilinkCompletion(() => titlesRef.current),
           Prec.high(
             keymap.of([

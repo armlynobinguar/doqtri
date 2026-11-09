@@ -35,6 +35,11 @@ test.describe("public pages, signed out", () => {
     await expect(note).toHaveAttribute("contenteditable", "false");
     await expect(page.locator('[contenteditable="true"]')).toHaveCount(0);
     await expect(page.getByRole("toolbar", { name: "Formatting" })).toHaveCount(0);
+
+    // Nothing to edit, so a plain click on a wikilink opens that demo note.
+    await note.locator(".cm-lp-wikilink", { hasText: "Product Roadmap" }).click();
+    await page.waitForURL(/\/demo\/product-roadmap$/);
+    await expect(page.getByTestId("note-editor").locator(".cm-content")).toContainText("Now");
   });
 
   test("an unknown demo note is a 404", async ({ page }) => {

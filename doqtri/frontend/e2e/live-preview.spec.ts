@@ -356,3 +356,69 @@ test.describe("live preview", () => {
     expect(errors).toEqual([]);
   });
 });
+
+test.describe("following links", () => {
+  const LINK_HOST = "https://links.e2e.invalid";
+
+  test("a plain click edits a link; ⌘/Ctrl-click opens the note a wikilink names", async ({ page }) => {
+    const targetTitle = uniqueTitle("Link target");
+    const target = await seedNote(targetTitle, "# Target\n\nArrived.\n");
+    ids.push(target);
+    const source = await openNote(page, `See [[${targetTitle}]] and [[Nowhere at all]].\n\nend`);
+    await setEditorSelection(page, -1);
+    const wikilink = noteEditor(page).locator(".cm-lp-wikilink").first();
+    await expect(wikilink).toHaveAttribute("title", /-click to open/);
+
+    // Plain click: the caret goes in, the source shows, nothing navigates.
+    await wikilink.click();
+    await expect(editorLine(page, "See")).toContainText(`[[${targetTitle}]]`);
+    expect(new URL(page.url()).pathname).toBe(`/vault/${source}`);
+
+    // A ghost link names no note: a follow-click does nothing.
+    await setEditorSelection(page, -1);
+    await noteEditor(page).locator(".cm-lp-wikilink").nth(1).click({ modifiers: ["ControlOrMeta"] });
+    await page.waitForTimeout(500);
+    expect(new URL(page.url()).pathname).toBe(`/vault/${source}`);
+
+    await noteEditor(page).locator(".cm-lp-wikilink").first().click({ modifiers: ["ControlOrMeta"] });
+    await page.waitForURL(`**/vault/${target}`);
+    await expect.poll(() => editorText(page)).toContain("Arrived.");
+  });
+
+  test("⌘/Ctrl-click and Mod-Enter open a web link in a new tab; javascript: does nothing", async ({ page, context }) => {
+    await context.route(`${LINK_HOST}/**`, (route) =>
+      route.fulfill({ status: 200, contentType: "text/html", body: "<title>Linked</title><p>linked page</p>" }),
+    );
+    const source = await openNote(page, `A [web link](${LINK_HOST}/page) and a [bad one](javascript:alert(1)).\n\nend`);
+    await setEditorSelection(page, -1);
+    const links = noteEditor(page).locator(".cm-lp-link");
+
+    const opened = context.waitForEvent("page");
+    await links.filter({ hasText: "web link" }).click({ modifiers: ["ControlOrMeta"] });
+    const tab = await opened;
+    await tab.waitForLoadState();
+    expect(tab.url()).toBe(`${LINK_HOST}/page`);
+    // No opener: the new tab cannot reach back into the vault.
+    expect(await tab.evaluate(() => window.opener)).toBeNull();
+    await tab.close();
+
+    // javascript: is refused: no tab, no navigation, no edit.
+    const before = await editorText(page);
+    const pages = context.pages().length;
+    await links.filter({ hasText: "bad one" }).click({ modifiers: ["ControlOrMeta"] });
+    await page.waitForTimeout(800);
+    expect(context.pages().length).toBe(pages);
+    expect(new URL(page.url()).pathname).toBe(`/vault/${source}`);
+    expect(await editorText(page)).toBe(before);
+
+    // The keyboard way: Mod-Enter with the caret inside the link.
+    await placeCaretAfter(page, "[web li");
+    const again = context.waitForEvent("page");
+    await page.keyboard.press("ControlOrMeta+Enter");
+    const second = await again;
+    await second.waitForLoadState();
+    expect(second.url()).toBe(`${LINK_HOST}/page`);
+    await second.close();
+    expect(await editorText(page)).toBe(before);
+  });
+});

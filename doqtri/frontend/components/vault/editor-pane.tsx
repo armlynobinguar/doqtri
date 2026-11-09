@@ -74,6 +74,7 @@ export function EditorPane({
   compact = false,
   readOnly = false,
   pending = false,
+  onOpenNote,
   banner,
 }: {
   docId: string;
@@ -98,6 +99,8 @@ export function EditorPane({
   readOnly?: boolean;
   /** Read-only only while the edit lock's status loads; see MarkdownEditor. */
   pending?: boolean;
+  /** Opens the note a followed `[[wikilink]]` names. */
+  onOpenNote?: (title: string) => void;
   /** Shown between the tab strip and the editor, e.g. "<name> is editing". */
   banner?: ReactNode;
 }) {
@@ -113,6 +116,7 @@ export function EditorPane({
       pending={pending}
       placeholder={PLACEHOLDER}
       compact={compact}
+      onOpenNote={onOpenNote}
     />
   );
 

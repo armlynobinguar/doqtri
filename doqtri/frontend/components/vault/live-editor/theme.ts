@@ -84,6 +84,9 @@ export const editorTheme = EditorView.theme({
     textDecorationColor: "color-mix(in oklch, var(--info) 60%, transparent)",
     textUnderlineOffset: "3px",
   },
+  // Followable: while ⌘/Ctrl is held, and always where nothing can be edited.
+  "&.cm-follow-links .cm-lp-link, &.cm-follow-links .cm-lp-wikilink, .cm-content[contenteditable=false] .cm-lp-link, .cm-content[contenteditable=false] .cm-lp-wikilink":
+    { cursor: "pointer", textDecorationStyle: "solid", textDecorationColor: "currentColor" },
   ".cm-lp-image-src": { color: "var(--muted-foreground)" },
   ".cm-lp-list-number": { color: "var(--muted-foreground)" },
   ".cm-lp-bullet": { color: "var(--muted-foreground)", fontWeight: "700" },

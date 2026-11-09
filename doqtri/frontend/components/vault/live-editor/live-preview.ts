@@ -25,6 +25,7 @@ import {
 } from "@/lib/live-preview/decorations";
 import { parseTable, type ParsedTable, type TableCell } from "@/lib/live-preview/table";
 import { inlineNodes, plainText, type InlineNode } from "@/lib/live-preview/inline";
+import { clickFollows, followCellLink, FOLLOW_HINT } from "@/components/vault/live-editor/link-following";
 
 /**
  * The live preview: the editor's text reads as rendered markdown except on
@@ -234,13 +235,22 @@ function buildInline(view: EditorView): DecorationSet {
   const tree = syntaxTree(state);
   const revealed = revealedLines(state.doc, activeRanges(state), tableBlocks(tree, state.doc));
   const ranges: Range<Decoration>[] = [];
+  // Links say how to follow them: a click where nothing can be edited,
+  // the follow modifier everywhere else (see link-following.ts).
+  const hint = view.state.facet(EditorView.editable) ? FOLLOW_HINT : "Click to open";
   for (const spec of previewSpecs(tree, state.doc, revealed, view.visibleRanges)) {
     switch (spec.kind) {
       case "hide":
         ranges.push(hiddenMark.range(spec.from, spec.to));
         break;
       case "mark":
-        ranges.push(Decoration.mark({ class: spec.cls }).range(spec.from, spec.to));
+        ranges.push(
+          Decoration.mark(
+            /\bcm-lp-(link|wikilink)\b/.test(spec.cls)
+              ? { class: spec.cls, attributes: { title: hint } }
+              : { class: spec.cls },
+          ).range(spec.from, spec.to),
+        );
         break;
       case "line":
         ranges.push(Decoration.line({ class: spec.cls }).range(spec.at));
@@ -266,6 +276,7 @@ const inlinePreview = ViewPlugin.fromClass(
         update.selectionSet ||
         update.startState.field(focusField, false) !== update.state.field(focusField, false) ||
         update.startState.readOnly !== update.state.readOnly ||
+        update.startState.facet(EditorView.editable) !== update.state.facet(EditorView.editable) ||
         syntaxTree(update.startState) !== syntaxTree(update.state)
       ) {
         this.decorations = buildInline(update.view);
@@ -293,15 +304,17 @@ function renderInline(nodes: InlineNode[], into: HTMLElement) {
       case "wikilink": {
         const link = document.createElement("span");
         link.className = "cm-lp-wikilink";
+        link.dataset.wikiTitle = node.target;
         link.textContent = node.text;
         into.append(link);
         break;
       }
       case "link": {
-        // Styled as a link but inert: a click edits the table, as in the text.
+        // A click edits the table; a follow-click opens it, as in the text.
         const link = document.createElement("span");
         link.className = "cm-lp-link";
-        link.title = node.href;
+        link.dataset.href = node.href;
+        link.title = `${node.href} · ${FOLLOW_HINT}`;
         renderInline(node.children, link);
         into.append(link);
         break;
@@ -396,6 +409,11 @@ class TableWidget extends WidgetType {
     wrap.addEventListener("mousedown", (event) => {
       if (event.button !== 0) return;
       event.preventDefault();
+      const link = (event.target as HTMLElement).closest<HTMLElement>("[data-href], [data-wiki-title]");
+      if (link && clickFollows(view, event)) {
+        followCellLink(view, link);
+        return;
+      }
       // Nothing to edit in a read-only copy: the grid stays a grid.
       if (!view.state.facet(EditorView.editable)) return;
       const target = (event.target as HTMLElement).closest<HTMLElement>("th, td");
