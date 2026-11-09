@@ -45,8 +45,9 @@ function watchRenames(page: Page, id: string): { at: number; body: string }[] {
 async function retypeHeading(page: Page, from: string, to: string) {
   await editableEditor(page);
   const text = await editorText(page);
-  expect(text.startsWith(`# ${from}`)).toBe(true);
-  await setEditorSelection(page, 2, 2 + from.length);
+  const at = text.indexOf(`# ${from}`);
+  expect(at >= 0 && text.slice(0, at).trim() === "", `the note opens with "# ${from}"`).toBe(true);
+  await setEditorSelection(page, at + 2, at + 2 + from.length);
   await page.keyboard.type(to);
 }
 
@@ -173,6 +174,29 @@ export function headingRenameCases(layout: Layout) {
     expect(renames).toHaveLength(1);
   });
 
+  test("deleting the title heading line does not rename the note after the # heading below it", async ({ page }) => {
+    const title = uniqueTitle("Two Headings");
+    const second = "# Second part\n\nMore.";
+    const id = await seed(title, `# ${title}\n\n${second}`);
+    const renames = watchRenames(page, id);
+    await page.goto(`/vault/${id}`);
+    await editableEditor(page);
+
+    // Select the title line with its line break, and delete it.
+    await setEditorSelection(page, 0, `# ${title}\n`.length);
+    await page.keyboard.press("Backspace");
+    await caretToEnd(page);
+    await expectSaved(id, `\n${second}`);
+
+    // The heading now first is another section's: editing it renames nothing either.
+    await retypeHeading(page, "Second part", "Second parts");
+    await caretToEnd(page);
+    await expectSaved(id, "\n# Second parts\n\nMore.");
+    await page.waitForTimeout(1_500);
+    expect(renames).toHaveLength(0);
+    expect((await readNote(id)).title).toBe(title);
+  });
+
   test("a clashing heading warns at the heading, keeps the text and the title, and clears when resolved", async ({
     page,
   }) => {
@@ -187,6 +211,10 @@ export function headingRenameCases(layout: Layout) {
     const warning = `Another note is already called “${taken}”. The title stays “${title}”. Edit the heading, or rename the note from the explorer.`;
     await expect(notice(page)).toHaveText(warning, { timeout: 15_000 });
     await expect(notice(page)).toHaveCount(1);
+    // One line at a fixed height, however narrow the page: a longer message
+    // ends in an ellipsis, and the whole of it is the line's title.
+    await expect(notice(page)).toHaveAttribute("title", warning);
+    expect((await notice(page).boundingBox())!.height).toBeLessThanOrEqual(21);
     // Announced politely, from a region that is always there.
     await expect(noticeStatus(page)).toHaveAttribute("aria-live", "polite");
     await expect(noticeStatus(page)).toHaveText(warning);
