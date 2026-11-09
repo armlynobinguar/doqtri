@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { deleteNote, noteEditor, seedNote, uniqueTitle } from "./helpers";
+import { headingRenameCases } from "./heading-rename-cases";
 
 /*
  * The vault's compact layout (below `lg`). Runs under the `mobile` project, on
@@ -136,5 +137,55 @@ test.describe("mobile vault", () => {
     const tabs = page.getByRole("navigation", { name: "Primary" });
     await expect(tabs.locator('[aria-current="page"]')).toHaveCount(0);
     await expectNoHorizontalScroll(page);
+  });
+});
+
+/*
+ * Editing the title heading renames the note (DOQ-36), on the phone layout:
+ * the title shows in the top bar, and the mindmap and backlinks are in the
+ * Map view.
+ */
+test.describe("mobile: editing the title heading renames the note", () => {
+  test.beforeEach(async ({ page }) => {
+    // See "mobile vault": the dev indicator covers the bottom-left corner.
+    await page.addInitScript(() => {
+      document.addEventListener("DOMContentLoaded", () => {
+        const style = document.createElement("style");
+        style.textContent = "nextjs-portal { display: none !important; }";
+        document.head.appendChild(style);
+      });
+    });
+  });
+
+  /** Runs `check` in the Map view, then goes back to the note. */
+  async function inMapView(page: Page, check: () => Promise<void>) {
+    await page.getByRole("tab", { name: "Map" }).tap();
+    await check();
+    await page.getByRole("tab", { name: "Note" }).tap();
+    await expect(noteEditor(page)).toBeVisible();
+  }
+
+  headingRenameCases({
+    async expectTitle(page, title, old) {
+      await expect(page.getByRole("heading", { level: 1, name: title, exact: true })).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByRole("heading", { level: 1, name: old, exact: true })).toHaveCount(0);
+    },
+    async expectMindmap(page, title, sections, old) {
+      await inMapView(page, async () => {
+        await page.getByTestId("right-panel").getByRole("tab", { name: "Mindmap" }).tap();
+        const mindmap = page.getByTestId("right-panel").getByTestId("mindmap");
+        await expect(mindmap.getByRole("paragraph").first()).toHaveText(title);
+        await expect(mindmap.locator(":scope > ul > li > span")).toHaveText(sections);
+        await expect(mindmap.getByText(old, { exact: true })).toHaveCount(0);
+        await expect(mindmap.getByText(title, { exact: true })).toHaveCount(1);
+      });
+    },
+    async expectBacklinks(page, count) {
+      await inMapView(page, async () => {
+        await expect(page.getByTestId("backlinks").locator("header")).toContainText(String(count), {
+          timeout: 15_000,
+        });
+      });
+    },
   });
 });
