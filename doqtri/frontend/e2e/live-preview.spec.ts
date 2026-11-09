@@ -261,6 +261,8 @@ test.describe("live preview", () => {
   });
 
   test("the toolbar formats the selection and the shortcuts do too", async ({ page }) => {
+    // Room for the text group beside the explorer; narrower, it folds into More.
+    await page.addInitScript(() => window.localStorage.setItem("doqtri:editor-mindmap", "hidden"));
     await openNote(page, "word");
     const text = await editorText(page);
     await setEditorSelection(page, 0, text.length);
@@ -339,19 +341,28 @@ test.describe("live preview", () => {
       if (request.method() === "PUT" && new URL(request.url()).pathname.startsWith("/api/notes/")) saves.push(request.url());
     });
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    // Room for the text group beside the explorer; narrower, it folds into More.
+    await page.addInitScript(() => window.localStorage.setItem("doqtri:editor-mindmap", "hidden"));
 
     await page.goto(`/vault/${id}`);
     const content = noteEditor(page);
     await expect(content).toHaveAttribute("contenteditable", "true");
     await expect(content).toHaveAttribute("aria-readonly", "true");
     // The toolbar is there, disabled, so it does not push the text down later.
-    await expect(page.getByRole("toolbar", { name: "Formatting" }).getByRole("button", { name: "Bold" })).toBeDisabled();
+    const bar = page.getByRole("toolbar", { name: "Formatting" });
+    await expect(bar.getByRole("button", { name: "Bold" })).toBeDisabled();
+    for (const control of await bar.locator("[data-tool-id]").all()) await expect(control).toBeDisabled();
 
     await setEditorSelection(page, (await editorText(page)).indexOf("Body.") + 5);
     await page.keyboard.type(" typed");
     await page.evaluate(() => navigator.clipboard.writeText(" pasted"));
     await page.keyboard.press("ControlOrMeta+v");
     await page.keyboard.press("ControlOrMeta+b");
+    // None of the toolbar's shortcuts edits either.
+    for (const combo of ["Shift+x", "Alt+1", "Shift+8", "Shift+9", "]", "\\", "h"]) {
+      await page.keyboard.press(`ControlOrMeta+${combo}`);
+    }
+    await page.keyboard.press("Escape");
     await content.locator(".cm-lp-task").click();
     await page.waitForTimeout(800);
     expect(await editorText(page)).toBe("Body.\n\n- [ ] todo");
