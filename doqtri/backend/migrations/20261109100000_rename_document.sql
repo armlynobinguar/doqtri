@@ -82,8 +82,11 @@
 -- `p_markdown` with its first non-blank line replaced by `# <btrim(p_title)>`,
 -- every other byte kept: the line's own `\r` of a CRLF ending, the lines
 -- before it (blank ones) and everything after it. Null when every line is
--- blank. A blank line holds only spaces, tabs, form feeds and vertical tabs
--- (and its `\r`). Internal: only rename_document() calls it.
+-- blank, and null when that first non-blank line is not an ATX level-1
+-- heading (`#` then a space or tab): it only ever rewrites a `# ` heading
+-- line, never prose or a `## ` heading. A blank line holds only spaces, tabs,
+-- form feeds and vertical tabs (and its `\r`). Internal: only
+-- rename_document() calls it.
 create function public.title_heading_rewrite(p_markdown text, p_title text)
 returns text
 language plpgsql
@@ -108,6 +111,9 @@ begin
       v_line := left(v_line, -1);
     end if;
     if v_line !~ E'^[ \\t\\f\\v]*$' then
+      if v_line !~ E'^#[ \\t]' then
+        return null;
+      end if;
       return substr(p_markdown, 1, v_pos - 1)
           || '# ' || btrim(p_title)
           || substr(p_markdown, v_pos + length(v_line));

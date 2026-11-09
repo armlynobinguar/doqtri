@@ -25,11 +25,12 @@
 --   R   "Roadmap", opening with "# Roadmap"
 --   C   "Charter"
 --   K   "Kick", with CRLF endings and blank lines before its heading
+--   P   "Prose", opening with a paragraph, no heading
 
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(61);
+select plan(64);
 
 insert into auth.users (id, email) values
   ('00000000-0000-4000-8000-000000000001', 'owner@example.com'),
@@ -53,7 +54,9 @@ insert into public.documents (id, user_id, workspace_id, title, markdown) values
   ('30000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-000000000003',
    '10000000-0000-4000-8000-000000000001', 'Charter', E'# Charter\n'),
   ('30000000-0000-4000-8000-000000000012', '00000000-0000-4000-8000-000000000003',
-   '10000000-0000-4000-8000-000000000001', 'Kick', E'\r\n \t\n# Kick\r\n\r\nBody\r\n');
+   '10000000-0000-4000-8000-000000000001', 'Kick', E'\r\n \t\n# Kick\r\n\r\nBody\r\n'),
+  ('30000000-0000-4000-8000-000000000013', '00000000-0000-4000-8000-000000000003',
+   '10000000-0000-4000-8000-000000000001', 'Prose', E'Some paragraph\nbody\n');
 
 -- A note as it stands: title, text and version in one row, for "nothing changed" checks.
 create function public._t_doc(p_id uuid) returns table (title text, markdown text, version bigint)
@@ -94,6 +97,8 @@ select is(public.title_heading_rewrite(E'# Old\r\nBody\r\n', 'New'),
 select is(public.title_heading_rewrite(E'\n \t\r\n# Old #\nBody', 'New'),
   E'\n \t\r\n# New\nBody', 'blank lines before it are kept as they are');
 select is(public.title_heading_rewrite(E'\n  \n', 'New'), null, 'a note of blank lines has no line to rewrite');
+select is(public.title_heading_rewrite(E'Some paragraph\nbody', 'New'), null, 'a first line of prose is not rewritten');
+select is(public.title_heading_rewrite(E'## Sub\nbody', 'New'), null, 'nor is a ## heading');
 
 
 -- ---------------------------------------------------------------------------
@@ -153,6 +158,10 @@ select throws_ok(
   $$ select public.rename_document('30000000-0000-4000-8000-000000000012', 'Kickoff 2',
        E'\r\n \t\n# Kickoff 2\n\r\nBody\r\n', 2, null) $$,
   '22023', 'markdown may only change the title heading', 'dropping the heading''s CRLF is refused');
+select throws_ok(
+  $$ select public.rename_document('30000000-0000-4000-8000-000000000013', 'X',
+       E'# X\nbody\n', 1, null) $$,
+  '22023', 'markdown may only change the title heading', 'a prose first line is not replaced by a heading');
 
 
 -- ---------------------------------------------------------------------------
