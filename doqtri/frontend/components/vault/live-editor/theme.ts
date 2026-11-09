@@ -184,6 +184,80 @@ export const editorTheme = EditorView.theme({
   },
   ".cm-lp-image-hint": { color: "var(--label)", fontSize: "0.85em" },
 
+  // Source view: the markdown as typed, nothing hidden or resized.
+  "&.cm-source-view .cm-content": { fontFamily: MONO, fontSize: "0.92em" },
+
+  // Find and replace: CodeMirror's panel above the text, in the app's glass.
+  ".cm-panels": { backgroundColor: "var(--background)", color: "var(--foreground)" },
+  ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--border)" },
+  ".cm-panel.cm-search": {
+    position: "relative",
+    padding: "8px 40px 8px 12px",
+    fontFamily: "var(--font-sans), ui-sans-serif, system-ui, sans-serif",
+    fontSize: "13px",
+    lineHeight: "32px",
+  },
+  ".cm-panel.cm-search input, .cm-panel.cm-search button, .cm-panel.cm-search label": { margin: "0 6px 0 0" },
+  ".cm-panel.cm-search .cm-textfield": {
+    height: "28px",
+    padding: "0 10px",
+    fontSize: "13px",
+    color: "var(--foreground)",
+    backgroundColor: "var(--glass)",
+    border: "1px solid var(--glass-lo)",
+    borderRadius: "8px",
+    boxShadow: "inset 0 1px 0 0 var(--glass-hi)",
+    outline: "none",
+  },
+  ".cm-panel.cm-search .cm-textfield:focus-visible": {
+    borderColor: "var(--ring)",
+    boxShadow: "0 0 0 3px color-mix(in oklch, var(--ring) 40%, transparent)",
+  },
+  ".cm-panel.cm-search .cm-button": {
+    height: "28px",
+    padding: "0 10px",
+    fontSize: "12.5px",
+    color: "var(--foreground)",
+    backgroundImage: "none",
+    backgroundColor: "var(--glass-strong)",
+    border: "1px solid var(--glass-lo)",
+    borderRadius: "8px",
+    boxShadow: "inset 0 1px 0 0 var(--glass-hi)",
+    cursor: "pointer",
+    transition: "background-color 150ms",
+  },
+  ".cm-panel.cm-search .cm-button:hover": { backgroundColor: "color-mix(in oklch, white 11%, transparent)" },
+  ".cm-panel.cm-search .cm-button:focus-visible, .cm-panel.cm-search [name=close]:focus-visible": {
+    outline: "2px solid var(--ring)",
+    outlineOffset: "1px",
+  },
+  ".cm-panel.cm-search label": { color: "var(--muted-foreground)", fontSize: "12.5px", whiteSpace: "nowrap" },
+  ".cm-panel.cm-search input[type=checkbox]": { accentColor: "var(--primary)", marginRight: "4px", verticalAlign: "-2px" },
+  ".cm-panel.cm-search [name=close]": {
+    position: "absolute",
+    top: "10px",
+    right: "10px",
+    width: "24px",
+    height: "24px",
+    lineHeight: "22px",
+    borderRadius: "6px",
+    color: "var(--muted-foreground)",
+    fontSize: "18px",
+    cursor: "pointer",
+  },
+  ".cm-panel.cm-search [name=close]:hover": { color: "var(--foreground)", backgroundColor: "var(--glass-strong)" },
+  ".cm-searchMatch": {
+    backgroundColor: "color-mix(in oklch, var(--warning) 22%, transparent)",
+    outline: "1px solid color-mix(in oklch, var(--warning) 45%, transparent)",
+    borderRadius: "2px",
+  },
+  ".cm-searchMatch.cm-searchMatch-selected": {
+    backgroundColor: "color-mix(in oklch, var(--warning) 50%, transparent)",
+  },
+  "@media (prefers-reduced-motion: reduce)": {
+    ".cm-panel.cm-search .cm-button": { transition: "none" },
+  },
+
   // The `[[` list: the vault's floating glass panel.
   ".cm-tooltip.cm-wikilink-suggest": {
     width: "300px",
