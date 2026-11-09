@@ -95,6 +95,7 @@ export const editorTheme = EditorView.theme({
     accentColor: "var(--primary)",
     cursor: "pointer",
   },
+  ".cm-content[aria-readonly=true] .cm-lp-task": { cursor: "default", opacity: "0.7" },
   ".cm-lp-quote": {
     borderLeft: "2px solid var(--label)",
     paddingLeft: "12px",

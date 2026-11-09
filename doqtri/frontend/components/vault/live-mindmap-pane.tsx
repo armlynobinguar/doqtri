@@ -52,10 +52,13 @@ export function LiveMindmapPane({
   const { building, rebuild } = useMindmapRebuild(docId);
 
   const settled = useDebouncedValue(markdown, REBUILD_MS);
-  const headings = useMemo(
-    () => withLabelPathIds(mindmapFromHeadings(title, settled)),
-    [title, settled],
-  );
+  const fresh = useMemo(() => withLabelPathIds(mindmapFromHeadings(title, settled)), [title, settled]);
+  // Most pauses in typing change prose, not headings. Keyed on the tree's
+  // shape and labels, the map keeps its identity then, so the canvas does
+  // not reheat its layout for nothing.
+  const shape = useMemo(() => treeKey(fresh.root), [fresh]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `shape` stands for `fresh`
+  const headings = useMemo(() => fresh, [shape]);
   const headingGraph = useMemo(() => graphFromMindmap(headings), [headings]);
   const conceptGraph = useMemo(() => (mindmap ? graphFromMindmap(mindmap) : null), [mindmap]);
 
@@ -127,6 +130,13 @@ export function LiveMindmapPane({
       )}
     </section>
   );
+}
+
+/** The tree's ids and labels, in order: equal exactly when the map would draw the same. */
+function treeKey(root: ConceptNode): string {
+  type Shape = [string, string, Shape[]];
+  const shape = (node: ConceptNode): Shape => [node.id, node.label, node.children.map(shape)];
+  return JSON.stringify(shape(root));
 }
 
 function Outline({ root }: { root: ConceptNode }) {

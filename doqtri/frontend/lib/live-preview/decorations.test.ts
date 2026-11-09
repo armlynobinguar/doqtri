@@ -277,3 +277,50 @@ describe("images", () => {
     }
   });
 });
+
+describe("syntax broken over lines", () => {
+  /** Valid CommonMark/GFM whose syntax spans a line break. */
+  const SAMPLES = [
+    '[a](/uri\n"title")',
+    "![alt\ntext](https://x.com/a.png)",
+    '![a](https://x.com/a.png\n"t")',
+    "-\n  [ ] task",
+    "[two\nlines](https://x.com)",
+    "**bold\nover lines** and _it\nalic_",
+    "> quote\nlazy line",
+    "```js\ncode\n```",
+    "# Heading #\n\n- [x]\n\n1.\n   next",
+  ];
+
+  it("never hides or replaces a line break, whatever the caret", () => {
+    for (const source of SAMPLES) {
+      const text = `${source}\n\nend`;
+      for (const selection of [[], [caret(text.length)], [caret(0)]]) {
+        for (const spec of render(text, selection).specs) {
+          if (spec.kind !== "hide" && spec.kind !== "widget") continue;
+          expect(text.slice(spec.from, spec.to), JSON.stringify(source)).not.toContain("\n");
+        }
+      }
+    }
+  });
+
+  it("shows a link with its title on the next line as source", () => {
+    const text = '[a](/uri\n"title")\n\nend';
+    expect(hidden(text, [caret(text.length)])).toEqual([]);
+    expect(classesAt(text, 1, [caret(text.length)])).toContain("cm-lp-link");
+  });
+
+  it("does not draw an image whose alt text or title runs onto the next line", () => {
+    for (const source of ["![alt\ntext](https://x.com/a.png)", '![a](https://x.com/a.png\n"t")']) {
+      const text = `${source}\n\nend`;
+      expect(widgets(text, [caret(text.length)]), source).toEqual([]);
+      expect(classesAt(text, 2, [caret(text.length)])).toContain("cm-lp-image-src");
+    }
+  });
+
+  it("hides only the bullet of a task that starts on the next line", () => {
+    const text = "-\n  [ ] task\n\nend";
+    expect(hidden(text, [caret(text.length)])).toEqual(["-"]);
+    expect(widgets(text, [caret(text.length)]).map((w) => w.widget)).toEqual([{ type: "task", checked: false }]);
+  });
+});

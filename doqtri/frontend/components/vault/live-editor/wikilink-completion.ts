@@ -49,6 +49,7 @@ const dismissed = StateField.define<number | null>({
 
 /** Completes the link being typed with `title`, as lib/wikilinks.ts says to. */
 function completeWith(view: EditorView, link: LinkQuery, title: string, picked?: Completion) {
+  if (view.state.readOnly) return;
   const caret = view.state.selection.main.head;
   const line = view.state.doc.lineAt(caret);
   const edit = completeLink(line.text, caret - line.from, { start: link.start - line.from, query: link.query }, title);
@@ -105,6 +106,7 @@ function wikilinkSource(getTitles: () => string[]) {
  */
 function acceptLink(getTitles: () => string[]) {
   return (view: EditorView): boolean => {
+    if (view.state.readOnly) return false;
     const status = completionStatus(view.state);
     if (status === null) return false;
     if (status === "active" && acceptCompletion(view)) return true;

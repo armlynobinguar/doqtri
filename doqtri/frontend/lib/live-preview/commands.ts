@@ -12,21 +12,40 @@ export type FormatCommand = (state: EditorState) => TransactionSpec;
 
 const FORMAT = { userEvent: "input.format", scrollIntoView: true } as const;
 
+/** How many `ch` run from `pos` in direction `step` (1 forward, -1 back). */
+function runAt(state: EditorState, pos: number, ch: string, step: 1 | -1): number {
+  let count = 0;
+  for (let at = step === 1 ? pos : pos - 1; at >= 0 && at < state.doc.length; at += step) {
+    if (state.sliceDoc(at, at + 1) !== ch) break;
+    count++;
+  }
+  return count;
+}
+
 /**
  * Wraps each selection in `marker` (bold, italic, inline code), or unwraps it
  * when it already is. An empty selection gets an empty pair with the caret
  * inside, ready to type.
+ *
+ * Bold and italic share `*`, so a marker is "there" only when the run of
+ * asterisks says so: one (or three) for italic, two (or three) for bold —
+ * italic on `**word**` adds a third rather than eating the bold.
  */
 export function toggleWrap(marker: string): FormatCommand {
   const size = marker.length;
+  const ch = marker[0];
+  const carries = (run: number) => run === size || (ch === "*" && run === 3);
   return (state) => ({
     ...FORMAT,
     ...state.changeByRange((range) => {
       const { from, to } = range;
-      const text = state.sliceDoc(from, to);
+      const inside = !range.empty && to - from > size * 2 &&
+        carries(Math.min(runAt(state, from, ch, 1), to - from)) &&
+        carries(Math.min(runAt(state, to, ch, -1), to - from));
+      const outside = carries(runAt(state, from, ch, -1)) && carries(runAt(state, to, ch, 1));
       if (range.empty) {
         // Inside an empty pair: take it back out.
-        if (state.sliceDoc(from - size, from) === marker && state.sliceDoc(to, to + size) === marker) {
+        if (outside) {
           return {
             changes: { from: from - size, to: to + size, insert: "" },
             range: EditorSelection.cursor(from - size),
@@ -37,13 +56,16 @@ export function toggleWrap(marker: string): FormatCommand {
           range: EditorSelection.cursor(from + size),
         };
       }
-      if (text.length >= size * 2 && text.startsWith(marker) && text.endsWith(marker)) {
+      if (inside) {
         return {
-          changes: { from, to, insert: text.slice(size, -size) },
+          changes: [
+            { from, to: from + size, insert: "" },
+            { from: to - size, to, insert: "" },
+          ],
           range: EditorSelection.range(from, to - size * 2),
         };
       }
-      if (state.sliceDoc(from - size, from) === marker && state.sliceDoc(to, to + size) === marker) {
+      if (outside) {
         return {
           changes: [
             { from: from - size, to: from, insert: "" },
@@ -64,7 +86,8 @@ export function toggleWrap(marker: string): FormatCommand {
 }
 
 export const toggleBold = toggleWrap("**");
-export const toggleItalic = toggleWrap("_");
+// `*`, not `_`: underscores do not make italics inside a word.
+export const toggleItalic = toggleWrap("*");
 
 /**
  * Inline code, or a fenced block when the selection spans lines: backticks

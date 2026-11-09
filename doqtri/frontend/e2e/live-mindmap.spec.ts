@@ -1,5 +1,13 @@
 import { test, expect, type Page } from "@playwright/test";
-import { deleteNote, editableEditor, fakeMindmap, seedNote, setEditorSelection, uniqueTitle } from "./helpers";
+import {
+  deleteNote,
+  editableEditor,
+  fakeMindmap,
+  seedNote,
+  serviceRest,
+  setEditorSelection,
+  uniqueTitle,
+} from "./helpers";
 
 /*
  * The live mindmap beside the editor (DOQ-31): the heading tree of the text
@@ -27,6 +35,10 @@ test.describe("live mindmap", () => {
     await expect(pane(page).locator("canvas")).toBeVisible();
     await expect(outline(page)).toContainText("Goals");
 
+    const saves: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() === "PUT" && new URL(request.url()).pathname.startsWith("/api/notes/")) saves.push(request.url());
+    });
     await setEditorSelection(page, -1);
     await page.keyboard.type("## Risks");
     const typed = Date.now();
@@ -34,6 +46,7 @@ test.describe("live mindmap", () => {
     // Rebuilt from the live text after a 250ms pause: well before the
     // debounced save (700ms) has even started.
     expect(Date.now() - typed).toBeLessThan(1_000);
+    expect(saves).toEqual([]);
   });
 
   test("an empty note shows how to grow the tree", async ({ page }) => {
@@ -69,9 +82,15 @@ test.describe("live mindmap", () => {
   test("with a stored concept map, the live heading tree is still the default", async ({ page }) => {
     const title = uniqueTitle("Concept live");
     const markdown = `# ${title}\n\n## Heading Only\n`;
-    // Stored against other text, so the note reads as changed since the map.
-    const id = await seedNote(title, `${markdown}\nolder text\n`, fakeMindmap(title, [{ label: "Stored Theme", children: ["Stored Child"] }]));
+    const id = await seedNote(title, markdown, fakeMindmap(title, [{ label: "Stored Theme", children: ["Stored Child"] }]));
     ids.push(id);
+    // The note moves on after its map was built: the stored hash no longer
+    // matches, so the server reads the map as stale.
+    await serviceRest(`documents?id=eq.${id}`, {
+      method: "PATCH",
+      body: { markdown: `${markdown}\nWritten after the map.\n` },
+      prefer: "return=minimal",
+    });
     await page.goto(`/vault/${id}`);
     await editableEditor(page);
 

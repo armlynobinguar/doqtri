@@ -269,7 +269,7 @@ test.describe("live preview", () => {
     await page.keyboard.press("ControlOrMeta+b");
     await expect.poll(() => editorText(page)).toBe("word");
     await page.keyboard.press("ControlOrMeta+i");
-    await expect.poll(() => editorText(page)).toBe("_word_");
+    await expect.poll(() => editorText(page)).toBe("*word*");
     await page.keyboard.press("ControlOrMeta+i");
     await page.keyboard.press("ControlOrMeta+k");
     await expect.poll(() => editorText(page)).toBe("[word](url)");
@@ -277,16 +277,24 @@ test.describe("live preview", () => {
     await expect(page.getByRole("dialog")).toHaveCount(0);
   });
 
-  test("a copy that cannot edit renders everything and offers no toolbar", async ({ page, context }) => {
+  test("a copy that cannot edit renders everything and takes no edits of any kind", async ({ page, context }) => {
     await page.route(`${IMAGE_HOST}/**`, (route) => route.fulfill({ status: 200, contentType: "image/png", body: PIXEL }));
-    const id = await openNote(page, `# Shared\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n![p](${IMAGE_HOST}/p.png)\n`);
+    const id = await openNote(
+      page,
+      `# Shared\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n![p](${IMAGE_HOST}/p.png)\n\n- [ ] todo\n\nsee `,
+    );
     // The first edit takes the lock for this tab.
     await setEditorSelection(page, -1);
     await page.keyboard.type("Mine.");
     await expect(page.getByText("Saved")).toBeVisible({ timeout: 15_000 });
+    const held = await editorText(page);
 
     const other = await context.newPage();
     await other.route(`${IMAGE_HOST}/**`, (route) => route.fulfill({ status: 200, contentType: "image/png", body: PIXEL }));
+    const saves: string[] = [];
+    other.on("request", (request) => {
+      if (request.method() === "PUT" && new URL(request.url()).pathname.startsWith("/api/notes/")) saves.push(request.url());
+    });
     await other.goto(`/vault/${id}`);
     const content = noteEditor(other);
     await expect(content).toBeVisible();
@@ -298,6 +306,53 @@ test.describe("live preview", () => {
     await content.locator("table.cm-lp-table").click();
     await expect(content.locator("table.cm-lp-table")).toBeVisible();
     await expect(other.getByRole("button", { name: "Regenerate" })).toBeDisabled();
+
+    // Every way of editing: typing, a paste, a link completion, a checkbox.
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await editorLine(other, "see").click();
+    await other.keyboard.type("typed");
+    await other.evaluate(() => navigator.clipboard.writeText("pasted"));
+    await other.keyboard.press("ControlOrMeta+v");
+    await other.keyboard.type("[[Sha");
+    await other.keyboard.press("Enter");
+    await content.locator(".cm-lp-task").click();
+    await other.waitForTimeout(1_500);
+    expect(await editorText(other)).toBe(held);
+    expect(saves).toEqual([]);
     await other.close();
+  });
+
+  test("a task's checkbox toggles it once the note has loaded", async ({ page }) => {
+    const id = await openNote(page, "- [ ] todo\n- [x] done\n\nend");
+    await setEditorSelection(page, -1);
+    const boxes = noteEditor(page).locator(".cm-lp-task");
+    await expect(boxes).toHaveCount(2);
+    await boxes.first().click();
+    await expect.poll(() => editorText(page)).toBe("- [x] todo\n- [x] done\n\nend");
+    await boxes.nth(1).click();
+    await expect.poll(() => editorText(page)).toBe("- [x] todo\n- [ ] done\n\nend");
+    await expect(page.getByText("Saved")).toBeVisible({ timeout: 15_000 });
+    await expect.poll(async () => (await readNote(id)).markdown).toBe("- [x] todo\n- [ ] done\n\nend");
+  });
+
+  test("syntax broken over lines renders without breaking the editor", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    const source = [
+      '[a](/uri\n"title")',
+      `![alt\ntext](${IMAGE_HOST}/a.png)`,
+      `![a](${IMAGE_HOST}/a.png\n"t")`,
+      "-\n  [ ] task",
+      "end",
+    ].join("\n\n");
+    await openNote(page, source);
+    // Rendered (caret elsewhere), then each line raw in turn, then typing.
+    await setEditorSelection(page, -1);
+    await expect(editorLine(page, "end")).toBeVisible();
+    for (let at = 0; at < source.length; at += 7) await setEditorSelection(page, at);
+    await setEditorSelection(page, -1);
+    await page.keyboard.type(" still works");
+    await expect.poll(() => editorText(page)).toBe(`${source} still works`);
+    expect(errors).toEqual([]);
   });
 });

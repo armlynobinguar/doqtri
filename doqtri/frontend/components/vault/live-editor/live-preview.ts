@@ -124,7 +124,9 @@ class TaskWidget extends WidgetType {
     box.checked = this.checked;
     box.tabIndex = -1;
     box.setAttribute("aria-label", this.checked ? "Done" : "To do");
-    box.disabled = view.state.readOnly;
+    // Not `disabled`: the widget outlives a change of lock state (eq() only
+    // compares `checked`), so whether it may toggle is read at click time,
+    // and the read-only look comes from the theme (aria-readonly).
     box.addEventListener("mousedown", (event) => {
       event.preventDefault();
       if (view.state.readOnly) return;
@@ -164,14 +166,16 @@ class ImageWidget extends WidgetType {
     frame.className = "cm-lp-image";
     frame.dataset.state = "loading";
     const img = document.createElement("img");
-    img.src = this.url;
-    img.alt = this.alt;
-    if (this.title) img.title = this.title;
-    // A note's reader is nobody else's business: no Referer to the image host.
+    // Before `src`: browsers read these when the request starts, and Firefox
+    // ignores `loading` set afterwards. A note's reader is nobody else's
+    // business, so no Referer goes to the image host.
     img.referrerPolicy = "no-referrer";
     img.loading = "lazy";
     img.decoding = "async";
     img.draggable = false;
+    img.alt = this.alt;
+    if (this.title) img.title = this.title;
+    img.src = this.url;
     img.addEventListener("load", () => {
       frame.dataset.state = "loaded";
     });
@@ -391,8 +395,10 @@ class TableWidget extends WidgetType {
     // text, where the rendered text maps back onto it one to one.
     wrap.addEventListener("mousedown", (event) => {
       if (event.button !== 0) return;
-      const target = (event.target as HTMLElement).closest<HTMLElement>("th, td");
       event.preventDefault();
+      // Nothing to edit in a read-only copy: the grid stays a grid.
+      if (!view.state.facet(EditorView.editable)) return;
+      const target = (event.target as HTMLElement).closest<HTMLElement>("th, td");
       let pos = this.table.header[0]?.from ?? 0;
       if (target) {
         const from = Number(target.dataset.from);

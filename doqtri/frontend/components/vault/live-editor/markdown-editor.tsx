@@ -130,7 +130,8 @@ export default function MarkdownEditor({
             keymap.of([
               { key: "Mod-b", run: run(toggleBold) },
               { key: "Mod-i", run: run(toggleItalic) },
-              { key: "Mod-k", run: run(insertLink) },
+              // Kept from the window, where ⌘K would also open the quick switcher.
+              { key: "Mod-k", run: run(insertLink), stopPropagation: true },
             ]),
           ),
           keymap.of([...defaultKeymap, ...historyKeymap]),
@@ -140,9 +141,13 @@ export default function MarkdownEditor({
             autocorrect: "off",
           }),
           editorTheme,
+          // Read-only means no edits from anywhere but outside: not a key, a
+          // paste, a completion or a checkbox. CodeMirror only blocks typing.
+          EditorState.changeFilter.of((tr) => !tr.startState.readOnly || tr.annotation(external) === true),
           EditorView.updateListener.of((update) => {
             if (!update.docChanged) return;
             if (update.transactions.every((tr) => tr.annotation(external))) return;
+            if (update.startState.readOnly) return;
             const text = update.state.doc.toString();
             reportedRef.current = text;
             onChangeRef.current(text);
@@ -150,9 +155,12 @@ export default function MarkdownEditor({
         ],
       }),
     });
-    // For the end-to-end tests (e2e/helpers.ts): the rendered text hides the
-    // markdown syntax, so the document can only be read from the view.
-    Object.defineProperty(created.dom, "__doqtriEditor", { value: created });
+    // For the end-to-end tests (e2e/helpers.ts), which run against `next dev`:
+    // the rendered text hides the markdown syntax, so the document can only
+    // be read from the view. Never in a production build.
+    if (process.env.NODE_ENV !== "production") {
+      Object.defineProperty(created.dom, "__doqtriEditor", { value: created });
+    }
     setView(created);
     return () => {
       created.destroy();
@@ -184,7 +192,8 @@ export default function MarkdownEditor({
   return (
     <div className={cn("doqtri-editor flex flex-col", !autoHeight && "h-full min-h-0")}>
       {/* Drawn before the editor exists too, so the text never shifts down under it. */}
-      {!readOnly && <FormatToolbar view={view} compact={compact} />}
+      {/* While the lock loads it shows, disabled, so it never pops in and pushes the text down. */}
+      {(!readOnly || pending) && <FormatToolbar view={view} compact={compact} disabled={readOnly} />}
       <div ref={hostRef} className={cn(!autoHeight && "min-h-0 flex-1")} data-testid="note-editor" />
     </div>
   );
@@ -207,7 +216,15 @@ const TOOLS: Tool[] = [
 ];
 
 /** Bold, italic, heading, list, link and code — the markdown most notes need. */
-function FormatToolbar({ view, compact }: { view: EditorView | null; compact: boolean }) {
+function FormatToolbar({
+  view,
+  compact,
+  disabled,
+}: {
+  view: EditorView | null;
+  compact: boolean;
+  disabled: boolean;
+}) {
   const [mac] = useState(() => /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent));
   return (
     <div
@@ -231,9 +248,9 @@ function FormatToolbar({ view, compact }: { view: EditorView | null; compact: bo
                   aria-keyshortcuts={shortcut ? `${mac ? "Meta" : "Control"}+${shortcut}` : undefined}
                   // Keep the caret (and the selection being formatted) in the editor.
                   onMouseDown={(event) => event.preventDefault()}
-                  disabled={!view}
+                  disabled={!view || disabled}
                   onClick={() => {
-                    if (!view) return;
+                    if (!view || view.state.readOnly) return;
                     view.dispatch(command(view.state));
                     view.focus();
                   }}

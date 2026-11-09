@@ -32,8 +32,23 @@ describe("toggleWrap", () => {
   });
 
   it("opens an empty pair at the caret, and closes it again", () => {
-    expect(run(toggleItalic, "a | b")).toBe("a _|_ b");
-    expect(run(toggleItalic, "a _|_ b")).toBe("a | b");
+    expect(run(toggleItalic, "a | b")).toBe("a *|* b");
+    expect(run(toggleItalic, "a *|* b")).toBe("a | b");
+  });
+
+  it("italicises with asterisks, which work inside a word", () => {
+    expect(run(toggleItalic, "un[believ]able")).toBe("un*[believ]*able");
+    expect(run(toggleItalic, "un*[believ]*able")).toBe("un[believ]able");
+  });
+
+  it("tells bold and italic apart by the run of asterisks", () => {
+    // Italic on bold adds a third asterisk rather than unwrapping the bold.
+    expect(run(toggleItalic, "**[word]**")).toBe("***[word]***");
+    expect(run(toggleItalic, "[**word**]")).toBe("*[**word**]*");
+    expect(run(toggleBold, "*[word]*")).toBe("***[word]***");
+    // Bold and italic together: either one comes off on its own.
+    expect(run(toggleBold, "***[word]***")).toBe("*[word]*");
+    expect(run(toggleItalic, "***[word]***")).toBe("**[word]**");
   });
 });
 

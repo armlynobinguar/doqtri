@@ -11,8 +11,15 @@ import { normalizeConcept, type ConceptNode, type DocMindmap } from "@/lib/mindm
  * from the root, which only changes for the heading actually edited.
  */
 
-/** Joins label-path segments; a heading label never contains a newline. */
-const SEPARATOR = "\n";
+/*
+ * Ids are built from characters a heading label cannot produce: labels are
+ * stripped of control characters, and the separator and the duplicate marker
+ * are control characters. So no label — `Root`, `Notes#2`, one with a slash —
+ * can spell another node's id.
+ */
+const SEPARATOR = "\u0001";
+const DUPLICATE = "\u0002";
+const CONTROL = /[\u0000-\u001f\u007f]/g;
 
 /**
  * How far out of its parent a new node starts, as a share of a ring, when it
@@ -23,25 +30,38 @@ const SEPARATOR = "\n";
 const GROW_FROM = 0.35;
 
 /** The root keeps one id whatever the note is called, so a rename moves nothing. */
-export const LIVE_ROOT_ID = "root";
+export const LIVE_ROOT_ID = "\u0000";
 
 /**
- * The same tree with every id replaced by its label path. Labels compare as
- * concepts do (case and spacing ignored); siblings with the same label are
- * told apart by their order (`Notes`, `Notes#2`).
+ * The id of the node at a heading-label path below the root: each label as
+ * normalizeConcept reads it, with `occurrence` counting same-label siblings
+ * from 1.
+ */
+export function labelPathId(path: readonly { label: string; occurrence?: number }[]): string {
+  let id = LIVE_ROOT_ID;
+  for (const { label, occurrence = 1 } of path) {
+    const segment = normalizeConcept(label.replace(CONTROL, ""));
+    id += SEPARATOR + (occurrence === 1 ? segment : `${segment}${DUPLICATE}${occurrence}`);
+  }
+  return id;
+}
+
+/**
+ * The same tree with every id replaced by its label path (see labelPathId).
+ * Labels compare as concepts do (case and spacing ignored); siblings with the
+ * same label are told apart by their order.
  */
 export function withLabelPathIds(mindmap: DocMindmap): DocMindmap {
-  function walk(node: ConceptNode, path: string): ConceptNode {
+  function walk(node: ConceptNode, id: string): ConceptNode {
     const seen = new Map<string, number>();
     return {
       ...node,
-      id: path,
+      id,
       children: node.children.map((child) => {
-        const label = normalizeConcept(child.label);
-        const count = (seen.get(label) ?? 0) + 1;
-        seen.set(label, count);
-        const segment = count === 1 ? label : `${label}#${count}`;
-        return walk(child, path === LIVE_ROOT_ID ? segment : `${path}${SEPARATOR}${segment}`);
+        const segment = normalizeConcept(child.label.replace(CONTROL, ""));
+        const count = (seen.get(segment) ?? 0) + 1;
+        seen.set(segment, count);
+        return walk(child, id + SEPARATOR + (count === 1 ? segment : `${segment}${DUPLICATE}${count}`));
       }),
     };
   }

@@ -139,8 +139,23 @@ export function previewSpecs(
   };
   const char = (pos: number) => doc.sliceString(pos, pos + 1);
 
+  /**
+   * Whether a range stays on one line. Inline decorations come from a view
+   * plugin, and CodeMirror refuses a plugin decoration that replaces a line
+   * break — markdown lets a link title, an image's alt text or a task's
+   * marker sit on the next line, so every replacement checks this first.
+   */
+  const oneLine = (from: number, to: number) => lineOf(from) === lineOf(to);
   const hide = (from: number, to: number) => {
-    if (to > from) specs.push({ kind: "hide", from, to });
+    if (to <= from) return;
+    // Never across a line break: such syntax stays visible, muted, instead.
+    if (oneLine(from, to)) specs.push({ kind: "hide", from, to });
+    else mark(from, to, SYNTAX_CLASS);
+  };
+  const widget = (from: number, to: number, spec: PreviewWidget): boolean => {
+    if (!oneLine(from, to)) return false;
+    specs.push({ kind: "widget", from, to, widget: spec });
+    return true;
   };
   const mark = (from: number, to: number, cls: string) => {
     if (to > from) specs.push({ kind: "mark", from, to, cls });
@@ -210,7 +225,8 @@ export function previewSpecs(
         if (marks.length < 2 || children(node, "URL").length === 0) return;
         const [open, close] = marks;
         mark(open.to, close.from, "cm-lp-link");
-        const hidden = !anyRevealed(from, to);
+        // A link broken over lines shows its source whole.
+        const hidden = !anyRevealed(from, to) && oneLine(from, to);
         syntax(open.from, open.to, hidden);
         syntax(close.from, to, hidden);
         return;
@@ -220,20 +236,18 @@ export function previewSpecs(
         const marks = children(node, "LinkMark");
         const urlNode = children(node, "URL")[0];
         const url = urlNode ? loadableImageUrl(doc.sliceString(urlNode.from, urlNode.to)) : null;
-        if (url && marks.length >= 2 && !anyRevealed(from, to)) {
-          const titleNode = children(node, "LinkTitle")[0];
-          specs.push({
-            kind: "widget",
-            from,
-            to,
-            widget: {
-              type: "image",
-              url,
-              alt: doc.sliceString(marks[0].to, marks[1].from),
-              title: titleNode ? doc.sliceString(titleNode.from + 1, titleNode.to - 1) : "",
-            },
+        const titleNode = children(node, "LinkTitle")[0];
+        const drawn =
+          url !== null &&
+          marks.length >= 2 &&
+          !anyRevealed(from, to) &&
+          widget(from, to, {
+            type: "image",
+            url,
+            alt: doc.sliceString(marks[0].to, marks[1].from),
+            title: titleNode ? doc.sliceString(titleNode.from + 1, titleNode.to - 1) : "",
           });
-        } else {
+        if (!drawn) {
           // Revealed, or an address that is never loaded: source, muted.
           mark(from, to, "cm-lp-image-src");
         }
@@ -280,10 +294,11 @@ export function previewSpecs(
         } else if (isRevealed(from)) {
           mark(from, to, SYNTAX_CLASS);
         } else if (task) {
-          // A task's checkbox stands in for its bullet.
-          hide(from, task.from);
+          // A task's checkbox stands in for its bullet; when the task starts
+          // on the next line, only the bullet itself goes.
+          hide(from, oneLine(from, task.from) ? task.from : to);
         } else {
-          specs.push({ kind: "widget", from, to, widget: { type: "bullet" } });
+          widget(from, to, { type: "bullet" });
         }
         return;
       }
@@ -293,7 +308,7 @@ export function previewSpecs(
           mark(from, to, SYNTAX_CLASS);
         } else {
           const checked = /x/i.test(doc.sliceString(from + 1, to - 1));
-          specs.push({ kind: "widget", from, to, widget: { type: "task", checked } });
+          if (!widget(from, to, { type: "task", checked })) mark(from, to, SYNTAX_CLASS);
         }
         return;
       }
@@ -315,7 +330,7 @@ export function previewSpecs(
           mark(from, to, SYNTAX_CLASS);
         } else {
           lineClass(from, "cm-lp-hr-line");
-          specs.push({ kind: "widget", from, to, widget: { type: "hr" } });
+          widget(from, to, { type: "hr" });
         }
         return false;
       }
@@ -332,13 +347,8 @@ export function previewSpecs(
           const openEnd = info ? info.to : open.to;
           if (isRevealed(open.from)) {
             mark(open.from, openEnd, SYNTAX_CLASS);
-          } else {
-            specs.push({
-              kind: "widget",
-              from: open.from,
-              to: openEnd,
-              widget: { type: "fence", lang: info ? doc.sliceString(info.from, info.to) : "" },
-            });
+          } else if (!widget(open.from, openEnd, { type: "fence", lang: info ? doc.sliceString(info.from, info.to) : "" })) {
+            mark(open.from, openEnd, SYNTAX_CLASS);
           }
         }
         const close = marks.length > 1 ? marks[marks.length - 1] : null;
