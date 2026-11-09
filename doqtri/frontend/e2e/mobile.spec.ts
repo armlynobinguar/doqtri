@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { deleteNote, seedNote, uniqueTitle } from "./helpers";
+import { deleteNote, noteEditor, seedNote, uniqueTitle } from "./helpers";
 
 /*
  * The vault's compact layout (below `lg`). Runs under the `mobile` project, on
@@ -82,23 +82,26 @@ test.describe("mobile vault", () => {
   test("a note splits into Note, Map and Ship views", async ({ page }) => {
     await page.goto(`/vault/${noteId}`);
 
-    await expect(page.locator(".w-md-editor-text-input")).toBeVisible();
+    // The same live-preview editor as on desktop, alone: no mindmap beside it.
+    await expect(noteEditor(page)).toBeVisible();
+    await expect(page.getByTestId("live-mindmap")).toHaveCount(0);
     // At 16px or more, iOS does not zoom the page when the editor is focused.
-    const fontSize = await page
-      .locator(".w-md-editor-text-input")
-      .evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    const fontSize = await noteEditor(page).evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
     expect(fontSize).toBeGreaterThanOrEqual(16);
+    // Finger-sized formatting buttons.
+    const bold = page.getByRole("toolbar", { name: "Formatting" }).getByRole("button", { name: "Bold" });
+    expect((await bold.boundingBox())!.height).toBeGreaterThanOrEqual(44);
 
     await page.getByRole("tab", { name: "Map" }).tap();
     await expect(page.getByRole("tab", { name: "Graph" })).toBeVisible();
     await expect(page.getByTestId("backlinks")).toContainText(linkedTitle);
-    await expect(page.locator(".w-md-editor-text-input")).toBeHidden();
+    await expect(noteEditor(page)).toBeHidden();
 
     await page.getByRole("tab", { name: "Ship" }).tap();
     await expect(page.getByText("Stellar proof")).toBeVisible();
 
     await page.getByRole("tab", { name: "Note" }).tap();
-    await expect(page.locator(".w-md-editor-text-input")).toBeVisible();
+    await expect(noteEditor(page)).toBeVisible();
     await expectNoHorizontalScroll(page);
   });
 

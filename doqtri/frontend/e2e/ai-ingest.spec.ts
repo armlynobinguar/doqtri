@@ -178,12 +178,15 @@ test.describe("upload and AI through the OpenAI stub", () => {
     created.push(id);
     await page.goto(`/vault/${id}`);
     await page.getByRole("tab", { name: "Mindmap", exact: true }).click();
-    await expect(page.getByText("From headings", { exact: true })).toBeVisible();
+    // The right panel's Mindmap tab; the live mindmap beside the editor has
+    // labels of its own.
+    const panel = page.getByTestId("right-panel");
+    await expect(panel.getByText("From headings", { exact: true })).toBeVisible();
 
-    await page.getByRole("button", { name: "Build mindmap" }).click();
+    await panel.getByRole("button", { name: "Build mindmap" }).click();
     await expect(page.getByText("Mindmap rebuilt")).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByText("Concept map", { exact: true })).toBeVisible();
-    await expect(page.getByText(OPENAI_STUB_MINDMAP_THEME).first()).toBeVisible();
+    await expect(panel.getByText("Concept map", { exact: true })).toBeVisible();
+    await expect(panel.getByText(OPENAI_STUB_MINDMAP_THEME).first()).toBeVisible();
   });
 
   test("an account over the daily AI limit is told so", async ({ browser }) => {

@@ -1,5 +1,14 @@
 import { test, expect, type Page } from "@playwright/test";
-import { deleteNote, editableEditor, fakeMindmap, readNote, seedNote, uniqueTitle } from "./helpers";
+import {
+  deleteNote,
+  editableEditor,
+  expectEditorText,
+  fakeMindmap,
+  readNote,
+  seedNote,
+  setEditorSelection,
+  uniqueTitle,
+} from "./helpers";
 
 /**
  * A rename renames the note's own title heading too (DOQ-35), so the mindmap
@@ -8,14 +17,26 @@ import { deleteNote, editableEditor, fakeMindmap, readNote, seedNote, uniqueTitl
  * it, and its next save goes on without a conflict.
  */
 
-/** What the note's editor shows. The one place that knows which editor it is. */
-async function expectEditor(page: Page, text: string) {
-  await expect(page.locator("textarea.w-md-editor-text-input")).toHaveValue(text);
+/** The side panel, which holds the Mindmap tab; the live mindmap pane beside the editor is apart from it. */
+function rightPanel(page: Page) {
+  return page.getByTestId("right-panel");
+}
+
+/** The side panel's mindmap. */
+function sideMindmap(page: Page) {
+  return rightPanel(page).getByTestId("mindmap");
 }
 
 /** The labels directly under the side panel mindmap's root. */
 function topLevelLabels(page: Page) {
-  return page.getByTestId("mindmap").locator(":scope > ul > li > span");
+  return sideMindmap(page).locator(":scope > ul > li > span");
+}
+
+/** Types `text` at the end of the note, as the user would. */
+async function typeAtEnd(page: Page, text: string) {
+  await editableEditor(page);
+  await setEditorSelection(page, -1);
+  await page.keyboard.type(text);
 }
 
 /** Every `## ` heading of the text, in order: what should ring the root. */
@@ -59,8 +80,9 @@ test.describe("rename keeps the title heading in step (DOQ-35)", () => {
     expect(expected.length).toBeGreaterThan(0);
 
     await editableEditor(page);
-    await page.getByRole("tab", { name: "Mindmap" }).click();
-    const mindmap = page.getByTestId("mindmap");
+    await rightPanel(page).getByRole("tab", { name: "Mindmap" }).click();
+    const mindmap = sideMindmap(page);
+    const liveOutline = page.getByTestId("live-mindmap-outline");
     await expect(mindmap.getByRole("paragraph").first()).toHaveText(created.title);
     await expect(topLevelLabels(page)).toHaveText(expected);
 
@@ -69,19 +91,19 @@ test.describe("rename keeps the title heading in step (DOQ-35)", () => {
 
     // The editor shows the new heading at once, the rest untouched.
     const rewritten = created.markdown.replace(`# ${created.title}\n`, `# ${renamed}\n`);
-    await expectEditor(page, rewritten);
+    await expectEditorText(page, rewritten);
     await expect.poll(async () => readNote(id)).toEqual({ title: renamed, markdown: rewritten });
 
-    // Sections sit directly around the renamed root: no lone old or new title node.
+    // Sections sit directly around the renamed root: no lone old or new title
+    // node, in the side panel or the live mindmap beside the editor.
     await expect(mindmap.getByRole("paragraph").first()).toHaveText(renamed);
     await expect(topLevelLabels(page)).toHaveText(expected);
     await expect(mindmap.getByText(created.title, { exact: true })).toHaveCount(0);
+    await expect(liveOutline.getByRole("paragraph")).toHaveText(renamed);
+    await expect(liveOutline.getByText(created.title, { exact: true })).toHaveCount(0);
 
     // The next save goes on from the rename's version.
-    const editor = await editableEditor(page);
-    await editor.click();
-    await editor.press("ControlOrMeta+End");
-    await editor.pressSequentially("After the rename.");
+    await typeAtEnd(page, "After the rename.");
     await expect(page.getByText("Saved", { exact: true }).first()).toBeVisible({ timeout: 15_000 });
     await expect.poll(async () => (await readNote(id)).markdown).toBe(`${rewritten}After the rename.`);
     await expect(page.getByTestId("edit-conflict-banner")).toHaveCount(0);
@@ -105,22 +127,17 @@ test.describe("rename keeps the title heading in step (DOQ-35)", () => {
     notes.push(id);
     await page.goto(`/vault/${id}`);
 
-    const editor = await editableEditor(page);
-    await editor.click();
-    await editor.press("ControlOrMeta+End");
     // Typed and straight into the dialog, inside the autosave's settle time.
-    await editor.pressSequentially(" Typed before the rename.");
+    await typeAtEnd(page, " Typed before the rename.");
     const renamed = uniqueTitle("Pending Renamed");
     await rename(page, title, renamed);
 
     const expected = `# ${renamed}${body} Typed before the rename.`;
-    await expectEditor(page, expected);
+    await expectEditorText(page, expected);
     await expect.poll(async () => readNote(id)).toEqual({ title: renamed, markdown: expected });
     await expect(page.getByTestId("edit-conflict-banner")).toHaveCount(0);
 
-    await editor.click();
-    await editor.press("ControlOrMeta+End");
-    await editor.pressSequentially(" And after it.");
+    await typeAtEnd(page, " And after it.");
     await expect.poll(async () => (await readNote(id)).markdown, { timeout: 15_000 }).toBe(`${expected} And after it.`);
     await expect(page.getByTestId("edit-conflict-banner")).toHaveCount(0);
     expect(conflicts).toEqual([]);
@@ -135,12 +152,13 @@ test.describe("rename keeps the title heading in step (DOQ-35)", () => {
     );
     notes.push(id);
     await page.goto(`/vault/${id}`);
-    await page.getByRole("tab", { name: "Mindmap" }).click();
-    await expect(page.getByText("Concept map", { exact: true })).toBeVisible();
+    // The live mindmap pane has a "Concept map" tab of its own: read the side panel's label.
+    await rightPanel(page).getByRole("tab", { name: "Mindmap" }).click();
+    await expect(rightPanel(page).getByText("Concept map", { exact: true })).toBeVisible();
 
     const renamed = uniqueTitle("Mapped Renamed");
     await rename(page, title, renamed);
-    await expect(page.getByText("Note has changed", { exact: true })).toBeVisible();
+    await expect(rightPanel(page).getByText("Note has changed", { exact: true })).toBeVisible();
   });
 
   test("a rename from another tab is refused while this user edits the note there, and that tab keeps saving", async ({
@@ -158,10 +176,7 @@ test.describe("rename keeps the title heading in step (DOQ-35)", () => {
       if (res.status() === 409 && new URL(res.url()).pathname.startsWith("/api/notes/")) conflicts.push(res.url());
     });
     await tabB.goto(`/vault/${id}`);
-    const editorB = await editableEditor(tabB);
-    await editorB.click();
-    await editorB.press("ControlOrMeta+End");
-    await editorB.pressSequentially(" Typed in B.");
+    await typeAtEnd(tabB, " Typed in B.");
     await expect.poll(async () => (await readNote(id)).markdown, { timeout: 15_000 }).toBe(
       `# ${title}\n\n## Scope\n\nFirst. Typed in B.`,
     );
@@ -179,9 +194,8 @@ test.describe("rename keeps the title heading in step (DOQ-35)", () => {
     expect(await readNote(id)).toEqual({ title, markdown: `# ${title}\n\n## Scope\n\nFirst. Typed in B.` });
 
     // Tab B never noticed: its next save goes on from its own version.
-    await editorB.click();
-    await editorB.press("ControlOrMeta+End");
-    await editorB.pressSequentially(" And more.");
+    await tabB.bringToFront();
+    await typeAtEnd(tabB, " And more.");
     await expect.poll(async () => (await readNote(id)).markdown, { timeout: 15_000 }).toBe(
       `# ${title}\n\n## Scope\n\nFirst. Typed in B. And more.`,
     );
@@ -201,6 +215,6 @@ test.describe("rename keeps the title heading in step (DOQ-35)", () => {
     const renamed = uniqueTitle("Own Renamed");
     await rename(page, title, renamed);
     await expect.poll(async () => readNote(id)).toEqual({ title: renamed, markdown });
-    await expectEditor(page, markdown);
+    await expectEditorText(page, markdown);
   });
 });

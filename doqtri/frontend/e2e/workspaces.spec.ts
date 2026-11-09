@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { shortenAddress } from "@/lib/wallet";
 import { assertNotProduction } from "./guard";
-import { deleteNote, editableEditor, personalWorkspaceId, seedNote, serviceRest, testUserId, uniqueTitle, userIdForWallet } from "./helpers";
+import { deleteNote, editableEditor, expectEditorText, noteEditor, personalWorkspaceId, setEditorSelection, seedNote, serviceRest, testUserId, uniqueTitle, userIdForWallet } from "./helpers";
 import { createTeamWorkspace, deleteWorkspace, memberRole, setMember } from "./teams";
 import { e2eKeypair, signedInContext } from "./wallet-session";
 
@@ -18,7 +18,6 @@ import { e2eKeypair, signedInContext } from "./wallet-session";
 const B = e2eKeypair("doqtri-e2e-wallet-b");
 const B_SHORT = shortenAddress(B.publicKey());
 
-const editor = (page: Page) => page.locator("textarea.w-md-editor-text-input");
 
 let aId: string;
 let bId: string;
@@ -50,7 +49,7 @@ async function expectNoteNotFound(page: Page, noteId: string, title: string) {
   await page.goto(`/vault/${noteId}`);
   await expect(page.getByText("This page could not be found.")).toBeVisible();
   await expect(page.getByText(title)).toHaveCount(0);
-  await expect(page.locator("textarea.w-md-editor-text-input")).toHaveCount(0);
+  await expect(noteEditor(page)).toHaveCount(0);
 }
 
 async function switchWorkspace(page: Page, name: string) {
@@ -240,7 +239,7 @@ test.describe("roles in the editor", () => {
     try {
       await bPage.goto(`/vault/${noteId}`);
       await expect(bPage.getByTestId("read-only-banner")).toHaveText(/You can read this note but not edit it/);
-      await expect(editor(bPage)).toHaveAttribute("readonly", "");
+      await expect(noteEditor(bPage)).toHaveAttribute("contenteditable", "false");
       await expect(bPage.getByRole("button", { name: "New note" })).toBeDisabled();
 
       const session = randomUUID();
@@ -266,9 +265,9 @@ test.describe("roles in the editor", () => {
 
     // A starts typing, which takes the lock.
     await page.goto(`/vault/${noteId}`);
-    await (await editableEditor(page)).click();
-    await editor(page).press("End");
-    await editor(page).pressSequentially(" Typed by A.");
+    await editableEditor(page);
+    await setEditorSelection(page, -1);
+    await page.keyboard.type(" Typed by A.");
     await expect(page.getByText("Saved")).toBeVisible({ timeout: 15_000 });
 
     const bPage = await bContext.newPage();
@@ -278,7 +277,7 @@ test.describe("roles in the editor", () => {
       await expect(banner).toContainText("is editing this note");
       // An editor cannot take the lock; only an admin or owner can.
       await expect(banner.getByRole("button", { name: "Take over" })).toHaveCount(0);
-      await expect(editor(bPage)).toHaveAttribute("readonly", "");
+      await expect(noteEditor(bPage)).toHaveAttribute("contenteditable", "false");
 
       // The server refuses B's save, whatever the UI shows.
       const session = randomUUID();
@@ -293,9 +292,9 @@ test.describe("roles in the editor", () => {
       expect((await save.json()).code).toBe("NOT_LOCK_HOLDER");
 
       // A saves again; B's read-only copy follows (polled every 15 s).
-      await editor(page).pressSequentially(" Second save.");
+      await page.keyboard.type(" Second save.");
       await expect(page.getByText("Saved")).toBeVisible({ timeout: 15_000 });
-      await expect(editor(bPage)).toHaveValue(/Second save\./, { timeout: 30_000 });
+      await expectEditorText(bPage, /Second save\./, 30_000);
     } finally {
       await bPage.close();
     }
@@ -306,9 +305,9 @@ test.describe("roles in the editor", () => {
     await setMember(team, bId, "admin");
 
     await page.goto(`/vault/${noteId}`);
-    await (await editableEditor(page)).click();
-    await editor(page).press("End");
-    await editor(page).pressSequentially(" A holds it.");
+    await editableEditor(page);
+    await setEditorSelection(page, -1);
+    await page.keyboard.type(" A holds it.");
     await expect(page.getByText("Saved")).toBeVisible({ timeout: 15_000 });
 
     const bPage = await bContext.newPage();
@@ -318,13 +317,14 @@ test.describe("roles in the editor", () => {
       await banner.getByRole("button", { name: "Take over" }).click();
       await expect(bPage.getByText("You are editing this note now")).toBeVisible();
       await expect(banner).toHaveCount(0);
-      await expect(editor(bPage)).not.toHaveAttribute("readonly", "");
+      await expect(noteEditor(bPage)).toHaveAttribute("contenteditable", "true");
 
       // A's next save is refused, and A's copy says who has it now.
-      await editor(page).pressSequentially(" Too late.");
+      await setEditorSelection(page, -1);
+      await page.keyboard.type(" Too late.");
       await expect(page.getByText(/is editing this note now\. This copy is read-only\./)).toBeVisible({ timeout: 30_000 });
       await expect(page.getByTestId("edit-lock-banner")).toBeVisible();
-      await expect(editor(page)).toHaveAttribute("readonly", "");
+      await expect(noteEditor(page)).toHaveAttribute("contenteditable", "false");
 
       const [{ markdown }] = await serviceRest<{ markdown: string }[]>(`documents?id=eq.${noteId}&select=markdown`);
       expect(markdown).not.toContain("Too late.");

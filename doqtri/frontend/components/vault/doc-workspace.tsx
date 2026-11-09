@@ -17,6 +17,8 @@ import { useIsCompactVault } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 import { useVaultStatus } from "@/components/vault/vault-status";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { useNavigate } from "@/components/vault/navigation";
+import { resolveLinkTitle } from "@/lib/wikilinks";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { createNoteSaver } from "@/lib/note-saver";
 import { useDocLock } from "@/hooks/use-doc-lock";
@@ -146,6 +148,9 @@ export function DocWorkspace({
     lock.phase === "loading" ||
     lock.phase === "other" ||
     lock.phase === "elsewhere";
+  // Read-only only because the lock's status has not arrived yet (DOQ-17):
+  // the editor keeps its caret so typing works the moment it does.
+  const lockPending = lock.phase === "loading" && !conflict;
 
   /** The editor's onChange: the first edit takes the lock. */
   const handleChange = useCallback(
@@ -293,8 +298,8 @@ export function DocWorkspace({
     },
     [controller, readOnly, reloadLatest, saveNow, saver, saves, setSaveState],
   );
-  const openNote = useMemo(() => ({ docId: active.id, rename: renameHere }), [active.id, renameHere]);
-  useRegisterOpenNote(openNote);
+  const openHere = useMemo(() => ({ docId: active.id, rename: renameHere }), [active.id, renameHere]);
+  useRegisterOpenNote(openHere);
 
   /**
    * The graph reads the settled text so the simulation is not restarted on
@@ -307,6 +312,17 @@ export function DocWorkspace({
         doc.id === active.id ? { ...doc, markdown: settled } : doc,
       ),
     [docs, active.id, settled],
+  );
+
+  // A followed [[link]] opens the note it names, as the graph would. A ghost
+  // link names no note, and does nothing.
+  const navigate = useNavigate();
+  const openNote = useCallback(
+    (title: string) => {
+      const target = resolveLinkTitle(docs, title);
+      if (target && target.id !== active.id) navigate(`/vault/${target.id}`);
+    },
+    [docs, active.id, navigate],
   );
 
   // Every other note, offered by the editor's `[[` autocomplete.
@@ -426,12 +442,15 @@ export function DocWorkspace({
         <div className={cn("min-h-0 flex-1", mobileView !== "note" && "hidden")}>
           <EditorPane
             compact
+            docId={active.id}
             title={active.title}
             markdown={markdown}
             onChange={handleChange}
             onRegenerate={() => setRegenerateOpen(true)}
             linkTitles={linkTitles}
             readOnly={readOnly}
+            pending={lockPending}
+            onOpenNote={openNote}
             banner={lockBanner}
           />
         </div>
@@ -463,14 +482,19 @@ export function DocWorkspace({
   return (
     <>
       <ResizablePanelGroup orientation="horizontal" className="min-h-0">
-        <ResizablePanel id="editor" minSize={320} className="min-h-0">
+        <ResizablePanel id="editor" minSize={320} className="flex min-h-0 flex-col">
           <EditorPane
+            docId={active.id}
             title={active.title}
             markdown={markdown}
             onChange={handleChange}
             onRegenerate={() => setRegenerateOpen(true)}
             linkTitles={linkTitles}
+            mindmap={active.mindmap ?? null}
+            mindmapStale={active.mindmapStale ?? false}
             readOnly={readOnly}
+            pending={lockPending}
+            onOpenNote={openNote}
             banner={lockBanner}
           />
         </ResizablePanel>
