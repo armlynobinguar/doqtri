@@ -24,7 +24,7 @@ import { EditLockBanner } from "@/components/vault/edit-lock-banner";
 import { EDITING_ELSEWHERE, editingMessage } from "@/lib/doc-lock";
 import type { Doc } from "@/lib/types";
 import type { RenamedNote } from "@/lib/rename-note";
-import { rewriteTitleHeading } from "@/lib/title-heading";
+import { adoptRename } from "@/lib/rename-adopt";
 import { useRegisterOpenNote } from "@/components/vault/open-note";
 
 const SETTLE_MS = 700;
@@ -247,10 +247,15 @@ export function DocWorkspace({
    * typed is lost), and the request runs in the save queue, so no autosave
    * races it. The text it wrote then becomes the saved copy at its version,
    * as for Regenerate, and the next save goes on from there. Anything typed
-   * while it ran is kept, with the same heading change made to it.
+   * while it ran is kept, with the same heading change made to it
+   * (lib/rename-adopt.ts).
+   *
+   * The request names this editor's edit session, so the server lets the
+   * heading change only when this tab holds the lock, or nobody does
+   * (rename_document()).
    */
   const renameHere = useCallback(
-    async (request: () => Promise<RenamedNote>) => {
+    async (request: (session: string) => Promise<RenamedNote>) => {
       if (!readOnly) {
         try {
           await saveNow();
@@ -260,30 +265,30 @@ export function DocWorkspace({
         }
       }
       return saves.run(async () => {
-        const renamed = await request();
-        const { markdown: written, version, previousVersion } = renamed;
-        if (written === undefined || version === undefined) return renamed;
-        if (previousVersion !== saver.version) {
-          // This copy was already behind the note; load what it is now,
-          // unless it holds unsaved text or a conflict the user must see.
-          if (!conflictRef.current && markdownRef.current === saves.saved) void reloadLatest();
+        const renamed = await request(controller.session);
+        const adopted = adoptRename({
+          renamed,
+          editorVersion: saver.version,
+          saved: saves.saved,
+          current: markdownRef.current,
+        });
+        if (!adopted) {
+          // A rewrite this copy was already behind: load what the note is
+          // now, unless it holds unsaved text or a conflict the user must see.
+          if (renamed.markdown !== undefined && !conflictRef.current && markdownRef.current === saves.saved) {
+            void reloadLatest();
+          }
           return renamed;
         }
-        const flushed = saves.saved;
-        saver.setVersion(version);
-        saves.markSaved(written);
-        const current = markdownRef.current;
-        const next =
-          current === flushed
-            ? written
-            : (rewriteTitleHeading(current, renamed.previousTitle, renamed.title) ?? current);
-        markdownRef.current = next;
-        setMarkdown(next);
-        setSaveState(next === written ? "saved" : "saving");
+        saver.setVersion(adopted.version);
+        saves.markSaved(adopted.saved);
+        markdownRef.current = adopted.text;
+        setMarkdown(adopted.text);
+        setSaveState(adopted.text === adopted.saved ? "saved" : "saving");
         return renamed;
       });
     },
-    [readOnly, reloadLatest, saveNow, saver, saves, setSaveState],
+    [controller, readOnly, reloadLatest, saveNow, saver, saves, setSaveState],
   );
   const openNote = useMemo(() => ({ docId: active.id, rename: renameHere }), [active.id, renameHere]);
   useRegisterOpenNote(openNote);

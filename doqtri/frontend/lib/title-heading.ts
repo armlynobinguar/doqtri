@@ -1,4 +1,6 @@
+import { cleanLabel } from "@/lib/mindmap";
 import { normalizeConcept } from "@/lib/mindmap-types";
+import { hasControlCharacters } from "@/lib/title";
 
 /** A level-1 ATX heading, read the way lib/mindmap.ts reads headings. */
 const H1_RE = /^#[ \t]+(.*)$/;
@@ -11,13 +13,19 @@ const CLOSING_HASHES_RE = /\s+#+\s*$/;
  *
  * A note usually opens with `# <title>`, and the mindmap folds that heading
  * into its root only while it matches the title (DOQ-30). So when the first
- * non-blank line is a level-1 heading whose text is the old title — compared
- * as titles are, ignoring case and spacing, with any closing `#`s dropped —
- * that line becomes `# <newTitle>`. Every other byte is kept, the line's own
- * ending (`\r\n` or `\n`) included.
+ * non-blank line is a level-1 heading whose text is the old title, that line
+ * becomes `# <newTitle>`. The text is read as the mindmap reads a heading
+ * (cleanLabel: `[[Target]]` as Target, `[[Target|Alias]]` as Alias, closing
+ * `#`s dropped) and compared as titles are, ignoring case and spacing. So
+ * `# [[Old]]` is the title heading of "Old", and `# [[Old|Alias]]` is that
+ * of "Alias", as deriveTitle() and the fold see them. The whole line is
+ * replaced by a plain `# <newTitle>`: a wikilink there is not kept. Every
+ * other byte stays, the line's own ending (`\r\n` or `\n`) included.
  *
  * Any other first line (another heading, a `##`, prose, or the title
- * heading further down) is the user's own, and null is returned.
+ * heading further down) is the user's own, and null is returned. So is a new
+ * title that is not one line, which the routes refuse anyway: written into
+ * the heading, a line break would add headings and move the ones after it.
  */
 export function rewriteTitleHeading(
   markdown: string,
@@ -25,7 +33,7 @@ export function rewriteTitleHeading(
   newTitle: string,
 ): string | null {
   const wanted = normalizeConcept(oldTitle);
-  if (!wanted) return null;
+  if (!wanted || hasControlCharacters(newTitle)) return null;
 
   let start = 0;
   while (start < markdown.length) {
@@ -38,8 +46,7 @@ export function rewriteTitleHeading(
     if (line.trim() !== "") {
       const match = H1_RE.exec(line);
       if (!match) return null;
-      const text = match[1].replace(CLOSING_HASHES_RE, "");
-      if (normalizeConcept(text) !== wanted) return null;
+      if (normalizeConcept(cleanLabel(match[1])) !== wanted) return null;
 
       const heading = titleHeading(newTitle);
       if (heading === line) return null;

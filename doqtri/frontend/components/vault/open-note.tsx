@@ -14,21 +14,29 @@ import type { RenamedNote } from "@/lib/rename-note";
  */
 export type OpenNote = {
   docId: string;
-  rename(request: () => Promise<RenamedNote>): Promise<RenamedNote>;
+  /** Runs `request` with the editor's edit session, which the server checks the lock against. */
+  rename(request: (session: string) => Promise<RenamedNote>): Promise<RenamedNote>;
 };
+
+/** A rename request, given the open editor's session when it goes through one. */
+export type RenameRequest = (session?: string) => Promise<RenamedNote>;
 
 /** The shell's side: where the open editor registers, and the rename that goes through it. */
 export type OpenNoteSlot = {
   ref: RefObject<OpenNote | null>;
-  /** Renames `docId` through the open editor when it is the note open there, else with `request` alone. */
-  rename(docId: string, request: () => Promise<RenamedNote>): Promise<RenamedNote>;
+  /**
+   * Renames `docId` through the open editor when it is the note open there,
+   * else with `request` alone, naming no session (the server then lets the
+   * heading change only while nobody holds the note's lock).
+   */
+  rename(docId: string, request: RenameRequest): Promise<RenamedNote>;
 };
 
 const OpenNoteContext = createContext<RefObject<OpenNote | null> | null>(null);
 
 export function useOpenNoteSlot(): OpenNoteSlot {
   const ref = useRef<OpenNote | null>(null);
-  const rename = useCallback((docId: string, request: () => Promise<RenamedNote>) => {
+  const rename = useCallback((docId: string, request: RenameRequest) => {
     const open = ref.current;
     return open?.docId === docId ? open.rename(request) : request();
   }, []);

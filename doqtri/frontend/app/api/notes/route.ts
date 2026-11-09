@@ -3,7 +3,7 @@ import {
   createSupabaseServerClient,
   createSupabaseAdminClient,
 } from "@/lib/supabase/server";
-import { MAX_TITLE_LENGTH } from "@/lib/title";
+import { hasControlCharacters, MAX_TITLE_LENGTH, TITLE_ONE_LINE } from "@/lib/title";
 import { insertWorkspaceDocument } from "@/lib/workspace-docs";
 import { readActiveWorkspaceCookie, workspaceForCreate } from "@/lib/active-workspace";
 
@@ -35,6 +35,9 @@ export async function POST(request: Request) {
     const body = (await request.json()) as { title?: unknown; body?: unknown; workspaceId?: unknown };
     requestedWorkspace = body.workspaceId;
     if (typeof body.title === "string" && body.title.trim()) {
+      if (hasControlCharacters(body.title.trim())) {
+        return NextResponse.json({ error: TITLE_ONE_LINE, code: "BAD_TITLE" }, { status: 400 });
+      }
       requestedTitle = body.title.trim().slice(0, MAX_TITLE_LENGTH);
     }
     if (typeof body.body === "string" && body.body.trim()) {

@@ -143,6 +143,53 @@ test.describe("rename keeps the title heading in step (DOQ-35)", () => {
     await expect(page.getByText("Note has changed", { exact: true })).toBeVisible();
   });
 
+  test("a rename from another tab is refused while this user edits the note there, and that tab keeps saving", async ({
+    page,
+    context,
+  }) => {
+    const conflicts: string[] = [];
+    const title = uniqueTitle("Two Tabs");
+    const id = await seedNote(title, `# ${title}\n\n## Scope\n\nFirst.`);
+    notes.push(id);
+
+    // Tab B edits the note, so it holds the note's edit lock.
+    const tabB = await context.newPage();
+    tabB.on("response", (res) => {
+      if (res.status() === 409 && new URL(res.url()).pathname.startsWith("/api/notes/")) conflicts.push(res.url());
+    });
+    await tabB.goto(`/vault/${id}`);
+    const editorB = await editableEditor(tabB);
+    await editorB.click();
+    await editorB.press("ControlOrMeta+End");
+    await editorB.pressSequentially(" Typed in B.");
+    await expect.poll(async () => (await readNote(id)).markdown, { timeout: 15_000 }).toBe(
+      `# ${title}\n\n## Scope\n\nFirst. Typed in B.`,
+    );
+
+    // Tab A renames it from the explorer, with no editor of its own on it.
+    await page.goto("/vault");
+    await page.getByRole("button", { name: `Rename ${title}` }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Note title").fill(uniqueTitle("Two Tabs Renamed"));
+    await dialog.getByRole("button", { name: "Rename", exact: true }).click();
+    await expect(dialog.getByRole("alert")).toHaveText(
+      "You are editing this note in another tab or window, so it cannot be renamed here.",
+    );
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    expect(await readNote(id)).toEqual({ title, markdown: `# ${title}\n\n## Scope\n\nFirst. Typed in B.` });
+
+    // Tab B never noticed: its next save goes on from its own version.
+    await editorB.click();
+    await editorB.press("ControlOrMeta+End");
+    await editorB.pressSequentially(" And more.");
+    await expect.poll(async () => (await readNote(id)).markdown, { timeout: 15_000 }).toBe(
+      `# ${title}\n\n## Scope\n\nFirst. Typed in B. And more.`,
+    );
+    await expect(tabB.getByTestId("edit-conflict-banner")).toHaveCount(0);
+    expect(conflicts).toEqual([]);
+    await tabB.close();
+  });
+
   test("a heading that is not the title is left alone", async ({ page }) => {
     const title = uniqueTitle("Own Heading");
     const markdown = "# Something I wrote\n\n## Scope\n";

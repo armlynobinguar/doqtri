@@ -9,10 +9,11 @@ const HEADING_RE = /^(#{1,6})\s+(.*)$/;
 
 /**
  * Strips the [[ ]] syntax from a heading so `## [[Auth]] flow` reads as
- * "Auth flow" in the tree. The link itself still belongs to the global graph;
- * the mindmap is about structure.
+ * "Auth flow" in the tree (an alias, `[[Target|Alias]]`, reads as the alias).
+ * The link itself still belongs to the global graph; the mindmap is about
+ * structure. Also how a rename recognises the title heading (DOQ-35).
  */
-function cleanLabel(raw: string): string {
+export function cleanLabel(raw: string): string {
   return raw
     .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target, alias) => alias ?? target)
     .replace(/\s+#+\s*$/, "") // closing ATX hashes

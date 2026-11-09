@@ -15,15 +15,19 @@ export type RenamedNote = {
 /**
  * Renames a note through the API. Throws with the server's reason — notably
  * when another note already has the title, which the dialog shows inline.
+ * `session` is the open editor's edit session, when the rename goes through
+ * it: the server checks the note's lock against it before it rewrites the
+ * title heading.
  */
 export async function renameNote(
   id: string,
   title: string,
+  session?: string,
 ): Promise<RenamedNote> {
   const res = await fetch(`/api/notes/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title }),
+    body: JSON.stringify(session ? { title, session } : { title }),
   });
   const payload = (await res.json().catch(() => null)) as {
     error?: string;

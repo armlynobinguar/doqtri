@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { mindmapFromHeadings } from "@/lib/mindmap-types";
+import { deriveTitle } from "@/lib/title";
 import { rewriteTitleHeading } from "@/lib/title-heading";
 
 describe("rewriteTitleHeading (DOQ-35)", () => {
@@ -59,6 +60,28 @@ describe("rewriteTitleHeading (DOQ-35)", () => {
     expect(rewriteTitleHeading("## Old\n", "Old", "New")).toBeNull();
     expect(rewriteTitleHeading("#Old\n", "Old", "New")).toBeNull();
     expect(rewriteTitleHeading("  # Old\n", "Old", "New")).toBeNull();
+  });
+
+  it("reads a wikilink heading as the mindmap does, and writes a plain one", () => {
+    // cleanLabel and deriveTitle read `# [[Old]]` as "Old" ...
+    expect(rewriteTitleHeading("# [[Old]]\nBody", "Old", "New")).toBe("# New\nBody");
+    // ... and `# [[Old|Alias]]` as its alias, so that is the title it heads.
+    expect(rewriteTitleHeading("# [[Old|Alias]]\nBody", "Old", "New")).toBeNull();
+    expect(rewriteTitleHeading("# [[Old|Alias]]\nBody", "Alias", "New")).toBe("# New\nBody");
+    expect(rewriteTitleHeading("# [[old]] #\r\nBody", "Old", "New")).toBe("# New\r\nBody");
+  });
+
+  it("agrees with deriveTitle on which title a wikilink heading names", () => {
+    for (const heading of ["# [[Old]]", "# [[Old|Alias]]", "# [[Old]] plan", "# Old"]) {
+      const title = deriveTitle(`${heading}\n`, "x.md");
+      expect(rewriteTitleHeading(`${heading}\n`, title, "New"), heading).toBe("# New\n");
+    }
+  });
+
+  it("writes nothing for a new title that is not one line", () => {
+    expect(rewriteTitleHeading("# Old\n## Scope\n", "Old", "New\n## Injected")).toBeNull();
+    expect(rewriteTitleHeading("# Old\n", "Old", "New\r## X")).toBeNull();
+    expect(rewriteTitleHeading("# Old\n", "Old", "Tab\there")).toBeNull();
   });
 
   it("answers null when the heading already reads as the new title", () => {

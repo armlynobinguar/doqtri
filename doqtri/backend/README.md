@@ -61,6 +61,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261101110000_chain_writes_status.sql    # NOT recorded (WP-4.1, DOQ-5): confirm on the remote before deploying
 20261101120000_wallet_topups.sql          # NOT recorded (WP-4.1, DOQ-6): confirm on the remote before deploying
 20261103100000_ops_snapshot.sql           # applied 2026-11-03 as `ops_snapshot` (WP-4.3, DOQ-14)
+20261109100000_rename_document.sql        # NOT yet applied (WP-1.7, DOQ-35): apply before deploying; /api/notes/[id] PATCH needs it
 ```
 
 Files marked "NOT recorded" were added without updating this list, so whether they are
@@ -201,13 +202,18 @@ Two supporting tables:
   names it, so a user's second tab is read-only and cannot release the
   first's); it frees after ten minutes without a heartbeat, and an admin or
   owner may take it over (anyone may take over their own lock from another
-  tab). Written only by `take_doc_lock()`, `release_doc_lock()` and
-  `save_document()`; workspace members read who holds it, and only editors
+  tab). Written only by `take_doc_lock()`, `release_doc_lock()`,
+  `save_document()` and `rename_document()`; workspace members read who holds it, and only editors
   and above are told the holder's name. `documents.version` counts saves,
   and the browser saves text only through
   `save_document(id, markdown, base_version, session)`, which refuses a
   caller without the lock in that session (`DQLCK`) or with a stale version
-  (`DQVER`). A plain client UPDATE of `markdown` is refused. Removing or
+  (`DQVER`). A rename goes through
+  `rename_document(id, title, markdown, base_version, session)` (DOQ-35),
+  which writes the title and, when the note's `# <title>` heading changes
+  with it, the new text in one UPDATE: refused while another user holds the
+  lock, and, when the text changes, unless the lock is free or held from
+  that session. A plain client UPDATE of `markdown` is refused. Removing or
   demoting a member drops their locks. A tab that closes or reloads releases
   its lock with a keepalive request; when that request never arrives, the old
   session's lock stays live, and a reloaded tab shows the note as being

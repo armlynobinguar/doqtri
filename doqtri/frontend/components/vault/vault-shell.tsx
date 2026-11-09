@@ -237,7 +237,7 @@ function VaultShellInner({
   const openNote = useOpenNoteSlot();
   const handleRenameNote = useCallback(
     async (note: NoteSummary, title: string) => {
-      const renamed = await openNote.rename(note.id, () => renameNote(note.id, title));
+      const renamed = await openNote.rename(note.id, (session) => renameNote(note.id, title, session));
       toast.success(`Renamed to “${renamed.title}”`);
       // The explorer, tabs, and mindmap root all read the title from the
       // layout's server data.
