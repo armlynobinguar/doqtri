@@ -67,18 +67,14 @@ vi.mock("@/components/vault/preferences", () => ({ PreferencesSync: () => null }
 vi.mock("@/components/vault/referral-claim", () => ({ ReferralClaim: () => null }));
 vi.mock("@/components/vault/profile-view", () => ({ ProfileView: () => null }));
 vi.mock("@/components/vault/account-menu", () => ({ AccountMenu: () => null }));
-vi.mock("@/components/auth/email-auth-form", () => ({ EmailAuthForm: () => null }));
-vi.mock("@/components/auth/wallet-option", () => ({ WalletOption: () => null }));
 
 const { default: ReferralsPage, generateMetadata } = await import("@/app/vault/referrals/page");
 const { default: VaultLayout } = await import("@/app/vault/layout");
 const { default: ProfilePage } = await import("@/app/vault/profile/page");
-const { default: SignUpPage } = await import("@/app/(auth)/signup/page");
 const { Ribbon, ribbonRouteAction } = await import("@/components/vault/ribbon");
 const { VaultShell } = await import("@/components/vault/vault-shell");
 const { ProfileView } = await import("@/components/vault/profile-view");
 const { ReferralInviteIntro } = await import("@/components/vault/referral-invite-intro");
-const { ReferralCodeField } = await import("@/components/auth/referral-code-field");
 const { TooltipProvider } = await import("@/components/ui/tooltip");
 
 /** The element of a given component anywhere in a tree, without rendering it. */
@@ -209,45 +205,5 @@ describe("Profile → Invite", () => {
     expect(html).toContain("earns you 30 PHP once they've made 3 on-chain activities");
     expect(html).toContain('href="/vault/referrals"');
     expect(html).toContain("View your referrals");
-  });
-});
-
-describe("the sign-up notice", () => {
-  const NOTICE =
-    "The person who invited you can see a masked version of your email or wallet, and how many on-chain actions you've taken.";
-  const field = (initialCode: string | null, dashboardLive: boolean) =>
-    renderToStaticMarkup(createElement(ReferralCodeField, { initialCode, dashboardLive })).replace(/&#x27;/g, "'");
-
-  it("appears in the ticket's words with a code applied, once on", () => {
-    expect(field("abcdefgh", true)).toContain(NOTICE);
-  });
-
-  it("doesn't appear without a code", () => {
-    expect(field(null, true)).not.toContain(NOTICE);
-  });
-
-  it("doesn't appear while off, and the field is what it was", () => {
-    const html = field("abcdefgh", false);
-    expect(html).not.toContain(NOTICE);
-    expect(html).toContain('data-testid="referral-applied"');
-    expect(html.startsWith("<p ")).toBe(true);
-    expect(html.endsWith("</p>")).toBe(true);
-    expect(html.match(/<p /g)).toHaveLength(1);
-  });
-
-  const signUp = async () =>
-    renderToStaticMarkup(await SignUpPage({ searchParams: Promise.resolve({}) })).replace(/&#x27;/g, "'");
-
-  it("the sign-up page passes the switch: off", async () => {
-    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "secret");
-    const html = await signUp();
-    expect(html).toContain("referral-applied");
-    expect(html).not.toContain(NOTICE);
-  });
-
-  it("the sign-up page passes the switch: on", async () => {
-    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "secret");
-    on();
-    expect(await signUp()).toContain(NOTICE);
   });
 });

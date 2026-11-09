@@ -12,14 +12,7 @@ import { Input } from "@/components/ui/input";
  * the account exists, which is what lets it count, for email and wallet
  * sign-up alike.
  */
-export function ReferralCodeField({
-  initialCode,
-  dashboardLive = false,
-}: {
-  initialCode: string | null;
-  /** The referral dashboard exists (the legal pages gate, lib/legal.ts), so the inviter can see this account there. */
-  dashboardLive?: boolean;
-}) {
+export function ReferralCodeField({ initialCode }: { initialCode: string | null }) {
   const [applied, setApplied] = useState(initialCode);
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState("");
@@ -57,22 +50,14 @@ export function ReferralCodeField({
 
   if (applied) {
     return (
-      <>
-        <p className="text-muted-foreground mt-1 flex items-center justify-center gap-2 text-[12px]" data-testid="referral-applied">
-          <GiftIcon className="size-3.5" strokeWidth={1.5} />
-          Invited with code <span className="text-foreground font-mono">{applied}</span>
-          <Button type="button" variant="ghost" size="xs" disabled={busy} onClick={() => void remove()}>
-            {busy ? <Loader2Icon className="animate-spin" /> : <XIcon strokeWidth={1.5} />}
-            Remove
-          </Button>
-        </p>
-        {dashboardLive ? (
-          <p className="text-muted-foreground text-center text-[12px]" data-testid="referral-notice">
-            The person who invited you can see a masked version of your email or wallet, and how many on-chain actions
-            you&apos;ve taken.
-          </p>
-        ) : null}
-      </>
+      <p className="text-muted-foreground mt-1 flex items-center justify-center gap-2 text-[12px]" data-testid="referral-applied">
+        <GiftIcon className="size-3.5" strokeWidth={1.5} />
+        Invited with code <span className="text-foreground font-mono">{applied}</span>
+        <Button type="button" variant="ghost" size="xs" disabled={busy} onClick={() => void remove()}>
+          {busy ? <Loader2Icon className="animate-spin" /> : <XIcon strokeWidth={1.5} />}
+          Remove
+        </Button>
+      </p>
     );
   }
 

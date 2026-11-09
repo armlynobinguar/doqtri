@@ -29,7 +29,7 @@ export default async function SignUpPage({
         <EmailAuthForm mode="sign-up" next={next} />
         <WalletOption next={next} />
         {legalPagesLive() && <SignUpNotice className="mt-1" />}
-        <ReferralCodeField initialCode={referral?.code ?? null} dashboardLive={legalPagesLive()} />
+        <ReferralCodeField initialCode={referral?.code ?? null} />
         <AuthSwitch prompt="Already have an account?" href={withNext("/login", next)} label="Sign in" />
       </AuthCard>
     </AuthPage>

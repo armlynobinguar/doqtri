@@ -435,31 +435,6 @@ test.describe("referral dashboard", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
   });
 
-  test("a sign-up with a code applied shows the notice", async ({ browser }) => {
-    const code = (
-      await serviceRest<{ code: string }[]>("rpc/referral_code_for", {
-        method: "POST",
-        body: { p_user_id: referrerId },
-      })
-    )[0].code;
-    const visitor = await browser.newContext({ baseURL: E2E_DOQTRI_ORIGIN, storageState: SIGNED_OUT });
-    try {
-      const signUp = await visitor.newPage();
-      await signUp.goto("/signup");
-      await expect(signUp.getByTestId("referral-notice")).toHaveCount(0);
-      await signUp.getByRole("button", { name: "Have a referral code?" }).click();
-      await signUp.getByTestId("referral-input").fill(code);
-      await signUp.getByRole("button", { name: "Apply" }).click();
-      await expect(signUp.getByTestId("referral-notice")).toHaveText(
-        "The person who invited you can see a masked version of your email or wallet, and how many on-chain actions you've taken.",
-      );
-      await signUp.getByTestId("referral-applied").getByRole("button", { name: "Remove" }).click();
-      await expect(signUp.getByTestId("referral-notice")).toHaveCount(0);
-    } finally {
-      await visitor.close();
-    }
-  });
-
   test("the list pages, and a failed turn keeps what's on screen and retries the same page", async () => {
     // Enough for three pages, on top of the rows the tests above left.
     await Promise.all(Array.from({ length: 41 }, () => refer(testEmail("cc").email)));
