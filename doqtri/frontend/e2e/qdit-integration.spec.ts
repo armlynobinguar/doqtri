@@ -5,6 +5,9 @@ import { expectAppUsesStub, signedWebhook, stub } from "./qdit-stub/client";
 import { createTeamWorkspace, deleteWorkspace, setMember } from "./teams";
 import { e2eKeypair, signedInContext } from "./wallet-session";
 
+/** The note's qdit panel. While the page streams, React parks a hidden copy outside <main>; only the one in <main> is real. */
+const qditPanel = (p: Page) => p.getByTestId("main").getByTestId("qdit-links");
+
 /**
  * doqtri x qdit, end to end against the contract stub (DOQ-16; WP-2.3 to
  * WP-2.8, gate G2 minus the chain step).
@@ -134,7 +137,7 @@ async function postWebhook(page: Page, hook: ReturnType<typeof signedWebhook>) {
 }
 
 function card(page: Page) {
-  return page.getByTestId("qdit-links").getByTestId("qdit-milestone-card");
+  return qditPanel(page).getByTestId("qdit-milestone-card");
 }
 
 /**
@@ -206,7 +209,7 @@ test.describe("connecting", () => {
     const note = await seedTeamNote("Revoked Plan");
     try {
       await page.goto(`/vault/${note.id}`);
-      await expect(page.getByTestId("qdit-links").getByRole("link", { name: "Reconnect qdit" })).toBeVisible();
+      await expect(qditPanel(page).getByRole("link", { name: "Reconnect qdit" })).toBeVisible();
     } finally {
       await deleteNote(note.id);
     }
@@ -227,7 +230,7 @@ test.describe("linking a plan", () => {
     const note = await seedTeamNote("Escrow Plan");
     try {
       await page.goto(`/vault/${note.id}`);
-      const panel = page.getByTestId("qdit-links");
+      const panel = qditPanel(page);
 
       await panel.getByRole("button", { name: "Link to a qdit project" }).click();
       await panel.getByLabel("qdit project").click();
@@ -366,7 +369,7 @@ test.describe("when qdit and doqtri disagree", () => {
       await stub.deleteProject(gone);
 
       await page.goto(`/vault/${note.id}`);
-      const panel = page.getByTestId("qdit-links");
+      const panel = qditPanel(page);
       await panel.getByRole("button", { name: "Unlink project" }).click();
       await panel.getByRole("button", { name: "Unlink, and every milestone link" }).click();
       await expect(panel).toContainText("qdit no longer shows you this project.");
@@ -443,7 +446,7 @@ test.describe("roles across both teams", () => {
     const note = await seedTeamNote("Editor Plan");
     try {
       await bPage.goto(`/vault/${note.id}`);
-      await expect(bPage.getByTestId("qdit-links")).toContainText("An admin of this workspace links the note to a qdit project.");
+      await expect(qditPanel(bPage)).toContainText("An admin of this workspace links the note to a qdit project.");
       const refused = await bPage.request.post(`/api/integrations/qdit/docs/${note.id}/project`, { data: { projectId: project } });
       expect(refused.status()).toBe(403);
 
@@ -464,7 +467,7 @@ test.describe("roles across both teams", () => {
     try {
       await linkThroughApi(page, note.id, project);
       await bPage.goto(`/vault/${note.id}`);
-      const panel = bPage.getByTestId("qdit-links");
+      const panel = qditPanel(bPage);
       await expect(panel).toContainText(`Project ${projectName}`);
       await expect(panel.getByRole("button", { name: "Create milestone" })).toHaveCount(0);
 
