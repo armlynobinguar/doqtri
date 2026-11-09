@@ -25,7 +25,8 @@ import { useDocLock } from "@/hooks/use-doc-lock";
 import { EditLockBanner } from "@/components/vault/edit-lock-banner";
 import { EDITING_ELSEWHERE, editingMessage } from "@/lib/doc-lock";
 import type { Doc } from "@/lib/types";
-import { countWords } from "@/lib/text-stats";
+import { hiddenSyntax, renderedText, textCounts } from "@/lib/text-stats";
+import { previewParser } from "@/lib/live-preview/syntax";
 
 const SETTLE_MS = 700;
 
@@ -180,9 +181,11 @@ export function DocWorkspace({
   // Keeps the Supabase write and the force simulation off the keystroke path.
   const settled = useDebouncedValue(markdown, SETTLE_MS);
 
+  // The note's rendered words (lib/text-stats.ts), off the keystroke path;
+  // the editor's own count takes over in the status bar once it reports.
   useEffect(() => {
-    setWordCount(countWords(markdown));
-  }, [markdown, setWordCount]);
+    setWordCount(textCounts(renderedText(settled, hiddenSyntax(previewParser.parse(settled), settled))).words);
+  }, [settled, setWordCount]);
 
   useEffect(() => {
     markdownRef.current = markdown;

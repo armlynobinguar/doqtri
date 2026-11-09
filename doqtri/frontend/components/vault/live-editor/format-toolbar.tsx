@@ -31,6 +31,7 @@ import {
   Maximize2Icon,
   Minimize2Icon,
   PencilLineIcon,
+  PilcrowIcon,
   Redo2Icon,
   RemoveFormattingIcon,
   SeparatorHorizontalIcon,
@@ -52,15 +53,11 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverDescription, PopoverTitle } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { tabsListVariants } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { ariaShortcut, isMacPlatform, shortcutLabel, withShortcut, type Shortcut } from "@/lib/editor-shortcuts";
 import { loadableImageUrl } from "@/lib/live-preview/image";
@@ -274,21 +271,94 @@ const STYLE_PREVIEW: Record<ParagraphStyle, string> = {
 };
 
 const VIEWS: { id: EditorMode; label: string; hint: string; icon: Icon }[] = [
-  { id: "source", label: "Source", hint: "Source: the raw markdown, everywhere", icon: CodeXmlIcon },
-  { id: "live", label: "Live", hint: "Live: rendered, with the source on the line you edit", icon: PencilLineIcon },
-  { id: "reading", label: "Reading", hint: "Reading: rendered, links open on a click", icon: BookOpenIcon },
+  { id: "source", label: "Source", hint: "the raw markdown, everywhere", icon: CodeXmlIcon },
+  { id: "live", label: "Live", hint: "rendered, with the source on the line you edit", icon: PencilLineIcon },
+  { id: "reading", label: "Reading", hint: "rendered, links open on a click", icon: BookOpenIcon },
 ];
+
+/**
+ * The order tools fold into More as the bar narrows, first to last: the
+ * ones a student reaches for least go first. Undo, redo, the style menu,
+ * bold, italic, both lists and link stay on the bar down to a 400px pane;
+ * only a narrower one folds those too (LAST_RESORT), rather than clip the
+ * View menu off the end.
+ */
+export const FOLD_ORDER = [
+  "find",
+  "clear",
+  "hr",
+  "codeblock",
+  "table",
+  "image",
+  "wikilink",
+  "task",
+  "indent",
+  "outdent",
+  "strike",
+  "code",
+  "quote",
+];
+
+export const LAST_RESORT = ["link", "ordered", "bullet", "italic", "bold", "redo", "undo"];
+
+const ALL_FOLDS = [...FOLD_ORDER, ...LAST_RESORT];
+
+/** The style menu's width by the bar's: its label, a shorter one, then just ¶. */
+type StyleSize = "wide" | "mid" | "narrow";
+type Layout = { folded: number; style: StyleSize; fullscreenButton: boolean };
+
+/** Below these bar widths the style menu shrinks, and full screen moves into the View menu. */
+const MID_BELOW = 600;
+const NARROW_BELOW = 480;
 
 /** Room kept free at the bar's end, so rounding never wraps it. */
 const SLACK = 4;
-/** A group divider: one pixel and its margins. */
-const DIVIDER = 9;
+/** Between tools in a group (gap-0.5). */
+const GAP = 2;
+
+/**
+ * How many tools to fold (in FOLD_ORDER, then LAST_RESORT) for the bar to fit `room` pixels,
+ * and how wide the style menu is. Pure, from measured sizes, so it never
+ * depends on what is folded at the moment.
+ */
+export function fitTools(
+  room: number,
+  size: { tool: number; divider: number; view: number; style: Record<StyleSize, number> },
+): Layout {
+  const style: StyleSize = room < NARROW_BELOW ? "narrow" : room < MID_BELOW ? "mid" : "wide";
+  const fullscreenButton = room >= MID_BELOW;
+  const right = size.view + (fullscreenButton ? GAP + size.tool : 0) + 4;
+  const widthWith = (folded: Set<string>) => {
+    let width = right;
+    let groups = 0;
+    for (const group of GROUPS) {
+      const count = group.tools ? group.tools.filter((tool) => !folded.has(tool.id)).length : 1;
+      if (count === 0) continue;
+      if (groups++ > 0) width += size.divider;
+      width += group.tools ? count * size.tool + (count - 1) * GAP : size.style[style];
+    }
+    if (folded.size > 0) width += size.divider + size.tool;
+    return width;
+  };
+  for (let folded = 0; folded < ALL_FOLDS.length; folded++) {
+    if (widthWith(new Set(ALL_FOLDS.slice(0, folded))) <= room) return { folded, style, fullscreenButton };
+  }
+  return { folded: ALL_FOLDS.length, style, fullscreenButton };
+}
 
 const BUTTON =
   "text-muted-foreground hover:text-foreground focus-visible:ring-ring flex shrink-0 items-center justify-center rounded-md transition-colors duration-150 motion-reduce:transition-none hover:bg-[var(--glass-strong)] focus-visible:ring-2 focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-50 aria-disabled:opacity-50 aria-pressed:bg-[var(--glass-strong)] aria-pressed:text-foreground aria-pressed:shadow-[inset_0_1px_0_0_var(--glass-hi)] aria-expanded:bg-[var(--glass-strong)] aria-expanded:text-foreground";
+const TOOL_SIZE = "size-7 pointer-coarse:size-11";
+const VIEW_CLASS = "h-7 gap-0.5 px-1.5 pointer-coarse:h-11 pointer-coarse:px-2.5";
+const STYLE_CLASS: Record<StyleSize, string> = {
+  wide: "h-7 w-[8.5rem] justify-between gap-1 px-2 text-[13px] font-medium pointer-coarse:h-11",
+  mid: "h-7 w-24 justify-between gap-1 px-2 text-[13px] font-medium pointer-coarse:h-11",
+  narrow: "h-7 gap-0.5 px-1.5 pointer-coarse:h-11 pointer-coarse:px-2.5",
+};
+const DIVIDER_CLASS = "flex h-4 shrink-0 px-1 before:block before:w-px before:bg-border";
 
 function Divider() {
-  return <span role="separator" aria-orientation="vertical" className="bg-border mx-1 h-4 w-px shrink-0" />;
+  return <span role="separator" aria-orientation="vertical" className={DIVIDER_CLASS} />;
 }
 
 type Roving = { tabIndex: (id: string) => 0 | -1 };
@@ -342,7 +412,7 @@ function ToolButton({
             onClick={(event) => {
               if (!soft) onRun(event.currentTarget);
             }}
-            className={cn(BUTTON, compact ? "size-11" : "size-7 pointer-coarse:size-11")}
+            className={cn(BUTTON, compact ? "size-11" : TOOL_SIZE)}
           />
         }
       >
@@ -505,9 +575,8 @@ export function FormatToolbar({
 }) {
   const [mac] = useState(() => isMacPlatform(navigator.platform || navigator.userAgent));
   const rootRef = useRef<HTMLDivElement>(null);
-  const rightRef = useRef<HTMLDivElement>(null);
-  const widths = useRef(new Map<string, number>());
-  const [fit, setFit] = useState(GROUPS.length);
+  const measureRef = useRef<HTMLDivElement>(null);
+  const [layout, setLayout] = useState<Layout>({ folded: 0, style: "wide", fullscreenButton: true });
   const [active, setActive] = useState("undo");
   const [popup, setPopup] = useState<"image" | "table" | null>(null);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
@@ -520,55 +589,53 @@ export function FormatToolbar({
   const off = disabled || !view;
   const reading = mode === "reading";
   const ctx = view ? { view } : null;
-  const shown = compact ? GROUPS.length : fit;
-  const visible = GROUPS.slice(0, shown);
-  const folded = GROUPS.slice(shown);
+  const shown: Layout = compact ? { folded: 0, style: "wide", fullscreenButton: true } : layout;
+  const folded = new Set(ALL_FOLDS.slice(0, shown.folded));
+  const fullscreenButton = shown.fullscreenButton || fullscreen;
 
-  // Fold groups from the right until the rest fits beside the view switch.
+  // Fold tools by priority until the rest fits; see FOLD_ORDER.
   useLayoutEffect(() => {
     const root = rootRef.current;
-    if (!root || compact) return;
-    const measure = () => {
-      for (const el of root.querySelectorAll<HTMLElement>("[data-group-id]")) {
-        widths.current.set(el.dataset.groupId!, el.offsetWidth);
-      }
+    const measure = measureRef.current;
+    if (!root || !measure || compact) return;
+    const width = (name: string) => measure.querySelector<HTMLElement>(`[data-measure="${name}"]`)?.offsetWidth ?? 0;
+    const update = () => {
       const styles = getComputedStyle(root);
-      const room =
-        root.clientWidth -
-        parseFloat(styles.paddingLeft) -
-        parseFloat(styles.paddingRight) -
-        (rightRef.current?.offsetWidth ?? 0) -
-        SLACK;
-      const width = (group: Group) => widths.current.get(group.id) ?? 0;
-      if (GROUPS.reduce((sum, group) => sum + width(group), 0) <= room) {
-        setFit(GROUPS.length);
-        return;
-      }
-      const more = (root.querySelector<HTMLElement>('[data-tool-id="fullscreen"]')?.offsetWidth ?? 28) + DIVIDER;
-      let used = 0;
-      let count = 0;
-      for (const group of GROUPS) {
-        if (used + width(group) > room - more) break;
-        used += width(group);
-        count++;
-      }
-      setFit(count);
+      const room = root.clientWidth - parseFloat(styles.paddingLeft) - parseFloat(styles.paddingRight) - SLACK;
+      const next = fitTools(room, {
+        tool: width("tool"),
+        divider: width("divider"),
+        view: width("view"),
+        style: { wide: width("style-wide"), mid: width("style-mid"), narrow: width("style-narrow") },
+      });
+      setLayout((prev) =>
+        prev.folded === next.folded && prev.style === next.style && prev.fullscreenButton === next.fullscreenButton ? prev : next,
+      );
     };
-    const observer = new ResizeObserver(measure);
+    const observer = new ResizeObserver(update);
     observer.observe(root);
     return () => observer.disconnect();
   }, [compact]);
 
+  // The groups as shown: folded tools left out, empty groups dropped.
+  const visible = GROUPS.map((group) => ({
+    ...group,
+    tools: group.tools?.filter((tool) => !folded.has(tool.id)),
+  })).filter((group) => !group.tools || group.tools.length > 0);
+  const inMore = GROUPS.map((group) => ({ ...group, tools: (group.tools ?? []).filter((tool) => folded.has(tool.id)) })).filter(
+    (group) => group.tools.length > 0,
+  );
+
   // Roving tabindex: one stop for the whole bar, at the last control used.
   const enabled = (id: string, reads = false) =>
-    !off && (reads || !reading || id.startsWith("view-") || id === "fullscreen");
+    !off && (reads || !reading || id === "view" || id === "fullscreen" || id === "more");
   const order = [
     ...visible.flatMap((group) =>
       group.tools ? group.tools.map((tool) => [tool.id, tool.reads] as const) : [["style", false] as const],
     ),
-    ...(folded.length ? [["more", true] as const] : []),
-    ...VIEWS.map((v) => [`view-${v.id}`, true] as const),
-    ["fullscreen", true] as const,
+    ...(inMore.length ? [["more", true] as const] : []),
+    ["view", true] as const,
+    ...(fullscreenButton ? [["fullscreen", true] as const] : []),
   ].filter(([id, reads]) => enabled(id, reads));
   const current = order.some(([id]) => id === active) ? active : (order[0]?.[0] ?? "");
   const roving: Roving = { tabIndex: (id) => (id === current ? 0 : -1) };
@@ -631,6 +698,7 @@ export function FormatToolbar({
     toEditor.current = true;
   };
 
+  const styleLabel = STYLE_LABEL[formats.style];
   const styleMenu = (
     <DropdownMenu>
       <Tooltip>
@@ -642,24 +710,24 @@ export function FormatToolbar({
                 <button
                   type="button"
                   data-tool-id="style"
-                  aria-label={`Paragraph style: ${STYLE_LABEL[formats.style]}`}
+                  aria-label={`Paragraph style: ${styleLabel}`}
                   disabled={off || reading}
                   tabIndex={roving.tabIndex("style")}
                   onMouseDown={(event) => event.preventDefault()}
-                  className={cn(
-                    BUTTON,
-                    "justify-between gap-1 px-2 text-[13px] font-medium",
-                    compact ? "h-11 w-36" : "h-7 w-[8.5rem] pointer-coarse:h-11",
-                  )}
+                  className={cn(BUTTON, compact ? cn(STYLE_CLASS.wide, "h-11 w-36") : STYLE_CLASS[shown.style])}
                 />
               }
             />
           }
         >
-          <span className="truncate">{STYLE_LABEL[formats.style]}</span>
-          <ChevronDownIcon className="size-3.5 shrink-0 opacity-70" strokeWidth={1.75} aria-hidden />
+          {shown.style === "narrow" && !compact ? (
+            <PilcrowIcon className="size-3.5 shrink-0" strokeWidth={1.75} aria-hidden />
+          ) : (
+            <span className="truncate">{styleLabel}</span>
+          )}
+          <ChevronDownIcon className="size-3 shrink-0 opacity-70" strokeWidth={1.75} aria-hidden />
         </TooltipTrigger>
-        <TooltipContent side="bottom">Paragraph style</TooltipContent>
+        <TooltipContent side="bottom">Paragraph style: {styleLabel}</TooltipContent>
       </Tooltip>
       <DropdownMenuContent className="w-60" finalFocus={finalFocus}>
         <DropdownMenuRadioGroup value={formats.style} onValueChange={(value) => applyStyle(value as ParagraphStyle)}>
@@ -680,9 +748,8 @@ export function FormatToolbar({
     </DropdownMenu>
   );
 
-  const renderGroup = (group: Group) => {
-    if (!group.tools) return styleMenu;
-    return group.tools.map((tool) => {
+  const renderTools = (tools: ButtonTool[]) =>
+    tools.map((tool) => {
       const history = tool.id === "undo" || tool.id === "redo";
       return (
         <ToolButton
@@ -699,9 +766,8 @@ export function FormatToolbar({
         />
       );
     });
-  };
 
-  const moreMenu = folded.length ? (
+  const moreMenu = inMore.length ? (
     <div className="flex shrink-0 items-center">
       <Divider />
       <DropdownMenu
@@ -726,7 +792,7 @@ export function FormatToolbar({
                     disabled={off}
                     tabIndex={roving.tabIndex("more")}
                     onMouseDown={(event) => event.preventDefault()}
-                    className={cn(BUTTON, "size-7 pointer-coarse:size-11")}
+                    className={cn(BUTTON, TOOL_SIZE)}
                   />
                 }
               />
@@ -737,71 +803,46 @@ export function FormatToolbar({
           <TooltipContent side="bottom">More formatting</TooltipContent>
         </Tooltip>
         <DropdownMenuContent align="end" className="w-64" finalFocus={finalFocus}>
-          {folded.map((group, i) => (
+          {inMore.map((group, i) => (
             <DropdownMenuGroup key={group.id}>
               {i > 0 ? <DropdownMenuSeparator /> : null}
-              {!group.tools ? (
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger disabled={reading}>Paragraph style</DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent className="w-60">
-                    <DropdownMenuRadioGroup
-                      value={formats.style}
-                      onValueChange={(value) => applyStyle(value as ParagraphStyle)}
-                    >
-                      {PARAGRAPH_STYLES.map(({ style, label }) => (
-                        <DropdownMenuRadioItem key={style} value={style} closeOnClick>
-                          <span data-style-preview className={cn("min-w-0 flex-1 truncate", STYLE_PREVIEW[style])}>
-                            {label}
-                          </span>
-                        </DropdownMenuRadioItem>
-                      ))}
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
-              ) : (
-                group.tools.map((tool) => {
-                  const Icon = tool.icon;
-                  const pressed = tool.pressed?.({ formats, searchOpen });
-                  const choose = () => {
-                    if (!ctx) return;
-                    if (tool.popup) {
-                      pendingPopup.current = tool.popup;
-                      return;
-                    }
-                    tool.run(ctx.view);
-                    toEditor.current = tool.id !== "find";
-                  };
-                  const history = tool.id === "undo" || tool.id === "redo";
-                  const itemDisabled =
-                    !enabled(tool.id, tool.reads) || (history && !(tool.id === "undo" ? canUndo : canRedo));
-                  const content = (
-                    <>
-                      <Icon className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
-                      <span className="flex-1">{tool.label}</span>
-                      {tool.shortcut ? (
-                        <DropdownMenuShortcut className="tracking-normal">
-                          {shortcutLabel(tool.shortcut, mac)}
-                        </DropdownMenuShortcut>
-                      ) : null}
-                    </>
-                  );
-                  return pressed === undefined ? (
-                    <DropdownMenuItem key={tool.id} disabled={itemDisabled} onClick={choose}>
-                      {content}
-                    </DropdownMenuItem>
-                  ) : (
-                    <DropdownMenuCheckboxItem
-                      key={tool.id}
-                      checked={pressed}
-                      disabled={itemDisabled}
-                      onCheckedChange={choose}
-                      closeOnClick
-                    >
-                      {content}
-                    </DropdownMenuCheckboxItem>
-                  );
-                })
-              )}
+              {group.tools.map((tool) => {
+                const ToolIcon = tool.icon;
+                const pressed = tool.pressed?.({ formats, searchOpen });
+                const choose = () => {
+                  if (!ctx) return;
+                  if (tool.popup) {
+                    pendingPopup.current = tool.popup;
+                    return;
+                  }
+                  tool.run(ctx.view);
+                  toEditor.current = tool.id !== "find";
+                };
+                const content = (
+                  <>
+                    <ToolIcon className="text-muted-foreground size-4" strokeWidth={1.75} aria-hidden />
+                    <span className="flex-1">{tool.label}</span>
+                    {tool.shortcut ? (
+                      <DropdownMenuShortcut className="tracking-normal">{shortcutLabel(tool.shortcut, mac)}</DropdownMenuShortcut>
+                    ) : null}
+                  </>
+                );
+                return pressed === undefined ? (
+                  <DropdownMenuItem key={tool.id} disabled={!enabled(tool.id, tool.reads)} onClick={choose}>
+                    {content}
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuCheckboxItem
+                    key={tool.id}
+                    checked={pressed}
+                    disabled={!enabled(tool.id, tool.reads)}
+                    onCheckedChange={choose}
+                    closeOnClick
+                  >
+                    {content}
+                  </DropdownMenuCheckboxItem>
+                );
+              })}
             </DropdownMenuGroup>
           ))}
         </DropdownMenuContent>
@@ -809,6 +850,63 @@ export function FormatToolbar({
     </div>
   ) : null;
 
+  const currentView = VIEWS.find((v) => v.id === mode) ?? VIEWS[1];
+  const ViewIcon = currentView.icon;
+  const viewMenu = (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <DropdownMenuTrigger
+              disabled={off}
+              render={
+                <button
+                  type="button"
+                  data-tool-id="view"
+                  aria-label={`View: ${currentView.label}`}
+                  disabled={off}
+                  tabIndex={roving.tabIndex("view")}
+                  onMouseDown={(event) => event.preventDefault()}
+                  className={cn(BUTTON, VIEW_CLASS, compact && "h-11 px-3")}
+                />
+              }
+            />
+          }
+        >
+          <ViewIcon className={compact ? "size-[18px]" : "size-3.5"} strokeWidth={1.75} aria-hidden />
+          <ChevronDownIcon className="size-3 opacity-70" strokeWidth={1.75} aria-hidden />
+        </TooltipTrigger>
+        <TooltipContent side="bottom">View: {currentView.hint}</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="end" className="w-72" finalFocus={finalFocus}>
+        <DropdownMenuRadioGroup
+          value={mode}
+          onValueChange={(value) => {
+            onModeChange(value as EditorMode);
+            toEditor.current = value !== "reading";
+          }}
+        >
+          {VIEWS.map(({ id, label, hint, icon: ItemIcon }) => (
+            <DropdownMenuRadioItem key={id} value={id} closeOnClick>
+              <ItemIcon className="text-muted-foreground size-4" strokeWidth={1.75} aria-hidden />
+              <span className="flex flex-col">
+                <span>{label}</span>
+                <span className="text-muted-foreground text-xs">{hint}</span>
+              </span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuCheckboxItem checked={fullscreen} onCheckedChange={() => onFullscreenChange(!fullscreen)} closeOnClick>
+          <Maximize2Icon className="text-muted-foreground size-4" strokeWidth={1.75} aria-hidden />
+          <span className="flex-1">Full screen</span>
+          <DropdownMenuShortcut className="tracking-normal">Esc exits</DropdownMenuShortcut>
+        </DropdownMenuCheckboxItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+
+  let groupIndex = 0;
   return (
     <div
       ref={rootRef}
@@ -822,78 +920,70 @@ export function FormatToolbar({
         if (id) setActive(id);
       }}
       className={cn(
-        "border-border/60 flex w-full min-w-0 shrink-0 items-center border-b px-2",
+        "border-border/60 relative flex w-full min-w-0 shrink-0 items-center border-b px-1.5",
         compact
           ? "h-12 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           : "h-10 overflow-hidden pointer-coarse:h-12",
       )}
     >
-      {visible.map((group, i) => (
+      {/* The sizes the fold works from, measured off-screen in the bar's own styles. */}
+      {compact ? null : (
         <div
-          key={group.id}
-          data-group-id={group.id}
-          role={group.tools ? "group" : undefined}
-          aria-label={group.tools ? group.label : undefined}
-          className="flex shrink-0 items-center gap-0.5"
+          ref={measureRef}
+          aria-hidden
+          className="pointer-events-none invisible absolute top-0 left-0 flex h-0 w-0 items-center overflow-hidden"
         >
-          {i > 0 ? <Divider /> : null}
-          {renderGroup(group)}
-        </div>
-      ))}
-      {moreMenu}
-
-      <div ref={rightRef} className="ml-auto flex shrink-0 items-center gap-1 pl-2">
-        <div
-          role="group"
-          aria-label="View"
-          className={cn(
-            tabsListVariants(),
-            "gap-0.5",
-            compact ? "h-auto p-0" : "h-8 pointer-coarse:h-auto pointer-coarse:p-0",
-          )}
-        >
-          {VIEWS.map(({ id, label, hint, icon: ViewIcon }) => (
-            <Tooltip key={id}>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    data-tool-id={`view-${id}`}
-                    aria-label={label}
-                    aria-pressed={mode === id}
-                    disabled={off}
-                    tabIndex={roving.tabIndex(`view-${id}`)}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => onModeChange(id)}
-                    className={cn(
-                      "text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex shrink-0 items-center justify-center gap-1 rounded-[9px] border border-transparent text-[12px] font-medium transition-colors duration-150 motion-reduce:transition-none focus-visible:ring-2 focus-visible:outline-hidden disabled:opacity-50",
-                      "aria-pressed:text-foreground aria-pressed:border-[var(--glass-lo)] aria-pressed:bg-[var(--glass-strong)] aria-pressed:shadow-[inset_0_1px_0_0_var(--glass-hi)]",
-                      compact ? "size-11" : "h-full px-2 pointer-coarse:h-11 pointer-coarse:px-3",
-                    )}
-                  />
-                }
-              >
-                {compact ? <ViewIcon className="size-[18px]" strokeWidth={1.75} aria-hidden /> : label}
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{hint}</TooltipContent>
-            </Tooltip>
+          <span data-measure="tool" className={cn("block shrink-0", TOOL_SIZE)} />
+          <span data-measure="divider" className={DIVIDER_CLASS} />
+          <span data-measure="view" className={cn(BUTTON, VIEW_CLASS)}>
+            <span className="size-3.5" />
+            <span className="size-3" />
+          </span>
+          {(["wide", "mid", "narrow"] as const).map((size) => (
+            <span key={size} data-measure={`style-${size}`} className={cn(BUTTON, STYLE_CLASS[size])}>
+              <span className="size-3.5" />
+              <span className="size-3" />
+            </span>
           ))}
         </div>
-        <ToolButton
-          tool={{
-            id: "fullscreen",
-            label: "Full screen",
-            icon: fullscreen ? Minimize2Icon : Maximize2Icon,
-            shortcut: undefined,
-          }}
-          hint={fullscreen ? "Exit full screen (Esc)" : "Full screen (Esc to exit)"}
-          pressed={fullscreen}
-          disabled={off}
-          compact={compact}
-          mac={mac}
-          roving={roving}
-          onRun={() => onFullscreenChange(!fullscreen)}
-        />
+      )}
+
+      {visible.map((group) => {
+        const first = groupIndex++ === 0;
+        return (
+          <div key={group.id} data-group-id={group.id} className="flex shrink-0 items-center">
+            {first ? null : <Divider />}
+            <div
+              role={group.tools ? "group" : undefined}
+              aria-label={group.tools ? group.label : undefined}
+              className="flex items-center gap-0.5"
+            >
+              {group.tools ? renderTools(group.tools) : styleMenu}
+            </div>
+          </div>
+        );
+      })}
+      {moreMenu}
+
+      <div className="ml-auto flex shrink-0 items-center gap-0.5 pl-1">
+        {viewMenu}
+        {fullscreenButton ? (
+          <ToolButton
+            tool={{
+              id: "fullscreen",
+              label: "Full screen",
+              icon: fullscreen ? Minimize2Icon : Maximize2Icon,
+              shortcut: undefined,
+            }}
+            hint={fullscreen ? "Exit full screen (Esc)" : "Full screen (Esc to exit)"}
+            pressed={fullscreen}
+            disabled={off}
+            compact={compact}
+            mac={mac}
+            roving={roving}
+            onRun={() => onFullscreenChange(!fullscreen)}
+          />
+        ) : null}
       </div>
 
       <Popover open={popup === "image"} onOpenChange={(open) => !open && closePopup()}>

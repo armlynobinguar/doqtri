@@ -1,22 +1,22 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Compartment, EditorState, Prec, Transaction, type Extension } from "@codemirror/state";
+import { Compartment, EditorState, Transaction, type Extension } from "@codemirror/state";
 import { drawSelection, dropCursor, EditorView, keymap, placeholder as placeholderText } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap, redoDepth, undoDepth } from "@codemirror/commands";
+import { history, historyKeymap, redoDepth, undoDepth } from "@codemirror/commands";
 import { searchPanelOpen } from "@codemirror/search";
 import { syntaxTree } from "@codemirror/language";
 import { commonmarkLanguage, markdown } from "@codemirror/lang-markdown";
 import { cn } from "@/lib/utils";
 import { PREVIEW_MARKDOWN_EXTENSIONS } from "@/lib/live-preview/syntax";
 import { formatState, NO_FORMAT, type FormatState } from "@/lib/live-preview/commands";
-import { countWords, type EditorStats } from "@/lib/text-stats";
+import { hiddenSyntax, renderedText, textCounts, type EditorStats } from "@/lib/text-stats";
 import { livePreview } from "@/components/vault/live-editor/live-preview";
 import { editorTheme } from "@/components/vault/live-editor/theme";
 import { wikilinkCompletion } from "@/components/vault/live-editor/wikilink-completion";
 import { linkFollowing, noteOpener } from "@/components/vault/live-editor/link-following";
 import { external, readOnlyGuard } from "@/components/vault/live-editor/read-only";
-import { findAndReplace, formattingKeymap, searchKeymap } from "@/components/vault/live-editor/editor-actions";
+import { editorKeymap, findAndReplace, searchKeymap, shortcutKeys } from "@/components/vault/live-editor/editor-actions";
 import { FormatToolbar, type EditorMode } from "@/components/vault/live-editor/format-toolbar";
 
 /** The smallest single change that turns `from` into `to`. */
@@ -57,6 +57,9 @@ function storeMode(mode: EditorMode) {
   }
 }
 
+/** What Tab can reach inside full screen. */
+const TABBABLE = 'button:not([disabled]), input:not([disabled]), select, textarea, a[href], [tabindex], [contenteditable="true"]';
+
 /** What the toolbar shows, read off the editor after each change. */
 type Snapshot = { formats: FormatState; canUndo: boolean; canRedo: boolean; searchOpen: boolean };
 
@@ -71,14 +74,35 @@ function snapshotOf(state: EditorState): Snapshot {
   };
 }
 
-function statsOf(state: EditorState): EditorStats {
-  const { main } = state.selection;
-  const line = state.doc.lineAt(main.head);
-  return {
-    chars: state.doc.length,
-    line: line.number,
-    col: main.head - line.from + 1,
-    selection: main.empty ? null : { words: countWords(state.sliceDoc(main.from, main.to)), chars: main.to - main.from },
+/**
+ * The status bar's counts, of the rendered text (lib/text-stats.ts). The
+ * note's own counts are kept until its text or parse tree changes, so a
+ * caret move only counts the selection.
+ */
+function statsReader() {
+  type Counted = {
+    doc: EditorState["doc"];
+    tree: ReturnType<typeof syntaxTree>;
+    text: string;
+    hidden: ReturnType<typeof hiddenSyntax>;
+    counts: ReturnType<typeof textCounts>;
+  };
+  let last: Counted | null = null;
+  return (state: EditorState): EditorStats => {
+    const tree = syntaxTree(state);
+    if (!last || last.doc !== state.doc || last.tree !== tree) {
+      const text = state.doc.toString();
+      const hidden = hiddenSyntax(tree, text);
+      last = { doc: state.doc, tree, text, hidden, counts: textCounts(renderedText(text, hidden)) };
+    }
+    const { main } = state.selection;
+    const line = state.doc.lineAt(main.head);
+    return {
+      ...last.counts,
+      line: line.number,
+      col: main.head - line.from + 1,
+      selection: main.empty ? null : textCounts(renderedText(last.text, last.hidden, main.from, main.to)),
+    };
   };
 }
 
@@ -180,6 +204,7 @@ export default function MarkdownEditor({
     if (!host) return;
     let lastSnapshot = "";
     let lastStats = "";
+    const statsOf = statsReader();
     const report = (state: EditorState, docOrSelection: boolean) => {
       const next = snapshotOf(state);
       const key = JSON.stringify(next);
@@ -216,8 +241,8 @@ export default function MarkdownEditor({
           noteOpener.of((title) => openNoteRef.current?.(title)),
           wikilinkCompletion(() => titlesRef.current),
           findAndReplace(),
-          Prec.high(keymap.of(formattingKeymap)),
-          keymap.of([...searchKeymap, ...defaultKeymap, ...historyKeymap]),
+          shortcutKeys(),
+          keymap.of([...searchKeymap, ...editorKeymap, ...historyKeymap]),
           EditorView.contentAttributes.of({
             "aria-label": "Note text",
             spellcheck: "false",
@@ -227,7 +252,11 @@ export default function MarkdownEditor({
           readOnlyGuard,
           EditorView.updateListener.of((update) => {
             // Scrolling and measuring change nothing the toolbar shows.
-            if (update.transactions.length > 0) report(update.state, update.docChanged || update.selectionSet);
+            if (update.transactions.length > 0) {
+              const counted =
+                update.docChanged || update.selectionSet || syntaxTree(update.startState) !== syntaxTree(update.state);
+              report(update.state, counted);
+            }
             if (!update.docChanged) return;
             if (update.transactions.every((tr) => tr.annotation(external))) return;
             if (update.startState.readOnly) return;
@@ -283,18 +312,63 @@ export default function MarkdownEditor({
   // element). Seen before anyone handles it, since a tooltip that happens
   // to be showing takes the key for itself.
   useEffect(() => {
-    if (!fullscreen) return;
+    if (!fullscreen || !view) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      const root = rootRef.current;
       const target = event.target instanceof Element ? event.target : null;
-      if (target && target !== document.body && !root?.contains(target)) return;
-      if (target?.closest(".cm-panels") || root?.querySelector(".cm-tooltip-autocomplete")) return;
+      if (target && target !== document.body && !rootRef.current?.contains(target)) return;
+      // The link list shows as a tooltip only while it has notes to offer.
+      if (searchPanelOpen(view.state) || view.dom.querySelector(".cm-tooltip-autocomplete")) return;
       setFullscreen(false);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [fullscreen]);
+  }, [fullscreen, view]);
+
+  // Full screen is modal: everything else on the page is inert (out of
+  // reach of Tab and the pointer) until it ends, and focus goes back where
+  // it was. Menus and popovers opened from the editor portal in afterwards,
+  // so they stay usable.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!fullscreen || !root) return;
+    const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const made: HTMLElement[] = [];
+    for (let node: HTMLElement = root; node.parentElement && node !== document.body; node = node.parentElement) {
+      for (const sibling of node.parentElement.children) {
+        if (sibling === node || !(sibling instanceof HTMLElement) || sibling.hasAttribute("inert")) continue;
+        sibling.setAttribute("inert", "");
+        made.push(sibling);
+      }
+    }
+    if (!root.contains(document.activeElement)) view?.focus();
+    // Tab and Shift+Tab wrap around inside, rather than leave for the browser's own controls.
+    const onTab = (event: KeyboardEvent) => {
+      if (event.key !== "Tab" || !root.contains(document.activeElement)) return;
+      // The text itself is a stop too, though it reports no tabIndex.
+      const stops = [...root.querySelectorAll<HTMLElement>(TABBABLE)].filter(
+        (el) =>
+          (el.tabIndex >= 0 || el.isContentEditable) &&
+          el.getAttribute("tabindex") !== "-1" &&
+          el.getClientRects().length > 0,
+      );
+      if (stops.length === 0) return;
+      const first = stops[0];
+      const last = stops[stops.length - 1];
+      const at = document.activeElement;
+      if (event.shiftKey ? at === first : at === last) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      }
+    };
+    document.addEventListener("keydown", onTab);
+    return () => {
+      document.removeEventListener("keydown", onTab);
+      for (const element of made) element.removeAttribute("inert");
+      if (before?.isConnected && !before.closest("[inert]")) before.focus();
+      else view?.focus();
+    };
+  }, [fullscreen, view]);
 
   const changeMode = (next: EditorMode) => {
     setMode(next);
@@ -306,6 +380,9 @@ export default function MarkdownEditor({
       ref={rootRef}
       data-view={shownMode}
       data-fullscreen={fullscreen || undefined}
+      role={fullscreen ? "dialog" : undefined}
+      aria-modal={fullscreen || undefined}
+      aria-label={fullscreen ? "Full screen editor" : undefined}
       className={cn(
         "doqtri-editor flex flex-col",
         !autoHeight && "h-full min-h-0",

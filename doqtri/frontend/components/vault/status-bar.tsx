@@ -73,9 +73,11 @@ const plural = (n: number, one: string, many: string) => `${n.toLocaleString()} 
  * Words, characters and the caret's line and column, as Word's status bar
  * shows them: with text selected, the selection's counts of the whole.
  */
-function EditorCounts({ wordCount }: { wordCount: number }) {
+function EditorCounts({ wordCount: fallback }: { wordCount: number }) {
   const stats = useEditorStats();
   const selection = stats?.selection;
+  // The editor's count of the rendered text, once it has one.
+  const wordCount = stats?.words ?? fallback;
   return (
     <>
       <span className="tabular-nums" data-testid="status-words">

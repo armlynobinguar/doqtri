@@ -1,6 +1,6 @@
-import { EditorState, type Extension } from "@codemirror/state";
-import type { EditorView, KeyBinding } from "@codemirror/view";
-import { redo, undo } from "@codemirror/commands";
+import { EditorState, Prec, type Extension } from "@codemirror/state";
+import { EditorView, type KeyBinding } from "@codemirror/view";
+import { defaultKeymap, redo, toggleBlockComment, toggleComment, undo } from "@codemirror/commands";
 import { openSearchPanel, search, searchKeymap } from "@codemirror/search";
 import { startCompletion } from "@codemirror/autocomplete";
 import {
@@ -17,9 +17,8 @@ import {
   toggleStrikethrough,
   toggleTaskList,
   type FormatCommand,
-  type ParagraphStyle,
 } from "@/lib/live-preview/commands";
-import type { Shortcut } from "@/lib/editor-shortcuts";
+import { isMacPlatform, resolveShortcut, type KeyEventLike, type Shortcut } from "@/lib/editor-shortcuts";
 
 /**
  * The note editor's commands as the toolbar and the keyboard run them, on a
@@ -32,16 +31,6 @@ export function runFormat(view: EditorView, command: FormatCommand): boolean {
   view.dispatch(command(view.state));
   return true;
 }
-
-/**
- * For keys the browser has a use of its own for (⌘[ goes Back, Ctrl+H opens
- * the history): handled even while read-only, so that never fires from the
- * note instead.
- */
-const always = (command: FormatCommand) => (view: EditorView) => {
-  runFormat(view, command);
-  return true;
-};
 
 /** `[[ ]]` at the caret, with the note list open on it. */
 export function insertWikilinkAndSuggest(view: EditorView): boolean {
@@ -73,15 +62,6 @@ export function runRedo(view: EditorView): boolean {
   return !view.state.readOnly && redo(view);
 }
 
-const STYLE_KEYS: [string, ParagraphStyle][] = [
-  ["0", "normal"],
-  ["1", "h1"],
-  ["2", "h2"],
-  ["3", "h3"],
-  ["4", "h4"],
-  ["5", "h5"],
-  ["6", "h6"],
-];
 
 /** The shortcuts the toolbar's tooltips name, by control. */
 export const SHORTCUTS = {
@@ -99,33 +79,91 @@ export const SHORTCUTS = {
   clear: { key: "\\", mod: true },
   find: { key: "f", mod: true },
   replace: { mac: { key: "f", mod: true, alt: true }, other: { key: "h", mod: true } },
-  ...Object.fromEntries(STYLE_KEYS.map(([key, style]) => [style, { key, mod: true, alt: true }])),
+  normal: { key: "0", mod: true, alt: true },
+  h1: { key: "1", mod: true, alt: true },
+  h2: { key: "2", mod: true, alt: true },
+  h3: { key: "3", mod: true, alt: true },
+  h4: { key: "4", mod: true, alt: true },
+  h5: { key: "5", mod: true, alt: true },
+  h6: { key: "6", mod: true, alt: true },
 } satisfies Record<string, Shortcut>;
 
+export type ShortcutId = keyof typeof SHORTCUTS;
+
+/** Other keys for the same command: redo is both ⌘⇧Z and Ctrl+Y everywhere. */
+export const SHORTCUT_ALIASES: Partial<Record<ShortcutId, Shortcut[]>> = {
+  redo: [
+    { key: "z", mod: true, shift: true },
+    { key: "y", ctrl: true },
+  ],
+};
+
 /**
- * The formatting keys, ahead of CodeMirror's defaults (whose ⌘[ and ⌘]
- * indent any line, where these nest list items). None of them is ⌘N, and
- * ⌘K is kept from the window, where it would also open the quick switcher;
- * lib/vault-shortcuts.ts leaves keys the editor handled alone.
+ * What each shortcut does. Keyed by the same names as SHORTCUTS, so a
+ * tooltip can never name a key that does something else, or nothing.
  */
-export const formattingKeymap: KeyBinding[] = [
-  { key: "Mod-b", run: always(toggleBold) },
-  { key: "Mod-i", run: always(toggleItalic) },
-  { key: "Mod-k", run: (view) => runFormat(view, insertLink), stopPropagation: true },
-  { key: "Mod-Shift-x", run: always(toggleStrikethrough) },
-  ...STYLE_KEYS.map(([key, style]): KeyBinding => ({ key: `Mod-Alt-${key}`, run: always(setParagraphStyle(style)) })),
-  { key: "Mod-Shift-7", run: always(toggleOrderedList) },
-  { key: "Mod-Shift-8", run: always(toggleBulletList) },
-  { key: "Mod-Shift-9", run: always(toggleTaskList) },
-  { key: "Mod-]", run: always(indentList) },
-  { key: "Mod-[", run: always(outdentList) },
-  { key: "Mod-\\", run: always(clearFormatting) },
-  // Undo is the history keymap's Mod-z; redo answers both of the usual keys.
-  { key: "Mod-Shift-z", run: redo, preventDefault: true },
-  { key: "Ctrl-y", run: redo, preventDefault: true },
-  // ⌘H hides the app on a Mac, so replace is ⌥⌘F there.
-  { key: "Mod-h", mac: "Mod-Alt-f", run: openReplace, preventDefault: true },
-];
+export const SHORTCUT_COMMANDS: Record<ShortcutId, (view: EditorView) => boolean> = {
+  undo: runUndo,
+  redo: runRedo,
+  bold: (view) => runFormat(view, toggleBold),
+  italic: (view) => runFormat(view, toggleItalic),
+  strike: (view) => runFormat(view, toggleStrikethrough),
+  link: (view) => runFormat(view, insertLink),
+  ordered: (view) => runFormat(view, toggleOrderedList),
+  bullet: (view) => runFormat(view, toggleBulletList),
+  task: (view) => runFormat(view, toggleTaskList),
+  outdent: (view) => runFormat(view, outdentList),
+  indent: (view) => runFormat(view, indentList),
+  clear: (view) => runFormat(view, clearFormatting),
+  find: openFind,
+  replace: openReplace,
+  normal: (view) => runFormat(view, setParagraphStyle("normal")),
+  h1: (view) => runFormat(view, setParagraphStyle("h1")),
+  h2: (view) => runFormat(view, setParagraphStyle("h2")),
+  h3: (view) => runFormat(view, setParagraphStyle("h3")),
+  h4: (view) => runFormat(view, setParagraphStyle("h4")),
+  h5: (view) => runFormat(view, setParagraphStyle("h5")),
+  h6: (view) => runFormat(view, setParagraphStyle("h6")),
+};
+
+/** The shortcut a keydown in the editor is, if any. */
+export function shortcutFor(event: KeyEventLike, mac: boolean): ShortcutId | null {
+  return resolveShortcut(SHORTCUTS, SHORTCUT_ALIASES, event, mac);
+}
+
+/**
+ * The toolbar's shortcuts, ahead of CodeMirror's own keys (whose ⌘[ and ⌘]
+ * indent any line, where these nest list items), matched as
+ * lib/editor-shortcuts.ts describes so another keyboard layout's characters
+ * are never taken for them.
+ *
+ * Every one is handled even while the note is read-only, so the browser's
+ * own use of the key (⌘[ goes Back, Ctrl+H opens the history) never fires
+ * from the note instead — except ⌘K, which then reaches the vault's quick
+ * switcher. None is ⌘N; lib/vault-shortcuts.ts leaves keys the editor
+ * handled alone.
+ */
+export function shortcutKeys(): Extension {
+  const mac = typeof navigator !== "undefined" && isMacPlatform(navigator.platform || navigator.userAgent);
+  return Prec.highest(
+    EditorView.domEventHandlers({
+      keydown(event, view) {
+        if (event.isComposing) return false;
+        const id = shortcutFor(event, mac);
+        if (!id) return false;
+        if (id === "link" && view.state.readOnly) return false;
+        SHORTCUT_COMMANDS[id](view);
+        event.preventDefault();
+        return true;
+      },
+    }),
+  );
+}
+
+/** CodeMirror's default keys, less comment toggling: HTML comments have no place in a note. */
+export const editorKeymap: KeyBinding[] = defaultKeymap.filter(
+  (binding) => binding.run !== toggleComment && binding.run !== toggleBlockComment,
+);
 
 /** Find and replace: CodeMirror's search panel above the text, in the app's words. */
 export function findAndReplace(): Extension {
