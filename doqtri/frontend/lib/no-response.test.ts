@@ -9,6 +9,15 @@ import { deleteNote, DeleteNoteError } from "@/lib/delete-note";
  * keep them apart.
  */
 
+/** A body that fails mid-read, as one does when the timeout fires. */
+function cutOffBody(): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      controller.error(new DOMException("The operation timed out.", "TimeoutError"));
+    },
+  });
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -38,6 +47,20 @@ describe("no answer from the server", () => {
     const refusal = await deleteNote("a").catch((error: unknown) => error);
     expect(refusal).toBeInstanceOf(DeleteNoteError);
     expect((refusal as DeleteNoteError).code).toBe("ANCHORED");
+  });
+
+  it("takes a 200 as done even when its body is lost or unreadable", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(cutOffBody(), { status: 200 })));
+    await expect(renameNote("a", "Apex")).resolves.toEqual({ title: "Apex", previousTitle: "" });
+    await expect(deleteNote("a")).resolves.toMatchObject({ purgedUploads: 0 });
+
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>", { status: 200 })));
+    await expect(renameNote("a", "Apex")).resolves.toMatchObject({ title: "Apex" });
+  });
+
+  it("is a NoResponseError when a refusal's body is cut off before its reason arrives", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(cutOffBody(), { status: 409 })));
+    await expect(renameNote("a", "Apex")).rejects.toBeInstanceOf(NoResponseError);
   });
 
   it("sends the request with a timeout, so a hung request ends", async () => {

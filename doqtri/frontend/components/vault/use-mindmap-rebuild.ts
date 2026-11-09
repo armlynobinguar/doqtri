@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { parseDocMindmap, type DocMindmap } from "@/lib/mindmap-types";
@@ -9,8 +9,11 @@ import { parseDocMindmap, type DocMindmap } from "@/lib/mindmap-types";
  * Rebuilds a note's concept map through /api/mindmap and shows the map the
  * route answers with at once, rather than waiting for router.refresh() to
  * re-read every note on the page. The refresh still follows, in the
- * background, so the server data catches up; the rebuilt map is shown only
- * while `stored` is still the map it replaced, so newer server data wins.
+ * background, so the server data catches up. The rebuilt map is shown while
+ * `stored` still has the content it had when the route answered: a refresh
+ * started earlier can bring that older map back without hiding the new one,
+ * and once server data moves on (to this map, or a newer one) it wins.
+ * Content, not identity: every refresh hands over a new object.
  *
  * Returns the map to show, whether it is stale, and the rebuild action.
  */
@@ -25,9 +28,17 @@ export function useMindmapRebuild({
 }) {
   const router = useRouter();
   const [building, setBuilding] = useState(false);
-  const [rebuilt, setRebuilt] = useState<{ replaced: DocMindmap | null; map: DocMindmap } | null>(null);
+  const [rebuilt, setRebuilt] = useState<{ base: string; map: DocMindmap } | null>(null);
 
-  const current = rebuilt && rebuilt.replaced === stored ? rebuilt : null;
+  const storedKey = useMemo(() => mindmapKey(stored), [stored]);
+  // The stored map as of the route's answer, which may be newer than the
+  // render that started the rebuild.
+  const latestKey = useRef(storedKey);
+  useEffect(() => {
+    latestKey.current = storedKey;
+  }, [storedKey]);
+
+  const current = rebuilt && rebuilt.base === storedKey ? rebuilt : null;
 
   async function rebuild() {
     setBuilding(true);
@@ -51,7 +62,7 @@ export function useMindmapRebuild({
         payload && typeof payload === "object" && "mindmap" in payload
           ? parseDocMindmap((payload as { mindmap: unknown }).mindmap)
           : null;
-      if (map) setRebuilt({ replaced: stored, map });
+      if (map) setRebuilt({ base: latestKey.current, map });
 
       toast.success("Mindmap rebuilt");
       router.refresh();
@@ -77,4 +88,9 @@ export function useMindmapRebuild({
  */
 export function withRootLabel(mindmap: DocMindmap, title: string): DocMindmap {
   return mindmap.root.label === title ? mindmap : { ...mindmap, root: { ...mindmap.root, label: title } };
+}
+
+/** Compares maps by content. */
+function mindmapKey(mindmap: DocMindmap | null): string {
+  return JSON.stringify(mindmap);
 }

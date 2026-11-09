@@ -35,12 +35,15 @@ export function RenameNoteDialog({
   initialValue,
   onOpenChange,
   onConfirm,
+  finalFocus,
 }: {
   open: boolean;
   title: string;
   initialValue?: string;
   onOpenChange: (open: boolean) => void;
   onConfirm: (title: string) => void;
+  /** Where focus goes when the dialog closes; see Base UI's Dialog.Popup. */
+  finalFocus?: () => HTMLElement | boolean;
 }) {
   const [value, setValue] = useState(initialValue ?? title);
   const [error, setError] = useState<string | null>(null);
@@ -66,7 +69,7 @@ export function RenameNoteDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[440px]">
+      <DialogContent className="sm:max-w-[440px]" finalFocus={finalFocus}>
         <form onSubmit={confirm} className="grid gap-4">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">

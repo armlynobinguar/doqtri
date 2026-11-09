@@ -1,4 +1,4 @@
-import { fetchOrNoResponse } from "@/lib/no-response";
+import { fetchOrNoResponse, readJson } from "@/lib/no-response";
 
 /** Carries the server's refusal code, so the UI can react to `ANCHORED`. */
 export class DeleteNoteError extends Error {
@@ -24,7 +24,11 @@ export async function deleteNote(id: string): Promise<{
   purgedUploads: number;
 }> {
   const res = await fetchOrNoResponse(`/api/notes/${id}`, { method: "DELETE" });
-  const payload = (await res.json().catch(() => null)) as {
+  // A 200 is the note deleted, even if its body was lost on the way.
+  const payload = (await readJson(res).catch((error: unknown) => {
+    if (res.ok) return null;
+    throw error;
+  })) as {
     error?: string;
     code?: string;
     title?: string;

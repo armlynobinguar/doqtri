@@ -1,4 +1,4 @@
-import { fetchOrNoResponse } from "@/lib/no-response";
+import { fetchOrNoResponse, readJson } from "@/lib/no-response";
 
 /**
  * Renames a note through the API. Throws with the server's reason — notably
@@ -14,15 +14,19 @@ export async function renameNote(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
   });
-  const payload = (await res.json().catch(() => null)) as {
+  // A 200 is the rename done, even if its body was lost on the way.
+  const payload = (await readJson(res).catch((error: unknown) => {
+    if (res.ok) return null;
+    throw error;
+  })) as {
     error?: string;
     title?: string;
     previousTitle?: string;
   } | null;
 
-  if (!res.ok || !payload?.title) {
+  if (!res.ok) {
     throw new Error(payload?.error ?? `Could not rename note (${res.status})`);
   }
 
-  return { title: payload.title, previousTitle: payload.previousTitle ?? "" };
+  return { title: payload?.title ?? title, previousTitle: payload?.previousTitle ?? "" };
 }

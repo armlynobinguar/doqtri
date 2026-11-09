@@ -27,11 +27,14 @@ export function DeleteNoteDialog({
   title,
   onOpenChange,
   onConfirm,
+  finalFocus,
 }: {
   open: boolean;
   title: string;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
+  /** Where focus goes when the dialog closes; see Base UI's Dialog.Popup. */
+  finalFocus?: () => HTMLElement | boolean;
 }) {
   function confirm() {
     onConfirm();
@@ -40,7 +43,7 @@ export function DeleteNoteDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[440px]">
+      <DialogContent className="sm:max-w-[440px]" finalFocus={finalFocus}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Trash2Icon className="text-destructive size-4" strokeWidth={1.75} />

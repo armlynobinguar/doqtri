@@ -15,13 +15,13 @@ test.describe("notes housekeeping", () => {
     for (const id of notes) await deleteNote(id);
   });
 
-  /** Holds this note's PATCH until the test lets it through, or answers it itself. */
-  function holdRename(page: Page, id: string) {
+  /** Holds this note's PATCH (or DELETE) until the test lets it through, or answers it itself. */
+  function holdRequest(page: Page, id: string, method: "PATCH" | "DELETE" = "PATCH") {
     let release!: (answer?: (route: Route) => Promise<void>) => void;
     const released = new Promise<((route: Route) => Promise<void>) | undefined>((resolve) => (release = resolve));
     const seen: string[] = [];
     void page.route(`**/api/notes/${id}`, async (route) => {
-      if (route.request().method() !== "PATCH") return route.fallback();
+      if (route.request().method() !== method) return route.fallback();
       seen.push(route.request().postData() ?? "");
       const answer = await released;
       return answer ? answer(route) : route.continue();
@@ -33,7 +33,7 @@ test.describe("notes housekeeping", () => {
     const title = uniqueTitle("Rename Me");
     const id = await seedNote(title, "# Rename Me\n\nBody.\n");
     notes.push(id);
-    const patch = holdRename(page, id);
+    const patch = holdRequest(page, id);
     await page.goto(`/vault/${id}`);
 
     await page.getByRole("button", { name: `Rename ${title}` }).click();
@@ -66,7 +66,7 @@ test.describe("notes housekeeping", () => {
     const title = uniqueTitle("Refused Rename");
     const id = await seedNote(title, "# Refused Rename\n\nBody.\n");
     notes.push(id);
-    const patch = holdRename(page, id);
+    const patch = holdRequest(page, id);
     await page.goto(`/vault/${id}`);
 
     await page.getByRole("button", { name: `Rename ${title}` }).click();
@@ -95,11 +95,41 @@ test.describe("notes housekeeping", () => {
     await expect(page.getByRole("dialog").getByLabel("Note title")).toHaveValue(renamed);
   });
 
+  test("a navigation commits while a rename is still out", async ({ page }) => {
+    const title = uniqueTitle("Slow Rename");
+    const other = uniqueTitle("Somewhere Else");
+    const id = await seedNote(title, "# Slow Rename\n\nBody.\n");
+    const otherId = await seedNote(other, "# Somewhere Else\n\nBody.\n");
+    notes.push(id, otherId);
+    const patch = holdRequest(page, id);
+    await page.goto(`/vault/${id}`);
+
+    await page.getByRole("button", { name: `Rename ${title}` }).click();
+    const dialog = page.getByRole("dialog");
+    const renamed = uniqueTitle("Renamed Meanwhile");
+    await dialog.getByLabel("Note title").fill(renamed);
+    await dialog.getByRole("button", { name: "Rename", exact: true }).click();
+    await expect(page.getByRole("link", { name: renamed })).toBeVisible();
+
+    // The PATCH is still held, and the other note opens anyway.
+    await page.getByRole("link", { name: other }).click();
+    await expect(page).toHaveURL(new RegExp(`/vault/${otherId}$`));
+    await expect(page.getByRole("tab", { name: other })).toBeVisible();
+    await expect(page.getByRole("link", { name: renamed })).toBeVisible();
+    expect(patch.seen).toHaveLength(1);
+
+    patch.release();
+    await expect.poll(async () => (await readNote(id)).title).toBe(renamed);
+    // The explorer keeps the new title through the refresh that follows.
+    await expect(page.getByRole("button", { name: `Rename ${renamed}` })).toBeEnabled();
+    await expect(page.getByRole("link", { name: renamed })).toBeVisible();
+  });
+
   test("a rename that gets no answer says it may not have saved", async ({ page }) => {
     const title = uniqueTitle("Lost Rename");
     const id = await seedNote(title, "# Lost Rename\n\nBody.\n");
     notes.push(id);
-    const patch = holdRename(page, id);
+    const patch = holdRequest(page, id);
     await page.goto(`/vault/${id}`);
 
     await page.getByRole("button", { name: `Rename ${title}` }).click();
@@ -117,7 +147,7 @@ test.describe("notes housekeeping", () => {
     const taken = uniqueTitle("Collision Target");
     const id = await seedNote(title, "# Collision Source\n\nBody.\n");
     notes.push(id, await seedNote(taken, "# Collision Target\n\nBody.\n"));
-    const patch = holdRename(page, id);
+    const patch = holdRequest(page, id);
     await page.goto(`/vault/${id}`);
 
     await page.getByRole("button", { name: `Rename ${title}` }).click();
@@ -149,6 +179,34 @@ test.describe("notes housekeeping", () => {
     await expect(page).toHaveURL(/\/vault$/);
     await expect(page.getByText(`Deleted “${title}”`)).toBeVisible();
     await expect.poll(async () => (await readNote(id)) ?? null).toBeNull();
+  });
+
+  test("a refused delete brings the row back, with the chain icon and a way back to the note", async ({ page }) => {
+    const title = uniqueTitle("Refused Delete");
+    const id = await seedNote(title, "# Refused Delete\n\nBody.\n");
+    notes.push(id);
+    const del = holdRequest(page, id, "DELETE");
+    await page.goto(`/vault/${id}`);
+
+    await page.getByRole("button", { name: `Delete ${title}` }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Delete permanently" }).click();
+    await expect(page.getByRole("link", { name: title })).toHaveCount(0);
+    await expect(page).toHaveURL(/\/vault$/);
+
+    // The ledger has it after all: the route refuses as it would for an anchored note.
+    del.release((route) =>
+      route.fulfill({
+        status: 409,
+        json: { error: "This note is anchored on Stellar, so it cannot be deleted.", code: "ANCHORED" },
+      }),
+    );
+    await expect(page.getByText("This note is anchored on Stellar, so it cannot be deleted.")).toBeVisible();
+    await expect(page.getByRole("link", { name: title })).toBeVisible();
+    await expect(page.getByRole("img", { name: `${title} is anchored on Stellar and cannot be deleted` })).toHaveCount(1);
+    expect((await readNote(id)).title).toBe(title);
+
+    await page.getByRole("button", { name: "Open note" }).click();
+    await expect(page).toHaveURL(new RegExp(`/vault/${id}$`));
   });
 
   test("the quick switcher says when nothing matches", async ({ page }) => {

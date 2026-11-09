@@ -67,7 +67,7 @@ export function FileExplorer({
   anchoredIds?: ReadonlySet<string>;
   onDeleteNote?: (note: NoteSummary) => void;
   /**
-   * Whether a rename or delete of this note is still waiting on the server.
+   * Whether a rename or delete of this note has not yet shown in server data.
    * Its row offers neither until then, so a second one cannot race the first.
    */
   isPending?: (id: string) => boolean;
@@ -323,6 +323,7 @@ function NoteRow({
       <NavLink
         href={`/vault/${note.id}`}
         aria-current={isActive ? "page" : undefined}
+        data-note-link={note.id}
         className="flex min-w-0 flex-1 items-center gap-2 py-[5px] pl-2.5 pointer-coarse:gap-3 pointer-coarse:py-3"
       >
         <FileTextIcon

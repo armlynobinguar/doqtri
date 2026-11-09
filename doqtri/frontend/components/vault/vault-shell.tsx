@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -30,7 +30,7 @@ import {
 import { createBlankNote } from "@/lib/create-note";
 import { deleteNote, DeleteNoteError } from "@/lib/delete-note";
 import { renameNote } from "@/lib/rename-note";
-import { NoResponseError } from "@/lib/no-response";
+import { NoResponseError, REQUEST_TIMEOUT_MS } from "@/lib/no-response";
 import { isTitleTaken } from "@/lib/title";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { anchoredDocIds } from "@/lib/stellar/anchored";
@@ -134,12 +134,17 @@ function VaultShellInner({
   // reads the overlaid list, and the pages under `children` read the same
   // overlay from context.
   const refresh = useCallback(() => router.refresh(), [router]);
-  const { overlay, run } = useNoteOverlayState(refresh);
+  const { overlay, run } = useNoteOverlayState({ notes, failedImports, location: pathname, refresh });
   const shownNotes = useMemo(() => overlayNotes(notes, overlay), [notes, overlay]);
   const shownImports = useMemo(
     () => failedImports.filter((item) => !overlay.dismissed.has(item.id)),
     [failedImports, overlay],
   );
+  // For toast actions, which run long after the render that made them.
+  const latest = useRef({ overlay, shownNotes });
+  useEffect(() => {
+    latest.current = { overlay, shownNotes };
+  }, [overlay, shownNotes]);
 
   // The shell lives in the layout, so the active note comes from the URL
   // rather than from props. `/vault/mindmap`, `/vault/graph` and
@@ -228,44 +233,31 @@ function VaultShellInner({
       const reopen = wasOpen
         ? { action: { label: "Open note", onClick: () => navigate(`/vault/${note.id}`) } }
         : undefined;
-      const start = () =>
-        run(
-          { kind: "delete", id: note.id },
-          async () => {
-            const { purgedUploads } = await deleteNote(note.id);
-            toast.success(
-              purgedUploads > 0
-                ? `Deleted “${note.title}” and its archived original`
-                : `Deleted “${note.title}”`,
-            );
-          },
-          (error) => {
-            // The ledger moved since the explorer last looked — show the chain
-            // icon on that row now, so the refusal is not a dead end.
-            if (error instanceof DeleteNoteError && error.code === "ANCHORED") {
-              setAnchored((prev) => new Set(prev ?? []).add(note.id));
-            }
-            if (error instanceof NoResponseError) {
-              toast.warning(
-                `Could not reach doqtri, so “${note.title}” may not have been deleted. Reload to check.`,
-                reopen,
-              );
-              return;
-            }
-            toast.error(error instanceof Error ? error.message : "Could not delete note", reopen);
-          },
-        );
-
-      if (!wasOpen) {
-        start();
-        return;
-      }
-      navigate("/vault");
-      // A transition started in the same event shares the navigation's lane,
-      // and that lane cannot commit while the delete is in flight: the deleted
-      // note would stay open until the server answered. A task later, the
-      // delete gets a lane of its own and the navigation commits on its own.
-      setTimeout(start, 0);
+      // The request runs outside any transition, so this commits at once.
+      if (wasOpen) navigate("/vault");
+      run(
+        { kind: "delete", id: note.id },
+        async () => {
+          const { purgedUploads } = await deleteNote(note.id);
+          toast.success(
+            purgedUploads > 0
+              ? `Deleted “${note.title}” and its archived original`
+              : `Deleted “${note.title}”`,
+          );
+        },
+        (error) => {
+          // The ledger moved since the explorer last looked — show the chain
+          // icon on that row now, so the refusal is not a dead end.
+          if (error instanceof DeleteNoteError && error.code === "ANCHORED") {
+            setAnchored((prev) => new Set(prev ?? []).add(note.id));
+          }
+          if (error instanceof NoResponseError) {
+            toast.warning(`Could not reach doqtri, so “${note.title}” may not have been deleted.`, reopen);
+            return;
+          }
+          toast.error(error instanceof Error ? error.message : "Could not delete note", reopen);
+        },
+      );
     },
     [activeId, navigate, run],
   );
@@ -280,7 +272,20 @@ function VaultShellInner({
       if (isTitleTaken(title, others)) throw new Error(`Another note is already called “${title}”`);
 
       const retry = {
-        action: { label: "Retry", onClick: () => setPendingRename({ note, draft: title }) },
+        action: {
+          label: "Retry",
+          onClick: () => {
+            // Read now, not when the toast was made: the note may have been
+            // renamed, deleted or be mid-change since.
+            const current = latest.current.shownNotes.find((other) => other.id === note.id);
+            if (!current) return;
+            if (isNotePending(latest.current.overlay, note.id)) {
+              toast.info(`“${current.title}” is still being changed. Try again in a moment.`);
+              return;
+            }
+            setPendingRename({ note: current, draft: title });
+          },
+        },
       };
       run(
         { kind: "rename", id: note.id, title },
@@ -289,10 +294,7 @@ function VaultShellInner({
         },
         (error) => {
           if (error instanceof NoResponseError) {
-            toast.warning(
-              `Could not reach doqtri, so renaming “${note.title}” may not have saved. Reload to check.`,
-              retry,
-            );
+            toast.warning(`Could not reach doqtri, so renaming “${note.title}” may not have saved.`, retry);
             return;
           }
           toast.error(error instanceof Error ? error.message : "Could not rename note", retry);
@@ -307,9 +309,16 @@ function VaultShellInner({
       run(
         { kind: "dismiss", id },
         async () => {
-          // RLS allows the owner to delete their own ingest rows.
-          const { error } = await createSupabaseBrowserClient().from("ingests").delete().eq("id", id);
+          // RLS allows the owner to delete their own ingest rows; a row it
+          // hides is not an error, just nothing deleted, so ask for the ids.
+          const { data, error } = await createSupabaseBrowserClient()
+            .from("ingests")
+            .delete()
+            .eq("id", id)
+            .select("id")
+            .abortSignal(AbortSignal.timeout(REQUEST_TIMEOUT_MS));
           if (error) throw new Error(error.message);
+          if (!data?.length) throw new Error("That import could not be dismissed");
         },
         (error) => {
           toast.error(error instanceof Error ? error.message : "Could not dismiss that import");
@@ -494,6 +503,8 @@ function VaultShellInner({
         />
         <DeleteNoteDialog
           open={pendingDelete !== null}
+          // The row is gone by now; land on the explorer's list instead.
+          finalFocus={() => noteRowLink() ?? true}
           title={pendingDelete?.title ?? ""}
           onOpenChange={(next) => {
             if (!next) setPendingDelete(null);
@@ -507,6 +518,9 @@ function VaultShellInner({
           open={pendingRename !== null}
           title={pendingRename?.note.title ?? ""}
           initialValue={pendingRename?.draft}
+          // The trigger may be disabled now (the rename is in flight), which
+          // would drop focus to the page; the row's link is the next best.
+          finalFocus={() => noteRowLink(pendingRename?.note.id) ?? true}
           onOpenChange={(next) => {
             if (!next) setPendingRename(null);
           }}
@@ -523,4 +537,13 @@ function VaultShellInner({
       </div>
     </NoteOverlayProvider>
   );
+}
+
+/**
+ * A note's link in the explorer (`id`), or its first one, to move focus to
+ * when a dialog closes; null when the explorer is not on screen.
+ */
+function noteRowLink(id?: string): HTMLElement | null {
+  const links = [...document.querySelectorAll<HTMLElement>("[data-note-link]")];
+  return (id ? links.find((link) => link.dataset.noteLink === id) : links[0]) ?? null;
 }
