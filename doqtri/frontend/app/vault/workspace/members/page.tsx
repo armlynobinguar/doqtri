@@ -44,5 +44,7 @@ export default async function MembersPage(props: PageProps<"/vault/workspace/mem
     );
   }
 
-  return <MembersView userId={user.id} workspaces={workspaces} workspaceId={workspaceId} />;
+  // Keyed by workspace: switching starts the screen afresh, so a change still
+  // waiting on its RPC cannot land on the next workspace's roster.
+  return <MembersView key={workspaceId} userId={user.id} workspaces={workspaces} workspaceId={workspaceId} />;
 }
