@@ -27,7 +27,7 @@ function sections(markdown: string): string[] {
 }
 
 async function rename(page: Page, from: string, to: string) {
-  await page.getByRole("button", { name: `Rename ${from}` }).click();
+  await page.getByRole("button", { name: `Rename ${from}`, exact: true }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel("Note title").fill(to);
   await dialog.getByRole("button", { name: "Rename", exact: true }).click();
