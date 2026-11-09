@@ -22,6 +22,7 @@ import { createNoteSaver } from "@/lib/note-saver";
 import { useDocLock } from "@/hooks/use-doc-lock";
 import { EditLockBanner } from "@/components/vault/edit-lock-banner";
 import { EDITING_ELSEWHERE, editingMessage } from "@/lib/doc-lock";
+import { useNoteTitle, useOverlaidNotes } from "@/components/vault/note-overlay";
 import type { Doc } from "@/lib/types";
 
 const SETTLE_MS = 700;
@@ -57,15 +58,21 @@ function countWords(markdown: string): number {
  * the server refuses as stale is never retried over the newer text: the
  * editor stops and offers a reload, and nothing reloads on its own while
  * that offer stands, so the unsaved text stays put to be copied.
+ *
+ * Titles (this note's, and every other note's for the graph, backlinks and
+ * [[wikilinks]]) are read through the vault's pending renames and deletes,
+ * so a rename shows here in the same frame as in the explorer.
  */
 export function DocWorkspace({
-  docs,
+  docs: serverDocs,
   active,
 }: {
   docs: Doc[];
   active: Doc;
 }) {
   const router = useRouter();
+  const docs = useOverlaidNotes(serverDocs);
+  const title = useNoteTitle(active.id, active.title);
   const { setWordCount, setSaveState } = useVaultStatus();
 
   const [markdown, setMarkdown] = useState(active.markdown);
@@ -367,7 +374,7 @@ export function DocWorkspace({
         <div className={cn("min-h-0 flex-1", mobileView !== "note" && "hidden")}>
           <EditorPane
             compact
-            title={active.title}
+            title={title}
             markdown={markdown}
             onChange={handleChange}
             onRegenerate={() => setRegenerateOpen(true)}
@@ -381,7 +388,7 @@ export function DocWorkspace({
             <RightPanel
               docs={docsForGraph}
               activeId={active.id}
-              title={active.title}
+              title={title}
               markdown={markdown}
               mindmap={active.mindmap ?? null}
               mindmapStale={active.mindmapStale ?? false}
@@ -392,7 +399,7 @@ export function DocWorkspace({
         )}
         {mobileView === "ship" && (
           <div className="bg-sidebar min-h-0 flex-1 overflow-y-auto [&>*:first-child]:border-t-0">
-            <ShipPanel docId={active.id} title={active.title} markdown={markdown} onSave={saveNow} />
+            <ShipPanel docId={active.id} title={title} markdown={markdown} onSave={saveNow} />
           </div>
         )}
 
@@ -406,7 +413,7 @@ export function DocWorkspace({
       <ResizablePanelGroup orientation="horizontal" className="min-h-0">
         <ResizablePanel id="editor" minSize={320} className="min-h-0">
           <EditorPane
-            title={active.title}
+            title={title}
             markdown={markdown}
             onChange={handleChange}
             onRegenerate={() => setRegenerateOpen(true)}
@@ -428,7 +435,7 @@ export function DocWorkspace({
           <RightPanel
             docs={docsForGraph}
             activeId={active.id}
-            title={active.title}
+            title={title}
             markdown={markdown}
             mindmap={active.mindmap ?? null}
             mindmapStale={active.mindmapStale ?? false}

@@ -1,7 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import { Loader2Icon, Trash2Icon } from "lucide-react";
+import { Trash2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -19,6 +18,9 @@ import {
  *
  * Anchored notes never reach this dialog: the explorer shows a chain icon
  * instead of the delete button, and the API refuses them.
+ *
+ * The delete is optimistic: `onConfirm` starts it and the dialog closes as
+ * the row goes. A refusal brings the row back with a toast.
  */
 export function DeleteNoteDialog({
   open,
@@ -29,28 +31,15 @@ export function DeleteNoteDialog({
   open: boolean;
   title: string;
   onOpenChange: (open: boolean) => void;
-  onConfirm: () => Promise<void>;
+  onConfirm: () => void;
 }) {
-  const [busy, setBusy] = useState(false);
-
-  async function confirm() {
-    setBusy(true);
-    try {
-      await onConfirm();
-      onOpenChange(false);
-    } finally {
-      setBusy(false);
-    }
+  function confirm() {
+    onConfirm();
+    onOpenChange(false);
   }
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (busy) return;
-        onOpenChange(next);
-      }}
-    >
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[440px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -72,22 +61,11 @@ export function DeleteNoteDialog({
         </DialogHeader>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button
-            onClick={confirm}
-            disabled={busy}
-            className="bg-destructive text-white hover:bg-destructive/90"
-          >
-            {busy ? (
-              <>
-                <Loader2Icon className="animate-spin" />
-                Deleting…
-              </>
-            ) : (
-              "Delete permanently"
-            )}
+          <Button onClick={confirm} className="bg-destructive text-white hover:bg-destructive/90">
+            Delete permanently
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -4,12 +4,15 @@ import { useMemo } from "react";
 import { GraphPanel } from "@/components/vault/graph-panel";
 import { buildGraph } from "@/lib/wikilinks";
 import type { Doc } from "@/lib/types";
+import { useOverlaidNotes } from "@/components/vault/note-overlay";
 
 /**
  * The vault-wide link graph. The same graph the right panel shows beside a
- * note, but with the whole pane to spread out in.
+ * note, but with the whole pane to spread out in. Pending renames and
+ * deletes from the explorer show here at once.
  */
-export function GlobalGraph({ docs }: { docs: Doc[] }) {
+export function GlobalGraph({ docs: serverDocs }: { docs: Doc[] }) {
+  const docs = useOverlaidNotes(serverDocs);
   const { nodes, edges } = useMemo(() => buildGraph(docs), [docs]);
 
   const noteCount = docs.length;

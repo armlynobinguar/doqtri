@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2Icon, PencilIcon } from "lucide-react";
+import { PencilIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -21,56 +21,51 @@ import { MAX_TITLE_LENGTH } from "@/lib/title";
  * stop resolving rather than letting the graph quietly lose edges.
  *
  * Mount it with a `key` per note, so each opening starts from that note's
- * current title instead of the last one typed.
+ * current title (or `initialValue`, when a refused rename is retried) instead
+ * of the last one typed.
  *
- * A refusal (usually a title another note already has) stays in the dialog,
- * next to the field the user has to change.
+ * The rename is optimistic: `onConfirm` starts it and returns, and the dialog
+ * closes in the same frame the new title appears. A refusal the client can
+ * see coming (a title another note already has) is thrown by `onConfirm`
+ * instead and stays in the dialog, next to the field the user has to change.
  */
 export function RenameNoteDialog({
   open,
   title,
+  initialValue,
   onOpenChange,
   onConfirm,
 }: {
   open: boolean;
   title: string;
+  initialValue?: string;
   onOpenChange: (open: boolean) => void;
-  onConfirm: (title: string) => Promise<void>;
+  onConfirm: (title: string) => void;
 }) {
-  const [value, setValue] = useState(title);
-  const [busy, setBusy] = useState(false);
+  const [value, setValue] = useState(initialValue ?? title);
   const [error, setError] = useState<string | null>(null);
 
   const trimmed = value.trim();
   const unchanged = trimmed === title;
 
-  async function confirm(event: React.FormEvent) {
+  function confirm(event: React.FormEvent) {
     event.preventDefault();
-    if (!trimmed || busy) return;
+    if (!trimmed) return;
     if (unchanged) {
       onOpenChange(false);
       return;
     }
-    setBusy(true);
-    setError(null);
     try {
-      await onConfirm(trimmed);
-      onOpenChange(false);
+      onConfirm(trimmed);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not rename note");
-    } finally {
-      setBusy(false);
+      return;
     }
+    onOpenChange(false);
   }
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (busy) return;
-        onOpenChange(next);
-      }}
-    >
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[440px]">
         <form onSubmit={confirm} className="grid gap-4">
           <DialogHeader>
@@ -94,7 +89,6 @@ export function RenameNoteDialog({
               autoFocus
               value={value}
               maxLength={MAX_TITLE_LENGTH}
-              disabled={busy}
               aria-invalid={error ? true : undefined}
               onChange={(event) => {
                 setValue(event.target.value);
@@ -110,23 +104,11 @@ export function RenameNoteDialog({
           </div>
 
           <DialogFooter>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => onOpenChange(false)}
-              disabled={busy}
-            >
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={busy || !trimmed}>
-              {busy ? (
-                <>
-                  <Loader2Icon className="animate-spin" />
-                  Renaming…
-                </>
-              ) : (
-                "Rename"
-              )}
+            <Button type="submit" disabled={!trimmed}>
+              Rename
             </Button>
           </DialogFooter>
         </form>

@@ -17,12 +17,9 @@ import {
   XIcon,
 } from "lucide-react";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { toast } from "sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { RetryTarget } from "@/components/vault/upload-dialog";
 import type { FailedImport, NoteSummary } from "@/lib/types";
 
@@ -42,9 +39,10 @@ export function FileExplorer({
   creating = false,
   failedImports = [],
   onRetryImport,
+  onDismissImport,
   anchoredIds,
   onDeleteNote,
-  deletingId,
+  isPending,
   onRenameNote,
 }: {
   notes: NoteSummary[];
@@ -64,10 +62,15 @@ export function FileExplorer({
   creating?: boolean;
   failedImports?: FailedImport[];
   onRetryImport?: (target: RetryTarget) => void;
+  onDismissImport?: (id: string) => void;
   /** Notes with a record on the ledger. Those cannot be deleted. */
   anchoredIds?: ReadonlySet<string>;
   onDeleteNote?: (note: NoteSummary) => void;
-  deletingId?: string | null;
+  /**
+   * Whether a rename or delete of this note is still waiting on the server.
+   * Its row offers neither until then, so a second one cannot race the first.
+   */
+  isPending?: (id: string) => boolean;
   onRenameNote?: (note: NoteSummary) => void;
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -167,7 +170,7 @@ export function FileExplorer({
                     note={note}
                     isActive={note.id === activeId}
                     anchored={anchoredIds?.has(note.id) ?? false}
-                    deleting={deletingId === note.id}
+                    pending={isPending?.(note.id) ?? false}
                     onRename={onRenameNote && canCreate ? onRenameNote : undefined}
                     onDelete={canCreate ? onDeleteNote : undefined}
                   />
@@ -176,8 +179,12 @@ export function FileExplorer({
             ))
           )}
 
-          {failedImports.length > 0 && onRetryImport ? (
-            <FailedImports items={failedImports} onRetry={canCreate ? onRetryImport : undefined} />
+          {failedImports.length > 0 && onRetryImport && onDismissImport ? (
+            <FailedImports
+              items={failedImports}
+              onRetry={canCreate ? onRetryImport : undefined}
+              onDismiss={onDismissImport}
+            />
           ) : null}
         </div>
       </ScrollArea>
@@ -292,14 +299,14 @@ function NoteRow({
   note,
   isActive,
   anchored,
-  deleting,
+  pending,
   onRename,
   onDelete,
 }: {
   note: NoteSummary;
   isActive: boolean;
   anchored: boolean;
-  deleting: boolean;
+  pending: boolean;
   onRename?: (note: NoteSummary) => void;
   onDelete?: (note: NoteSummary) => void;
 }) {
@@ -324,8 +331,8 @@ function NoteRow({
         />
         <span className="truncate">{note.title}</span>
       </NavLink>
-      {onRename ? <RenameRowAction note={note} onRename={onRename} /> : null}
-      <NoteRowAction note={note} anchored={anchored} deleting={deleting} onDelete={onDelete} />
+      {onRename ? <RenameRowAction note={note} pending={pending} onRename={onRename} /> : null}
+      <NoteRowAction note={note} anchored={anchored} pending={pending} onDelete={onDelete} />
     </li>
   );
 }
@@ -339,19 +346,12 @@ function NoteRow({
 function FailedImports({
   items,
   onRetry,
+  onDismiss,
 }: {
   items: FailedImport[];
   onRetry?: (target: RetryTarget) => void;
+  onDismiss: (id: string) => void;
 }) {
-  const router = useRouter();
-
-  async function dismiss(id: string) {
-    // RLS allows the owner to delete their own ingest rows.
-    const { error } = await createSupabaseBrowserClient().from("ingests").delete().eq("id", id);
-    if (error) toast.error(error.message);
-    router.refresh();
-  }
-
   return (
     <div className="mt-3">
       <div className="text-sidebar-foreground/80 flex items-center gap-1.5 px-3 pt-3 pb-1.5 text-[13px]">
@@ -381,7 +381,7 @@ function FailedImports({
             <button
               type="button"
               aria-label={`Dismiss failed import of ${item.filename}`}
-              onClick={() => void dismiss(item.id)}
+              onClick={() => onDismiss(item.id)}
               className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent flex size-6 items-center justify-center rounded-lg pointer-coarse:size-10"
             >
               <XIcon className="size-3.5" strokeWidth={1.5} />
@@ -399,17 +399,21 @@ function FailedImports({
  */
 function RenameRowAction({
   note,
+  pending,
   onRename,
 }: {
   note: NoteSummary;
+  pending: boolean;
   onRename: (note: NoteSummary) => void;
 }) {
   return (
     <Tooltip>
       <TooltipTrigger
         aria-label={`Rename ${note.title}`}
+        // TooltipTrigger's own `disabled` only stops the tooltip; the button needs it.
+        render={<button type="button" disabled={pending} />}
         onClick={() => onRename(note)}
-        className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent focus-visible:ring-ring flex size-6 shrink-0 items-center justify-center rounded-lg opacity-0 transition-opacity group-hover:opacity-100 pointer-coarse:size-10 pointer-coarse:opacity-70 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:outline-hidden"
+        className="text-sidebar-foreground/70 hover:text-foreground hover:bg-sidebar-accent focus-visible:ring-ring flex size-6 shrink-0 items-center justify-center rounded-lg opacity-0 transition-opacity group-hover:opacity-100 pointer-coarse:size-10 pointer-coarse:opacity-70 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-40"
       >
         <PencilIcon className="size-3.5" strokeWidth={1.5} />
       </TooltipTrigger>
@@ -430,12 +434,12 @@ function RenameRowAction({
 function NoteRowAction({
   note,
   anchored,
-  deleting,
+  pending,
   onDelete,
 }: {
   note: NoteSummary;
   anchored: boolean;
-  deleting: boolean;
+  pending: boolean;
   onDelete?: (note: NoteSummary) => void;
 }) {
   if (anchored) {
@@ -467,15 +471,11 @@ function NoteRowAction({
     <Tooltip>
       <TooltipTrigger
         aria-label={`Delete ${note.title}`}
-        render={<button type="button" disabled={deleting} />}
+        render={<button type="button" disabled={pending} />}
         onClick={() => onDelete(note)}
-        className="text-sidebar-foreground/70 hover:text-destructive hover:bg-sidebar-accent focus-visible:ring-ring flex size-6 shrink-0 items-center justify-center rounded-lg opacity-0 transition-opacity group-hover:opacity-100 pointer-coarse:size-10 pointer-coarse:opacity-70 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:outline-hidden disabled:opacity-100"
+        className="text-sidebar-foreground/70 hover:text-destructive hover:bg-sidebar-accent focus-visible:ring-ring flex size-6 shrink-0 items-center justify-center rounded-lg opacity-0 transition-opacity group-hover:opacity-100 pointer-coarse:size-10 pointer-coarse:opacity-70 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-40"
       >
-        {deleting ? (
-          <Loader2Icon className="size-3.5 animate-spin" strokeWidth={1.5} />
-        ) : (
-          <Trash2Icon className="size-3.5" strokeWidth={1.5} />
-        )}
+        <Trash2Icon className="size-3.5" strokeWidth={1.5} />
       </TooltipTrigger>
       <TooltipContent side="right">Delete note</TooltipContent>
     </Tooltip>

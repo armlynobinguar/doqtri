@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, type Route } from "@playwright/test";
 import { deleteNote, E2E_KEYPAIR, editableEditor, readNote, seedNote, serviceRest, uniqueTitle } from "./helpers";
 import { signedInContext } from "./wallet-session";
 
@@ -15,10 +15,25 @@ test.describe("notes housekeeping", () => {
     for (const id of notes) await deleteNote(id);
   });
 
-  test("rename warns about links and renames", async ({ page }) => {
+  /** Holds this note's PATCH until the test lets it through, or answers it itself. */
+  function holdRename(page: Page, id: string) {
+    let release!: (answer?: (route: Route) => Promise<void>) => void;
+    const released = new Promise<((route: Route) => Promise<void>) | undefined>((resolve) => (release = resolve));
+    const seen: string[] = [];
+    void page.route(`**/api/notes/${id}`, async (route) => {
+      if (route.request().method() !== "PATCH") return route.fallback();
+      seen.push(route.request().postData() ?? "");
+      const answer = await released;
+      return answer ? answer(route) : route.continue();
+    });
+    return { release, seen };
+  }
+
+  test("rename warns about links, and shows the new title before the server answers", async ({ page }) => {
     const title = uniqueTitle("Rename Me");
     const id = await seedNote(title, "# Rename Me\n\nBody.\n");
     notes.push(id);
+    const patch = holdRename(page, id);
     await page.goto(`/vault/${id}`);
 
     await page.getByRole("button", { name: `Rename ${title}` }).click();
@@ -29,8 +44,92 @@ test.describe("notes housekeeping", () => {
     const renamed = uniqueTitle("Renamed Note");
     await dialog.getByLabel("Note title").fill(renamed);
     await dialog.getByRole("button", { name: "Rename", exact: true }).click();
-    await expect(page.getByText(`Renamed to “${renamed}”`)).toBeVisible();
+
+    // The PATCH is still held: the dialog has closed and every surface has
+    // the new title anyway, and the row's rename and delete wait for it.
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole("link", { name: renamed })).toBeVisible();
+    await expect(page.getByRole("tab", { name: renamed })).toBeVisible();
+    await expect(page.getByRole("button", { name: `Rename ${renamed}` })).toBeDisabled();
+    await expect(page.getByRole("button", { name: `Delete ${renamed}` })).toBeDisabled();
+    expect(patch.seen).toHaveLength(1);
+
+    patch.release();
     await expect.poll(async () => (await readNote(id)).title).toBe(renamed);
+    await expect(page.getByRole("button", { name: `Rename ${renamed}` })).toBeEnabled();
+    await expect(page.getByRole("link", { name: renamed })).toBeVisible();
+    // The new title on screen is the confirmation; no toast repeats it.
+    await expect(page.getByText(`Renamed to “${renamed}”`)).toHaveCount(0);
+  });
+
+  test("a refused rename puts the old title back everywhere and offers Retry", async ({ page }) => {
+    const title = uniqueTitle("Refused Rename");
+    const id = await seedNote(title, "# Refused Rename\n\nBody.\n");
+    notes.push(id);
+    const patch = holdRename(page, id);
+    await page.goto(`/vault/${id}`);
+
+    await page.getByRole("button", { name: `Rename ${title}` }).click();
+    const dialog = page.getByRole("dialog");
+    const renamed = uniqueTitle("Never Saved");
+    await dialog.getByLabel("Note title").fill(renamed);
+    await dialog.getByRole("button", { name: "Rename", exact: true }).click();
+    await expect(page.getByRole("link", { name: renamed })).toBeVisible();
+
+    // A teammate took the title between the client's check and the write.
+    patch.release((route) =>
+      route.fulfill({
+        status: 409,
+        json: { error: `Another note is already called “${renamed}”`, code: "TITLE_TAKEN" },
+      }),
+    );
+    await expect(page.getByText(`Another note is already called “${renamed}”`)).toBeVisible();
+    await expect(page.getByRole("link", { name: title })).toBeVisible();
+    await expect(page.getByRole("tab", { name: title })).toBeVisible();
+    await expect(page.getByRole("link", { name: renamed })).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: renamed })).toHaveCount(0);
+    expect((await readNote(id)).title).toBe(title);
+
+    // Retry reopens the dialog with what was typed, ready to change.
+    await page.getByRole("button", { name: "Retry" }).click();
+    await expect(page.getByRole("dialog").getByLabel("Note title")).toHaveValue(renamed);
+  });
+
+  test("a rename that gets no answer says it may not have saved", async ({ page }) => {
+    const title = uniqueTitle("Lost Rename");
+    const id = await seedNote(title, "# Lost Rename\n\nBody.\n");
+    notes.push(id);
+    const patch = holdRename(page, id);
+    await page.goto(`/vault/${id}`);
+
+    await page.getByRole("button", { name: `Rename ${title}` }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Note title").fill(uniqueTitle("Maybe Saved"));
+    await dialog.getByRole("button", { name: "Rename", exact: true }).click();
+
+    patch.release((route) => route.abort("internetdisconnected"));
+    await expect(page.getByText(`renaming “${title}” may not have saved`)).toBeVisible();
+    await expect(page.getByRole("link", { name: title })).toBeVisible();
+  });
+
+  test("a title another note has keeps the dialog open and sends nothing", async ({ page }) => {
+    const title = uniqueTitle("Collision Source");
+    const taken = uniqueTitle("Collision Target");
+    const id = await seedNote(title, "# Collision Source\n\nBody.\n");
+    notes.push(id, await seedNote(taken, "# Collision Target\n\nBody.\n"));
+    const patch = holdRename(page, id);
+    await page.goto(`/vault/${id}`);
+
+    await page.getByRole("button", { name: `Rename ${title}` }).click();
+    const dialog = page.getByRole("dialog");
+    // Case and surrounding spaces do not make it a different title.
+    await dialog.getByLabel("Note title").fill(`  ${taken.toUpperCase()} `);
+    await dialog.getByRole("button", { name: "Rename", exact: true }).click();
+
+    await expect(dialog.getByRole("alert")).toContainText("Another note is already called");
+    await expect(dialog).toBeVisible();
+    await expect(page.getByRole("link", { name: title })).toBeVisible();
+    expect(patch.seen).toHaveLength(0);
   });
 
   test("delete asks first, then removes the note for good", async ({ page }) => {
@@ -45,8 +144,10 @@ test.describe("notes housekeeping", () => {
     await expect(dialog).toContainText("This cannot be undone.");
     await dialog.getByRole("button", { name: "Delete permanently" }).click();
 
-    await expect(page.getByText(`Deleted “${title}”`)).toBeVisible();
+    // The open note is left at once, without waiting for the DELETE.
     await expect(page.getByRole("button", { name: `Delete ${title}` })).toHaveCount(0);
+    await expect(page).toHaveURL(/\/vault$/);
+    await expect(page.getByText(`Deleted “${title}”`)).toBeVisible();
     await expect.poll(async () => (await readNote(id)) ?? null).toBeNull();
   });
 

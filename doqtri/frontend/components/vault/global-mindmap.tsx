@@ -8,13 +8,16 @@ import type { Doc } from "@/lib/types";
 import type { SavedStyle } from "@/lib/mindmap-style-sync";
 import { useNavigate } from "@/components/vault/navigation";
 import { MindmapPromoBanner } from "@/components/promo/mindmap-promo-banner";
+import { useOverlaidNotes } from "@/components/vault/note-overlay";
 
 /**
  * The vault-wide mindmap. Concepts from every document in one map, with the
- * ones several documents reach drawn as hubs.
+ * ones several documents reach drawn as hubs. Pending renames and deletes
+ * from the explorer show here at once.
  */
-export function GlobalMindmap({ docs, savedStyle }: { docs: Doc[]; savedStyle: SavedStyle }) {
+export function GlobalMindmap({ docs: serverDocs, savedStyle }: { docs: Doc[]; savedStyle: SavedStyle }) {
   const navigate = useNavigate();
+  const docs = useOverlaidNotes(serverDocs);
   const graph = useMemo(() => buildGlobalMindmap(docs), [docs]);
 
   const documentCount = docs.length;
