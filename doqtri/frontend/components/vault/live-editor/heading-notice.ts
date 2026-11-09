@@ -9,8 +9,10 @@ import { headingNoticeText, type HeadingNotice } from "@/lib/heading-rename";
  *
  * A block widget after the heading line, so it sits with the heading and
  * never covers text. There is only ever one: a new notice updates it in
- * place (updateDOM), and its height is fixed by the theme, so text below it
- * moves once, when it appears, and not as it changes.
+ * place (updateDOM). It is one line at a fixed height whatever it says (the
+ * theme clamps it, with an ellipsis), so text below it moves once, when it
+ * appears, and not as it changes or on a narrow phone; the whole message is
+ * its `title`, and the status region's.
  *
  * Shown only while the note's first non-blank line is a `#` heading; the
  * workspace clears it when the heading goes. Screen readers hear it through
@@ -47,6 +49,7 @@ class HeadingNoticeWidget extends WidgetType {
   }
 
   get estimatedHeight() {
+    // The theme's 20px box and its 6px margin.
     return 26;
   }
 
@@ -68,6 +71,7 @@ class HeadingNoticeWidget extends WidgetType {
     const { kind } = this.notice;
     const { message, hint } = headingNoticeText(this.notice);
     box.dataset.kind = kind;
+    box.title = hint ? `${message} ${hint}` : message;
 
     const icon = document.createElement("span");
     icon.className = "cm-heading-notice-icon";

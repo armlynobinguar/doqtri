@@ -184,15 +184,19 @@ export const editorTheme = EditorView.theme({
   },
   ".cm-lp-image-hint": { color: "var(--label)", fontSize: "0.85em" },
 
-  // The line under the title heading (heading-notice.ts, DOQ-36). One fixed
-  // line height and size, whatever the text size, so the text below moves
-  // once when it appears and never as it changes. The warning tint marks
+  // The line under the title heading (heading-notice.ts, DOQ-36). One line
+  // at a fixed 20px whatever the text size or width: longer messages end in
+  // an ellipsis (the whole one is the box's title and the status region's),
+  // so the text below moves once when it appears and never as it changes or
+  // wraps. The warning tint marks
   // only the icon and the edge: --warning text is under 4.5:1 on the light
   // page, so the words use --foreground and --label.
   ".cm-heading-notice": {
     display: "flex",
-    alignItems: "flex-start",
+    alignItems: "center",
     gap: "6px",
+    boxSizing: "border-box",
+    height: "20px",
     margin: "0 0 6px",
     padding: "1px 0 1px 8px",
     borderLeft: "2px solid var(--label)",
@@ -211,7 +215,13 @@ export const editorTheme = EditorView.theme({
     color: "var(--label)",
   },
   ".cm-heading-notice[data-kind='clash'] .cm-heading-notice-icon": { color: "var(--warning)" },
-  ".cm-heading-notice-text": { minWidth: "0" },
+  ".cm-heading-notice-text": {
+    flex: "1",
+    minWidth: "0",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
   ".cm-heading-notice-hint": { color: "var(--label)" },
   ".cm-heading-notice-dismiss": {
     display: "flex",
