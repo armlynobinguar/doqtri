@@ -1,7 +1,8 @@
 "use client";
 
-import { createContext, useContext, useMemo, useState } from "react";
+import { createContext, useContext, useMemo, useState, useSyncExternalStore } from "react";
 import type { SaveState } from "@/components/vault/status-bar";
+import type { EditorStats } from "@/lib/text-stats";
 
 export type RightTab = "graph" | "mindmap";
 
@@ -18,7 +19,37 @@ type VaultStatus = {
   setWordCount: (count: number | undefined) => void;
   setSaveState: (state: SaveState) => void;
   setRightTab: (tab: RightTab) => void;
+  /** The editor's caret and selection counts; see useEditorStats. */
+  setEditorStats: (stats: EditorStats | undefined) => void;
+  editorStats: StatsStore;
 };
+
+/**
+ * The editor's counts change with every caret move, so they skip the context
+ * value (which would re-render the whole vault shell each time): the status
+ * bar subscribes to this store on its own.
+ */
+type StatsStore = {
+  get: () => EditorStats | undefined;
+  set: (stats: EditorStats | undefined) => void;
+  subscribe: (listener: () => void) => () => void;
+};
+
+function createStatsStore(): StatsStore {
+  let value: EditorStats | undefined;
+  const listeners = new Set<() => void>();
+  return {
+    get: () => value,
+    set: (stats) => {
+      value = stats;
+      for (const listener of listeners) listener();
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
 
 const VaultStatusContext = createContext<VaultStatus | null>(null);
 
@@ -26,6 +57,7 @@ export function VaultStatusProvider({ children }: { children: React.ReactNode })
   const [wordCount, setWordCount] = useState<number | undefined>(undefined);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [rightTab, setRightTab] = useState<RightTab>("graph");
+  const [editorStats] = useState(createStatsStore);
 
   const value = useMemo(
     () => ({
@@ -35,8 +67,10 @@ export function VaultStatusProvider({ children }: { children: React.ReactNode })
       setWordCount,
       setSaveState,
       setRightTab,
+      editorStats,
+      setEditorStats: editorStats.set,
     }),
-    [wordCount, saveState, rightTab],
+    [wordCount, saveState, rightTab, editorStats],
   );
 
   return (
@@ -52,4 +86,12 @@ export function useVaultStatus(): VaultStatus {
     throw new Error("useVaultStatus must be used inside a VaultStatusProvider");
   }
   return ctx;
+}
+
+const noStats = () => () => {};
+
+/** The open note's caret and selection counts; undefined with no editor open. */
+export function useEditorStats(): EditorStats | undefined {
+  const store = useContext(VaultStatusContext)?.editorStats;
+  return useSyncExternalStore(store?.subscribe ?? noStats, () => store?.get(), () => undefined);
 }

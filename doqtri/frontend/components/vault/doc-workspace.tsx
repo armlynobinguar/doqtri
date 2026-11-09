@@ -25,6 +25,7 @@ import { useDocLock } from "@/hooks/use-doc-lock";
 import { EditLockBanner } from "@/components/vault/edit-lock-banner";
 import { EDITING_ELSEWHERE, editingMessage } from "@/lib/doc-lock";
 import type { Doc } from "@/lib/types";
+import { countWords } from "@/lib/text-stats";
 
 const SETTLE_MS = 700;
 
@@ -36,11 +37,6 @@ const MOBILE_VIEWS: { id: MobileView; label: string }[] = [
   { id: "map", label: "Map" },
   { id: "ship", label: "Ship" },
 ];
-
-function countWords(markdown: string): number {
-  const words = markdown.trim().split(/\s+/).filter(Boolean);
-  return words.length;
-}
 
 /**
  * Owns the markdown for the active note. The markdown is the single source of
@@ -68,7 +64,7 @@ export function DocWorkspace({
   active: Doc;
 }) {
   const router = useRouter();
-  const { setWordCount, setSaveState } = useVaultStatus();
+  const { setWordCount, setSaveState, setEditorStats } = useVaultStatus();
 
   const [markdown, setMarkdown] = useState(active.markdown);
   const [regenerateOpen, setRegenerateOpen] = useState(false);
@@ -198,8 +194,9 @@ export function DocWorkspace({
     return () => {
       setWordCount(undefined);
       setSaveState("idle");
+      setEditorStats(undefined);
     };
-  }, [setWordCount, setSaveState]);
+  }, [setWordCount, setSaveState, setEditorStats]);
 
   useEffect(() => {
     if (settled === saves.saved) return;
@@ -392,6 +389,7 @@ export function DocWorkspace({
             readOnly={readOnly}
             pending={lockPending}
             onOpenNote={openNote}
+            onStats={setEditorStats}
             banner={lockBanner}
           />
         </div>
@@ -436,6 +434,7 @@ export function DocWorkspace({
             readOnly={readOnly}
             pending={lockPending}
             onOpenNote={openNote}
+            onStats={setEditorStats}
             banner={lockBanner}
           />
         </ResizablePanel>
