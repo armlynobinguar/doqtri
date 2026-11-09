@@ -3,9 +3,6 @@ import { JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { PREFERENCES_BOOT_SCRIPT } from "@/lib/preferences";
-// The editor's stylesheet must load before globals.css so the brand-palette
-// overrides in there win on equal specificity.
-import "@uiw/react-md-editor/markdown-editor.css";
 import "./globals.css";
 
 // Variable names match the tokens consumed by @theme inline in globals.css.
@@ -52,8 +49,6 @@ export default function RootLayout({
     <html
       lang="en"
       className={`dark ${jakarta.variable} ${jetbrainsMono.variable} h-full antialiased`}
-      // Consumed by @uiw/react-md-editor to pick its colour variant.
-      data-color-mode="dark"
       suppressHydrationWarning
     >
       <head>

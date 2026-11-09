@@ -1,5 +1,16 @@
 import { test, expect } from "@playwright/test";
-import { deleteNote, readNote, seedNote, uniqueTitle } from "./helpers";
+import {
+  deleteNote,
+  editableEditor,
+  editorLine,
+  expectEditorText,
+  noteEditor,
+  placeCaretAfter,
+  readNote,
+  replaceEditorText,
+  seedNote,
+  uniqueTitle,
+} from "./helpers";
 
 test.describe("editor", () => {
   let noteId: string;
@@ -18,39 +29,30 @@ test.describe("editor", () => {
     await page.goto(`/vault/${noteId}`);
 
     // ssr:false means the fallback shows first, then the real editor replaces it.
-    const textarea = page.locator("textarea.w-md-editor-text-input");
-    await expect(textarea).toBeVisible();
-    await expect(textarea).toHaveValue(/# Editor Note/);
+    await expect(noteEditor(page)).toBeVisible();
+    await expectEditorText(page, /# Editor Note/);
 
-    // Live preview pane renders the markdown too.
-    await expect(
-      page.locator(".wmde-markdown").getByRole("heading", { name: "Editor Note" }),
-    ).toBeVisible();
+    // Live preview: with no caret in it, the heading renders, its hash hidden.
+    await expect(editorLine(page, "Editor Note")).toHaveText("Editor Note");
+    await expect(editorLine(page, "Editor Note")).toHaveClass(/cm-lp-h1/);
   });
 
   test("word count updates in the status bar as you type", async ({ page }) => {
     await page.goto(`/vault/${noteId}`);
-    const textarea = page.locator("textarea.w-md-editor-text-input");
-    await expect(textarea).toBeVisible();
+    await editableEditor(page);
 
     // "# Editor Note\n\nOriginal body." -> 5 words
     await expect(page.getByText(/^\d+ words?$/)).toContainText("5 words");
 
-    await textarea.click();
-    await textarea.press("End");
-    await textarea.pressSequentially(" plus three more words");
+    await placeCaretAfter(page, "Original body.");
+    await page.keyboard.type(" plus three more words");
 
     await expect(page.getByText(/^\d+ words?$/)).toContainText("9 words");
   });
 
   test("an edit debounce-saves and survives a reload", async ({ page }) => {
     await page.goto(`/vault/${noteId}`);
-    const textarea = page.locator("textarea.w-md-editor-text-input");
-    await expect(textarea).toBeVisible();
-
-    await textarea.click();
-    await textarea.press("ControlOrMeta+a");
-    await textarea.fill("# Editor Note\n\n## New Section\n\nEdited body.\n");
+    await replaceEditorText(page, "# Editor Note\n\n## New Section\n\nEdited body.\n");
 
     // The status bar is the only surface that reports the debounced write.
     await expect(page.getByText("Saving…")).toBeVisible();
@@ -62,9 +64,7 @@ test.describe("editor", () => {
     expect(stored.markdown).toContain("Edited body.");
 
     await page.reload();
-    await expect(page.locator("textarea.w-md-editor-text-input")).toHaveValue(
-      /## New Section/,
-    );
+    await expectEditorText(page, /## New Section/);
   });
 
   test("selecting a note in the explorer opens it", async ({ page }) => {
@@ -76,9 +76,7 @@ test.describe("editor", () => {
       await page.getByRole("link", { name: otherTitle }).click();
 
       await page.waitForURL(`**/vault/${otherId}`);
-      await expect(page.locator("textarea.w-md-editor-text-input")).toHaveValue(
-        /# Other Note/,
-      );
+      await expectEditorText(page, /# Other Note/);
     } finally {
       await deleteNote(otherId);
     }

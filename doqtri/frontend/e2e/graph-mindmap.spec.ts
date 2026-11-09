@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { deleteNote, seedNote, uniqueTitle } from "./helpers";
+import { deleteNote, replaceEditorText, seedNote, uniqueTitle } from "./helpers";
 
 test.describe("derived views", () => {
   let hubId: string;
@@ -158,11 +158,7 @@ test.describe("derived views", () => {
     const mindmap = page.getByTestId("mindmap");
     await expect(mindmap.getByText("Links", { exact: true })).toBeVisible();
 
-    const textarea = page.locator("textarea.w-md-editor-text-input");
-    await expect(textarea).toBeVisible();
-    await textarea.click();
-    await textarea.press("ControlOrMeta+a");
-    await textarea.fill(`# ${hubTitle}\n\n## Renamed Section\n\n### Nested Child\n`);
+    await replaceEditorText(page, `# ${hubTitle}\n\n## Renamed Section\n\n### Nested Child\n`);
 
     // The mindmap reads the live editor text, so this needs no save.
     await expect(mindmap.getByText("Renamed Section", { exact: true })).toBeVisible();
@@ -174,7 +170,8 @@ test.describe("derived views", () => {
     await page.goto(`/vault/${hubId}`);
 
     const countNodes = () =>
-      page.locator("canvas").first().evaluate((el: HTMLCanvasElement) => {
+      // The right panel's graph, not the live mindmap beside the editor.
+      page.getByTestId("right-panel").locator("canvas").first().evaluate((el: HTMLCanvasElement) => {
         const ctx = el.getContext("2d");
         if (!ctx) return 0;
         const { data } = ctx.getImageData(0, 0, el.width, el.height);
@@ -189,10 +186,8 @@ test.describe("derived views", () => {
     await expect.poll(countNodes, { timeout: 20_000 }).toBeGreaterThan(0);
     const before = await countNodes();
 
-    const textarea = page.locator("textarea.w-md-editor-text-input");
-    await textarea.click();
-    await textarea.press("ControlOrMeta+a");
-    await textarea.fill(
+    await replaceEditorText(
+      page,
       `# ${hubTitle}\n\nSee [[${spokeTitle}]], [[Nonexistent Target]], [[Another Ghost]], [[Third Ghost]].\n`,
     );
 

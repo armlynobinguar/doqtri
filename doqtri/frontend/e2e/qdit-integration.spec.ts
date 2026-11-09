@@ -1,6 +1,6 @@
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { assertNotProduction } from "./guard";
-import { deleteNote, editableEditor, seedNote, serviceRest, testUserId, uniqueTitle, userIdForWallet } from "./helpers";
+import { deleteNote, replaceEditorText, seedNote, serviceRest, testUserId, uniqueTitle, userIdForWallet } from "./helpers";
 import { expectAppUsesStub, signedWebhook, stub } from "./qdit-stub/client";
 import { createTeamWorkspace, deleteWorkspace, setMember } from "./teams";
 import { e2eKeypair, signedInContext } from "./wallet-session";
@@ -275,10 +275,7 @@ test.describe("linking a plan", () => {
     try {
       const row = await linkThroughApi(page, note.id, project, H_BUILD, "Build the escrow");
       await page.goto(`/vault/${note.id}`);
-      const textarea = await editableEditor(page);
-      await textarea.click();
-      await textarea.press("ControlOrMeta+a");
-      await textarea.fill(PLAN(note.title).replace("## Build the escrow", "## Build the escrow contract"));
+      await replaceEditorText(page, PLAN(note.title).replace("## Build the escrow", "## Build the escrow contract"));
       await expect(page.getByText("Saved")).toBeVisible({ timeout: 15_000 });
 
       // The save hook pushes the new title to qdit in the background.

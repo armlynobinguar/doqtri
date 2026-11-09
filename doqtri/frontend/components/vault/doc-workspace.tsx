@@ -143,6 +143,9 @@ export function DocWorkspace({
     lock.phase === "loading" ||
     lock.phase === "other" ||
     lock.phase === "elsewhere";
+  // Read-only only because the lock's status has not arrived yet (DOQ-17):
+  // the editor keeps its caret so typing works the moment it does.
+  const lockPending = lock.phase === "loading" && !conflict;
 
   /** The editor's onChange: the first edit takes the lock. */
   const handleChange = useCallback(
@@ -373,6 +376,7 @@ export function DocWorkspace({
             onRegenerate={() => setRegenerateOpen(true)}
             linkTitles={linkTitles}
             readOnly={readOnly}
+            pending={lockPending}
             banner={lockBanner}
           />
         </div>
@@ -412,6 +416,7 @@ export function DocWorkspace({
             onRegenerate={() => setRegenerateOpen(true)}
             linkTitles={linkTitles}
             readOnly={readOnly}
+            pending={lockPending}
             banner={lockBanner}
           />
         </ResizablePanel>

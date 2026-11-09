@@ -244,6 +244,8 @@ function VaultShellInner({
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      // Already handled: in the note editor, ⌘K inserts a link.
+      if (event.defaultPrevented) return;
       if (event.key === "k" && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
         setSwitcherOpen((open) => !open);

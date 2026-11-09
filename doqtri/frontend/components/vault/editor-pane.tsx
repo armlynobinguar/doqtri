@@ -1,16 +1,16 @@
 "use client";
 
-import { useRef, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import dynamic from "next/dynamic";
 import { FileTextIcon, SparklesIcon } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { DoqtriLoader } from "@/components/brand/doqtri-loader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { WikilinkSuggest } from "@/components/vault/wikilink-suggest";
 
-// Touches `window`, so it must never be server-rendered.
-const MDEditor = dynamic(() => import("@uiw/react-md-editor"), {
+// CodeMirror measures the DOM, so the editor is never server-rendered — and
+// none of it lands in the server bundle.
+const MarkdownEditor = dynamic(() => import("@/components/vault/live-editor/markdown-editor"), {
   ssr: false,
   loading: () => (
     <div className="flex h-full items-center justify-center">
@@ -18,6 +18,8 @@ const MDEditor = dynamic(() => import("@uiw/react-md-editor"), {
     </div>
   ),
 });
+
+const PLACEHOLDER = "Write markdown. Wrap concepts in [[double brackets]].";
 
 export function EditorPane({
   title,
@@ -27,6 +29,7 @@ export function EditorPane({
   linkTitles,
   compact = false,
   readOnly = false,
+  pending = false,
   banner,
 }: {
   title: string;
@@ -35,21 +38,29 @@ export function EditorPane({
   linkTitles: string[];
   onChange: (markdown: string) => void;
   onRegenerate: () => void;
-  /**
-   * The phone layout: the title and Regenerate live in the surrounding chrome,
-   * and the editor opens on the source alone — a live preview beside it would
-   * leave each side a column a few words wide.
-   */
+  /** The phone layout: the title and Regenerate live in the surrounding chrome. */
   compact?: boolean;
   /**
    * Someone else holds the edit lock, or the caller may only read (D-17):
    * the text cannot be changed and Regenerate is off.
    */
   readOnly?: boolean;
+  /** Read-only only while the edit lock's status loads; see MarkdownEditor. */
+  pending?: boolean;
   /** Shown between the tab strip and the editor, e.g. "<name> is editing". */
   banner?: ReactNode;
 }) {
-  const editorRef = useRef<HTMLDivElement>(null);
+  const editor = (
+    <MarkdownEditor
+      value={markdown}
+      onChange={onChange}
+      linkTitles={linkTitles}
+      readOnly={readOnly}
+      pending={pending}
+      placeholder={PLACEHOLDER}
+      compact={compact}
+    />
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -72,52 +83,35 @@ export function EditorPane({
             </TabsList>
           </Tabs>
 
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={onRegenerate}
-                  disabled={readOnly}
-                  // The muted lavender is reserved for AI-driven affordances,
-                  // and only tints the icon.
-                  className="h-7 gap-1.5 px-2.5 text-[12px]"
-                >
-                  <SparklesIcon className="text-accent size-3.5" strokeWidth={1.5} />
-                  Regenerate
-                </Button>
-              }
-            />
-            <TooltipContent side="bottom">
-              Rewrite this note&apos;s structure and links with AI
-            </TooltipContent>
-          </Tooltip>
+          <div className="flex shrink-0 items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={onRegenerate}
+                    disabled={readOnly}
+                    // The muted lavender is reserved for AI-driven affordances,
+                    // and only tints the icon.
+                    className="h-7 gap-1.5 px-2.5 text-[12px]"
+                  >
+                    <SparklesIcon className="text-accent size-3.5" strokeWidth={1.5} />
+                    Regenerate
+                  </Button>
+                }
+              />
+              <TooltipContent side="bottom">
+                Rewrite this note&apos;s structure and links with AI
+              </TooltipContent>
+            </Tooltip>
+          </div>
         </div>
       )}
 
       {banner}
 
-      <div ref={editorRef} className="min-h-0 flex-1">
-        <MDEditor
-          value={markdown}
-          onChange={(next) => {
-            if (!readOnly) onChange(next ?? "");
-          }}
-          hideToolbar={readOnly}
-          height="100%"
-          preview={compact ? "edit" : "live"}
-          visibleDragbar={false}
-          textareaProps={{
-            placeholder: "Write markdown. Wrap concepts in [[double brackets]].",
-            spellCheck: false,
-            readOnly,
-            "aria-readonly": readOnly,
-          }}
-          style={{ height: "100%" }}
-        />
-        <WikilinkSuggest containerRef={editorRef} titles={linkTitles} />
-      </div>
+      <div className="min-h-0 flex-1">{editor}</div>
     </div>
   );
 }

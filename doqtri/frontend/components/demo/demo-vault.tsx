@@ -12,8 +12,9 @@ import { mindmapFromHeadings } from "@/lib/mindmap-types";
 import type { DemoNote } from "@/lib/demo-vault";
 import { cn } from "@/lib/utils";
 
-// The editor's own renderer, so a demo note reads exactly like a vault note.
-const Markdown = dynamic(() => import("@uiw/react-md-editor").then((m) => m.default.Markdown), {
+// The vault's own editor, read-only, so a demo note reads exactly like a
+// vault note: rendered, tables and images included, with nothing to edit.
+const MarkdownEditor = dynamic(() => import("@/components/vault/live-editor/markdown-editor"), {
   ssr: false,
   loading: () => (
     <div className="flex h-40 items-center justify-center">
@@ -117,7 +118,17 @@ export function DemoVault({ notes, active }: { notes: readonly DemoNote[]; activ
               view !== "note" && "max-lg:hidden",
             )}
           >
-            <Markdown source={active.markdown} style={{ background: "transparent" }} />
+            <div className="[--editor-pad-x:0px] [--lp-pad-bottom:0px] [--lp-pad-top:0px]">
+              <MarkdownEditor
+                key={active.id}
+                value={active.markdown}
+                onChange={() => {}}
+                linkTitles={[]}
+                readOnly
+                placeholder=""
+                autoHeight
+              />
+            </div>
             <aside className="border-border mt-8 rounded-xl border p-4 text-sm">
               <p className="font-medium">Save &amp; anchor is turned off in the demo</p>
               <p className="text-muted-foreground mt-1">

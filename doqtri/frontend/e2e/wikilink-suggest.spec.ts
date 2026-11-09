@@ -1,21 +1,19 @@
-import { test, expect, type Page } from "@playwright/test";
-import { deleteNote, editableEditor, seedNote, uniqueTitle } from "./helpers";
+import { test, expect } from "@playwright/test";
+import {
+  deleteNote,
+  editableEditor,
+  editorText,
+  expectEditorText,
+  noteEditor,
+  seedNote,
+  setEditorSelection,
+  uniqueTitle,
+} from "./helpers";
 
 /*
  * Typing `[[` in the editor lists the vault's notes, Obsidian-style, and
  * picking one completes the link.
  */
-
-const TEXTAREA = "textarea.w-md-editor-text-input";
-
-async function caretAtEnd(page: Page) {
-  const textarea = await editableEditor(page);
-  await textarea.evaluate((el: HTMLTextAreaElement) => {
-    el.focus();
-    el.setSelectionRange(el.value.length, el.value.length);
-  });
-  return textarea;
-}
 
 test.describe("[[ link autocomplete", () => {
   const ids: string[] = [];
@@ -39,7 +37,8 @@ test.describe("[[ link autocomplete", () => {
     const source = await seedNote(uniqueTitle("Linker"), "# Source\n\nsee ");
     ids.push(source);
     await page.goto(`/vault/${source}`);
-    const textarea = await caretAtEnd(page);
+    await editableEditor(page);
+    await setEditorSelection(page, -1);
 
     await page.keyboard.type("[[");
     const list = page.getByRole("listbox", { name: "Link to note" });
@@ -49,6 +48,8 @@ test.describe("[[ link autocomplete", () => {
     const options = list.getByRole("option");
     await expect(options).toHaveCount(2);
     await expect(options.first()).toHaveAttribute("aria-selected", "true");
+    // The typed characters are emphasised in each title.
+    await expect(options.first().locator(".cm-completionMatchedText")).toHaveText(target.split(" ")[0]);
 
     // Down to the second, back up to the first: the highlight wraps and moves.
     await page.keyboard.press("ArrowDown");
@@ -58,11 +59,11 @@ test.describe("[[ link autocomplete", () => {
 
     await expect(list).toBeHidden();
     // Enter picked the note rather than starting a new line.
-    await expect(textarea).toHaveValue(`# Source\n\nsee [[${target}]]`);
+    await expectEditorText(page, `# Source\n\nsee [[${target}]]`);
 
     // The caret lands past `]]`, so typing continues the sentence.
     await page.keyboard.type(" next");
-    await expect(textarea).toHaveValue(`# Source\n\nsee [[${target}]] next`);
+    await expectEditorText(page, `# Source\n\nsee [[${target}]] next`);
   });
 
   test("click picks a note, Esc dismisses, and the active note is not offered", async ({
@@ -72,7 +73,8 @@ test.describe("[[ link autocomplete", () => {
     const source = await seedNote(sourceTitle, "# Source\n\n");
     ids.push(source);
     await page.goto(`/vault/${source}`);
-    const textarea = await caretAtEnd(page);
+    await editableEditor(page);
+    await setEditorSelection(page, -1);
     const list = page.getByRole("listbox", { name: "Link to note" });
 
     await page.keyboard.type("[[");
@@ -80,10 +82,11 @@ test.describe("[[ link autocomplete", () => {
     await expect(list.getByRole("option", { name: sourceTitle })).toHaveCount(0);
 
     await page.keyboard.type("beta sib");
+    await expect(list.getByRole("option")).toHaveCount(1);
     await list.getByRole("option", { name: sibling }).click();
     await expect(list).toBeHidden();
-    await expect(textarea).toHaveValue(`# Source\n\n[[${sibling}]]`);
-    await expect(textarea).toBeFocused();
+    await expectEditorText(page, `# Source\n\n[[${sibling}]]`);
+    await expect(noteEditor(page)).toBeFocused();
 
     await page.keyboard.type(" and [[Alp");
     await expect(list).toBeVisible();
@@ -93,20 +96,15 @@ test.describe("[[ link autocomplete", () => {
     await page.keyboard.type("ha");
     await expect(list).toBeHidden();
     await page.keyboard.type("]]");
-    await expect(textarea).toHaveValue(`# Source\n\n[[${sibling}]] and [[Alpha]]`);
+    await expectEditorText(page, `# Source\n\n[[${sibling}]] and [[Alpha]]`);
   });
 
   test("completing inside a closed link replaces its target", async ({ page }) => {
     const source = await seedNote(uniqueTitle("Linker"), "# Source\n\n[[Old]] tail");
     ids.push(source);
     await page.goto(`/vault/${source}`);
-    const textarea = page.locator(TEXTAREA);
-    await expect(textarea).toBeVisible();
-    await textarea.evaluate((el: HTMLTextAreaElement) => {
-      const pos = el.value.indexOf("Old") + 1;
-      el.focus();
-      el.setSelectionRange(pos, pos);
-    });
+    await editableEditor(page);
+    await setEditorSelection(page, (await editorText(page)).indexOf("Old") + 1);
     // Replace "O" with the token so the list narrows to our notes.
     await page.keyboard.press("Backspace");
     await page.keyboard.type(target.split(" ")[0]);
@@ -114,6 +112,6 @@ test.describe("[[ link autocomplete", () => {
     const list = page.getByRole("listbox", { name: "Link to note" });
     await expect(list.getByRole("option")).toHaveCount(2);
     await page.keyboard.press("Tab");
-    await expect(textarea).toHaveValue(`# Source\n\n[[${target}]] tail`);
+    await expectEditorText(page, `# Source\n\n[[${target}]] tail`);
   });
 });
