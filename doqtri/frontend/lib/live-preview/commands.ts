@@ -217,13 +217,42 @@ const LITERAL = new Set(["FencedCode", "CodeBlock", "InlineCode", "URL", "Autoli
 
 const CODE = new Set(["FencedCode", "CodeBlock", "InlineCode"]);
 
-function inside(tree: Tree, pos: number, names: Set<string>): boolean {
+/**
+ * The outermost `names` node holding `pos`: strictly inside, except a link's
+ * or image's address, which also takes its very end (`[t](https://x.y|)`),
+ * where a marker would still land in the address.
+ */
+function insideNode(tree: Tree, pos: number, names: Set<string>): SyntaxNode | null {
+  let found: SyntaxNode | null = null;
   for (const side of [-1, 1] as const) {
     for (let node: SyntaxNode | null = tree.resolveInner(pos, side); node; node = node.parent) {
-      if (names.has(node.name) && node.from < pos && pos < node.to) return true;
+      if (!names.has(node.name)) continue;
+      const address = node.name === "URL" && (node.parent?.name === "Link" || node.parent?.name === "Image");
+      if (node.from < pos && (pos < node.to || (address && pos === node.to))) {
+        if (!found || node.from <= found.from) found = node;
+      }
     }
   }
-  return false;
+  return found;
+}
+
+function inside(tree: Tree, pos: number, names: Set<string>): boolean {
+  return insideNode(tree, pos, names) !== null;
+}
+
+/**
+ * A selection part with any code or address at either end cut off, so
+ * formatting a stretch that starts in a URL formats the text after it.
+ */
+function clipLiteral(state: EditorState, tree: Tree, part: { from: number; to: number }) {
+  let { from, to } = part;
+  const start = insideNode(tree, from, LITERAL);
+  if (start) from = Math.max(from, start.to);
+  const end = insideNode(tree, to, LITERAL);
+  if (end) to = Math.min(to, end.from);
+  while (from < to && /\s/.test(state.sliceDoc(from, from + 1))) from++;
+  while (to > from && /\s/.test(state.sliceDoc(to - 1, to))) to--;
+  return { from, to };
 }
 
 /** Strictly inside code of any kind. */
@@ -330,9 +359,13 @@ export function toggleInline(format: InlineFormat): FormatCommand {
         }
 
         const parts = segments(state, from, to)
-          .map((part) => ({ ...part, node: formatNode(state, tree, part, nodeName) }))
-          // Formatting already there may come off; none goes into code or an address.
-          .filter((part) => part.node || (!inLiteral(tree, part.from) && !inLiteral(tree, part.to)));
+          .map((part) => {
+            const node = formatNode(state, tree, part, nodeName);
+            // Formatting already there may come off; none goes into code or
+            // an address, so a part reaching into one stops at its edge.
+            return { ...(node ? part : clipLiteral(state, tree, part)), node };
+          })
+          .filter((part) => part.to > part.from && (part.node || (!inLiteral(tree, part.from) && !inLiteral(tree, part.to))));
         if (parts.length === 0) return { range };
 
         if (parts.every((part) => part.node)) {
@@ -790,13 +823,33 @@ function indentOf(line: Line): { quote: number; indent: number } {
 }
 
 /** The lines nested under `line`: indented past it, up to the first line that is not. */
+/** A line that starts a block of its own, so cannot carry on the paragraph above. */
+const BLOCK_START = /^[ \t]{0,3}(?:#{1,6}(?:[ \t]|$)|>|```|~~~|(?:[-*_][ \t]*){3,}$)/;
+
+/**
+ * Whether a line carries on the paragraph above it lazily: markdown lets a
+ * paragraph's next line skip the indentation, and it still belongs to the
+ * same item. Never after a blank line, never a new marker or block.
+ */
+function lazyAfter(state: EditorState, line: Line): boolean {
+  if (line.number === 1 || blank(state.doc.line(line.number - 1))) return false;
+  return !lineStart(line.text).marker && !BLOCK_START.test(line.text);
+}
+
+/**
+ * The lines nested under `line`: indented past it, up to the first line that
+ * is not — past any line that only continues a paragraph lazily.
+ */
 function childrenOf(state: EditorState, line: Line): Line[] {
   const own = indentOf(line).indent;
   const out: Line[] = [];
   for (let n = line.number + 1; n <= state.doc.lines; n++) {
     const next = state.doc.line(n);
     if (blank(next)) continue;
-    if (indentOf(next).indent <= own) break;
+    if (indentOf(next).indent <= own) {
+      if (lazyAfter(state, next)) continue;
+      break;
+    }
     out.push(next);
   }
   return out;
@@ -812,7 +865,8 @@ function itemAbove(state: EditorState, line: Line, test: (indent: number) => boo
     if (blank(prev)) continue;
     const start = lineStart(prev.text);
     if (!start.marker) {
-      if (/^[ \t]/.test(prev.text)) continue;
+      // Indented, or carrying on an item's paragraph lazily: still in the list.
+      if (/^[ \t]/.test(prev.text) || lazyAfter(state, prev)) continue;
       return null;
     }
     if (test(start.indent.length)) return start;

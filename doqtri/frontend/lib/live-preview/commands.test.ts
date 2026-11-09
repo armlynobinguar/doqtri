@@ -491,3 +491,40 @@ describe("documents from elsewhere", () => {
     expect(list.update(toggleOrderedList(list)).state.doc.toString()).toBe("1. a\n   1. b\n2. c");
   });
 });
+
+/*
+ * Round 3: the end of a link's address, selections that reach into code or
+ * an address, and lists whose items carry on lazily.
+ */
+describe("addresses and code at the edge of a selection", () => {
+  it("treats the very end of a link's address as the address", () => {
+    expect(runOn(toggleBold, "[t](https://x.y)", 15).text).toBe("[t](https://x.y)");
+    expect(runOn(toggleItalic, "![a](https://x.y/p.png)", 22).text).toBe("![a](https://x.y/p.png)");
+    // Just past the link, it is text again.
+    expect(runOn(toggleBold, "[t](https://x.y) word", 19).text).toBe("[t](https://x.y) **word**");
+  });
+
+  it("formats the part of a selection after an address or code span, not nothing", () => {
+    expect(runOn(toggleBold, "see https://x.example/a then more", 8, 33).text).toBe(
+      "see https://x.example/a **then more**",
+    );
+    expect(runOn(toggleItalic, "run `npm i` now please", 6, 22).text).toBe("run `npm i` *now please*");
+    // And the part before one, when the selection ends inside it.
+    expect(runOn(toggleBold, "plain text `code here`", 0, 16).text).toBe("**plain text** `code here`");
+  });
+});
+
+describe("lazy continuation lines", () => {
+  it("keeps a nested item under its parent across a lazy line", () => {
+    expect(runOn(toggleOrderedList, "- a\nlazy\n  - b", 1).text).toBe("1. a\nlazy\n   - b");
+  });
+
+  it("finds the sibling above a lazy line to indent under", () => {
+    expect(runOn(indentList, "- a\nlazy\n- b", 11).text).toBe("- a\nlazy\n  - b");
+  });
+
+  it("does not take a paragraph after a blank line, or a heading, as lazy", () => {
+    expect(runOn(indentList, "- a\n\npara\n- b", 13).text).toBe("- a\n\npara\n- b");
+    expect(runOn(indentList, "- a\n# H\n- b", 10).text).toBe("- a\n# H\n- b");
+  });
+});
