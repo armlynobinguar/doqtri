@@ -28,7 +28,6 @@
     "@codemirror/view": "^6.43.15",
     "@creit.tech/stellar-wallets-kit": "^2.8.0",
     "@lezer/common": "^1.5.5",
-    "@lezer/highlight": "^1.2.5",
     "@lezer/markdown": "^1.8.1",
     "@openzeppelin/relayer-plugin-channels": "0.21.0",
     "@simplewebauthn/browser": "13.3.0",
