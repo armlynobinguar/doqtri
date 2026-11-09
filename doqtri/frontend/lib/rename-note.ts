@@ -13,7 +13,23 @@ export type RenamedNote = {
 };
 
 /**
- * Renames a note through the API. Throws with the server's reason — notably
+ * A rename the server refused: its message, with the HTTP status and the
+ * answer's `code` (TITLE_TAKEN, LOCKED, NOT_LOCK_HOLDER, BAD_TITLE, ...) for
+ * a caller that handles some refusals itself (DOQ-36).
+ */
+export class RenameError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = "RenameError";
+  }
+}
+
+/**
+ * Renames a note through the API. Throws a RenameError with the server's reason — notably
  * when another note already has the title, which the dialog shows inline.
  * `session` is the open editor's edit session, when the rename goes through
  * it: the server checks the note's lock against it before it rewrites the
@@ -31,12 +47,17 @@ export async function renameNote(
   });
   const payload = (await res.json().catch(() => null)) as {
     error?: string;
+    code?: string;
     title?: string;
     previousTitle?: string;
   } | null;
 
   if (!res.ok || !payload?.title) {
-    throw new Error(payload?.error ?? `Could not rename note (${res.status})`);
+    throw new RenameError(
+      payload?.error ?? `Could not rename note (${res.status})`,
+      res.status,
+      typeof payload?.code === "string" ? payload.code : undefined,
+    );
   }
 
   return { title: payload.title, previousTitle: payload.previousTitle ?? "", ...renamedText(payload) };
