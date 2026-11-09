@@ -566,6 +566,56 @@ test.describe("editor toolbar", () => {
     expect(Math.min(...ratios)).toBeGreaterThanOrEqual(4.5);
   });
 
+  test("in full screen the style menu and the table picker still work", async ({ page }) => {
+    await openNote(page, "Title");
+    await setEditorSelection(page, 2);
+    await tool(page, "Full screen").click();
+    await expect(page.getByRole("dialog", { name: "Full screen editor" })).toBeVisible();
+    // Menus and popovers open above the overlay, and their choices apply.
+    await styleMenu(page).click();
+    await page.getByRole("menuitemradio", { name: /^Heading 1/ }).click();
+    await expectEditorText(page, "# Title");
+    await setEditorSelection(page, -1);
+    await tool(page, "Table").click();
+    await page.getByRole("dialog", { name: "Insert table" }).getByRole("button", { name: "2 by 2 table" }).click();
+    await expectEditorText(page, "# Title\n\n| Column 1 | Column 2 |\n| -------- | -------- |\n|          |          |\n\n");
+    await expect(page.getByRole("dialog", { name: "Full screen editor" })).toBeVisible();
+    // The insert hands focus back to the text, where Esc ends full screen.
+    await expect(noteEditor(page)).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: "Full screen editor" })).toHaveCount(0);
+  });
+
+  test("full screen ends when someone takes the note over, with the banner in reach", async ({ page, context }) => {
+    test.setTimeout(90_000);
+    const id = await openNote(page, "Mine");
+    await setEditorSelection(page, -1);
+    await page.keyboard.type(" first");
+    await expect(page.getByText("Saved")).toBeVisible({ timeout: 15_000 });
+    await tool(page, "Full screen").click();
+    const overlay = page.getByRole("dialog", { name: "Full screen editor" });
+    await expect(overlay).toBeVisible();
+
+    // The same account in another tab takes the lock with "Edit here".
+    const other = await context.newPage();
+    try {
+      await other.goto(`/vault/${id}`);
+      await other.getByTestId("edit-lock-elsewhere-banner").getByRole("button", { name: "Edit here" }).click();
+      await editableEditor(other);
+
+      // This copy learns on its next save, turns read-only, and leaves full screen.
+      await page.keyboard.type(" late");
+      await expect(overlay).toHaveCount(0, { timeout: 30_000 });
+      await expect(noteEditor(page)).toHaveAttribute("contenteditable", "false");
+      expect(await page.evaluate(() => document.querySelectorAll("[inert]").length)).toBe(0);
+      await expect(page.getByTestId("edit-lock-elsewhere-banner")).toBeVisible();
+      // Focus is kept near the note, not dropped on the page.
+      expect(await page.evaluate(() => document.activeElement !== document.body)).toBe(true);
+    } finally {
+      await other.close();
+    }
+  });
+
   test("the status bar counts the rendered text, not the markdown", async ({ page }) => {
     await openNote(page, "# Title **bold**\n\n- [a link](https://example.com/long/address) here\n\n| x | y |\n| - | - |");
     await setEditorSelection(page, -1);
@@ -613,9 +663,19 @@ test.describe("editor toolbar at the default layout", () => {
   test("keeps the everyday tools on the bar and folds the rest into More", async ({ page }) => {
     const id = await seedNote(uniqueTitle("Toolbar default"), "Text");
     ids.push(id);
+    // Whether the unfolded bar was ever on the page between React's commits
+    // (a frame of it painted before the fold): watched from the first render.
+    await page.addInitScript(() => {
+      const seen = { unfolded: false };
+      (window as unknown as { __toolbarSeen: typeof seen }).__toolbarSeen = seen;
+      new MutationObserver(() => {
+        if (document.querySelector('[role="toolbar"] [data-tool-id="find"]')) seen.unfolded = true;
+      }).observe(document, { childList: true, subtree: true });
+    });
     await page.goto(`/vault/${id}`);
     await editableEditor(page);
     await expect(page.getByTestId("live-mindmap")).toBeVisible();
+    expect(await page.evaluate(() => (window as unknown as { __toolbarSeen: { unfolded: boolean } }).__toolbarSeen.unfolded)).toBe(false);
     const width = await toolbar(page).evaluate((el) => el.getBoundingClientRect().width);
     expect(width).toBeLessThan(600);
     const shownIds = () =>
@@ -732,8 +792,10 @@ test.describe("editor toolbar at the default layout", () => {
     ]) {
       // ⌘K, unhandled by a read-only editor, opens the quick switcher; Esc closes it.
       await setEditorSelection(page, 0, 4);
+      await expect(content).toBeFocused();
       await page.keyboard.press(combo);
       await page.keyboard.press("Escape");
+      await expect(page.getByPlaceholder("Go to note…")).toBeHidden();
     }
     await page.waitForTimeout(800);
     expect(await editorText(page)).toBe("Body one");
