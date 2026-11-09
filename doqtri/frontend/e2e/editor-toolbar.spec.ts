@@ -35,6 +35,13 @@ async function expectTooltip(page: Page, text: string) {
   await expect(shown).toBeVisible();
   await expect(shown).toHaveText(text);
 }
+const viewMenu = (page: Page) => toolbar(page).getByRole("button", { name: /^View:/ });
+/** Picks Source, Live or Reading from the View menu. */
+async function chooseView(page: Page, name: "Source" | "Live" | "Reading") {
+  await viewMenu(page).click();
+  await page.getByRole("menuitemradio", { name: new RegExp(`^${name}`) }).click();
+  await expect(viewMenu(page)).toHaveAttribute("aria-label", `View: ${name}`);
+}
 const styleMenu = (page: Page) => toolbar(page).getByRole("button", { name: /^Paragraph style/ });
 
 /** Opens a seeded note with room for the whole toolbar (the mindmap hidden). */
@@ -86,9 +93,7 @@ test.describe("editor toolbar", () => {
       "hr",
       "clear",
       "find",
-      "view-source",
-      "view-live",
-      "view-reading",
+      "view",
       "fullscreen",
     ]);
     // Every control has a name.
@@ -231,10 +236,11 @@ test.describe("editor toolbar", () => {
     await picker.getByRole("button", { name: "3 by 2 table" }).click();
     await expect(picker).toBeHidden();
     const table = "| Column 1 | Column 2 | Column 3 |\n| -------- | -------- | -------- |\n|          |          |          |";
-    await expectEditorText(page, `Intro\n\n${table}\n`);
+    // With a blank line after it, so what is typed next does not join it.
+    await expectEditorText(page, `Intro\n\n${table}\n\n`);
     // The caret is in the table, typing over the first header.
     await page.keyboard.type("Name");
-    await expectEditorText(page, `Intro\n\n${table.replace("Column 1", "Name")}\n`);
+    await expectEditorText(page, `Intro\n\n${table.replace("Column 1", "Name")}\n\n`);
     await setEditorSelection(page, 0);
     const grid = noteEditor(page).locator("table.cm-lp-table");
     await expect(grid).toBeVisible();
@@ -377,18 +383,17 @@ test.describe("editor toolbar", () => {
     await context.route("https://example.com/**", (route) => route.fulfill({ status: 200, body: "ok" }));
     await openNote(page, `# Heading\n\nSee [[${otherTitle}]] and [the site](https://example.com/page).`);
     await setEditorSelection(page, -1);
-    await expect(tool(page, "Live")).toHaveAttribute("aria-pressed", "true");
+    await expect(viewMenu(page)).toHaveAttribute("aria-label", "View: Live");
     const heading = noteEditor(page).locator(".cm-line").first();
     await expect(heading).toHaveText("Heading");
 
-    await tool(page, "Source").click();
-    await expect(tool(page, "Source")).toHaveAttribute("aria-pressed", "true");
+    await chooseView(page, "Source");
     // Raw markdown everywhere, not only on the caret's line.
     await expect(heading).toHaveText("# Heading");
     await expect(noteEditor(page)).toContainText(`[[${otherTitle}]]`);
     await expect(noteEditor(page)).toContainText("[the site](https://example.com/page)");
 
-    await tool(page, "Reading").click();
+    await chooseView(page, "Reading");
     await expect(noteEditor(page)).toHaveAttribute("contenteditable", "false");
     await expect(heading).toHaveText("Heading");
     // Formatting is off; the views and find still work.
@@ -396,7 +401,7 @@ test.describe("editor toolbar", () => {
     await expect(tool(page, "Find and replace")).toBeEnabled();
 
     await page.reload();
-    await expect(tool(page, "Reading")).toHaveAttribute("aria-pressed", "true");
+    await expect(viewMenu(page)).toHaveAttribute("aria-label", "View: Reading");
     await expect(noteEditor(page)).toHaveAttribute("contenteditable", "false");
     // No caret: nothing editable, and no drawn cursor showing.
     await expect(page.locator(".cm-cursor")).toBeHidden();
@@ -409,10 +414,10 @@ test.describe("editor toolbar", () => {
     await noteEditor(page).locator(".cm-lp-wikilink").click();
     await page.waitForURL(`**/vault/${otherId}`);
 
-    await tool(page, "Live").click();
+    await chooseView(page, "Live");
     await editableEditor(page);
     await page.reload();
-    await expect(tool(page, "Live")).toHaveAttribute("aria-pressed", "true");
+    await expect(viewMenu(page)).toHaveAttribute("aria-label", "View: Live");
     await editableEditor(page);
   });
 
@@ -440,6 +445,33 @@ test.describe("editor toolbar", () => {
     await expect(root).toHaveCount(0);
     await expect(tool(page, "Full screen")).toHaveAttribute("aria-pressed", "false");
 
+    // Modal while on: a labelled dialog, Tab stays inside, the rest is inert.
+    await tool(page, "Full screen").click();
+    await expect(page.getByRole("dialog", { name: "Full screen editor" })).toBeVisible();
+    const inert = () => page.getByRole("button", { name: "New note" }).evaluate((el) => !!el.closest("[inert]"));
+    expect(await inert()).toBe(true);
+    for (let i = 0; i < 12; i++) {
+      await page.keyboard.press("Tab");
+      const focus = await page.evaluate(() => ({
+        inside: !!document.activeElement?.closest(".doqtri-editor[data-fullscreen]"),
+        what: document.activeElement?.outerHTML.slice(0, 160) ?? "nothing",
+      }));
+      expect(focus.inside, `Tab ${i + 1} reached ${focus.what}`).toBe(true);
+    }
+    // Esc closes the find panel first, and only then full screen.
+    await setEditorSelection(page, 0);
+    await page.keyboard.press("ControlOrMeta+f");
+    await expect(page.locator(".cm-search")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".cm-search")).toHaveCount(0);
+    await expect(root).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(root).toHaveCount(0);
+    // Back out: the page is reachable again, and focus is back in the note.
+    expect(await inert()).toBe(false);
+    expect(await page.evaluate(() => document.querySelectorAll("[inert]").length)).toBe(0);
+    expect(await page.evaluate(() => !!document.activeElement?.closest(".doqtri-editor"))).toBe(true);
+
     // And the button exits too.
     await tool(page, "Full screen").click();
     await expect(root).toBeVisible();
@@ -464,6 +496,10 @@ test.describe("editor toolbar", () => {
     expect(fits.height).toBeLessThanOrEqual(41);
     expect(fits.overflow).toBeLessThanOrEqual(0);
     expect(fits.page).toBeLessThanOrEqual(0);
+    // The View menu at the end is in reach, not clipped off.
+    const bar = (await toolbar(page).boundingBox())!;
+    const view = (await viewMenu(page).boundingBox())!;
+    expect(view.x + view.width).toBeLessThanOrEqual(bar.x + bar.width);
 
     await setEditorSelection(page, 0, 4);
     await more.click();
@@ -530,17 +566,29 @@ test.describe("editor toolbar", () => {
     expect(Math.min(...ratios)).toBeGreaterThanOrEqual(4.5);
   });
 
+  test("the status bar counts the rendered text, not the markdown", async ({ page }) => {
+    await openNote(page, "# Title **bold**\n\n- [a link](https://example.com/long/address) here\n\n| x | y |\n| - | - |");
+    await setEditorSelection(page, -1);
+    const status = page.getByRole("contentinfo");
+    // Title, bold, a, link, here, x, y.
+    await expect(status.getByTestId("status-words")).toHaveText("7 words");
+    await setEditorSelection(page, 0, 16);
+    await expect(status.getByTestId("status-words")).toHaveText("2 of 7 words");
+    await expect(status.getByTestId("status-chars")).toHaveText(/^10 of /);
+  });
+
   test("the status bar shows words, characters and line:col, and the selection's counts", async ({ page }) => {
     await openNote(page, "one two three\nfour");
     await setEditorSelection(page, -1);
     const status = page.getByRole("contentinfo");
     await expect(status.getByTestId("status-words")).toHaveText("4 words");
-    await expect(status.getByTestId("status-chars")).toHaveText("18 characters");
+    // Characters with spaces, not line breaks, as Word counts them.
+    await expect(status.getByTestId("status-chars")).toHaveText("17 characters");
     await expect(status.getByTestId("status-cursor")).toHaveText("Ln 2, Col 5");
 
     await setEditorSelection(page, 4, 13);
     await expect(status.getByTestId("status-words")).toHaveText("2 of 4 words");
-    await expect(status.getByTestId("status-chars")).toHaveText("9 of 18 characters");
+    await expect(status.getByTestId("status-chars")).toHaveText("9 of 17 characters");
     await expect(status.getByTestId("status-cursor")).toHaveText("Ln 1, Col 14");
   });
 
@@ -557,5 +605,144 @@ test.describe("editor toolbar", () => {
     await expect(list.getByRole("option", { name: otherTitle })).toBeVisible();
     await list.getByRole("option", { name: otherTitle }).click();
     await expectEditorText(page, `See [[${otherTitle}]]`);
+  });
+});
+
+test.describe("editor toolbar at the default layout", () => {
+  // 1440×900 with the explorer, the right panel and the live mindmap all open.
+  test("keeps the everyday tools on the bar and folds the rest into More", async ({ page }) => {
+    const id = await seedNote(uniqueTitle("Toolbar default"), "Text");
+    ids.push(id);
+    await page.goto(`/vault/${id}`);
+    await editableEditor(page);
+    await expect(page.getByTestId("live-mindmap")).toBeVisible();
+    const width = await toolbar(page).evaluate((el) => el.getBoundingClientRect().width);
+    expect(width).toBeLessThan(600);
+    const shownIds = () =>
+      toolbar(page)
+        .locator("[data-tool-id]")
+        .evaluateAll((els) => els.map((el) => el.getAttribute("data-tool-id")!));
+
+    // The everyday tools are all there; what folded, folded by priority.
+    const everyday = ["undo", "redo", "style", "bold", "italic", "link", "bullet", "ordered"];
+    const fold = ["find", "clear", "hr", "codeblock", "table", "image", "wikilink", "task", "indent", "outdent", "strike", "code", "quote"];
+    const shown = await shownIds();
+    expect(shown).toEqual(expect.arrayContaining([...everyday, "more", "view"]));
+    const folded = fold.filter((id) => !shown.includes(id));
+    expect(folded).toEqual(fold.slice(0, folded.length));
+    expect(folded.length).toBeGreaterThanOrEqual(10);
+    // The style menu is down to its ¶, still named with the line's style.
+    await expect(styleMenu(page)).toHaveAccessibleName("Paragraph style: Normal text");
+    // Nothing wraps or spills.
+    const fits = await toolbar(page).evaluate((el) => ({
+      height: el.getBoundingClientRect().height,
+      overflow: el.scrollWidth - el.clientWidth,
+      page: document.documentElement.scrollWidth - window.innerWidth,
+    }));
+    expect(fits.height).toBeLessThanOrEqual(41);
+    expect(fits.overflow).toBeLessThanOrEqual(0);
+    expect(fits.page).toBeLessThanOrEqual(0);
+
+    // At a 400px pane, exactly the everyday tools are left; all the rest is
+    // in More, in the bar's own group order.
+    const barWidth = () => toolbar(page).evaluate((el) => el.getBoundingClientRect().width);
+    for (let viewport = 1420; viewport >= 1100 && (await barWidth()) > 400; viewport -= 20) {
+      await page.setViewportSize({ width: viewport, height: 900 });
+      await page.waitForTimeout(100);
+    }
+    expect(await barWidth()).toBeLessThanOrEqual(400);
+    expect(await barWidth()).toBeGreaterThan(370);
+    await expect
+      .poll(shownIds)
+      .toEqual(["undo", "redo", "style", "bold", "italic", "link", "bullet", "ordered", "more", "view"]);
+    await toolbar(page).getByRole("button", { name: "More formatting" }).click();
+    const items = page.getByRole("menu").locator('[role="menuitem"], [role="menuitemcheckbox"]');
+    await expect(items).toHaveText([
+      /^Strikethrough/,
+      /^Inline code/,
+      /^Wikilink/,
+      /^Image/,
+      /^Table/,
+      /^Checklist/,
+      /^Decrease indent/,
+      /^Increase indent/,
+      /^Blockquote/,
+      /^Code block/,
+      /^Horizontal line/,
+      /^Clear formatting/,
+      /^Find and replace/,
+    ]);
+    // A folded tool works from the menu: strikethrough on the word.
+    await page.keyboard.press("Escape");
+    await setEditorSelection(page, 0, 4);
+    await toolbar(page).getByRole("button", { name: "More formatting" }).click();
+    await page.getByRole("menuitemcheckbox", { name: /^Strikethrough/ }).click();
+    await expectEditorText(page, "~~Text~~");
+    // Full screen lives in the View menu at this width.
+    await viewMenu(page).click();
+    await page.getByRole("menuitemcheckbox", { name: /^Full screen/ }).click();
+    await expect(page.getByRole("dialog", { name: "Full screen editor" })).toBeVisible();
+    // Full screen is wide: the tools come back out, with a button to leave.
+    await expect(tool(page, "Find and replace")).toBeVisible();
+    await tool(page, "Full screen").click();
+    await expect(page.getByRole("dialog", { name: "Full screen editor" })).toHaveCount(0);
+  });
+
+  test("while the lock reloads, undo, redo and the other shortcuts change nothing", async ({ page }) => {
+    const id = await seedNote(uniqueTitle("Toolbar pending"), "Body");
+    ids.push(id);
+    let hold = false;
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route(`**/api/notes/${id}/lock**`, async (route) => {
+      if (hold && route.request().method() === "GET") await held;
+      await route.continue();
+    });
+    await page.goto(`/vault/${id}`);
+    await editableEditor(page);
+    // Real history: two edits, one undone, so both undo and redo have work.
+    await setEditorSelection(page, 4);
+    await page.keyboard.type(" one");
+    await setEditorSelection(page, 0, 4);
+    await page.keyboard.press("ControlOrMeta+b");
+    await page.keyboard.press("ControlOrMeta+z");
+    await expectEditorText(page, "Body one");
+    await expect(page.getByText("Saved")).toBeVisible({ timeout: 15_000 });
+
+    // The page comes back from the background: the lock status loads again.
+    hold = true;
+    await page.evaluate(() => {
+      window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true }));
+      window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+    });
+    const content = noteEditor(page);
+    await expect(content).toHaveAttribute("aria-readonly", "true");
+    await expect(tool(page, "Undo")).toBeDisabled();
+
+    const mac = await page.evaluate(() => /Mac/.test(navigator.platform));
+    await setEditorSelection(page, 0, 4);
+    for (const combo of [
+      "ControlOrMeta+z",
+      "ControlOrMeta+Shift+z",
+      "Control+y",
+      "ControlOrMeta+k",
+      "ControlOrMeta+Shift+7",
+      "ControlOrMeta+Alt+1",
+      mac ? "Meta+Alt+f" : "Control+h",
+    ]) {
+      // ⌘K, unhandled by a read-only editor, opens the quick switcher; Esc closes it.
+      await setEditorSelection(page, 0, 4);
+      await page.keyboard.press(combo);
+      await page.keyboard.press("Escape");
+    }
+    await page.waitForTimeout(800);
+    expect(await editorText(page)).toBe("Body one");
+
+    // Once it has loaded, the same history works again.
+    release();
+    await expect(content).not.toHaveAttribute("aria-readonly", "true");
+    await setEditorSelection(page, 0);
+    await page.keyboard.press("ControlOrMeta+Shift+z");
+    await expectEditorText(page, "**Body** one");
   });
 });

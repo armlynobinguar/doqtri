@@ -261,8 +261,6 @@ test.describe("live preview", () => {
   });
 
   test("the toolbar formats the selection and the shortcuts do too", async ({ page }) => {
-    // Room for the text group beside the explorer; narrower, it folds into More.
-    await page.addInitScript(() => window.localStorage.setItem("doqtri:editor-mindmap", "hidden"));
     await openNote(page, "word");
     const text = await editorText(page);
     await setEditorSelection(page, 0, text.length);
@@ -341,8 +339,6 @@ test.describe("live preview", () => {
       if (request.method() === "PUT" && new URL(request.url()).pathname.startsWith("/api/notes/")) saves.push(request.url());
     });
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-    // Room for the text group beside the explorer; narrower, it folds into More.
-    await page.addInitScript(() => window.localStorage.setItem("doqtri:editor-mindmap", "hidden"));
 
     await page.goto(`/vault/${id}`);
     const content = noteEditor(page);
