@@ -16,7 +16,10 @@ import { useNavigationStatus } from "@/components/vault/navigation";
  * and once server data moves on (to this map, or a newer one) it wins.
  * Content, not identity: every refresh hands over a new object.
  *
- * Returns the map to show, whether it is stale, and the rebuild action.
+ * Returns the map to show, whether it is stale, and the rebuild action. A
+ * note's workspace calls it once and hands the result to every view of the
+ * map it shows (the right panel's Mindmap tab and the live mindmap beside the
+ * editor), so a rebuild from either shows in both.
  */
 export function useMindmapRebuild({
   docId,
@@ -92,6 +95,9 @@ export function useMindmapRebuild({
     rebuild,
   };
 }
+
+/** A note's concept map as useMindmapRebuild holds it, with its rebuild action. */
+export type MindmapRebuild = ReturnType<typeof useMindmapRebuild>;
 
 /**
  * A stored map's root carries the title the note had when it was built; the

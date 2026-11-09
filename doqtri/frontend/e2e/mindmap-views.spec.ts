@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { deleteNote, fakeMindmap, seedNote, uniqueTitle } from "./helpers";
+import { deleteNote, fakeMindmap, replaceEditorText, seedNote, uniqueTitle } from "./helpers";
 
 /**
  * Counts the distinct opaque colors on the mindmap canvas.
@@ -148,10 +148,7 @@ test.describe("document mindmap", () => {
   test("editing the note marks the stored map as changed", async ({ page }) => {
     await page.goto(`/vault/${docId}`);
 
-    const textarea = page.locator("textarea.w-md-editor-text-input");
-    await textarea.click();
-    await textarea.press("ControlOrMeta+a");
-    await textarea.fill(`# ${title}\n\nCompletely different text.\n`);
+    await replaceEditorText(page, `# ${title}\n\nCompletely different text.\n`);
     await expect(page.getByText("Saved")).toBeVisible({ timeout: 15_000 });
 
     // Staleness is decided on the server from the markdown hash, so the flag

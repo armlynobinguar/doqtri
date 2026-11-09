@@ -3,6 +3,8 @@
 import { useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { resolveLinkTitle } from "@/lib/wikilinks";
 import { FileTextIcon, LockIcon, NetworkIcon } from "lucide-react";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { DoqtriLoader } from "@/components/brand/doqtri-loader";
@@ -12,8 +14,9 @@ import { mindmapFromHeadings } from "@/lib/mindmap-types";
 import type { DemoNote } from "@/lib/demo-vault";
 import { cn } from "@/lib/utils";
 
-// The editor's own renderer, so a demo note reads exactly like a vault note.
-const Markdown = dynamic(() => import("@uiw/react-md-editor").then((m) => m.default.Markdown), {
+// The vault's own editor, read-only, so a demo note reads exactly like a
+// vault note: rendered, tables and images included, with nothing to edit.
+const MarkdownEditor = dynamic(() => import("@/components/vault/live-editor/markdown-editor"), {
   ssr: false,
   loading: () => (
     <div className="flex h-40 items-center justify-center">
@@ -35,6 +38,7 @@ const secondary =
  * nothing that writes. Anchoring is shown as the next step after signing up.
  */
 export function DemoVault({ notes, active }: { notes: readonly DemoNote[]; active: DemoNote }) {
+  const router = useRouter();
   const [view, setView] = useState<View>("note");
   const graph = useMemo(
     () => graphFromMindmap(mindmapFromHeadings(active.title, active.markdown)),
@@ -117,7 +121,22 @@ export function DemoVault({ notes, active }: { notes: readonly DemoNote[]; activ
               view !== "note" && "max-lg:hidden",
             )}
           >
-            <Markdown source={active.markdown} style={{ background: "transparent" }} />
+            <div className="[--editor-pad-x:0px] [--lp-pad-bottom:0px] [--lp-pad-top:0px]">
+              <MarkdownEditor
+                key={active.id}
+                value={active.markdown}
+                onChange={() => {}}
+                linkTitles={[]}
+                readOnly
+                placeholder=""
+                autoHeight
+                // Wikilinks between demo notes open them, as in a real vault.
+                onOpenNote={(title) => {
+                  const target = resolveLinkTitle(notes, title);
+                  if (target && target.id !== active.id) router.push(`/demo/${target.id}`);
+                }}
+              />
+            </div>
             <aside className="border-border mt-8 rounded-xl border p-4 text-sm">
               <p className="font-medium">Save &amp; anchor is turned off in the demo</p>
               <p className="text-muted-foreground mt-1">

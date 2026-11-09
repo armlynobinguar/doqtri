@@ -1,5 +1,5 @@
 import { test, expect, type Page, type Route } from "@playwright/test";
-import { deleteNote, E2E_KEYPAIR, editableEditor, readNote, seedNote, serviceRest, uniqueTitle } from "./helpers";
+import { deleteNote, E2E_KEYPAIR, editableEditor, expectEditorText, readNote, setEditorSelection, seedNote, serviceRest, uniqueTitle } from "./helpers";
 import { signedInContext } from "./wallet-session";
 
 /**
@@ -373,7 +373,7 @@ test.describe("save conflict", () => {
   test("a save on a stale version shows the conflict banner, and Reload loads the other text", async ({ page }) => {
     id = await seedNote(uniqueTitle("Conflict Note"), "# Conflict Note\n\nFirst text.\n");
     await page.goto(`/vault/${id}`);
-    const editor = await editableEditor(page);
+    await editableEditor(page);
 
     // Someone else's save lands while this copy is open: same note, newer version.
     const [row] = await serviceRest<{ version: number }[]>(`documents?id=eq.${id}&select=version`);
@@ -386,9 +386,8 @@ test.describe("save conflict", () => {
     const refused = page.waitForResponse(
       (res) => res.request().method() === "PUT" && new URL(res.url()).pathname === `/api/notes/${id}`,
     );
-    await editor.click();
-    await editor.press("ControlOrMeta+End");
-    await editor.pressSequentially(" My edit.");
+    await setEditorSelection(page, -1);
+    await page.keyboard.type(" My edit.");
     const res = await refused;
     expect(res.status()).toBe(409);
     expect((await res.json()) as { code: string }).toMatchObject({ code: "STALE_VERSION" });
@@ -396,7 +395,7 @@ test.describe("save conflict", () => {
     const banner = page.getByTestId("edit-conflict-banner");
     await expect(banner).toContainText("This note was changed elsewhere since you loaded it");
     await banner.getByRole("button", { name: "Reload" }).click();
-    await expect(page.locator("textarea.w-md-editor-text-input")).toHaveValue(/Saved elsewhere\./);
+    await expectEditorText(page, /Saved elsewhere\./);
     // Nothing was overwritten.
     expect((await readNote(id)).markdown).toContain("Saved elsewhere.");
   });
