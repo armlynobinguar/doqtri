@@ -2,7 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { ConnectionStore, StoredConnection } from "./connection-store";
 import type { QditConfig } from "./qdit-config";
 import type { TokenSet } from "./qdit-oauth";
-import { createQditClient, errorFromResponse, parseRetryAfter, QditError, QditNotConnectedError } from "./qdit-client";
+import {
+  createQditClient,
+  errorFromResponse,
+  parseRetryAfter,
+  QditError,
+  QditHackathonSnapshotError,
+  QditNotConnectedError,
+} from "./qdit-client";
 
 const ANA = "11111111-1111-4111-8111-111111111111";
 const NOW = 1_800_000_000_000;
@@ -363,5 +370,99 @@ describe("error mapping", () => {
     const fetch = mockFetch(() => json(200, { nope: true }));
     const error = await createQditClient(ANA, { config, store, fetch, now: () => NOW }).me().catch((e: unknown) => e);
     expect((error as QditError).kind).toBe("bad_response");
+  });
+});
+
+describe("pushHackathonSnapshot", () => {
+  const BODY = JSON.stringify({ hackathon_slug: "h", snapshot_id: "s", notes: [{ title: "Café" }] });
+  const RECEIPT = { id: "r1", note_count: 1, received_at: "2026-11-20T15:04:06.120Z", submission_state: "none" };
+  const error = (status: number, code: string, details?: Record<string, unknown>) =>
+    json(status, { error: { code, message: `qdit says ${code}`, ...(details ? { details } : {}) } }, { "X-Request-Id": "req-1" });
+
+  async function push(answer: Response | (() => Response), body = BODY) {
+    const sent: { url: string; init: RequestInit }[] = [];
+    const fetch = mockFetch((url, init) => {
+      sent.push({ url, init });
+      return typeof answer === "function" ? answer() : answer;
+    });
+    const client = createQditClient(ANA, { config, store: memoryStore({}), fetch, now: () => NOW });
+    return { sent, result: client.pushHackathonSnapshot("p/1", body) };
+  }
+
+  it("posts the body byte for byte with the user's token and reads the receipt", async () => {
+    for (const status of [201, 200]) {
+      const { sent, result } = await push(json(status, { data: { ...RECEIPT, extra: true } }));
+      expect(await result).toEqual(RECEIPT);
+      expect(sent).toHaveLength(1);
+      expect(sent[0].url).toBe("https://qdit.test/api/v1/projects/p%2F1/hackathon-snapshots");
+      expect(sent[0].init.method).toBe("POST");
+      expect(sent[0].init.body).toBe(BODY);
+      expect(bearer(sent[0].init)).toBe("Bearer at1");
+      expect((sent[0].init.headers as Record<string, string>)["Content-Type"]).toBe("application/json; charset=utf-8");
+    }
+  });
+
+  it("resends the same bytes after a refresh", async () => {
+    const store = memoryStore({});
+    const bodies: unknown[] = [];
+    const fetch = mockFetch((url, init) => {
+      if (url === TOKEN_URL) return tokenResponse(2);
+      bodies.push(init.body);
+      return bearer(init) === "Bearer at1" ? json(401, { error: { code: "unauthorized", message: "expired" } }) : json(201, { data: RECEIPT });
+    });
+    await createQditClient(ANA, { config, store, fetch, now: () => NOW }).pushHackathonSnapshot("p1", BODY);
+    expect(bodies).toEqual([BODY, BODY]);
+  });
+
+  it.each([
+    [409, "conflict", { reason: "hackathon_not_open" }, "hackathon_not_open"],
+    [409, "conflict", { reason: "hackathon_closed" }, "hackathon_closed"],
+    [409, "conflict", { reason: "snapshot_conflict" }, "snapshot_conflict"],
+    [400, "invalid_request", { fields: ["notes[3].markdown", "body"] }, "invalid_snapshot"],
+    [403, "forbidden", undefined, "forbidden"],
+    [404, "not_found", undefined, "not_found"],
+  ])("maps %i %s %j to %s", async (status, code, details, refusal) => {
+    const { result } = await push(error(status, code, details));
+    const failure = await result.catch((e: unknown) => e);
+    expect(failure).toBeInstanceOf(QditHackathonSnapshotError);
+    expect(failure).toBeInstanceOf(QditError);
+    expect(failure).toMatchObject({ refusal, status, code, requestId: "req-1" });
+    if (status === 400) expect((failure as QditHackathonSnapshotError).fields).toEqual(["notes[3].markdown", "body"]);
+  });
+
+  it("maps the platform's bare 413 to too_large", async () => {
+    const { result } = await push(new Response("Request Entity Too Large", { status: 413 }));
+    await expect(result).rejects.toMatchObject({ refusal: "too_large", kind: "payload_too_large", status: 413 });
+  });
+
+  it("refuses to send more than 2 MiB", async () => {
+    const { sent, result } = await push(json(201, { data: RECEIPT }), "x".repeat(2 * 1024 * 1024 + 1));
+    await expect(result).rejects.toMatchObject({ refusal: "too_large", status: null, fields: ["body"] });
+    expect(sent).toHaveLength(0);
+  });
+
+  it("leaves other answers as plain QditErrors", async () => {
+    const other = await (await push(error(409, "conflict", { reason: "something_else" }))).result.catch((e: unknown) => e);
+    expect(other).toBeInstanceOf(QditError);
+    expect(other).not.toBeInstanceOf(QditHackathonSnapshotError);
+    expect(other).toMatchObject({ kind: "conflict", reason: "something_else" });
+    const busy = await (await push(json(429, { error: { code: "rate_limited", message: "slow" } }, { "Retry-After": "7" }))).result.catch(
+      (e: unknown) => e,
+    );
+    expect(busy).not.toBeInstanceOf(QditHackathonSnapshotError);
+    expect(busy).toMatchObject({ kind: "rate_limited", retryAfterSeconds: 7 });
+  });
+
+  it("refuses a receipt that is not the contract's", async () => {
+    const { result } = await push(json(201, { data: { ...RECEIPT, submission_state: "graded" } }));
+    await expect(result).rejects.toMatchObject({ kind: "bad_response" });
+  });
+
+  it("times out like every other call", async () => {
+    const fetch = vi.fn(async () => {
+      throw Object.assign(new Error("timed out"), { name: "TimeoutError" });
+    });
+    const client = createQditClient(ANA, { config, store: memoryStore({}), fetch, now: () => NOW });
+    await expect(client.pushHackathonSnapshot("p1", BODY)).rejects.toMatchObject({ kind: "timeout" });
   });
 });

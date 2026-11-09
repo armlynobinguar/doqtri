@@ -61,6 +61,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261101110000_chain_writes_status.sql    # NOT recorded (WP-4.1, DOQ-5): confirm on the remote before deploying
 20261101120000_wallet_topups.sql          # NOT recorded (WP-4.1, DOQ-6): confirm on the remote before deploying
 20261103100000_ops_snapshot.sql           # applied 2026-11-03 as `ops_snapshot` (WP-4.3, DOQ-14)
+20261110100000_documents_created_at.sql   # NOT yet applied (WP-4.7, DOQ-39): apply before deploying; loadVaultDocs selects created_at
 ```
 
 Files marked "NOT recorded" were added without updating this list, so whether they are
