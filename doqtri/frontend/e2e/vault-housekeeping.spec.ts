@@ -206,6 +206,10 @@ test.describe("notes housekeeping", () => {
 
     await expect(dialog.getByRole("alert")).toContainText("Another note is already called");
     await expect(dialog).toBeVisible();
+    // The open dialog hides the rest of the page from the accessibility tree,
+    // so the explorer is checked once it closes: still the old title.
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
     await expect(page.getByRole("link", { name: title })).toBeVisible();
     expect(patch.seen).toHaveLength(0);
   });
