@@ -4,6 +4,8 @@ import { useEffect, useState, useSyncExternalStore, type RefObject } from "react
 import {
   createDocLockApi,
   createDocLockController,
+  stopAfterLastSave,
+  type LastSave,
   type DocLockController,
   type DocLockState,
 } from "@/lib/doc-lock-client";
@@ -21,13 +23,14 @@ import {
  * ten minutes) or the user clicks Edit here; polling does not clear it.
  *
  * `beforeStop` is the editor's last save (DOQ-43): run on unmount while the
- * lock is still held; the release waits for it to settle (the server
- * releases the lock with that save, so a closing tab loses neither). It
- * returns null when there is nothing to save.
+ * lock is still held. The heartbeat stops at once and the release waits for
+ * the save to settle (the server releases the lock with that save, so a
+ * closing tab loses neither); see stopAfterLastSave(). It returns null when
+ * there is nothing to save.
  */
 export function useDocLock(
   docId: string,
-  beforeStop?: RefObject<(() => Promise<unknown> | null) | null>,
+  beforeStop?: RefObject<(() => LastSave | null) | null>,
 ): { lock: DocLockState; controller: DocLockController } {
   // The page remounts the editor per note, so one controller per mount, and
   // with it one edit session: each tab, and each visit to a note, holds the
@@ -47,13 +50,10 @@ export function useDocLock(
     return () => {
       window.removeEventListener("pagehide", onPageHide);
       window.removeEventListener("pageshow", onPageShow);
-      const stop = () => controller.stop({ keepalive: true });
       // The editor's latest last save, as it is now: what it is set to on
       // closing is what has to go out.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-      const pending = beforeStop?.current?.() ?? null;
-      if (pending) void pending.finally(stop);
-      else stop();
+      stopAfterLastSave(controller, beforeStop?.current?.() ?? null, window);
     };
   }, [controller, beforeStop]);
 
