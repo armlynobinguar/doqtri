@@ -176,21 +176,24 @@ export function mindmapFromHeadings(title: string, markdown: string): DocMindmap
 }
 
 /**
- * Drops a lone top heading that only repeats the title.
+ * Drops a top heading that only repeats the title.
  *
  * A note's markdown opens with `# <title>`, so the heading tree's root (the
- * title) would otherwise have that heading as its only child, with every
- * section one ring further out. The map folds it into the root instead.
+ * title) would otherwise have that heading as its first child, with every
+ * section one ring further out. The map folds it into the root instead: its
+ * sections ring the root, followed by any `#` headings after it. Those are
+ * there in a note whose title line was put above an older opening heading
+ * (D-120, lib/title-line.ts), which would otherwise leave the title as a
+ * lone node beside them. Only the first heading folds, so a heading that
+ * says the title further down is the note's own.
  *
  * Display only: the heading tree itself keeps the heading, since its
  * positional id (`h0`) is what links and node status are anchored on.
  */
 function foldTitleHeading(root: MindmapNode): MindmapNode {
-  const [only] = root.children;
-  if (root.children.length !== 1 || normalizeConcept(only.label) !== normalizeConcept(root.label)) {
-    return root;
-  }
-  return { ...root, children: only.children };
+  const [first, ...rest] = root.children;
+  if (!first || normalizeConcept(first.label) !== normalizeConcept(root.label)) return root;
+  return { ...root, children: [...first.children, ...rest] };
 }
 
 function convert(node: MindmapNode, depth: number): ConceptNode {

@@ -65,6 +65,10 @@ describe("withTitleLine (D-120)", () => {
       expect(map.root.label).toBe("Plan");
       expect(map.root.children.map((child) => child.label)).toEqual(["Scope"]);
     }
+    // An older opening heading moved down sits beside the root's sections, with no lone title node.
+    const map = mindmapFromHeadings("Plan", withTitleLine(`# Other${BODY}`, "Plan", "open")!);
+    expect(map.root.children.map((child) => child.label)).toEqual(["Other"]);
+    expect(map.root.children[0].children.map((child) => child.label)).toEqual(["Scope"]);
   });
 
   it("is what a rename from the explorer leaves a never-opened older note to (DOQ-35)", () => {

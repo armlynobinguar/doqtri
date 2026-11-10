@@ -182,8 +182,16 @@ describe("mindmapFromHeadings", () => {
     expect(labels(map.root.children)).toEqual(["Plan"]);
   });
 
-  it("keeps a title heading that has siblings", () => {
-    const map = mindmapFromHeadings("Doc", "# Doc\n## A\n# Other\n");
-    expect(labels(map.root.children)).toEqual(["Doc", "Other"]);
+  it("folds a title heading that has siblings too, its sections first (D-120)", () => {
+    // A title line put above an older opening heading: no lone title node beside it.
+    const map = mindmapFromHeadings("Doc", "# Doc\n## A\n# Other\n## B\n");
+    expect(labels(map.root.children)).toEqual(["A", "Other"]);
+    expect(labels(map.root.children[1].children)).toEqual(["B"]);
+    expect(labels(mindmapFromHeadings("Doc", "# Doc\n\n# Other\n").root.children)).toEqual(["Other"]);
+  });
+
+  it("keeps a heading that says the title further down", () => {
+    const map = mindmapFromHeadings("Doc", "# Intro\n# Doc\n## A\n");
+    expect(labels(map.root.children)).toEqual(["Intro", "Doc"]);
   });
 });
