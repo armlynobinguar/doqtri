@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import {
   MINDMAP_PROMO,
+  PROMO_AI_DISCLOSURE,
   PROMO_BUCKET,
   PROMO_IMAGE_TYPES,
   promoFilesProblem,
@@ -243,6 +244,10 @@ export function PromoSubmissionForm({ submission }: { submission: PromoSubmissio
           placeholder="Email or X handle"
         />
       </div>
+
+      <p data-testid="promo-ai-disclosure" className="text-label text-[12px] leading-relaxed">
+        {PROMO_AI_DISCLOSURE}
+      </p>
 
       <Button type="submit" size="lg" disabled={busy || picked.length === 0} className="self-start rounded-full">
         {busy && <Loader2Icon className="animate-spin" />}

@@ -4,6 +4,7 @@ import { runChainJobs } from "@/lib/stellar/chain-jobs";
 import { runWalletTopUps } from "@/lib/stellar/wallet-topups";
 import { readSchedulerHealth, schedulerWarning } from "@/lib/stellar/chain-jobs-scheduler";
 import { runPendingWrites } from "@/lib/stellar/pending-writes";
+import { runReferralSync } from "@/lib/referral-activity";
 import { logError } from "@/lib/log-error";
 
 export const runtime = "nodejs";
@@ -37,8 +38,11 @@ function authorized(request: Request): boolean {
  *
  * The same run retries new wallets' failed Friendbot top-ups
  * (wallet-topups.ts, DOQ-6; testnet only) alongside the chain jobs, and
- * reports them as `topUps`, null when that queue could not run. None of the
- * three stops the others.
+ * reports them as `topUps`, null when that queue could not run.
+ *
+ * It also syncs referred users' on-chain activity (referral-activity.ts,
+ * DOQ-23), reported as `referrals`, null when that could not run. None of the
+ * four stops the others.
  */
 export async function GET(request: Request) {
   if (!authorized(request)) return Response.json({ error: "Not allowed." }, { status: 401 });
@@ -54,13 +58,29 @@ export async function GET(request: Request) {
     logError("[chain/jobs] wallet top-ups failed", error);
     return null;
   });
+  const referrals = runReferralSync(admin).catch((error) => {
+    logError("[chain/jobs] referral sync failed", error);
+    return null;
+  });
   try {
     const queue = await runChainJobs(admin, { limit: 50 });
-    return Response.json({ ...queue, pendingWrites: await settling, topUps: await topUps, scheduler });
+    return Response.json({
+      ...queue,
+      pendingWrites: await settling,
+      topUps: await topUps,
+      referrals: await referrals,
+      scheduler,
+    });
   } catch (error) {
     logError("[chain/jobs] failed", error);
     return Response.json(
-      { error: "The queue couldn't run.", pendingWrites: await settling, topUps: await topUps, scheduler },
+      {
+        error: "The queue couldn't run.",
+        pendingWrites: await settling,
+        topUps: await topUps,
+        referrals: await referrals,
+        scheduler,
+      },
       { status: 503 },
     );
   }

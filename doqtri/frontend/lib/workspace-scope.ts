@@ -153,14 +153,16 @@ export function vaultReturnPath(raw: string | null | undefined): string {
 
 /**
  * Where to land after switching from `pathname`: the vault-wide views
- * (graph, mindmap, templates) stay put and show the new workspace, while a
- * note belongs to the workspace being left, so a note's pages go back to
- * the vault.
+ * (graph, mindmap, templates) stay put and show the new workspace, the account
+ * pages and referrals stay put because no workspace owns them, while a note
+ * belongs to the workspace being left, so a note's pages go back to the vault.
  */
 export function pathAfterSwitch(pathname: string): string {
   const segment = pathname.split("/")[2] ?? "";
   if (segment === "graph" || segment === "mindmap" || segment === "templates") return `/vault/${segment}`;
-  if (segment === "profile" || segment === "earnings" || segment === "workspace") return pathname;
+  if (segment === "profile" || segment === "earnings" || segment === "workspace" || segment === "referrals") {
+    return pathname;
+  }
   return "/vault";
 }
 

@@ -11,6 +11,9 @@ import { cn } from "@/lib/utils";
 export type ReferrerEntry = ReferrerStat & {
   /** Email, wallet address, or user id when neither is known. */
   owner: string;
+  /** Rewards eligible and not yet paid, and rewards paid (DOQ-26). */
+  eligible: number;
+  paid: number;
 };
 
 export type RecentReferral = {
@@ -215,12 +218,14 @@ function ReferrerTable({
   if (referrers.length === 0) return <Empty none={empty} />;
   return (
     <div className="glass mt-4 overflow-x-auto rounded-2xl">
-      <table className="w-full min-w-[640px] text-[13px]" data-testid="referrer-table">
+      <table className="w-full min-w-[760px] text-[13px]" data-testid="referrer-table">
         <thead className="border-b border-[var(--glass-lo)]">
           <tr>
             <th className={TH}>Referrer</th>
             <th className={TH}>Code</th>
             <th className={cn(TH, "text-right")}>Total</th>
+            <th className={cn(TH, "text-right")}>Eligible</th>
+            <th className={cn(TH, "text-right")}>Paid</th>
             {SOURCES.map((s) => (
               <th key={s.source} className={cn(TH, "text-right")}>
                 {s.label}
@@ -237,6 +242,12 @@ function ReferrerTable({
               </td>
               <td className={cn(TD, "font-mono text-[12px]")}>{r.code}</td>
               <td className={cn(TD, "text-right")}>{r.total}</td>
+              <td className={cn(TD, "text-right")} data-testid="referrer-eligible">
+                {r.eligible}
+              </td>
+              <td className={cn(TD, "text-right")} data-testid="referrer-paid">
+                {r.paid}
+              </td>
               {SOURCES.map((s) => (
                 <td key={s.source} className={cn(TD, "text-muted-foreground text-right")}>
                   {r.via[s.source]}

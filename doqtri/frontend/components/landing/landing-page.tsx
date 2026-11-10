@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { Box, FileText, Link2, Network, PlayIcon, type LucideIcon } from "lucide-react";
 import { OpenVaultLink } from "@/components/auth/open-vault-link";
@@ -7,6 +8,7 @@ import { BlockChain } from "@/components/brand/block-chain";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { BlockGlyph, type Glyph } from "@/components/brand/glyphs";
 import { LandingMindmap } from "@/components/landing/landing-mindmap";
+import { LegalLinks } from "@/components/legal/legal-links";
 import { LiveStats } from "@/components/landing/live-stats";
 import { MINDMAP_PROMO, PROMO_PATH } from "@/lib/promo";
 import styles from "./landing-page.module.css";
@@ -46,7 +48,12 @@ const LIFECYCLE: { label: string; glyph: Glyph }[] = [
   { label: "Verified", glyph: "stellar" },
 ];
 
-export function LandingPage() {
+/**
+ * `legalLive`: the legal pages are live (lib/legal.ts), so the footer links them.
+ * `testimonials`: approved referrers' words (DOQ-28), streamed in by the page
+ * under its own Suspense boundary; nothing until the legal pages go live.
+ */
+export function LandingPage({ legalLive, testimonials = null }: { legalLive: boolean; testimonials?: ReactNode }) {
   return (
     <div className={styles.page}>
       <div className={styles.atmosphere} aria-hidden />
@@ -187,6 +194,8 @@ export function LandingPage() {
           </ol>
         </section>
 
+        {testimonials}
+
         <section className={styles.proof} id="proof" aria-labelledby="proof-title">
           <p className={styles.eyebrow}>Block by block</p>
           <h2 id="proof-title" className={styles.sectionTitle}>
@@ -220,6 +229,7 @@ export function LandingPage() {
         </span>
         <span className={styles.footerLinks}>
           <Link href="/docs">Docs</Link>
+          {legalLive && <LegalLinks className="gap-x-4" />}
           <a href={X_URL} target="_blank" rel="noreferrer">
             @usedoqtri
           </a>

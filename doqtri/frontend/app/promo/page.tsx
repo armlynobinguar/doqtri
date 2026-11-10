@@ -4,7 +4,7 @@ import { GiftIcon } from "lucide-react";
 import { OpenVaultLink } from "@/components/auth/open-vault-link";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { PromoSubmissionForm } from "@/components/promo/promo-submission-form";
-import { MINDMAP_PROMO, PROMO_BUCKET, type PromoSubmission } from "@/lib/promo";
+import { MINDMAP_PROMO, PROMO_AI_DISCLOSURE, PROMO_BUCKET, type PromoSubmission } from "@/lib/promo";
 import {
   createSupabaseAdminClient,
   createSupabaseServerClient,
@@ -136,7 +136,7 @@ export default async function PromoPage() {
 
         <p className="text-label mt-6 text-[12px] leading-relaxed">
           One entry per account; submitting again replaces your entry. Screenshots
-          are stored privately and only reviewed by the Doqtri team. Winners are
+          are stored privately. {PROMO_AI_DISCLOSURE} Winners are
           contacted through the details you leave, or on X at @{MINDMAP_PROMO.xHandle}.
         </p>
       </main>

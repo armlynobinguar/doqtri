@@ -5,6 +5,8 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": fileURLToPath(new URL(".", import.meta.url)),
+      // Next resolves this marker itself; outside its bundler it is an empty module.
+      "server-only": "next/dist/compiled/server-only/empty.js",
     },
   },
   test: {
@@ -18,6 +20,8 @@ export default defineConfig({
       "lib/**/*.test.ts",
       "app/api/**/*.test.ts",
       "app/d/**/*.test.ts",
+      // The legal pages' gate, with the sitemap and robots.txt beside them.
+      "app/*.test.ts",
       "components/**/*.test.ts",
       "scripts/**/*.test.ts",
       // The e2e qdit stub, checked against doqtri's real client (no network beyond localhost).

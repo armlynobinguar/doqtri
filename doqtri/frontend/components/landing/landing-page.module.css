@@ -593,12 +593,14 @@
 .blocks,
 .mapBand,
 .how,
+.testimonials,
 .proof {
   scroll-margin-top: 4.5rem;
 }
 
 .blocks,
 .how,
+.testimonials,
 .proof {
   max-width: 64rem;
   margin: 0 auto;
@@ -653,6 +655,74 @@
   color: var(--muted-foreground);
   font-size: 0.93rem;
   line-height: 1.55;
+}
+
+/* Referrers' words (DOQ-28): cards like the blocks', text that wraps however long a word is. */
+.quoteGrid {
+  list-style: none;
+  padding: 0;
+  margin: 2rem 0 0;
+  display: grid;
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (min-width: 640px) {
+  .quoteGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 960px) {
+  .quoteGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.quoteCard {
+  min-width: 0;
+  padding: 1.4rem;
+  border-radius: 20px;
+  background: var(--glass);
+  border: 1px solid var(--glass-lo);
+  box-shadow: inset 0 1px 0 0 var(--glass-hi);
+}
+
+.quoteFigure {
+  display: grid;
+  gap: 1rem;
+  margin: 0;
+  min-width: 0;
+}
+
+.quoteText {
+  margin: 0;
+  min-width: 0;
+  font-size: 0.97rem;
+  line-height: 1.6;
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+}
+
+.quoteText p::before {
+  content: "\201C";
+}
+
+.quoteText p::after {
+  content: "\201D";
+}
+
+.quoteName {
+  min-width: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
+
+.quoteName::before {
+  content: "\2014\00a0";
 }
 
 /* The banner band: a full-width panel like the X header. */
