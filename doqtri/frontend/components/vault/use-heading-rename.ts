@@ -12,9 +12,10 @@ export type { HeadingCheck } from "@/lib/heading-renamer";
  * tells it the page's title.
  *
  * `title` is the confirmed title: the page's, or the one a rename here set
- * while the page's data has not caught up. The title being typed is shown
- * through DOQ-32's NoteOverlay (`typed`, DOQ-44), and goes when the note
- * closes, unless a rename of it is on its way.
+ * while the page's data has not caught up. The title being typed is a label
+ * only, in the vault's draft store (`typed`, DOQ-44); a rename of it that
+ * lands goes through DOQ-32's NoteOverlay. The draft goes when the note
+ * closes, once nothing is on its way.
  */
 export function useHeadingRename({
   docId,

@@ -49,7 +49,7 @@ import {
   useNavigationStatus,
 } from "@/components/vault/navigation";
 import {
-  NoteDraftsProvider,
+  NoteTitleDraftsProvider,
   NoteOverlayProvider,
   isNotePending,
   overlayNotes,
@@ -152,7 +152,7 @@ function VaultShellInner({
   // reads the overlaid list, and the pages under `children` read the same
   // overlay from context.
   const refresh = useCallback(() => router.refresh(), [router]);
-  const { overlay, run, drafts } = useNoteOverlayState({
+  const { overlay, run, titleDrafts } = useNoteOverlayState({
     notes,
     failedImports,
     location: pathname,
@@ -449,10 +449,11 @@ function VaultShellInner({
 
   return (
     <NoteOverlayProvider value={overlay}>
-      <NoteDraftsProvider value={drafts}>
+      <NoteTitleDraftsProvider value={titleDrafts}>
         <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
           <MobileTopBar
             title={mobileTitle}
+            noteId={activeId}
             // Desktop shows this in the status bar; one live "Saved" is enough.
             saveState={isMobile ? saveState : "idle"}
             creating={creating}
@@ -577,7 +578,7 @@ function VaultShellInner({
             onOpenChange={setSettingsOpen}
           />
         </div>
-      </NoteDraftsProvider>
+      </NoteTitleDraftsProvider>
     </NoteOverlayProvider>
   );
 }

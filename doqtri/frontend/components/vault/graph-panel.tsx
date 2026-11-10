@@ -12,6 +12,7 @@ import { buildGraph, type GraphNode } from "@/lib/wikilinks";
 import { GRAPH_COLORS } from "@/lib/theme";
 import type { Doc } from "@/lib/types";
 import { useNavigate } from "@/components/vault/navigation";
+import { useDraftTitle } from "@/components/vault/note-overlay";
 
 type NodeDatum = GraphNode;
 type SimNode = NodeObject<NodeDatum>;
@@ -90,6 +91,9 @@ export function GraphPanel({
   const graphRef = useRef<GraphInstance<SimNode> | undefined>(undefined);
   const nodesRef = useRef<SimNode[]>([]);
   const [size, setSize] = useState({ width: 0, height: 0 });
+  // The open note's label while its title line is typed (DOQ-44): drawn only,
+  // never part of the graph's data or its links.
+  const activeLabel = useDraftTitle(activeId, "");
 
   // force-graph mutates node objects with simulation coordinates. Rebuilding
   // the graph on every edit would otherwise reset the layout, so positions are
@@ -214,7 +218,7 @@ export function GraphPanel({
                 : node.ghost
                   ? GRAPH_COLORS.ghostStroke
                   : GRAPH_COLORS.label;
-              ctx.fillText(node.label, x, y + LABEL_OFFSET);
+              ctx.fillText(isActive && activeLabel ? activeLabel : node.label, x, y + LABEL_OFFSET);
             }}
           />
         )

@@ -25,9 +25,9 @@ import { useDocLock } from "@/hooks/use-doc-lock";
 import { EditLockBanner } from "@/components/vault/edit-lock-banner";
 import { EDITING_ELSEWHERE, editingMessage } from "@/lib/doc-lock";
 import {
-  useNoteDrafts,
+  useDraftTitle,
   useNoteTitle,
-  useNoteTitleWithoutDraft,
+  useNoteTitleDrafts,
   useOverlaidNotes,
 } from "@/components/vault/note-overlay";
 import { useMindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
@@ -84,9 +84,8 @@ export function DocWorkspace({
   const docs = useOverlaidNotes(serverDocs);
   // Through the vault's pending renames (DOQ-32), so a rename from the
   // explorer shows here in the same frame; the heading renamer builds on it.
-  // Not through a title still being typed (DOQ-44): that is the renamer's own.
-  const pageTitle = useNoteTitleWithoutDraft(active.id, active.title);
-  const drafts = useNoteDrafts();
+  const pageTitle = useNoteTitle(active.id, active.title);
+  const titleDrafts = useNoteTitleDrafts();
   // One concept map for the note, shown by the right panel and the live
   // mindmap beside the editor alike: a rebuild from either shows in both.
   const concept = useMindmapRebuild({
@@ -371,19 +370,15 @@ export function DocWorkspace({
       text: () => markdownRef.current,
       canRename: () => !readOnlyRef.current,
       rename: renameHere,
-      backlinks: (current) =>
-        buildBacklinks(
-          docs.map((doc) => (doc.id === active.id ? { ...doc, title: current } : doc)),
-          active.id,
-        ).length,
-      refresh: drafts.refresh,
-      // What the title line is being typed as, everywhere the title shows,
-      // before any request (DOQ-44).
-      draft: (next, previousTitle) =>
-        next === null ? drafts.drop(active.id) : drafts.show(active.id, next, previousTitle),
-      confirm: (next, previousTitle) => drafts.confirm(active.id, next, previousTitle),
+      backlinks: () => buildBacklinks(docs, active.id).length,
+      refresh: titleDrafts.refresh,
+      // What the title line is being typed as: the note's label wherever its
+      // title shows, before any request, and nothing else (DOQ-44).
+      draft: (next) => titleDrafts.drafts.set(active.id, next),
+      landed: (next, previousTitle) => titleDrafts.landed({ id: active.id, title: next, previousTitle }),
+      settleDraft: () => titleDrafts.settle(active.id),
     }),
-    [renameHere, docs, active.id, drafts],
+    [renameHere, docs, active.id, titleDrafts],
   );
   const checkHeadingRef = useRef(() => checkHeadingNow(headingContext));
   useEffect(() => {
@@ -401,10 +396,10 @@ export function DocWorkspace({
   }, [readOnly]);
   // Called from inside an editor update: run once it has finished.
   const leaveTitleLine = useCallback(() => queueMicrotask(() => checkHeadingRef.current()), []);
-  // The confirmed title: the page's, or one a rename here set. The title line
-  // and the ship panel go by it; everything else shows a title being typed.
-  const confirmedTitle = headingRename.title;
-  const title = useNoteTitle(active.id, confirmedTitle);
+  const title = headingRename.title;
+  // The tab and the live mindmap's root show a title being typed (DOQ-44);
+  // everything else, the editor's title line included, goes by `title`.
+  const shownTitle = useDraftTitle(active.id, title);
 
   /**
    * The title line an older note gets after its first edit (D-120,
@@ -415,8 +410,8 @@ export function DocWorkspace({
    */
   const checkTitleLine = useCallback(() => checkTitleLineSafety(active.id), [active.id]);
   const titleLineWrite = useMemo(
-    () => ({ title: confirmedTitle === active.title ? active.title : null, check: checkTitleLine }),
-    [confirmedTitle, active.title, checkTitleLine],
+    () => ({ title: title === active.title ? active.title : null, check: checkTitleLine }),
+    [title, active.title, checkTitleLine],
   );
 
   /**
@@ -562,8 +557,8 @@ export function DocWorkspace({
         <div className={cn("min-h-0 flex-1", mobileView !== "note" && "hidden")}>
           <EditorPane
             compact
-            title={title}
-            lineTitle={confirmedTitle}
+            title={shownTitle}
+            lineTitle={title}
             concept={concept}
             markdown={markdown}
             onChange={handleChange}
@@ -610,8 +605,8 @@ export function DocWorkspace({
       <ResizablePanelGroup orientation="horizontal" className="min-h-0">
         <ResizablePanel id="editor" minSize={320} className="flex min-h-0 flex-col">
           <EditorPane
-            title={title}
-            lineTitle={confirmedTitle}
+            title={shownTitle}
+            lineTitle={title}
             concept={concept}
             markdown={markdown}
             onChange={handleChange}

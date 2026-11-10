@@ -141,6 +141,7 @@ export function headingRenameCases(layout: Layout) {
   test("the title being typed shows at once, before any PATCH, and holds as the rename lands", async ({ page }) => {
     const title = uniqueTitle("Live Plan");
     const id = await seed(title, `# ${title}${BODY}`);
+    await seed(uniqueTitle("Live Linker"), `See [[${title}]].\n`);
     const renames = watchRenames(page, id);
     // The rename is held until the typed title has been seen: no network wait.
     let release!: () => void;
@@ -159,6 +160,8 @@ export function headingRenameCases(layout: Layout) {
     // Before the edit settled: nothing asked of the server yet.
     expect(renames).toHaveLength(0);
     await layout.expectTitle(page, renamed, title);
+    // A label only: the note's links still go by its confirmed title.
+    await layout.expectBacklinks(page, 1);
 
     // Every title shown from here on, through the rename and the refresh after it.
     await page.evaluate((selector) => {

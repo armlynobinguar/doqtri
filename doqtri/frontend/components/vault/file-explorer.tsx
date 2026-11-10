@@ -1,6 +1,7 @@
 "use client";
 
 import { NavLink } from "@/components/vault/navigation";
+import { useDraftTitle } from "@/components/vault/note-overlay";
 import {
   LayoutTemplateIcon,
   FileTextIcon,
@@ -310,6 +311,8 @@ function NoteRow({
   onRename?: (note: NoteSummary) => void;
   onDelete?: (note: NoteSummary) => void;
 }) {
+  // A title being typed into the note's title line shows here as it is typed (DOQ-44).
+  const label = useDraftTitle(note.id, note.title);
   return (
     <li
       className={cn(
@@ -330,7 +333,7 @@ function NoteRow({
           className={cn("size-3.5 shrink-0", isActive ? "text-foreground" : "opacity-60")}
           strokeWidth={1.5}
         />
-        <span className="truncate">{note.title}</span>
+        <span className="truncate">{label}</span>
       </NavLink>
       {onRename ? <RenameRowAction note={note} pending={pending} onRename={onRename} /> : null}
       <NoteRowAction note={note} anchored={anchored} pending={pending} onDelete={onDelete} />

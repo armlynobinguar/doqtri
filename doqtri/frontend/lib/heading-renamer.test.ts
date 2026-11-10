@@ -18,12 +18,16 @@ function setup(title: string, options: { canRename?: () => boolean; backlinks?: 
   const renamer = createHeadingRenamer({ docId: "n1", title, markdown: note(title), renameNote });
   const editor = { text: note(title) };
   const refresh = vi.fn();
-  // The draft the overlay shows, as the workspace's NoteDrafts would keep it.
-  const drafts = { shown: null as string | null };
+  // The label the draft store shows, as the workspace would keep it.
+  const drafts = { shown: null as string | null, settled: false };
   const draft = vi.fn((title: string | null) => {
     drafts.shown = title;
+    drafts.settled = false;
   });
-  const confirm = vi.fn();
+  const landed = vi.fn();
+  const settleDraft = vi.fn(() => {
+    drafts.settled = true;
+  });
   const ctx: HeadingCheck = {
     text: () => editor.text,
     canRename: options.canRename ?? (() => true),
@@ -35,11 +39,12 @@ function setup(title: string, options: { canRename?: () => boolean; backlinks?: 
     backlinks: () => options.backlinks ?? 0,
     refresh,
     draft,
-    confirm,
+    landed,
+    settleDraft,
   };
   /** What the workspace shows as the title, for a page title of `page`. */
   const shown = (page: string) => renamer.getSnapshot().overlay ?? page;
-  return { renamer, renameNote, server, editor, ctx, refresh, shown, drafts, draft, confirm };
+  return { renamer, renameNote, server, editor, ctx, refresh, shown, drafts, draft, landed };
 }
 
 describe("createHeadingRenamer", () => {
@@ -50,8 +55,8 @@ describe("createHeadingRenamer", () => {
     await settle();
     expect(t.renameNote).toHaveBeenCalledExactlyOnceWith("n1", "New", "session-1", "Old");
     expect(t.renamer.title).toBe("New");
-    // Confirmed through the overlay, which asks for the refresh (DOQ-44).
-    expect(t.confirm).toHaveBeenCalledExactlyOnceWith("New", "Old");
+    // Shown as an accepted rename through the overlay, which asks for the refresh (DOQ-44).
+    expect(t.landed).toHaveBeenCalledExactlyOnceWith("New", "Old");
     expect(t.refresh).not.toHaveBeenCalled();
     // The settle after the caret left asks for nothing more.
     t.renamer.check(t.ctx);
@@ -280,7 +285,8 @@ describe("createHeadingRenamer", () => {
         backlinks: () => 0,
         refresh: () => {},
         draft: () => {},
-        confirm: () => {},
+        landed: () => {},
+        settleDraft: () => {},
       };
       renameNote.mockRejectedValueOnce(new RenameError("Someone else is editing", 423, "LOCKED"));
       renamer.check(ctx);
@@ -309,12 +315,11 @@ describe("createHeadingRenamer", () => {
   });
 
   describe("drafts (DOQ-44)", () => {
-    it("shows the heading as it is typed, before any rename, and confirms it when the rename lands", async () => {
+    it("shows the heading as it is typed, before any rename, and hands the landed rename to the overlay", async () => {
       const t = setup("Old");
       t.editor.text = note("Ne");
       t.renamer.typed(t.ctx);
       expect(t.drafts.shown).toBe("Ne");
-      expect(t.draft).toHaveBeenLastCalledWith("Ne", "Old");
       t.editor.text = note("New");
       t.renamer.typed();
       expect(t.drafts.shown).toBe("New");
@@ -323,8 +328,13 @@ describe("createHeadingRenamer", () => {
       t.renamer.check(t.ctx);
       await settle();
       expect(t.renameNote).toHaveBeenCalledOnce();
-      expect(t.confirm).toHaveBeenCalledExactlyOnceWith("New", "Old");
+      expect(t.landed).toHaveBeenCalledExactlyOnceWith("New", "Old");
+      // The draft stays until the overlay shows what landed; the store drops it then.
       expect(t.drafts.shown).toBe("New");
+      // An edit after, in the body, says the heading is the title now: no draft.
+      t.editor.text = `${note("New")} More.`;
+      t.renamer.typed();
+      expect(t.drafts.shown).toBeNull();
     });
 
     it("shows no draft for an emptied, invalid or unchanged heading, nor from a copy that cannot rename", () => {
@@ -357,12 +367,31 @@ describe("createHeadingRenamer", () => {
       t.renamer.check();
       await settle();
       expect(t.drafts.shown).toBeNull();
-      expect(t.confirm).not.toHaveBeenCalled();
+      expect(t.landed).not.toHaveBeenCalled();
       expect(t.renamer.getSnapshot().notice?.kind).toBe("clash");
       // An edit in the body while the clash stands brings no draft back.
       t.editor.text = `${note("Taken")} More.`;
       t.renamer.typed();
       expect(t.drafts.shown).toBeNull();
+    });
+
+    it("keeps the draft of a heading typed on while a refused rename was out", async () => {
+      const t = setup("Old");
+      let refuse!: () => void;
+      t.renameNote.mockImplementationOnce(
+        () => new Promise((_, reject) => (refuse = () => reject(new RenameError("Taken", 409, "TITLE_TAKEN")))),
+      );
+      t.editor.text = note("Taken");
+      t.renamer.typed(t.ctx);
+      t.renamer.check();
+      t.editor.text = note("Taken Two");
+      t.renamer.typed();
+      refuse();
+      await settle();
+      expect(t.renamer.getSnapshot().notice?.kind).toBe("clash");
+      // No frame back to "Old" before the next rename: the newer heading shows.
+      expect(t.draft.mock.calls.slice(-1)).toEqual([["Taken Two"]]);
+      expect(t.draft).not.toHaveBeenCalledWith(null);
     });
 
     it.each([
@@ -377,7 +406,7 @@ describe("createHeadingRenamer", () => {
       t.renamer.check();
       await settle();
       expect(t.drafts.shown).toBeNull();
-      expect(t.confirm).not.toHaveBeenCalled();
+      expect(t.landed).not.toHaveBeenCalled();
     });
 
     it("drops the draft when the note closes before the edit settles", () => {
@@ -387,27 +416,40 @@ describe("createHeadingRenamer", () => {
       t.renamer.typed();
       t.renamer.leave();
       expect(t.drafts.shown).toBeNull();
-      t.renamer.check();
       t.renamer.typed();
-      expect(t.renameNote).not.toHaveBeenCalled();
       expect(t.drafts.shown).toBeNull();
     });
 
-    it("lets a rename in flight when the note closes settle its draft, as the title it landed", async () => {
+    it("still runs the check queued behind a rename in flight when the note closes, then lets the draft go", async () => {
       const t = setup("Old");
+      let land!: () => void;
+      t.renameNote.mockImplementationOnce(
+        (_id, next) => new Promise((resolve) => (land = () => resolve({ title: next, previousTitle: "Old" }))),
+      );
       t.editor.text = note("New");
       t.renamer.typed(t.ctx);
       t.renamer.check();
-      // Typed on, then closed, while the rename was out.
+      // Typed on and settled (saved) while the rename was out, then closed.
       t.editor.text = note("Newer");
       t.renamer.typed();
       t.renamer.check();
       t.renamer.leave();
       expect(t.drafts.shown).toBe("Newer");
+      const draftedBefore = t.draft.mock.calls.length;
+      land();
       await settle();
-      expect(t.renameNote).toHaveBeenCalledOnce();
-      expect(t.drafts.shown).toBe("New");
-      expect(t.confirm).toHaveBeenCalledExactlyOnceWith("New", "Old");
+      await settle();
+      expect(t.renameNote).toHaveBeenCalledTimes(2);
+      expect(t.renameNote).toHaveBeenLastCalledWith("n1", "Newer", "session-1", "New");
+      expect(t.renamer.title).toBe("Newer");
+      expect(t.landed.mock.calls).toEqual([
+        ["New", "Old"],
+        ["Newer", "New"],
+      ]);
+      // Nothing more is on its way: the draft goes once what landed shows.
+      expect(t.drafts.settled).toBe(true);
+      // Nothing drafted after the note closed: no flash back to "New" or "Old".
+      expect(t.draft).toHaveBeenCalledTimes(draftedBefore);
     });
   });
 });

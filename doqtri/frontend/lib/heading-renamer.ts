@@ -41,13 +41,15 @@ import { RenameError, renameNote as defaultRenameNote, type RenamedNote } from "
  * page is refreshed to show the title the note has.
  *
  * Drafts (DOQ-44). As the title line is typed, `typed()` shows the title it
- * would rename to everywhere the note's title shows (the vault's
- * NoteOverlay), before any request: the same decision check() makes, so only
- * a heading that would rename shows, never an emptied or invalid one, nor one
- * a clash refused. When the rename lands the draft is confirmed, and holds
- * until the page's data shows it; when it is refused, or fails, the draft
- * goes and the confirmed title shows again. When the editor goes (`leave()`),
- * a rename in flight still settles its draft; with none, the draft goes.
+ * would rename to as the note's label wherever its title shows, before any
+ * request: the same decision check() makes, so only a heading that would
+ * rename shows, never an emptied or invalid one, nor one a clash refused. A
+ * draft is a label only; everything else keeps the confirmed title. When the
+ * rename lands it is an accepted rename like the explorer's (`landed`), and
+ * the draft goes once that shows. When it is refused, the draft is worked out
+ * again from the text then (a clash or a rename elsewhere), or goes. When the
+ * editor goes (`leave()`), nothing more is drafted; a check queued behind a
+ * rename in flight still runs, and once nothing is on its way the draft goes.
  */
 
 /** What a check needs from the workspace at the moment it runs. */
@@ -62,17 +64,16 @@ export type HeadingCheck = {
    * edit session.
    */
   rename(request: (session: string) => Promise<RenamedNote>): Promise<RenamedNote>;
-  /** How many other notes link to this one under `title`, its current one. */
-  backlinks(title: string): number;
+  /** How many other notes link to this one under its current title. */
+  backlinks(): number;
   /** Asks for the page's data again, so everything showing the title catches up. */
   refresh(): void;
-  /**
-   * Shows `title`, being typed, as the note's title everywhere, renamed from
-   * `previousTitle`; with null, the confirmed title again (NoteDrafts).
-   */
-  draft(title: string | null, previousTitle: string): void;
-  /** The rename to `title` from `previousTitle` landed; also asks for the page's data again. */
-  confirm(title: string, previousTitle: string): void;
+  /** Shows `title`, being typed, as the note's label; with null, the confirmed title again. */
+  draft(title: string | null): void;
+  /** The rename to `title` from `previousTitle` landed: shown as accepted, and the page's data asked for. */
+  landed(title: string, previousTitle: string): void;
+  /** The editor is gone and nothing is on its way: the draft goes once what landed shows. */
+  settleDraft(): void;
 };
 
 export type HeadingRenamerSnapshot = {
@@ -103,7 +104,7 @@ export function createHeadingRenamer(init: {
   let again = false;
   let last: HeadingCheck | null = null;
   let notice: HeadingNotice | null = null;
-  // The editor is gone: nothing more is checked or drafted.
+  // The editor is gone: nothing more is drafted.
   let left = false;
   // The answers to this editor's own heading renames, told apart from any
   // other rename that goes through the editor (the explorer's).
@@ -144,13 +145,13 @@ export function createHeadingRenamer(init: {
     if (context) last = context;
     const ctx = last;
     if (!ctx || left) return;
-    ctx.draft(draftTitle(ctx), latest);
+    ctx.draft(draftTitle(ctx));
   }
 
   function check(context?: HeadingCheck) {
     if (context) last = context;
     const ctx = last;
-    if (!ctx || left) return;
+    if (!ctx) return;
     if (busy) {
       again = true;
       return;
@@ -158,7 +159,7 @@ export function createHeadingRenamer(init: {
     // Nothing fires from a copy that cannot be edited. Its text changes only
     // from outside, and those loads reset the baseline themselves.
     if (!ctx.canRename()) {
-      ctx.draft(null, latest);
+      if (!left) ctx.draft(null);
       return;
     }
 
@@ -176,7 +177,7 @@ export function createHeadingRenamer(init: {
     if (refused(decision.title, current)) return;
 
     busy = true;
-    const backlinks = ctx.backlinks(current);
+    const backlinks = ctx.backlinks();
     ctx
       .rename(async (session) => {
         const renamed = await renameNote(init.docId, decision.title, session, current);
@@ -192,19 +193,19 @@ export function createHeadingRenamer(init: {
           const previousTitle = renamed.previousTitle || current;
           setNotice(backlinks > 0 ? { kind: "renamed", title: renamed.title, previousTitle, backlinks } : null);
           emit();
-          // Gone meanwhile: nothing will draft again, so the draft is this rename's.
-          if (left) ctx.draft(renamed.title, current);
-          ctx.confirm(renamed.title, current);
+          ctx.landed(renamed.title, current);
         },
         (error: unknown) => {
-          ctx.draft(null, latest);
           if (!(error instanceof RenameError)) {
             // A save that failed first, which the save status already shows.
             // The baseline stays, so the next settled edit tries again.
+            if (!left) ctx.draft(null);
             return;
           }
           if (error.code === "TITLE_TAKEN") {
             setNotice({ kind: "clash", heading: decision.title, title: current });
+            // Typed on since: that heading's draft, else none.
+            typed();
           } else if (error.code === "TITLE_CHANGED") {
             // Renamed elsewhere: theirs stands. This heading is compared from now on.
             baseline = text;
@@ -212,18 +213,21 @@ export function createHeadingRenamer(init: {
             pending = [];
             setNotice(null);
             emit();
+            typed();
             ctx.refresh();
-          } else if (!LOCK_CODES.has(error.code ?? "") && error.status !== 423) {
-            init.onError?.(error.message);
+          } else {
+            if (!left) ctx.draft(null);
+            if (!LOCK_CODES.has(error.code ?? "") && error.status !== 423) init.onError?.(error.message);
           }
         },
       )
       .finally(() => {
         busy = false;
-        if (again && !left) {
+        if (again) {
           again = false;
           check();
         }
+        if (left && !busy) ctx.settleDraft();
       });
   }
 
@@ -262,14 +266,14 @@ export function createHeadingRenamer(init: {
       typed();
     },
 
-    /** The editor is gone (the note closed): a rename in flight settles its draft; else the draft goes. */
+    /** The editor is gone (the note closed): see Drafts above. */
     leave() {
       if (left) return;
       left = true;
-      if (!busy) last?.draft(null, latest);
+      if (!busy) last?.draft(null);
     },
 
-    /** The editor is back (React remounting it in development): checks and drafts run again. */
+    /** The editor is back (React remounting it in development): drafts run again. */
     resume() {
       left = false;
     },
