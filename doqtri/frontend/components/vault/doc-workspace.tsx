@@ -24,11 +24,13 @@ import { createNoteSaver } from "@/lib/note-saver";
 import { useDocLock } from "@/hooks/use-doc-lock";
 import { EditLockBanner } from "@/components/vault/edit-lock-banner";
 import { EDITING_ELSEWHERE, editingMessage } from "@/lib/doc-lock";
+import { useNoteTitle, useOverlaidNotes } from "@/components/vault/note-overlay";
+import { useMindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
 import type { Doc } from "@/lib/types";
-import type { EditorStats } from "@/lib/text-stats";
 import type { RenamedNote } from "@/lib/rename-note";
 import { adoptRename } from "@/lib/rename-adopt";
 import { useRegisterOpenNote } from "@/components/vault/open-note";
+import type { EditorStats } from "@/lib/text-stats";
 import { useHeadingRename } from "@/components/vault/use-heading-rename";
 import { buildBacklinks } from "@/lib/wikilinks";
 
@@ -60,15 +62,30 @@ const MOBILE_VIEWS: { id: MobileView; label: string }[] = [
  * the server refuses as stale is never retried over the newer text: the
  * editor stops and offers a reload, and nothing reloads on its own while
  * that offer stands, so the unsaved text stays put to be copied.
+ *
+ * Titles (this note's, and every other note's for the graph, backlinks and
+ * [[wikilinks]]) are read through the vault's pending renames and deletes,
+ * so a rename shows here in the same frame as in the explorer.
  */
 export function DocWorkspace({
-  docs,
+  docs: serverDocs,
   active,
 }: {
   docs: Doc[];
   active: Doc;
 }) {
   const router = useRouter();
+  const docs = useOverlaidNotes(serverDocs);
+  // Through the vault's pending renames (DOQ-32), so a rename from the
+  // explorer shows here in the same frame; the heading renamer builds on it.
+  const pageTitle = useNoteTitle(active.id, active.title);
+  // One concept map for the note, shown by the right panel and the live
+  // mindmap beside the editor alike: a rebuild from either shows in both.
+  const concept = useMindmapRebuild({
+    docId: active.id,
+    stored: active.mindmap ?? null,
+    stale: active.mindmapStale ?? false,
+  });
   const { setWordCount, setSaveState, setEditorStats } = useVaultStatus();
 
   const [markdown, setMarkdown] = useState(active.markdown);
@@ -89,7 +106,7 @@ export function DocWorkspace({
   // Editing the title heading renames the note (DOQ-36).
   const headingRename = useHeadingRename({
     docId: active.id,
-    title: active.title,
+    title: pageTitle,
     initialMarkdown: active.markdown,
   });
   const resetHeading = headingRename.reset;
@@ -322,6 +339,7 @@ export function DocWorkspace({
     },
     [controller, noteRenamed, readOnly, reloadLatest, saveNow, saver, saves, setSaveState],
   );
+  // Registered with the shell, so its rename dialog renames this note here.
   const openHere = useMemo(() => ({ docId: active.id, rename: renameHere }), [active.id, renameHere]);
   useRegisterOpenNote(openHere);
 
@@ -498,8 +516,8 @@ export function DocWorkspace({
         <div className={cn("min-h-0 flex-1", mobileView !== "note" && "hidden")}>
           <EditorPane
             compact
-            docId={active.id}
             title={title}
+            concept={concept}
             markdown={markdown}
             onChange={handleChange}
             onRegenerate={() => setRegenerateOpen(true)}
@@ -521,8 +539,7 @@ export function DocWorkspace({
               activeId={active.id}
               title={title}
               markdown={markdown}
-              mindmap={active.mindmap ?? null}
-              mindmapStale={active.mindmapStale ?? false}
+              concept={concept}
               onSave={saveNow}
               showShip={false}
             />
@@ -544,14 +561,12 @@ export function DocWorkspace({
       <ResizablePanelGroup orientation="horizontal" className="min-h-0">
         <ResizablePanel id="editor" minSize={320} className="flex min-h-0 flex-col">
           <EditorPane
-            docId={active.id}
             title={title}
+            concept={concept}
             markdown={markdown}
             onChange={handleChange}
             onRegenerate={() => setRegenerateOpen(true)}
             linkTitles={linkTitles}
-            mindmap={active.mindmap ?? null}
-            mindmapStale={active.mindmapStale ?? false}
             readOnly={readOnly}
             pending={lockPending}
             onOpenNote={openNote}
@@ -577,8 +592,7 @@ export function DocWorkspace({
             activeId={active.id}
             title={title}
             markdown={markdown}
-            mindmap={active.mindmap ?? null}
-            mindmapStale={active.mindmapStale ?? false}
+            concept={concept}
             onSave={saveNow}
           />
         </ResizablePanel>

@@ -1,3 +1,5 @@
+import { fetchOrNoResponse, isNoAnswer, NoResponseError, readJson } from "@/lib/no-response";
+
 /**
  * What a rename did. `markdown`, `version` and `previousVersion` are there
  * only when the note's title heading was renamed with it (DOQ-35): the text
@@ -31,8 +33,10 @@ export class RenameError extends Error {
 }
 
 /**
- * Renames a note through the API. Throws a RenameError with the server's reason — notably
- * when another note already has the title, which the dialog shows inline.
+ * Renames a note through the API. Throws a RenameError with the server's
+ * reason — notably when another note already has the title, which the dialog
+ * shows inline — or NoResponseError when no answer came, in which case the
+ * rename may have happened.
  * `session` is the open editor's edit session, when the rename goes through
  * it: the server checks the note's lock against it before it rewrites the
  * title heading. `expectedTitle` is the title the caller believes the note
@@ -45,7 +49,7 @@ export async function renameNote(
   session?: string,
   expectedTitle?: string,
 ): Promise<RenamedNote> {
-  const res = await fetch(`/api/notes/${id}`, {
+  const res = await fetchOrNoResponse(`/api/notes/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -54,23 +58,32 @@ export async function renameNote(
       ...(expectedTitle !== undefined ? { expectedTitle } : {}),
     }),
   });
-  const payload = (await res.json().catch(() => null)) as {
+  // A 200 is the rename done, even if its body was lost on the way.
+  const payload = (await readJson(res).catch((error: unknown) => {
+    if (res.ok) return null;
+    throw error;
+  })) as {
     error?: string;
     code?: string;
     title?: string;
     previousTitle?: string;
   } | null;
 
-  if (!res.ok || !payload?.title) {
+  if (isNoAnswer(res.status, payload)) throw new NoResponseError();
+  if (!res.ok) {
     throw new RenameError(
       payload?.error ?? `Could not rename note (${res.status})`,
       res.status,
       typeof payload?.code === "string" ? payload.code : undefined,
-      !res.ok && typeof payload?.title === "string" ? payload.title : undefined,
+      typeof payload?.title === "string" ? payload.title : undefined,
     );
   }
 
-  return { title: payload.title, previousTitle: payload.previousTitle ?? "", ...renamedText(payload) };
+  return {
+    title: payload?.title ?? title,
+    previousTitle: payload?.previousTitle ?? "",
+    ...renamedText(payload),
+  };
 }
 
 /** The rewritten text and its versions, when the answer carries all three. */

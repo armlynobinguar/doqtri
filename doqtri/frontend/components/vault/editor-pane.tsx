@@ -9,7 +9,7 @@ import { DoqtriLoader } from "@/components/brand/doqtri-loader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { LiveMindmapPane } from "@/components/vault/live-mindmap-pane";
-import type { DocMindmap } from "@/lib/mindmap-types";
+import type { MindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
 import type { HeadingNotice } from "@/lib/heading-rename";
 import { cn } from "@/lib/utils";
 import type { EditorStats } from "@/lib/text-stats";
@@ -65,14 +65,12 @@ function subscribeMindmapShown(listener: () => void) {
 }
 
 export function EditorPane({
-  docId,
   title,
   markdown,
   onChange,
   onRegenerate,
   linkTitles,
-  mindmap = null,
-  mindmapStale = false,
+  concept,
   compact = false,
   readOnly = false,
   pending = false,
@@ -83,16 +81,17 @@ export function EditorPane({
   onDismissHeadingNotice,
   onLeaveTitleLine,
 }: {
-  docId: string;
   title: string;
   markdown: string;
   /** Titles offered when a `[[link` is being typed. */
   linkTitles: string[];
   onChange: (markdown: string) => void;
   onRegenerate: () => void;
-  /** The note's stored AI concept map, for the live mindmap's Concept map view. */
-  mindmap?: DocMindmap | null;
-  mindmapStale?: boolean;
+  /**
+   * The note's AI concept map and its rebuild, for the live mindmap's
+   * Concept map view; shared with the right panel.
+   */
+  concept: MindmapRebuild;
   /**
    * The phone layout: the title and Regenerate live in the surrounding chrome,
    * and there is no room for the mindmap beside the text — it is the Map view.
@@ -232,11 +231,9 @@ export function EditorPane({
                 className="flex min-h-0 flex-col"
               >
                 <LiveMindmapPane
-                  docId={docId}
                   title={title}
                   markdown={markdown}
-                  mindmap={mindmap}
-                  stale={mindmapStale}
+                  concept={concept}
                 />
               </ResizablePanel>
             </>

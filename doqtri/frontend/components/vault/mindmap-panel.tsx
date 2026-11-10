@@ -4,14 +4,10 @@ import { useMemo } from "react";
 import { NavLink } from "@/components/vault/navigation";
 import { Loader2Icon, Maximize2Icon, RefreshCwIcon } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
-import { useMindmapRebuild } from "@/hooks/use-mindmap-rebuild";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  mindmapFromHeadings,
-  type ConceptNode,
-  type DocMindmap,
-} from "@/lib/mindmap-types";
+import { mindmapFromHeadings, type ConceptNode } from "@/lib/mindmap-types";
+import { withRootLabel, type MindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
 
 /**
  * The compact mindmap: the document's concept tree, in the right-hand panel.
@@ -22,27 +18,28 @@ import {
  * from is the whole point of the feature: the stored concept map when there is
  * one, and the heading hierarchy only as a fallback — headings alone say
  * almost nothing about a document that has none.
+ *
+ * The concept map and its rebuild come from the note's workspace, shared with
+ * the live mindmap beside the editor; see useMindmapRebuild.
  */
 export function MindmapPanel({
   docId,
   title,
   markdown,
-  mindmap,
-  stale,
+  concept,
 }: {
   docId: string;
   title: string;
   markdown: string;
-  mindmap: DocMindmap | null;
-  stale: boolean;
+  concept: MindmapRebuild;
 }) {
-  const { building, rebuild } = useMindmapRebuild(docId);
+  const { mindmap, stale, building, rebuild } = concept;
 
   const fallback = useMemo(
     () => mindmapFromHeadings(title, markdown),
     [title, markdown],
   );
-  const tree = mindmap ?? fallback;
+  const tree = mindmap ? withRootLabel(mindmap, title) : fallback;
   const derived = mindmap === null;
 
   return (

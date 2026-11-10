@@ -4,12 +4,13 @@ import { useMemo } from "react";
 import { NavLink, useNavigate } from "@/components/vault/navigation";
 import { ArrowLeftIcon, Loader2Icon, NetworkIcon, SparklesIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useMindmapRebuild } from "@/hooks/use-mindmap-rebuild";
 import { MindmapStudio } from "@/components/vault/mindmap-studio";
 import { MindmapPromoBanner } from "@/components/promo/mindmap-promo-banner";
 import { graphFromMindmap } from "@/lib/mindmap-graph";
 import { mindmapFromHeadings, type DocMindmap } from "@/lib/mindmap-types";
 import type { SavedStyle } from "@/lib/mindmap-style-sync";
+import { useMindmapRebuild, withRootLabel } from "@/components/vault/use-mindmap-rebuild";
+import { useNoteTitle } from "@/components/vault/note-overlay";
 
 /**
  * The full-screen mindmap of a single document.
@@ -20,10 +21,10 @@ import type { SavedStyle } from "@/lib/mindmap-style-sync";
  */
 export function DocumentMindmap({
   docId,
-  title,
+  title: storedTitle,
   markdown,
-  mindmap,
-  stale,
+  mindmap: stored,
+  stale: storedStale,
   savedStyle,
 }: {
   docId: string;
@@ -34,11 +35,17 @@ export function DocumentMindmap({
   savedStyle: SavedStyle;
 }) {
   const navigate = useNavigate();
-  const { building, rebuild } = useMindmapRebuild(docId);
+  // Renamed from the explorer while this view is open: show the new title now.
+  const title = useNoteTitle(docId, storedTitle);
+  const { mindmap, stale, building, rebuild } = useMindmapRebuild({
+    docId,
+    stored,
+    stale: storedStale,
+  });
 
   const derived = mindmap === null;
   const tree = useMemo(
-    () => mindmap ?? mindmapFromHeadings(title, markdown),
+    () => (mindmap ? withRootLabel(mindmap, title) : mindmapFromHeadings(title, markdown)),
     [mindmap, title, markdown],
   );
   const graph = useMemo(() => graphFromMindmap(tree), [tree]);

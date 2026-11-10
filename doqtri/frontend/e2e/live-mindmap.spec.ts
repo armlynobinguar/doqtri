@@ -8,6 +8,7 @@ import {
   setEditorSelection,
   uniqueTitle,
 } from "./helpers";
+import { OPENAI_STUB_MINDMAP_THEME } from "./openai-stub/config";
 
 /*
  * The live mindmap beside the editor (DOQ-31): the heading tree of the text
@@ -103,6 +104,35 @@ test.describe("live mindmap", () => {
     await expect(outline(page)).toContainText("Stored Child");
     await expect(pane(page).getByText("Note has changed")).toBeVisible();
     await expect(pane(page).getByRole("button", { name: "Rebuild mindmap" })).toBeVisible();
+  });
+
+  test("a rebuild from the Concept map view shows in it and in the right panel, without a reload", async ({ page }) => {
+    const title = uniqueTitle("Concept rebuild");
+    const id = await seedNote(
+      title,
+      `# ${title}\n\n## Heading Only\n\nSome text.\n`,
+      fakeMindmap(title, [{ label: "Stored Theme", children: ["Stored Child"] }]),
+    );
+    ids.push(id);
+    await page.goto(`/vault/${id}`);
+    await editableEditor(page);
+    await page.getByRole("tab", { name: "Mindmap", exact: true }).click();
+    const panel = page.getByTestId("right-panel");
+    await expect(panel.getByText("Stored Theme")).toBeVisible();
+
+    let loads = 0;
+    page.on("load", () => loads++);
+    await pane(page).getByRole("tab", { name: "Concept map" }).click();
+    await pane(page).getByRole("button", { name: "Rebuild mindmap" }).click();
+    await expect(page.getByText("Mindmap rebuilt")).toBeVisible({ timeout: 30_000 });
+
+    // One rebuilt map, held by the workspace: both views show it.
+    await expect(outline(page)).toContainText(OPENAI_STUB_MINDMAP_THEME);
+    await expect(outline(page)).not.toContainText("Stored Theme");
+    await expect(pane(page).getByText("Up to date")).toBeVisible();
+    await expect(panel.getByText(OPENAI_STUB_MINDMAP_THEME).first()).toBeVisible();
+    await expect(panel.getByText("Stored Theme")).toHaveCount(0);
+    expect(loads).toBe(0);
   });
 
   test("a note without a stored map has nothing to switch to", async ({ page }) => {

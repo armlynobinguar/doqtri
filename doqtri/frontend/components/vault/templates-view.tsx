@@ -24,6 +24,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useNavigate } from "@/components/vault/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -186,6 +187,7 @@ const DESCRIPTIONS: Record<PageTab, string> = {
  */
 export function TemplatesView() {
   const router = useRouter();
+  const navigate = useNavigate();
   const params = useSearchParams();
   const requested = params.get("tab");
   const tab: PageTab = isTab(requested) ? requested : "starter";
@@ -203,7 +205,7 @@ export function TemplatesView() {
   function opened({ id, title }: { id: string; title: string }) {
     toast.success(`Created “${title}”`);
     // Navigate first, then refresh, so the explorer lists the new note.
-    router.push(`/vault/${id}`);
+    navigate(`/vault/${id}`);
     router.refresh();
   }
 

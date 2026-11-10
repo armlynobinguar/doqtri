@@ -47,13 +47,18 @@ function sections(markdown: string): string[] {
     .map((line) => line.slice(3).trim());
 }
 
+/**
+ * Renames from the explorer and waits for the rename to settle. The dialog
+ * closes at once and the new title shows before the server answers (DOQ-32);
+ * the row's Rename button stays disabled until it has.
+ */
 async function rename(page: Page, from: string, to: string) {
   await page.getByRole("button", { name: `Rename ${from}`, exact: true }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel("Note title").fill(to);
   await dialog.getByRole("button", { name: "Rename", exact: true }).click();
-  await expect(page.getByText(`Renamed to “${to}”`)).toBeVisible();
   await expect(dialog).toBeHidden();
+  await expect(page.getByRole("button", { name: `Rename ${to}`, exact: true })).toBeEnabled({ timeout: 15_000 });
 }
 
 test.describe("rename keeps the title heading in step (DOQ-35)", () => {
@@ -182,15 +187,21 @@ test.describe("rename keeps the title heading in step (DOQ-35)", () => {
     );
 
     // Tab A renames it from the explorer, with no editor of its own on it.
+    // The dialog has closed by the time the server refuses, so the refusal
+    // is a toast, and the old title comes back (DOQ-32).
+    await page.bringToFront();
     await page.goto("/vault");
     await page.getByRole("button", { name: `Rename ${title}` }).click();
     const dialog = page.getByRole("dialog");
-    await dialog.getByLabel("Note title").fill(uniqueTitle("Two Tabs Renamed"));
+    const attempted = uniqueTitle("Two Tabs Renamed");
+    await dialog.getByLabel("Note title").fill(attempted);
     await dialog.getByRole("button", { name: "Rename", exact: true }).click();
-    await expect(dialog.getByRole("alert")).toHaveText(
-      "You are editing this note in another tab or window, so it cannot be renamed here.",
-    );
-    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(
+      page.getByText("You are editing this note in another tab or window, so it cannot be renamed here."),
+    ).toBeVisible();
+    await expect(page.getByRole("link", { name: title, exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("link", { name: attempted })).toHaveCount(0);
     expect(await readNote(id)).toEqual({ title, markdown: `# ${title}\n\n## Scope\n\nFirst. Typed in B.` });
 
     // Tab B never noticed: its next save goes on from its own version.

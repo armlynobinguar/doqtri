@@ -6,11 +6,11 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { MindmapCanvas } from "@/components/vault/mindmap-canvas";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
-import { useMindmapRebuild } from "@/hooks/use-mindmap-rebuild";
+import { withRootLabel, type MindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
 import { graphFromMindmap, type MindmapGraph } from "@/lib/mindmap-graph";
 import { withLabelPathIds } from "@/lib/mindmap-live";
 import { DEFAULT_STYLE, type MindmapStyle } from "@/lib/mindmap-style";
-import { mindmapFromHeadings, type ConceptNode, type DocMindmap } from "@/lib/mindmap-types";
+import { mindmapFromHeadings, type ConceptNode } from "@/lib/mindmap-types";
 import { cn } from "@/lib/utils";
 
 /** How long typing must pause before the heading map is rebuilt. */
@@ -30,26 +30,29 @@ type View = "headings" | "concept";
  * it grows (see lib/mindmap-live.ts). Concept map shows the stored AI map,
  * when the note has one, with the same stale hint and Rebuild as the right
  * panel's Mindmap tab — the live tree is never replaced by it. Without a
- * stored map there is nothing to switch to, and no switch.
+ * stored map there is nothing to switch to, and no switch. The concept map
+ * and its rebuild are the workspace's, shared with the right panel, so a
+ * rebuild here shows there too (and the other way round) without a reload.
  */
 export function LiveMindmapPane({
-  docId,
   title,
   markdown,
-  mindmap,
-  stale,
+  concept,
 }: {
-  docId: string;
   title: string;
   /** The editor's live text. */
   markdown: string;
-  /** The stored AI concept map, null when the note has none. */
-  mindmap: DocMindmap | null;
-  stale: boolean;
+  /** The AI concept map (null when the note has none) and its rebuild. */
+  concept: MindmapRebuild;
 }) {
+  const { stale, building, rebuild } = concept;
+  // The root shows the note's title now, so a rename (pending or done) reaches it.
+  const mindmap = useMemo(
+    () => (concept.mindmap ? withRootLabel(concept.mindmap, title) : null),
+    [concept.mindmap, title],
+  );
   const [chosen, setChosen] = useState<View>("headings");
   const view: View = mindmap ? chosen : "headings";
-  const { building, rebuild } = useMindmapRebuild(docId);
 
   const settled = useDebouncedValue(markdown, REBUILD_MS);
   const fresh = useMemo(() => withLabelPathIds(mindmapFromHeadings(title, settled)), [title, settled]);
