@@ -1,8 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { EditorSelection, EditorState, Transaction, type TransactionSpec } from "@codemirror/state";
-import { history, undo, redo } from "@codemirror/commands";
+import { EditorSelection, EditorState, StateEffect, Transaction, type TransactionSpec } from "@codemirror/state";
+import {
+  copyLineDown,
+  copyLineUp,
+  history,
+  moveLineDown,
+  moveLineUp,
+  redo,
+  transposeChars,
+  undo,
+} from "@codemirror/commands";
 import { external, readOnlyGuard } from "@/components/vault/live-editor/read-only";
-import { enterFromTitle, titleLine, titleLineChange, titleLineDecorations } from "@/components/vault/live-editor/title-line";
+import {
+  enterFromTitle,
+  lineMoveKeys,
+  titleLine,
+  titleLineChange,
+  titleLineDecorations,
+} from "@/components/vault/live-editor/title-line";
+import { setParagraphStyle, toggleCodeBlock, toggleInline, toggleList } from "@/lib/live-preview/commands";
 
 const BODY = "\n\n## Scope\n\nText.";
 
@@ -78,15 +94,24 @@ describe("the title line guard (D-120)", () => {
       expect(after.caret).toBe(5);
     });
 
-    it("inline formatting over a selection that starts in the `# ` wraps the title", () => {
-      const after = edit(make(`# Plan${BODY}`), {
+    it("formatting that reaches into the `# ` does nothing; inside the title's text it wraps", () => {
+      const state = make(`# Plan${BODY}`);
+      const into = edit(state, {
         changes: [
           { from: 0, insert: "**" },
           { from: 6, insert: "**" },
         ],
         userEvent: "input.format",
       });
-      expect(after.text).toBe(`# **Plan**${BODY}`);
+      expect(into.text).toBe(`# Plan${BODY}`);
+      const inside = edit(state, {
+        changes: [
+          { from: 2, insert: "**" },
+          { from: 6, insert: "**" },
+        ],
+        userEvent: "input.format",
+      });
+      expect(inside.text).toBe(`# **Plan**${BODY}`);
     });
 
     it("an empty title keeps its `# ` too", () => {
@@ -243,6 +268,101 @@ describe("the title line guard (D-120)", () => {
     ).toBe("# Plan\n\nProse");
   });
 
+  describe("commands that reach line 1, run as the keys run them", () => {
+    const DOC = "# Plan\nline2\nline3";
+
+    it("moving or copying lines never touches the title line", () => {
+      for (const [command, caret] of [
+        [moveLineDown, 3],
+        [moveLineUp, 3],
+        [copyLineDown, 3],
+        [copyLineUp, 3],
+        [moveLineUp, 9],
+      ] as const) {
+        const after = run(make(DOC, { caret }), command);
+        expect(after.text, `${command.name} at ${caret}`).toBe(DOC);
+      }
+      // Below the title they work as ever.
+      expect(run(make(DOC, { caret: 9 }), moveLineDown).text).toBe("# Plan\nline3\nline2");
+      expect(run(make(DOC, { caret: 9 }), copyLineUp).text).toBe("# Plan\nline2\nline2\nline3");
+      expect(run(make(DOC, { caret: 9 }), copyLineDown).text).toBe("# Plan\nline2\nline2\nline3");
+    });
+
+    it("takes Alt-↑/↓ and Shift-Alt-↑/↓ when they would reach the title, so nothing else runs", () => {
+      expect(lineMoveKeys.moveDown({ state: make(DOC, { caret: 3 }) })).toBe(true);
+      expect(lineMoveKeys.copyDown({ state: make(DOC, { caret: 3 }) })).toBe(true);
+      expect(lineMoveKeys.copyUp({ state: make(DOC, { caret: 3 }) })).toBe(true);
+      expect(lineMoveKeys.moveUp({ state: make(DOC, { caret: 9 }) })).toBe(true);
+      // Line 2 copied up, or moved down, stays in the body: the keys are the editor's.
+      expect(lineMoveKeys.copyUp({ state: make(DOC, { caret: 9 }) })).toBe(false);
+      expect(lineMoveKeys.moveDown({ state: make(DOC, { caret: 9 }) })).toBe(false);
+      expect(lineMoveKeys.moveUp({ state: make(DOC, { caret: 15 }) })).toBe(false);
+    });
+
+    it("Ctrl-T never swaps characters across the end of the title line", () => {
+      expect(run(make(DOC, { caret: 7 }), transposeChars).text).toBe(DOC);
+      expect(run(make(DOC, { caret: 6 }), transposeChars).text).toBe(DOC);
+      // Inside the title, or the body, it swaps as usual.
+      expect(run(make(DOC, { caret: 4 }), transposeChars).text).toBe("# Paln\nline2\nline3");
+      expect(run(make(DOC, { caret: 9 }), transposeChars).text).toBe("# Plan\nlnie2\nline3");
+    });
+
+    it("block styles from the toolbar do nothing on the title line; inline ones wrap its text", () => {
+      for (const command of [toggleCodeBlock, setParagraphStyle("h2"), setParagraphStyle("quote"), setParagraphStyle("normal"), toggleList("bullet")]) {
+        const state = make(DOC, { caret: 4 });
+        expect(state.update(command(state)).state.doc.toString()).toBe(DOC);
+      }
+      const word = make(DOC).update({ selection: EditorSelection.range(2, 6) }).state;
+      expect(word.update(toggleInline("bold")(word)).state.doc.toString()).toBe("# **Plan**\nline2\nline3");
+      // In the body, block styles work as ever.
+      const body = make(DOC, { caret: 9 });
+      expect(body.update(setParagraphStyle("h2")(body)).state.doc.toString()).toBe("# Plan\n## line2\nline3");
+    });
+
+    it("whole lines put above the title (they end in a line break) go to the start of the body", () => {
+      const after = edit(make(DOC, { caret: 0 }), { changes: { from: 0, insert: "moved\n" }, userEvent: "input.paste" });
+      expect(after.text).toBe("# Plan\nmoved\nline2\nline3");
+    });
+
+    it("a title line cut and pasted lower leaves an empty title, and the heading below it is body text", () => {
+      const cut = edit(make(DOC), { changes: { from: 0, to: 7 }, userEvent: "delete.cut" }).state;
+      expect(cut.doc.toString()).toBe("# \nline2\nline3");
+      const pasted = edit(cut, { changes: { from: cut.doc.length, insert: "\n# Plan" }, userEvent: "input.paste" });
+      expect(pasted.text).toBe("# \nline2\nline3\n# Plan");
+    });
+  });
+
+  it("keeps every caret of a multiple selection when it corrects an edit", () => {
+    const state = EditorState.create({
+      doc: `# Plan${BODY}`,
+      selection: EditorSelection.create([EditorSelection.cursor(0), EditorSelection.cursor(9)]),
+      extensions: [EditorState.allowMultipleSelections.of(true), titleLine("Plan")],
+    });
+    const after = state.update(state.replaceSelection("x")).state;
+    expect(after.doc.toString()).toBe(`# xPlan\n\n#x# Scope\n\nText.`);
+    expect(after.selection.ranges.map((range) => range.head)).toEqual([3, 11]);
+  });
+
+  it("carries a corrected edit's effects over to the rewritten changes", () => {
+    const mark = StateEffect.define<number>({ map: (pos, mapping) => mapping.mapPos(pos) });
+    let seen: number | null = null;
+    const state = EditorState.create({
+      doc: "# Plan\nline2",
+      extensions: [
+        titleLine("Plan"),
+        EditorState.transactionExtender.of((tr) => {
+          for (const effect of tr.effects) if (effect.is(mark)) seen = effect.value;
+          return null;
+        }),
+      ],
+    });
+    // A paste over the title's line break, with an effect naming the end of the pasted text.
+    state.update({ changes: { from: 4, to: 8, insert: "XY" }, effects: mark.of(6), userEvent: "input.paste" });
+    // Rewritten to "# PlXY\nine2", the line break kept. The effect named the
+    // end of what the paste covered, which is now just after that line break.
+    expect(seen).toBe(7);
+  });
+
   it("undoes and redoes a corrected edit as one step", () => {
     const pasted = edit(make(`# Plan${BODY}`), {
       changes: { from: 2, to: 6, insert: "A\nB" },
@@ -270,16 +390,18 @@ describe("the title line guard (D-120)", () => {
       expect(shown(make(`# Plan${BODY}`, { readOnly: true }))).toEqual(["line:cm-title-line"]);
     });
 
-    it("shows a read-only copy that does not open with its title the title line it will get, writing nothing", () => {
-      for (const doc of [`Prose${BODY}`, `## Plan${BODY}`, `# Other${BODY}`, ""]) {
-        const state = make(doc, { readOnly: true });
-        expect(shown(state), doc).toEqual(["preview:Plan"]);
-        expect(state.doc.toString()).toBe(doc);
+    it("shows a note that does not open with its title line the one it will get, writing nothing", () => {
+      for (const readOnly of [true, false]) {
+        for (const doc of [`Prose${BODY}`, `## Plan${BODY}`, ""]) {
+          const state = make(doc, { readOnly });
+          expect(shown(state), doc).toEqual(["preview:Plan"]);
+          expect(state.doc.toString()).toBe(doc);
+        }
       }
     });
 
-    it("shows no preview on a copy that can be edited: it gets the real line", () => {
-      expect(shown(make(`Prose${BODY}`))).toEqual([]);
+    it("shows no preview over a level-1 heading the note opens with: that is its title line", () => {
+      expect(shown(make(`# Other${BODY}`, { readOnly: true }))).toEqual(["line:cm-title-line"]);
     });
   });
 });

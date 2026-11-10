@@ -13,14 +13,15 @@ import {
 } from "@codemirror/state";
 import { Decoration, EditorView, keymap, WidgetType, type DecorationSet } from "@codemirror/view";
 import { completionStatus } from "@codemirror/autocomplete";
-import { opensWithTitle } from "@/lib/heading-rename";
+import { hasTitleLine } from "@/lib/title-line";
 import { external } from "@/components/vault/live-editor/read-only";
 
 /**
  * The note's title line in the editor (D-120). Like Obsidian's, the first
  * line is always `# <title>`: editing its text renames the note (DOQ-36),
  * but the line itself is not content that can be removed. lib/title-line.ts
- * puts it there when a note opens without one; this keeps it there.
+ * says what an older note's line is (the editor adds it with the note's
+ * first edit); this keeps it there.
  *
  * Every edit is let through as it is unless it would break the line, and
  * then it is corrected rather than refused, so typing still lands somewhere
@@ -39,23 +40,27 @@ import { external } from "@/components/vault/live-editor/read-only";
  *     leaves `# ` with an empty title, which renames nothing (DOQ-36's
  *     "emptied"), and the new text below it; a pasted note that opens with
  *     its own `# ` heading brings its own title
+ *   - commands that move or copy whole lines, swap characters, or restyle a
+ *     block (Alt-↑/↓, Ctrl-T, the toolbar's headings, lists, quotes and code
+ *     blocks) do nothing when they would reach line 1; inline formatting
+ *     inside the title's text still works
  *
  * Only edits from this editor are checked: text loaded from outside (a
  * reload, someone else's save) is shown as it is, and undo and redo replay
  * edits that were already checked. A note whose first line is not a title
- * line yet (a read-only copy of an older note) is not guarded either; it
- * shows its title above the text instead (see `preview`), and gets the real
- * line once it can be edited.
+ * line yet (an older note not edited since D-120, or one whose headings are
+ * linked or anchored and so never gets one) is not guarded either; it shows
+ * its title above the text instead (see TitlePreview), writing nothing.
  */
 
 /** A first line that is a title line: `#`, then a space or tab. Its first two characters are the prefix. */
 const TITLE_LINE_RE = /^#[ \t]/;
 const PREFIX = 2;
 
-/** Marks this editor's own title line changes: Enter on the title, and the line added on open. */
+/** Marks this editor's own title line changes: Enter on the title, and the line added with a first edit. */
 export const titleLineChange = Annotation.define<boolean>();
 
-/** Tells the editor the note's title, for the title line shown above a read-only copy's text. */
+/** Tells the editor the note's title, for the title line shown above a note that has none yet. */
 export const setNoteTitle = StateEffect.define<string>();
 
 const titleField = StateField.define<string>({
@@ -155,6 +160,10 @@ export function repairTitleLine(
       // line break, say. The `# ` and the line break stay; what is typed goes
       // into the title, as below.
       span(PREFIX, to, first.replace(/^[#\s]*/, ""), more);
+    } else if (from < PREFIX && to <= PREFIX && more.length > 0 && more[more.length - 1] === "") {
+      // Whole lines put above the title (they end in a line break): they go
+      // to the start of the body instead, the title line untouched.
+      rest.push(...lines.slice(0, -1));
     } else if (from < PREFIX) {
       // Inside the `# `: it stays, and anything typed goes to the start of
       // the title, without the `#`s and spaces that would only make it `##`.
@@ -221,10 +230,31 @@ export function repairTitleLine(
   return { changes, caret: at };
 }
 
+/** Commands that move or copy whole lines, by their user events. */
+const LINE_MOVES = ["move.line", "input.copyline"];
+
+/** Whether an edit reaches line 1: its text, its `# `, or the line break after it. */
+const touchesTitle = (edit: Edit, titleEnd: number) => edit.from <= titleEnd;
+
+/** Whether an edit reaches into the `# ` or across the line break after the title. */
+const crossesTitle = (edit: Edit, titleEnd: number) =>
+  edit.from <= titleEnd && (edit.from < PREFIX || edit.to > titleEnd);
+
+/** Whether an edit stays inside the title's text, on one line: an inline wrap such as bold. */
+const insideTitleText = (edit: Edit, titleEnd: number) =>
+  edit.from >= PREFIX && edit.to <= titleEnd && edit.lines.length === 1;
+
 /**
  * The guard itself: rewrites an edit that would break the title line into
- * one that keeps it (see repairTitleLine), and drops one that cannot be
- * rewritten into anything sensible.
+ * one that keeps it (see repairTitleLine), and drops the ones with nothing
+ * sensible to rewrite into: line moves and copies that reach line 1,
+ * character swaps across its `# ` or line break, and toolbar block styles on
+ * it (anything but an inline wrap of its text).
+ *
+ * A rewrite keeps the transaction's user event and whether it goes into undo
+ * history, and carries its effects over to the rewritten changes. A single
+ * caret goes where repairTitleLine says; several are each mapped through the
+ * rewritten changes, so none is lost.
  */
 const guard = EditorState.transactionFilter.of((tr): Transaction | TransactionSpec | readonly TransactionSpec[] => {
   if (!tr.docChanged) return tr;
@@ -237,24 +267,72 @@ const guard = EditorState.transactionFilter.of((tr): Transaction | TransactionSp
   tr.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
     edits.push({ from, to, lines: inserted.toJSON() });
   });
-  const repaired = repairTitleLine(start.doc, edits, tr.isUserEvent("input.format"));
+  const titleEnd = start.doc.line(1).to;
+  if (LINE_MOVES.some((event) => tr.isUserEvent(event)) && edits.some((edit) => touchesTitle(edit, titleEnd))) {
+    return {};
+  }
+  // Ctrl-T: swapping across the `# ` or the title's line break; inside the title it swaps as usual.
+  if (tr.isUserEvent("move.character") && edits.some((edit) => crossesTitle(edit, titleEnd))) return {};
+  const format = tr.isUserEvent("input.format");
+  if (format && edits.some((edit) => touchesTitle(edit, titleEnd) && !insideTitleText(edit, titleEnd))) return {};
+
+  const repaired = repairTitleLine(start.doc, edits, format);
   if (!repaired) return guarded(tr.newDoc) ? tr : {};
   if (!guarded(repaired.changes.apply(start.doc))) return {};
+  if (repaired.changes.empty && repaired.caret === null) return {};
 
   const userEvent = tr.annotation(Transaction.userEvent);
   const annotations: Annotation<boolean | string>[] = [
     Transaction.addToHistory.of(tr.annotation(Transaction.addToHistory) ?? true),
   ];
   if (userEvent) annotations.push(Transaction.userEvent.of(userEvent));
-  if (repaired.changes.empty && repaired.caret === null) return {};
-  return {
-    changes: repaired.changes,
-    selection: repaired.caret === null ? undefined : EditorSelection.cursor(repaired.caret),
-    effects: tr.effects,
-    annotations,
-    scrollIntoView: true,
-  };
+  // Effects name positions in the text the original changes made: back to
+  // the text before them, then on through the rewritten ones.
+  const back = tr.changes.invertedDesc;
+  const effects = tr.effects
+    .map((effect) => effect.map(back)?.map(repaired.changes.desc))
+    .filter((effect): effect is StateEffect<unknown> => effect !== undefined);
+  // Several carets: each where it was, moved out of the `# ` (where typing
+  // goes to the start of the title), then mapped past what was typed there.
+  const clamp = (pos: number) => Math.max(pos, PREFIX);
+  const selection =
+    start.selection.ranges.length > 1
+      ? EditorSelection.create(
+          start.selection.ranges.map((range) =>
+            EditorSelection.range(clamp(range.anchor), clamp(range.head)).map(repaired.changes, 1),
+          ),
+          start.selection.mainIndex,
+        )
+      : repaired.caret === null
+        ? undefined
+        : EditorSelection.cursor(repaired.caret);
+  return { changes: repaired.changes, selection, effects, annotations, scrollIntoView: true };
 });
+
+/**
+ * Alt-↑/↓ and Shift-Alt-↑/↓ move or copy the selected lines. Not when the
+ * lines include the title line, or when moving line 2 up would swap it with
+ * the title: the guard would drop the edit anyway, so the keys are taken
+ * here and do nothing.
+ */
+function refuseLineMove(up: boolean, move: boolean) {
+  return (view: { state: EditorState }): boolean => {
+    const { state } = view;
+    if (state.readOnly || !guarded(state.doc)) return false;
+    return state.selection.ranges.some((range) => {
+      const first = state.doc.lineAt(range.from).number;
+      return first === 1 || (up && move && first === 2);
+    });
+  };
+}
+
+/** The line move and copy keys' guards, in the order of their bindings. */
+export const lineMoveKeys = {
+  moveUp: refuseLineMove(true, true),
+  moveDown: refuseLineMove(false, true),
+  copyUp: refuseLineMove(true, false),
+  copyDown: refuseLineMove(false, false),
+};
 
 /**
  * Enter on the title line moves the caret to the start of the body, adding a
@@ -283,7 +361,7 @@ export function enterFromTitle(view: { state: EditorState; dispatch: (spec: Tran
   return true;
 }
 
-/** The title shown above a read-only copy's text when the text does not open with it yet. */
+/** The title shown above a note's text while the text does not open with it. */
 class TitlePreview extends WidgetType {
   constructor(readonly title: string) {
     super();
@@ -307,14 +385,14 @@ class TitlePreview extends WidgetType {
 }
 
 /**
- * Line 1 is styled as the note's title. A copy that cannot be written to
- * (read-only, Reading view, or waiting for its lock) whose text does not open
- * with the title yet shows the title line it will get, above the text and
- * outside it: nothing is written until the note can be edited.
+ * Line 1 is styled as the note's title. A note that does not open with its
+ * title line shows the one it will get, above the text and outside it:
+ * nothing is written for it until the note's first edit (and never, for a
+ * note whose headings are linked or anchored).
  */
 export function titleLineDecorations(state: EditorState): DecorationSet {
   const title = state.field(titleField);
-  if (state.readOnly && title.trim() && !opensWithTitle(state.doc.toString(), title)) {
+  if (title.trim() && !hasTitleLine(state.doc.toString(), title)) {
     return Decoration.set([
       Decoration.widget({ widget: new TitlePreview(title.trim()), block: true, side: -1 }).range(0),
     ]);
@@ -327,7 +405,7 @@ const decorations = StateField.define<DecorationSet>({
   create: titleLineDecorations,
   update(value, tr) {
     const titleChanged = tr.effects.some((effect) => effect.is(setNoteTitle));
-    if (!tr.docChanged && !titleChanged && tr.startState.readOnly === tr.state.readOnly) return value;
+    if (!tr.docChanged && !titleChanged) return value;
     return titleLineDecorations(tr.state);
   },
   provide: (field) => EditorView.decorations.from(field),
@@ -339,6 +417,14 @@ export function titleLine(title: string): Extension {
     titleField.init(() => title),
     decorations,
     guard,
-    Prec.highest(keymap.of([{ key: "Enter", run: enterFromTitle, shift: enterFromTitle }])),
+    Prec.highest(
+      keymap.of([
+        { key: "Enter", run: enterFromTitle, shift: enterFromTitle },
+        { key: "Alt-ArrowUp", run: lineMoveKeys.moveUp },
+        { key: "Alt-ArrowDown", run: lineMoveKeys.moveDown },
+        { key: "Shift-Alt-ArrowUp", run: lineMoveKeys.copyUp },
+        { key: "Shift-Alt-ArrowDown", run: lineMoveKeys.copyDown },
+      ]),
+    ),
   ];
 }

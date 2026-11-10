@@ -155,6 +155,18 @@ describe("decideHeadingRename", () => {
       }
     });
 
+    it("a title line cut and pasted lower: the editor leaves `# ` with an empty title, which renames nothing", () => {
+      // What the title line guard makes of the cut and the paste (title-line.ts).
+      expect(decideHeadingRename("# Old\n# Other\n", "# \n# Other\n# Old\n", "Old")).toEqual({
+        rename: false,
+        reason: "emptied",
+      });
+      expect(decideHeadingRename("# Old\r\n\r\n# Second\r\n", "# \r\n\r\n# Second\r\n# Old\r\n", "Old")).toEqual({
+        rename: false,
+        reason: "emptied",
+      });
+    });
+
     it("a first line that stops being a # heading", () => {
       for (const after of [note("## Roadmap"), note("Roadmap"), note("#Roadmap"), `## Scope\n\nText.`, note("- Roadmap")]) {
         expect(decideHeadingRename(note("# Plan"), after, "Plan")).toEqual({ rename: false, reason: "not-heading" });
