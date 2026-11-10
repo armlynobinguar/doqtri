@@ -485,12 +485,18 @@ describe("createHeadingRenamer", () => {
       expect(t.renamer.title).toBe("No titlesdffga");
     });
 
-    it("drops a draft when the explorer's answer arrives through the editor too", () => {
-      const t = setup("Old");
-      t.editor.text = note("Ol");
+    it("drafts nothing from the explorer's answer, read before the editor shows the renamed text", () => {
+      // The workspace hands over the rewritten text before the editor shows it:
+      // compared then, the old heading would read as a rename back to the old title.
+      const t = setup("Untitled");
       t.renamer.typed(t.ctx);
-      expect(t.drafts.shown).toBe("Ol");
-      t.renamer.noteRenamed({ title: "Renamed", previousTitle: "Old" });
+      t.renamer.setPageTitle("Renamed");
+      const drafted = t.draft.mock.calls.length;
+      t.renamer.noteRenamed({ title: "Renamed", previousTitle: "Untitled" }, note("Renamed"));
+      expect(t.draft).toHaveBeenCalledTimes(drafted);
+      expect(t.drafts.shown).toBeNull();
+      t.editor.text = note("Renamed");
+      t.renamer.typed();
       expect(t.drafts.shown).toBeNull();
     });
 

@@ -304,7 +304,9 @@ export function createHeadingRenamer(init: {
       pending = [];
       notice = null;
       emit();
-      typed();
+      // No draft is worked out here: the editor may not show the renamed text
+      // yet. The explorer's rename already replaced the draft when its title
+      // showed (setPageTitle, and the overlay's run).
     },
 
     /** Whether `renamed` answers one of this editor's own heading renames, not one from elsewhere. */
