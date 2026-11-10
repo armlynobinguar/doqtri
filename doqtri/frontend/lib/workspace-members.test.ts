@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyRosterChange,
   assignableRoles,
   canChangeRole,
   canInvite,
@@ -13,6 +14,7 @@ import {
   recentRemovals,
   transferCandidates,
   type ChainJobRow,
+  type RosterChange,
   type RosterMember,
 } from "@/lib/workspace-members";
 import type { WorkspaceRole } from "@/lib/workspace-roles";
@@ -169,5 +171,72 @@ describe("pending removals and handovers", () => {
     const handover = job({ kind: "reassign_owner", address: null, status: "needs_product_owner" });
     expect(handoverNeedingProductOwner([job({}), handover])).toBe(handover);
     expect(handoverNeedingProductOwner([job({ kind: "reassign_owner", status: "pending" })])).toBeNull();
+  });
+});
+
+// The reducer only: React's useOptimistic does the rollback itself, by
+// dropping a settled change and showing the server data again. These pin down
+// what that relies on: a change applies to the shown lists, never alters the
+// data it is applied to, and can be re-applied safely. The rollback on screen
+// is covered end to end in e2e/workspaces.spec.ts.
+describe("applying changes before their RPC answers (DOQ-33)", () => {
+  const lists = () => ({
+    roster: [owner, editor, viewer],
+    invites: [{ id: "i1" }, { id: "i2" }],
+    myInvites: [{ id: "m1" }],
+    emailInvites: true,
+  });
+  // What useOptimistic shows: every change still waiting, applied over the
+  // latest server data.
+  const shown = (base: ReturnType<typeof lists>, pending: RosterChange[]) => pending.reduce(applyRosterChange, base);
+  const roles = (s: { roster: RosterMember[] }) => s.roster.map((m) => `${m.userId}:${m.role}`);
+
+  it("applies a role change to the shown roster and leaves the data it started from as it was", () => {
+    const base = lists();
+    const before = structuredClone(base);
+    const change: RosterChange = { kind: "role", userId: "viewer", role: "editor" };
+    expect(roles(shown(base, [change]))).toEqual(["owner:owner", "editor:editor", "viewer:editor"]);
+    expect(shown(base, [])).toEqual(before);
+    expect(base).toEqual(before);
+  });
+
+  it("changes nothing more when a role change is applied again, or over a reload that has it", () => {
+    const change: RosterChange = { kind: "role", userId: "viewer", role: "admin" };
+    const kept = applyRosterChange(lists(), change);
+    expect(roles(kept)).toEqual(["owner:owner", "editor:editor", "viewer:admin"]);
+    expect(shown(kept, [change])).toEqual(kept);
+  });
+
+  it("drops a removed member from the shown roster and leaves the data it started from as it was", () => {
+    const base = lists();
+    const before = structuredClone(base);
+    const change: RosterChange = { kind: "remove", userId: "editor" };
+    expect(roles(shown(base, [change]))).toEqual(["owner:owner", "viewer:viewer"]);
+    expect(shown(base, [])).toEqual(before);
+    expect(base).toEqual(before);
+  });
+
+  it("changes nothing more when a removal is applied again, and still applies over a newer reload", () => {
+    const change: RosterChange = { kind: "remove", userId: "editor" };
+    const kept = applyRosterChange(lists(), change);
+    expect(shown(kept, [change])).toEqual(kept);
+    const reloaded = { ...lists(), roster: [owner, editor, viewer, member("admin", "new")] };
+    expect(roles(shown(reloaded, [change]))).toEqual(["owner:owner", "viewer:viewer", "new:admin"]);
+  });
+
+  it("drops a withdrawn or declined invite from either list and leaves the lists it started from as they were", () => {
+    const base = lists();
+    expect(shown(base, [{ kind: "cancel-invite", inviteId: "i2" }]).invites).toEqual([{ id: "i1" }]);
+    expect(shown(base, [{ kind: "cancel-invite", inviteId: "m1" }]).myInvites).toEqual([]);
+    expect(shown(base, [])).toEqual(lists());
+  });
+
+  it("leaves everything else alone", () => {
+    const base = lists();
+    const next = applyRosterChange(base, { kind: "role", userId: "viewer", role: "editor" });
+    expect(next.emailInvites).toBe(true);
+    expect(next.invites).toBe(base.invites);
+    expect(next.roster[0]).toBe(owner);
+    expect(applyRosterChange(base, { kind: "remove", userId: "nobody" }).roster).toEqual(base.roster);
   });
 });

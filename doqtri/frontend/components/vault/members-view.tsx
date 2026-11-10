@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useOptimistic, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowRightLeftIcon,
@@ -35,6 +35,7 @@ import { cn } from "@/lib/utils";
 import type { WorkspaceRole } from "@/lib/workspace-roles";
 import { workspaceSlug } from "@/lib/workspace-scope";
 import {
+  applyRosterChange,
   assignableRoles,
   canChangeRole,
   canInvite,
@@ -52,8 +53,11 @@ import {
   transferCandidates,
   type ChainJobRow,
   type MemberChainState,
+  type RosterChange,
   type RosterMember,
 } from "@/lib/workspace-members";
+import { ReadSequence } from "@/lib/read-sequence";
+import { mayHaveLanded, supabaseWriteError, WRITE_TIMEOUT_MS, writeFailureMessage } from "@/lib/write-outcome";
 
 /** A workspace the user belongs to, for the picker. */
 export type WorkspaceChoice = { id: string; name: string; personal: boolean; role: WorkspaceRole; former?: boolean };
@@ -185,7 +189,10 @@ export function MembersView({
   const personal = workspace?.personal ?? true;
   const former = workspace?.former === true;
 
-  const [data, setData] = useState<Loaded>(EMPTY);
+  // What the server last returned, and what the screen shows: that, with any
+  // role change, removal or withdrawn invite still waiting on its RPC (DOQ-33).
+  const [server, setServer] = useState<Loaded>(EMPTY);
+  const [data, showChange] = useOptimistic<Loaded, RosterChange>(server, applyRosterChange);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [chain, setChain] = useState<ChainWorkspace | null | undefined | "unreachable">(undefined);
@@ -198,19 +205,29 @@ export function MembersView({
 
   const chainShown = REGISTRY_EDITORS && !personal;
 
+  // Reloads run behind optimistic changes without being awaited, so they can
+  // overlap; one overtaken by a newer reload or a successful write drops its
+  // answer rather than bring back a row that is already gone.
+  const [reads] = useState(() => new ReadSequence());
+
   const reload = useCallback(async () => {
+    const ticket = reads.start();
     try {
-      setData(await loadAll(workspaceId));
+      const next = await loadAll(workspaceId);
+      if (!reads.isCurrent(ticket)) return;
+      setServer(next);
       setLoadError(null);
     } catch (error) {
+      if (!reads.isCurrent(ticket)) return;
       setLoadError(error instanceof Error ? error.message : "Members couldn't be loaded.");
     } finally {
       setLoaded(true);
     }
     if (chainShown) {
-      setChain(await DoqtriRegistry.readWorkspace(workspaceId).catch(() => "unreachable" as const));
+      const read = await DoqtriRegistry.readWorkspace(workspaceId).catch(() => "unreachable" as const);
+      if (reads.isCurrent(ticket)) setChain(read);
     }
-  }, [workspaceId, chainShown]);
+  }, [workspaceId, chainShown, reads]);
 
   useEffect(() => {
     const timer = setTimeout(() => void reload(), 0);
@@ -238,10 +255,49 @@ export function MembersView({
     }
   }
 
+  /**
+   * Shows `change` at once and runs `write` behind it (DOQ-33). A refusal puts
+   * the row back and shows the server's message. No answer puts it back too,
+   * says the change may not have saved, and reloads to see whether it did. On
+   * success the change is kept, and `after` settles the screen on the
+   * server's data without holding the row busy.
+   */
+  function actOptimistic(name: string, change: RosterChange, write: () => Promise<void>, after: () => Promise<void>) {
+    setBusy(name);
+    startTransition(async () => {
+      showChange(change);
+      try {
+        await write();
+        reads.invalidate();
+        setServer((current) => applyRosterChange(current, change));
+        void after();
+      } catch (error) {
+        toast.error(writeFailureMessage(error, `${name} failed`));
+        if (mayHaveLanded(error)) void reload();
+      } finally {
+        setBusy(null);
+      }
+    });
+  }
+
   async function rpc(fn: string, args: Record<string, unknown>) {
-    const { data: result, error } = await createSupabaseBrowserClient().rpc(fn, args);
-    if (error) throw new Error(error.message);
+    const { data: result, error, status } = await createSupabaseBrowserClient().rpc(fn, args);
+    if (error) throw supabaseWriteError(error, status);
     return result as unknown;
+  }
+
+  /** rpc() for an optimistic change: it gives up after WRITE_TIMEOUT_MS, so the change cannot hang on screen. */
+  async function optimisticRpc(fn: string, args: Record<string, unknown>) {
+    const { error, status } = await createSupabaseBrowserClient()
+      .rpc(fn, args)
+      .abortSignal(AbortSignal.timeout(WRITE_TIMEOUT_MS));
+    if (error) throw supabaseWriteError(error, status);
+  }
+
+  /** Works the chain follow-ups a role change or removal queued, then rereads everything. */
+  async function syncThenReload() {
+    await syncChain(workspaceId);
+    await reload();
   }
 
   function needWallet(): string {
@@ -264,27 +320,39 @@ export function MembersView({
         : "Invite sent. Whoever signs in with that wallet sees it and joins once they accept it.",
     );
 
+  // The new role shows before the RPC answers. Chain sync and the reload
+  // start once it succeeds, and nothing waits on them.
   const changeRole = (member: RosterMember, role: WorkspaceRole) =>
-    act(`role:${member.userId}`, async () => {
-      await rpc("set_workspace_member_role", { p_workspace_id: workspaceId, p_user_id: member.userId, p_role: role });
-      toast.success(`${nameOf(member.label, member.address)} is now ${ROLE_LABELS[role].toLowerCase()}.`);
-      await syncChain(workspaceId);
-      await reload();
-    });
+    actOptimistic(
+      `role:${member.userId}`,
+      { kind: "role", userId: member.userId, role },
+      async () => {
+        await optimisticRpc("set_workspace_member_role", { p_workspace_id: workspaceId, p_user_id: member.userId, p_role: role });
+        toast.success(`${nameOf(member.label, member.address)} is now ${ROLE_LABELS[role].toLowerCase()}.`);
+      },
+      syncThenReload,
+    );
 
+  // Removing someone else hides their row at once. Leaving waits for the
+  // server: it navigates away from a workspace you no longer belong to.
   const remove = (member: RosterMember) =>
-    act(member.userId === userId ? "leave" : `remove:${member.userId}`, async () => {
-      await rpc("remove_workspace_member", { p_workspace_id: workspaceId, p_user_id: member.userId });
-      await syncChain(workspaceId);
-      if (member.userId === userId) {
-        toast.success(`You left ${workspace?.name ?? "the workspace"}.`);
-        router.push("/vault/workspace/members");
-        router.refresh();
-        return;
-      }
-      toast.success(`${nameOf(member.label, member.address)} was removed.`);
-      await reload();
-    });
+    member.userId === userId
+      ? act("leave", async () => {
+          await rpc("remove_workspace_member", { p_workspace_id: workspaceId, p_user_id: member.userId });
+          await syncChain(workspaceId);
+          toast.success(`You left ${workspace?.name ?? "the workspace"}.`);
+          router.push("/vault/workspace/members");
+          router.refresh();
+        })
+      : actOptimistic(
+          `remove:${member.userId}`,
+          { kind: "remove", userId: member.userId },
+          async () => {
+            await optimisticRpc("remove_workspace_member", { p_workspace_id: workspaceId, p_user_id: member.userId });
+            toast.success(`${nameOf(member.label, member.address)} was removed.`);
+          },
+          syncThenReload,
+        );
 
   const grant = (member: RosterMember, fn: "add_editor" | "add_admin") =>
     act(`grant:${member.userId}`, async () => {
@@ -384,10 +452,15 @@ export function MembersView({
     });
 
   const cancelInvite = (id: string, mine: boolean) =>
-    act(`cancel:${id}`, async () => {
-      await rpc("cancel_workspace_invite", { p_invite_id: id });
-      await reload();
-    }, mine ? "Invite declined." : "Invite withdrawn.");
+    actOptimistic(
+      `cancel:${id}`,
+      { kind: "cancel-invite", inviteId: id },
+      async () => {
+        await optimisticRpc("cancel_workspace_invite", { p_invite_id: id });
+        toast.success(mine ? "Invite declined." : "Invite withdrawn.");
+      },
+      reload,
+    );
 
   const createTeam = () =>
     act("create-team", async () => {

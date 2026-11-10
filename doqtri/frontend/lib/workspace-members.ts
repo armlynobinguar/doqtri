@@ -192,6 +192,49 @@ export function recentRemovals(jobs: ChainJobRow[], roster: RosterMember[], now:
     .sort((a, b) => (b.doneAt ?? "").localeCompare(a.doneAt ?? ""));
 }
 
+/**
+ * A members-screen change shown before its RPC answers (DOQ-33): a role
+ * change, removing someone else, or withdrawing or declining an invite.
+ * Leaving, inviting and accepting wait for the server: each needs its answer
+ * (a navigation, an invite id, a workspace id) before there is anything to show.
+ */
+export type RosterChange =
+  | { kind: "role"; userId: string; role: WorkspaceRole }
+  | { kind: "remove"; userId: string }
+  | { kind: "cancel-invite"; inviteId: string };
+
+/** The lists a RosterChange touches. Invite ids are unique across both invite lists. */
+export type RosterLists = {
+  roster: RosterMember[];
+  invites: { id: string }[];
+  myInvites: { id: string }[];
+};
+
+/**
+ * The screen's lists with `change` applied, as useOptimistic's reducer and
+ * again to keep the change once its RPC succeeds. It returns new lists and
+ * never touches `state`, so a refused change rolls back to exactly what was
+ * shown before. Applying it twice, or to a reload that already has it, changes
+ * nothing more: React re-runs pending changes over every new base.
+ */
+export function applyRosterChange<S extends RosterLists>(state: S, change: RosterChange): S {
+  switch (change.kind) {
+    case "role":
+      return {
+        ...state,
+        roster: state.roster.map((m) => (m.userId === change.userId ? { ...m, role: change.role } : m)),
+      };
+    case "remove":
+      return { ...state, roster: state.roster.filter((m) => m.userId !== change.userId) };
+    case "cancel-invite":
+      return {
+        ...state,
+        invites: state.invites.filter((i) => i.id !== change.inviteId),
+        myInvites: state.myInvites.filter((i) => i.id !== change.inviteId),
+      };
+  }
+}
+
 /** A D-31 handover the product owner has to sign, if one is waiting. */
 export function handoverNeedingProductOwner(jobs: ChainJobRow[]): ChainJobRow | null {
   return jobs.find((j) => j.kind === "reassign_owner" && j.status === "needs_product_owner") ?? null;

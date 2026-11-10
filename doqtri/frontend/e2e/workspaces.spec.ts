@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { test, expect, type BrowserContext, type Page } from "@playwright/test";
+import { test, expect, type BrowserContext, type Page, type Route } from "@playwright/test";
 import { shortenAddress } from "@/lib/wallet";
+import { UNCONFIRMED_WRITE } from "@/lib/write-outcome";
 import { assertNotProduction } from "./guard";
 import { deleteNote, editableEditor, expectEditorText, noteEditor, personalWorkspaceId, setEditorSelection, seedNote, serviceRest, testUserId, uniqueTitle, userIdForWallet } from "./helpers";
 import { createTeamWorkspace, deleteWorkspace, memberRole, setMember } from "./teams";
@@ -191,6 +192,84 @@ test.describe("members screen", () => {
       await bPage.close();
       await deleteNote(noteId);
     }
+  });
+
+  test("a role change shows before the RPC answers, and goes back when it is refused or unanswered", async ({ page }) => {
+    await setMember(team, bId, "viewer");
+    await page.goto(`/vault/workspace/members?ws=${team}`);
+    const role = page.getByLabel(`Role of ${B_SHORT}`);
+    await expect(role).toHaveText("Viewer");
+
+    // Each step holds the RPC until the screen has shown the new role, so the
+    // test proves the change appears before the server answers (DOQ-33).
+    const RPC = "**/rest/v1/rpc/set_workspace_member_role";
+    async function pick(option: string, answer: (route: Route) => Promise<void>) {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      await page.route(RPC, async (route) => {
+        await held;
+        await answer(route);
+      });
+      const stored = await memberRole(team, bId);
+      await role.click();
+      await page.getByRole("option", { name: option }).click();
+      await expect(role).toHaveText(option);
+      expect(await memberRole(team, bId)).toBe(stored);
+      release();
+    }
+
+    // Accepted: the role stays, and the database has it.
+    await pick("Editor", (route) => route.continue());
+    await expect(page.getByText(new RegExp(`${B_SHORT} is now editor`, "i"))).toBeVisible();
+    await expect.poll(() => memberRole(team, bId)).toBe("editor");
+    await expect(role).toHaveText("Editor");
+    await page.unroute(RPC);
+
+    // Refused, as PostgREST answers a raised exception: the old role comes back with the server's message.
+    await pick("Admin", (route) =>
+      route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "P0001", message: "E2E refused this role change", details: null, hint: null }),
+      }),
+    );
+    await expect(page.getByText("E2E refused this role change")).toBeVisible();
+    await expect(role).toHaveText("Editor");
+    expect(await memberRole(team, bId)).toBe("editor");
+    await page.unroute(RPC);
+
+    // No answer at all: the old role comes back and the toast says it may not have saved.
+    await pick("Viewer", (route) => route.abort("failed"));
+    await expect(page.getByText(UNCONFIRMED_WRITE)).toBeVisible();
+    await expect(role).toHaveText("Editor");
+    expect(await memberRole(team, bId)).toBe("editor");
+    await page.unroute(RPC);
+  });
+
+  test("removing someone hides their row before the RPC answers, and a refusal brings it back", async ({ page }) => {
+    await setMember(team, bId, "viewer");
+    await page.goto(`/vault/workspace/members?ws=${team}`);
+    const row = page.getByTestId("member-row").filter({ hasText: B_SHORT });
+    await expect(row).toBeVisible();
+
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route("**/rest/v1/rpc/remove_workspace_member", async (route) => {
+      await held;
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "P0001", message: "E2E refused this removal", details: null, hint: null }),
+      });
+    });
+    await page.getByRole("button", { name: `Remove ${B_SHORT}` }).click();
+    await expect(row).toHaveCount(0);
+    expect(await memberRole(team, bId)).toBe("viewer");
+    release();
+
+    await expect(page.getByText("E2E refused this removal")).toBeVisible();
+    await expect(row).toBeVisible();
+    expect(await memberRole(team, bId)).toBe("viewer");
   });
 
   // The RPCs behind these controls refuse the same callers; that is covered
