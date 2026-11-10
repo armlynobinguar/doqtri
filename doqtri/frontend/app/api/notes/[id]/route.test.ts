@@ -453,6 +453,53 @@ describe("PATCH /api/notes/[id] renames the title heading with the title (DOQ-35
     expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
   });
 
+  describe("with the title the caller expects (DOQ-36)", () => {
+    it("renames when the note's title is still the expected one", async () => {
+      const res = await PATCH(rename("Plan 2027", { expectedTitle: " Roadmap " }), ctx());
+      expect(res.status).toBe(200);
+      expect((await res.json()).title).toBe("Plan 2027");
+      expect(renameCalls()).toHaveLength(1);
+    });
+
+    it("answers 409 TITLE_CHANGED with the current title, writing nothing, when it was renamed meanwhile", async () => {
+      adminRows.documents = { ...(adminRows.documents as object), title: "Someone Else's Title" };
+      const res = await PATCH(rename("Plan 2027", { expectedTitle: "Roadmap" }), ctx());
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: "This note was renamed to “Someone Else's Title” meanwhile, so it was not renamed.",
+        code: "TITLE_CHANGED",
+        title: "Someone Else's Title",
+      });
+      expect(renameCalls()).toEqual([]);
+      expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
+    });
+
+    it("compares exactly: a rename that only changed case still counts", async () => {
+      adminRows.documents = { ...(adminRows.documents as object), title: "roadmap" };
+      const res = await PATCH(rename("Plan 2027", { expectedTitle: "Roadmap" }), ctx());
+      expect(res.status).toBe(409);
+      expect((await res.json()).code).toBe("TITLE_CHANGED");
+    });
+
+    it("checks again when a save makes it read the note again", async () => {
+      renameAnswers({ data: null, error: { code: "DQVER", message: "stale", details: "4" } });
+      adminReads.documents = [
+        adminRows.documents,
+        { id: DOC, workspace_id: WS, user_id: ME, title: "Renamed Elsewhere", markdown: OLD, version: 4 },
+      ];
+      const res = await PATCH(rename("Plan 2027", { expectedTitle: "Roadmap" }), ctx());
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ code: "TITLE_CHANGED", title: "Renamed Elsewhere" });
+      expect(renameCalls()).toHaveLength(1);
+    });
+
+    it("is not checked when it is not sent", async () => {
+      adminRows.documents = { ...(adminRows.documents as object), title: "Someone Else's Title" };
+      const res = await PATCH(rename("Plan 2027"), ctx());
+      expect(res.status).toBe(200);
+    });
+  });
+
   it("calls nothing when the title does not change", async () => {
     const res = await PATCH(rename("Roadmap"), ctx());
     expect(res.status).toBe(200);

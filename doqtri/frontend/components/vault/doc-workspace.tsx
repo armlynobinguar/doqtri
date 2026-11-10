@@ -29,6 +29,8 @@ import type { EditorStats } from "@/lib/text-stats";
 import type { RenamedNote } from "@/lib/rename-note";
 import { adoptRename } from "@/lib/rename-adopt";
 import { useRegisterOpenNote } from "@/components/vault/open-note";
+import { useHeadingRename } from "@/components/vault/use-heading-rename";
+import { buildBacklinks } from "@/lib/wikilinks";
 
 const SETTLE_MS = 700;
 
@@ -84,6 +86,14 @@ export function DocWorkspace({
 
   const { lock, controller } = useDocLock(active.id);
 
+  // Editing the title heading renames the note (DOQ-36).
+  const headingRename = useHeadingRename({
+    docId: active.id,
+    title: active.title,
+    initialMarkdown: active.markdown,
+  });
+  const resetHeading = headingRename.reset;
+
   // The page remounts this per note, so the saver never outlives its row.
   // Its writes hold the lock and send the version the text is based on.
   const [saver] = useState(() =>
@@ -112,10 +122,11 @@ export function DocWorkspace({
     saver.setVersion(Number(data.version));
     saves.markSaved(data.markdown);
     markdownRef.current = data.markdown;
+    resetHeading(data.markdown);
     setMarkdown(data.markdown);
     setConflict(false);
     setSaveState("saved");
-  }, [active.id, saver, saves, setSaveState]);
+  }, [active.id, resetHeading, saver, saves, setSaveState]);
 
   useEffect(() => {
     controller.setHandlers({
@@ -147,10 +158,17 @@ export function DocWorkspace({
   // Read-only only because the lock's status has not arrived yet (DOQ-17):
   // the editor keeps its caret so typing works the moment it does.
   const lockPending = lock.phase === "loading" && !conflict;
+  const readOnlyRef = useRef(readOnly);
+  useEffect(() => {
+    readOnlyRef.current = readOnly;
+  }, [readOnly]);
 
   /** The editor's onChange: the first edit takes the lock. */
   const handleChange = useCallback(
     (next: string) => {
+      // Now rather than after the render, for a title-line check made in the
+      // same editor update (DOQ-36).
+      markdownRef.current = next;
       setMarkdown(next);
       void controller.noteEdit().then((held) => {
         // Lost the race for a free lock: drop the keystroke for their text.
@@ -264,6 +282,7 @@ export function DocWorkspace({
    * heading change only when this tab holds the lock, or nobody does
    * (rename_document()).
    */
+  const noteRenamed = headingRename.noteRenamed;
   const renameHere = useCallback(
     async (request: (session: string) => Promise<RenamedNote>) => {
       if (!readOnly) {
@@ -282,6 +301,7 @@ export function DocWorkspace({
           saved: saves.saved,
           current: markdownRef.current,
         });
+        noteRenamed(renamed, adopted?.text);
         if (!adopted) {
           // A rewrite this copy was already behind: load what the note is
           // now, unless it holds unsaved text or a conflict the user must see.
@@ -300,10 +320,40 @@ export function DocWorkspace({
         // now, rebased, rather than the pre-rename text it was queued with.
       }, () => markdownRef.current);
     },
-    [controller, readOnly, reloadLatest, saveNow, saver, saves, setSaveState],
+    [controller, noteRenamed, readOnly, reloadLatest, saveNow, saver, saves, setSaveState],
   );
-  const openNote = useMemo(() => ({ docId: active.id, rename: renameHere }), [active.id, renameHere]);
-  useRegisterOpenNote(openNote);
+  const openHere = useMemo(() => ({ docId: active.id, rename: renameHere }), [active.id, renameHere]);
+  useRegisterOpenNote(openHere);
+
+  /**
+   * Renames the note when its title heading was edited (DOQ-36): when an
+   * edit settles, and when the caret leaves the title line. Never while the
+   * copy is read-only or its lock is loading. The explorer, tab, graph and
+   * mindmap read the title from the layout's server data, as after a rename
+   * from the explorer.
+   */
+  const checkHeadingNow = headingRename.check;
+  const checkHeading = useCallback(() => {
+    checkHeadingNow({
+      text: () => markdownRef.current,
+      canRename: () => !readOnlyRef.current,
+      rename: renameHere,
+      backlinks: () => buildBacklinks(docs, active.id).length,
+      refresh: () => router.refresh(),
+    });
+  }, [checkHeadingNow, renameHere, docs, active.id, router]);
+  const checkHeadingRef = useRef(checkHeading);
+  useEffect(() => {
+    checkHeadingRef.current = checkHeading;
+  }, [checkHeading]);
+  // Also once the copy can be edited again, for an edit that settled while
+  // the lock's status was reloading.
+  useEffect(() => {
+    checkHeadingRef.current();
+  }, [settled, readOnly]);
+  // Called from inside an editor update: run once it has finished.
+  const leaveTitleLine = useCallback(() => queueMicrotask(() => checkHeadingRef.current()), []);
+  const title = headingRename.title;
 
   /**
    * The graph reads the settled text so the simulation is not restarted on
@@ -387,11 +437,13 @@ export function DocWorkspace({
         : NaN;
     if (Number.isSafeInteger(nextVersion)) saver.setVersion(nextVersion);
     saves.markSaved(next);
+    markdownRef.current = next;
+    resetHeading(next);
     setMarkdown(next);
     setSaveState("saved");
     toast.success("Note regenerated");
     router.refresh();
-  }, [active.id, controller, router, saveNow, saver, saves, setSaveState]);
+  }, [active.id, controller, resetHeading, router, saveNow, saver, saves, setSaveState]);
 
   const regenerateDialog = (
     <RegenerateDialog
@@ -447,7 +499,7 @@ export function DocWorkspace({
           <EditorPane
             compact
             docId={active.id}
-            title={active.title}
+            title={title}
             markdown={markdown}
             onChange={handleChange}
             onRegenerate={() => setRegenerateOpen(true)}
@@ -457,6 +509,9 @@ export function DocWorkspace({
             onOpenNote={openNote}
             onStats={handleStats}
             banner={lockBanner}
+            headingNotice={headingRename.notice}
+            onDismissHeadingNotice={headingRename.dismiss}
+            onLeaveTitleLine={leaveTitleLine}
           />
         </div>
         {mobileView === "map" && (
@@ -464,7 +519,7 @@ export function DocWorkspace({
             <RightPanel
               docs={docsForGraph}
               activeId={active.id}
-              title={active.title}
+              title={title}
               markdown={markdown}
               mindmap={active.mindmap ?? null}
               mindmapStale={active.mindmapStale ?? false}
@@ -475,7 +530,7 @@ export function DocWorkspace({
         )}
         {mobileView === "ship" && (
           <div className="bg-sidebar min-h-0 flex-1 overflow-y-auto [&>*:first-child]:border-t-0">
-            <ShipPanel docId={active.id} title={active.title} markdown={markdown} onSave={saveNow} />
+            <ShipPanel docId={active.id} title={title} markdown={markdown} onSave={saveNow} />
           </div>
         )}
 
@@ -490,7 +545,7 @@ export function DocWorkspace({
         <ResizablePanel id="editor" minSize={320} className="flex min-h-0 flex-col">
           <EditorPane
             docId={active.id}
-            title={active.title}
+            title={title}
             markdown={markdown}
             onChange={handleChange}
             onRegenerate={() => setRegenerateOpen(true)}
@@ -502,6 +557,9 @@ export function DocWorkspace({
             onOpenNote={openNote}
             onStats={handleStats}
             banner={lockBanner}
+            headingNotice={headingRename.notice}
+            onDismissHeadingNotice={headingRename.dismiss}
+            onLeaveTitleLine={leaveTitleLine}
           />
         </ResizablePanel>
 
@@ -517,7 +575,7 @@ export function DocWorkspace({
           <RightPanel
             docs={docsForGraph}
             activeId={active.id}
-            title={active.title}
+            title={title}
             markdown={markdown}
             mindmap={active.mindmap ?? null}
             mindmapStale={active.mindmapStale ?? false}

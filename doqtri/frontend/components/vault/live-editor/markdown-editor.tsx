@@ -18,6 +18,8 @@ import { linkFollowing, noteOpener } from "@/components/vault/live-editor/link-f
 import { external, readOnlyGuard } from "@/components/vault/live-editor/read-only";
 import { editorKeymap, findAndReplace, searchKeymap, shortcutKeys } from "@/components/vault/live-editor/editor-actions";
 import { FormatToolbar, type EditorMode } from "@/components/vault/live-editor/format-toolbar";
+import { headingNotice, headingNoticeDismiss, setHeadingNotice } from "@/components/vault/live-editor/heading-notice";
+import { headingNoticeText, type HeadingNotice } from "@/lib/heading-rename";
 
 /** The smallest single change that turns `from` into `to`. */
 function diff(from: string, to: string) {
@@ -131,6 +133,21 @@ function statsReporter(emit: (stats: EditorStats) => void, current: () => Editor
     },
   };
 }
+/** The number of the note's first non-blank line, where its title heading would be. */
+function titleLine(state: EditorState): number | null {
+  const { doc } = state;
+  for (let n = 1; n <= doc.lines; n++) {
+    if (!/^[ \t\f\v]*$/.test(doc.line(n).text)) return n;
+  }
+  return null;
+}
+
+/** Whether the caret is on the title line. */
+function caretOnTitleLine(state: EditorState): boolean {
+  const line = titleLine(state);
+  return line !== null && state.doc.lineAt(state.selection.main.head).number === line;
+}
+
 
 /**
  * The note editor: one column of markdown that reads as rendered text, with
@@ -160,6 +177,9 @@ export default function MarkdownEditor({
   autoHeight = false,
   onOpenNote,
   onStats,
+  headingNotice: notice = null,
+  onDismissHeadingNotice,
+  onLeaveTitleLine,
 }: {
   value: string;
   onChange: (markdown: string) => void;
@@ -181,6 +201,12 @@ export default function MarkdownEditor({
   onOpenNote?: (title: string) => void;
   /** Characters, caret position and selection counts, for the status bar. */
   onStats?: (stats: EditorStats) => void;
+  /** The line under the title heading (DOQ-36): a title clash, or a rename's links; null for none. */
+  headingNotice?: HeadingNotice | null;
+  /** The notice's Dismiss button. */
+  onDismissHeadingNotice?: () => void;
+  /** The caret moved off the note's first non-blank line, after an edit or by moving (DOQ-36). */
+  onLeaveTitleLine?: () => void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -212,6 +238,8 @@ export default function MarkdownEditor({
   const titlesRef = useRef(linkTitles);
   const openNoteRef = useRef(onOpenNote);
   const statsRef = useRef(onStats);
+  const dismissRef = useRef(onDismissHeadingNotice);
+  const leaveTitleRef = useRef(onLeaveTitleLine);
   /** The text this editor last reported, so its own echo is not re-applied. */
   const reportedRef = useRef(value);
   useEffect(() => {
@@ -219,6 +247,8 @@ export default function MarkdownEditor({
     titlesRef.current = linkTitles;
     openNoteRef.current = onOpenNote;
     statsRef.current = onStats;
+    dismissRef.current = onDismissHeadingNotice;
+    leaveTitleRef.current = onLeaveTitleLine;
   });
 
   /** Reading is read-only too: nothing in it may change the text. */
@@ -275,6 +305,8 @@ export default function MarkdownEditor({
             spellcheck: "false",
             autocorrect: "off",
           }),
+          headingNotice(),
+          headingNoticeDismiss.of(() => dismissRef.current?.()),
           editorTheme,
           readOnlyGuard,
           EditorView.updateListener.of((update) => {
@@ -289,6 +321,13 @@ export default function MarkdownEditor({
             const text = update.state.doc.toString();
             reportedRef.current = text;
             onChangeRef.current(text);
+          }),
+          // Reported after the change above, so the text it acts on is the edited one.
+          EditorView.updateListener.of((update) => {
+            if (!update.selectionSet && !update.docChanged) return;
+            if (update.state.readOnly) return;
+            if (update.transactions.every((tr) => tr.annotation(external))) return;
+            if (caretOnTitleLine(update.startState) && !caretOnTitleLine(update.state)) leaveTitleRef.current?.();
           }),
         ],
       }),
@@ -320,6 +359,10 @@ export default function MarkdownEditor({
       ],
     });
   }, [view, lock, preview, views, readOnly, pending, shownMode]);
+
+  useEffect(() => {
+    view?.dispatch({ effects: setHeadingNotice.of(notice) });
+  }, [view, notice]);
 
   // Text from outside: a reload after a conflict, someone else's save, a
   // regenerate. Applied as the smallest change, so the caret stays put when
@@ -442,6 +485,15 @@ export default function MarkdownEditor({
         />
       )}
       <div ref={hostRef} className={cn(!autoHeight && "min-h-0 flex-1")} data-testid="note-editor" />
+      {/* Always mounted, so a notice appearing in it is announced. */}
+      <div role="status" aria-live="polite" className="sr-only" data-testid="heading-notice-status">
+        {notice ? announcement(notice) : ""}
+      </div>
     </div>
   );
+}
+
+function announcement(notice: HeadingNotice): string {
+  const { message, hint } = headingNoticeText(notice);
+  return hint ? `${message} ${hint}` : message;
 }

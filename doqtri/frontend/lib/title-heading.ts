@@ -39,28 +39,43 @@ export function rewriteTitleHeading(
   const wanted = normalizeConcept(oldTitle);
   if (!wanted || hasControlCharacters(newTitle)) return null;
 
+  const line = firstNonBlankLine(markdown);
+  if (!line) return null;
+  const label = headingLabel(line.text);
+  if (label === null || normalizeConcept(label) !== wanted) return null;
+
+  const heading = titleHeading(newTitle);
+  if (heading === line.text) return null;
+  return markdown.slice(0, line.from) + heading + markdown.slice(line.to);
+}
+
+/**
+ * The note's first non-blank line: its text, without the line ending, and
+ * where that text starts and ends in `markdown`. The `\r` of a CRLF ending is
+ * outside the line. Null when every line is blank.
+ */
+export function firstNonBlankLine(markdown: string): { text: string; from: number; to: number } | null {
   let start = 0;
   while (start < markdown.length) {
     const newline = markdown.indexOf("\n", start);
     const end = newline === -1 ? markdown.length : newline;
-    // The `\r` of a CRLF ending stays where it is, outside the line.
     const lineEnd = end > start && markdown[end - 1] === "\r" ? end - 1 : end;
-    const line = markdown.slice(start, lineEnd);
-
-    if (!BLANK_RE.test(line)) {
-      const match = H1_RE.exec(line);
-      if (!match) return null;
-      if (normalizeConcept(cleanLabel(match[1])) !== wanted) return null;
-
-      const heading = titleHeading(newTitle);
-      if (heading === line) return null;
-      return markdown.slice(0, start) + heading + markdown.slice(lineEnd);
-    }
-
+    const text = markdown.slice(start, lineEnd);
+    if (!BLANK_RE.test(text)) return { text, from: start, to: lineEnd };
     if (newline === -1) break;
     start = newline + 1;
   }
   return null;
+}
+
+/**
+ * What a level-1 heading line says, read as the mindmap reads a heading
+ * (cleanLabel), or null when `line` is not one. `# [[Target|Alias]]` reads
+ * as Alias.
+ */
+export function headingLabel(line: string): string | null {
+  const match = H1_RE.exec(line);
+  return match ? cleanLabel(match[1]) : null;
 }
 
 /**

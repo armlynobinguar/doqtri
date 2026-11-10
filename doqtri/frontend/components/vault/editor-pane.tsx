@@ -10,6 +10,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { LiveMindmapPane } from "@/components/vault/live-mindmap-pane";
 import type { DocMindmap } from "@/lib/mindmap-types";
+import type { HeadingNotice } from "@/lib/heading-rename";
 import { cn } from "@/lib/utils";
 import type { EditorStats } from "@/lib/text-stats";
 
@@ -78,6 +79,9 @@ export function EditorPane({
   onOpenNote,
   onStats,
   banner,
+  headingNotice = null,
+  onDismissHeadingNotice,
+  onLeaveTitleLine,
 }: {
   docId: string;
   title: string;
@@ -107,6 +111,11 @@ export function EditorPane({
   onStats?: (stats: EditorStats) => void;
   /** Shown between the tab strip and the editor, e.g. "<name> is editing". */
   banner?: ReactNode;
+  /** The line under the note's title heading (DOQ-36); see MarkdownEditor. */
+  headingNotice?: HeadingNotice | null;
+  onDismissHeadingNotice?: () => void;
+  /** The caret moved off the note's title line (DOQ-36). */
+  onLeaveTitleLine?: () => void;
 }) {
   const mindmapShown = useSyncExternalStore(subscribeMindmapShown, readMindmapShown, () => true);
   const showMindmap = !compact && mindmapShown;
@@ -122,6 +131,9 @@ export function EditorPane({
       compact={compact}
       onOpenNote={onOpenNote}
       onStats={onStats}
+      headingNotice={headingNotice}
+      onDismissHeadingNotice={onDismissHeadingNotice}
+      onLeaveTitleLine={onLeaveTitleLine}
     />
   );
 
