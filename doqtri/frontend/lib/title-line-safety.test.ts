@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { readTitleLineSafety, type SafetyReads } from "@/lib/title-line-safety";
+import { readTitleLineSafety, readTitleLineSafetyOutcome, type SafetyReads } from "@/lib/title-line-safety";
 
 /** Reads that find what `found` says, each failing instead when it says "fail". */
 function reads(found: Partial<Record<keyof SafetyReads, boolean | "fail">> = {}): SafetyReads {
@@ -30,5 +30,19 @@ describe("readTitleLineSafety (D-120)", () => {
     for (const key of ["hasNodeLinks", "hasChainWrites", "isRegistered"] as const) {
       expect(await readTitleLineSafety("n1", reads({ [key]: "fail" })), key).toBe("blocked");
     }
+  });
+});
+
+describe("readTitleLineSafetyOutcome (DOQ-46)", () => {
+  it("tells a read that failed apart from one that found something", async () => {
+    expect(await readTitleLineSafetyOutcome("n1", reads())).toBe("allowed");
+    expect(await readTitleLineSafetyOutcome("n1", reads({ hasChainWrites: true }))).toBe("blocked");
+    for (const key of ["hasNodeLinks", "hasChainWrites", "isRegistered"] as const) {
+      expect(await readTitleLineSafetyOutcome("n1", reads({ [key]: "fail" })), key).toBe("unreadable");
+    }
+  });
+
+  it("counts something found even when another read failed", async () => {
+    expect(await readTitleLineSafetyOutcome("n1", reads({ hasNodeLinks: true, isRegistered: "fail" }))).toBe("blocked");
   });
 });

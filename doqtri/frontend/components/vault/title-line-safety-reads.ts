@@ -1,5 +1,10 @@
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { readTitleLineSafety, type SafetyReads, type TitleLineSafety } from "@/lib/title-line-safety";
+import {
+  readTitleLineSafety,
+  readTitleLineSafetyOutcome,
+  type SafetyReads,
+  type TitleLineSafety,
+} from "@/lib/title-line-safety";
 
 /** The reads behind the answer, in the browser: the same tables and ledger the ship panel reads. */
 const browserReads: SafetyReads = {
@@ -30,4 +35,9 @@ const browserReads: SafetyReads = {
  */
 export function checkTitleLineSafety(docId: string): Promise<Exclude<TitleLineSafety, "loading">> {
   return readTitleLineSafety(docId, browserReads);
+}
+
+/** The same, telling a read that failed apart from a real block (DOQ-46): for the rewrite after a rename. */
+export function checkTitleLineSafetyOutcome(docId: string): Promise<"allowed" | "blocked" | "unreadable"> {
+  return readTitleLineSafetyOutcome(docId, browserReads);
 }

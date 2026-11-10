@@ -34,10 +34,25 @@ export type SafetyReads = {
 
 /** "allowed" only when every read succeeded and found nothing; "blocked" otherwise. */
 export async function readTitleLineSafety(docId: string, reads: SafetyReads): Promise<Exclude<TitleLineSafety, "loading">> {
-  try {
-    const found = await Promise.all([reads.hasNodeLinks(docId), reads.hasChainWrites(docId), reads.isRegistered(docId)]);
-    return found.some(Boolean) ? "blocked" : "allowed";
-  } catch {
-    return "blocked";
-  }
+  const outcome = await readTitleLineSafetyOutcome(docId, reads);
+  return outcome === "allowed" ? "allowed" : "blocked";
+}
+
+/**
+ * The same answer, telling a read that failed ("unreadable") apart from one
+ * that found something ("blocked"), for a caller that may ask again rather
+ * than give up on a line for good (DOQ-46). Something found counts even when
+ * another read failed.
+ */
+export async function readTitleLineSafetyOutcome(
+  docId: string,
+  reads: SafetyReads,
+): Promise<"allowed" | "blocked" | "unreadable"> {
+  const settled = await Promise.allSettled([
+    reads.hasNodeLinks(docId),
+    reads.hasChainWrites(docId),
+    reads.isRegistered(docId),
+  ]);
+  if (settled.some((read) => read.status === "fulfilled" && read.value)) return "blocked";
+  return settled.some((read) => read.status === "rejected") ? "unreadable" : "allowed";
 }
