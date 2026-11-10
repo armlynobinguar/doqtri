@@ -104,8 +104,8 @@ const guardField = StateField.define<boolean>({
   },
 });
 
-/** Whether the guard holds for `state`. */
-function guarded(state: EditorState): boolean {
+/** Whether the guard holds for `state`: line 1 is the note's title line, being edited or not. */
+export function guarded(state: EditorState): boolean {
   return state.field(guardField, false) ?? false;
 }
 

@@ -186,6 +186,17 @@ describe("the title line added after a first edit (D-120)", () => {
     expect(ask).toHaveBeenCalledOnce();
   });
 
+  it("never adds a line above a title line being retyped, though it says something else for a moment", async () => {
+    const view = viewOf("# Plan\n\nBody", { caret: 6 });
+    const check = vi.fn(async (): Promise<TitleLineSafety> => "allowed");
+    const { writer } = writerFor({ current: { title: "Plan", check } });
+    view.dispatch(view.state.update({ changes: { from: 2, to: 6, insert: "T" }, userEvent: "input.type" }));
+    writer.edited(view);
+    await settle();
+    expect(view.text).toBe("# T\n\nBody");
+    expect(check).not.toHaveBeenCalled();
+  });
+
   it("moves every caret with the line it adds", async () => {
     const view = viewOf("ab\ncd", { multiple: true });
     view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(1), EditorSelection.cursor(4)]) });

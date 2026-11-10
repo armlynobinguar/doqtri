@@ -1,14 +1,15 @@
 import { Transaction, type EditorState, type TransactionSpec } from "@codemirror/state";
 import { hasTitleLine, titleLineEdit } from "@/lib/title-line";
 import type { TitleLineSafety } from "@/lib/title-line-safety";
-import { titleLineChange } from "@/components/vault/live-editor/title-line";
+import { guarded, titleLineChange } from "@/components/vault/live-editor/title-line";
 
 /**
  * Gives an older note its title line with its first edit (D-120,
  * lib/title-line.ts). Opening a note writes nothing; the first edit applies
  * at once, as any edit does, and then:
  *
- *   1. if the note still lacks its title line, the workspace is asked afresh
+ *   1. if the note still lacks its title line (and the guard holds none:
+ *      a title being retyped is still the title line), the workspace is asked afresh
  *      whether the line may go in (lib/title-line-safety.ts: not when its
  *      headings are linked or it is registered or anchored on chain). Nothing
  *      is remembered from earlier, so a link or anchor made since counts;
@@ -75,7 +76,9 @@ export function createTitleLineWriter(options: {
       const write = options.write();
       if (!write || write.title === null) return;
       const title = write.title;
-      if (hasTitleLine(view.state.doc.toString(), title)) {
+      // A title line the guard holds is the note's, even while it is being
+      // retyped and says something else for a moment.
+      if (guarded(view.state) || hasTitleLine(view.state.doc.toString(), title)) {
         decided = true;
         return;
       }
