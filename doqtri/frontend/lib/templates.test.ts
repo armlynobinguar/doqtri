@@ -20,4 +20,30 @@ describe("templates", () => {
     expect(map.children).toHaveLength(1);
     expect(countNodes(map)).toBeGreaterThanOrEqual(6);
   });
+
+  it("client-project keeps the bootcamp slide's sections, in order", () => {
+    const template = TEMPLATES.find((t) => t.id === "client-project");
+    expect(template).toBeDefined();
+    if (!template) return;
+    const sections = ["Scope", "Milestones", "Team", "Acceptance", "Risks", "Change requests"];
+    const h2 = template.body
+      .split("\n")
+      .filter((line) => line.startsWith("## "))
+      .map((line) => line.slice(3));
+    expect(h2).toEqual(sections);
+
+    // Root is the title; its single child is the `# Client Project` heading.
+    const map = buildMindmap(template.title, templateMarkdown(template));
+    expect(map.children).toHaveLength(1);
+    const titleNode = map.children[0];
+    expect(titleNode.label).toBe("Client Project");
+    expect(titleNode.children.map((n) => n.label)).toEqual(sections);
+    const byLabel = (label: string) => titleNode.children.find((n) => n.label === label);
+    expect(byLabel("Milestones")?.children.map((n) => n.label)).toEqual([
+      "M1: Design sign-off",
+      "M2: Beta release",
+      "M3: Go-live",
+    ]);
+    expect(byLabel("Change requests")?.children).toEqual([]);
+  });
 });
