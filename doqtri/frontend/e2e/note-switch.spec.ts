@@ -1,14 +1,18 @@
+import { randomUUID } from "node:crypto";
 import { expect, test, type Page, type Request } from "@playwright/test";
 import {
   deleteNote,
   editableEditor,
   expectEditorText,
+  personalWorkspaceId,
   readNote,
   seedNote,
   serviceRest,
   setEditorSelection,
+  testUserId,
   uniqueTitle,
 } from "./helpers";
+import { activateWorkspace, createTeamWorkspace, deleteWorkspace } from "./teams";
 
 /*
  * Switching between notes of the active workspace happens on the client
@@ -59,9 +63,12 @@ test.describe("note switching", () => {
   test.beforeEach(async () => {
     const titleA = uniqueTitle("Switch A");
     const titleB = uniqueTitle("Switch B");
-    a = { id: await seedNote(titleA, `# ${titleA}\n\nalpha body\n`), title: titleA };
+    a = { id: await seedNote(titleA, `# ${titleA}\n\n## Alpha theme\n\nalpha body\n`), title: titleA };
     // B links to A, so A's backlinks name B.
-    b = { id: await seedNote(titleB, `# ${titleB}\n\nbravo body, see [[${titleA}]]\n`), title: titleB };
+    b = {
+      id: await seedNote(titleB, `# ${titleB}\n\n## Bravo theme\n\nbravo body, see [[${titleA}]]\n`),
+      title: titleB,
+    };
     ids.push(a.id, b.id);
   });
 
@@ -79,8 +86,12 @@ test.describe("note switching", () => {
     await expect(page).toHaveURL(new RegExp(`/vault/${a.id}$`));
     await expectEditorText(page, /alpha body/);
     await editableEditor(page);
-    // The panels beside the editor follow the note: B links here.
+    // The panels beside the editor follow the note: B links here, and the
+    // live mindmap is A's.
     await expect(page.getByTestId("backlinks").getByText(b.title)).toBeVisible();
+    await expect(page.getByTestId("live-mindmap-outline")).toContainText("Alpha theme");
+    await expect(page.getByTestId("live-mindmap-outline")).not.toContainText("Bravo theme");
+    await expect(page.getByTestId("right-panel").locator("canvas").first()).toBeVisible();
     await expect(explorerLink(page, a.id)).toHaveAttribute("aria-current", "page");
 
     // The quick switcher opens notes the same way.
@@ -173,25 +184,62 @@ test.describe("note switching", () => {
     await expect(page.getByTestId("edit-conflict-banner")).toHaveCount(0);
   });
 
-  test("text typed just before a switch is there on coming back, and gets saved", async ({ page }) => {
-    await page.goto(`/vault/${a.id}`);
+  /** Types at the end of the open note and waits for the lock its first keystroke takes. */
+  async function typeWithLock(page: Page, id: string, text: string) {
     await editableEditor(page);
     await setEditorSelection(page, -1);
-    // The first keystroke takes the lock; away once it has, before the
-    // autosave's debounce ends.
     const locked = page.waitForResponse(
-      (res) => res.url().includes(`/api/notes/${a.id}/lock`) && res.request().method() === "POST",
+      (res) => res.url().includes(`/api/notes/${id}/lock`) && res.request().method() === "POST",
     );
-    await page.keyboard.type("unsaved words");
+    await page.keyboard.type(text);
     await locked;
+  }
+
+  /** The PUTs to a note's save route, with their bodies. */
+  function watchSaves(page: Page, id: string): { markdown: string; release?: boolean }[] {
+    const saves: { markdown: string; release?: boolean }[] = [];
+    page.on("request", (request) => {
+      if (request.method() === "PUT" && new URL(request.url()).pathname === `/api/notes/${id}`) {
+        saves.push(request.postDataJSON() as { markdown: string; release?: boolean });
+      }
+    });
+    return saves;
+  }
+
+  test("text typed just before a switch is saved as the editor closes", async ({ page }) => {
+    await page.goto(`/vault/${a.id}`);
+    const saves = watchSaves(page, a.id);
+    // Away before the autosave's debounce ends.
+    await typeWithLock(page, a.id, "unsaved words");
     await explorerLink(page, b.id).click();
     await expectEditorText(page, /bravo body/);
 
-    await explorerLink(page, a.id).click();
-    await expectEditorText(page, /alpha body\nunsaved words$/);
+    // Saved on leaving, with the lock released by that same request.
+    await expect.poll(() => saves.length).toBeGreaterThan(0);
+    expect(saves.at(-1)).toMatchObject({ markdown: expect.stringMatching(/unsaved words$/), release: true });
     await expect
       .poll(async () => (await readNote(a.id)).markdown, { timeout: 15_000 })
-      .toBe(`# ${a.title}\n\nalpha body\nunsaved words`);
+      .toBe(`# ${a.title}\n\n## Alpha theme\n\nalpha body\nunsaved words`);
+
+    // Coming back shows it, editable: the lock was let go.
+    await explorerLink(page, a.id).click();
+    await expectEditorText(page, /alpha body\nunsaved words$/);
+    await editableEditor(page);
+  });
+
+  test("text typed just before a switch survives a reload right after it", async ({ page }) => {
+    await page.goto(`/vault/${a.id}`);
+    await typeWithLock(page, a.id, "last words");
+    await explorerLink(page, b.id).click();
+    await page.reload();
+    await expect
+      .poll(async () => (await readNote(a.id)).markdown, { timeout: 15_000 })
+      .toBe(`# ${a.title}\n\n## Alpha theme\n\nalpha body\nlast words`);
+    // The save took the lock with it: A opens editable, not "elsewhere".
+    await page.goto(`/vault/${a.id}`);
+    await expectEditorText(page, /last words$/);
+    await editableEditor(page);
+    await expect(page.getByTestId("edit-lock-elsewhere-banner")).toHaveCount(0);
   });
 
   test("the edit lock is taken on the first keystroke and released on leaving", async ({ page, context }) => {
@@ -250,6 +298,60 @@ test.describe("note switching", () => {
     await expect
       .poll(async () => (await readNote(b.id)).markdown, { timeout: 15_000 })
       .toMatch(/\nkept$/);
+  });
+
+  test("back from a note to a page that is not one shows no loader on the way", async ({ page }) => {
+    await page.goto("/vault/graph");
+    await explorerLink(page, a.id).click();
+    await expectEditorText(page, /alpha body/);
+    await watchLoaders(page);
+    await page.goBack();
+    await expect(page).toHaveURL(/\/vault\/graph$/);
+    await expect(page.getByTestId("note-editor")).toHaveCount(0);
+    await page.waitForTimeout(300);
+    expect(await loaderSeen(page)).toBe(false);
+  });
+
+  test("back to a note deleted since goes through the server", async ({ page }) => {
+    await page.goto(`/vault/${a.id}`);
+    await editableEditor(page);
+    await explorerLink(page, b.id).click();
+    await expectEditorText(page, /bravo body/);
+
+    await page.getByRole("button", { name: `Delete ${b.title}` }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Delete permanently" }).click();
+    await expect(page).toHaveURL(/\/vault$/);
+    await expect.poll(async () => (await readNote(b.id)) ?? null).toBeNull();
+
+    await page.goBack();
+    await expect(page).toHaveURL(new RegExp(`/vault/${b.id}$`));
+    await expect(page.getByRole("heading", { name: "This page could not be found." })).toBeVisible();
+    await expect(page.getByTestId("note-editor")).toHaveCount(0);
+  });
+
+  test("an unknown id, and another workspace's note, go through the server", async ({ page }) => {
+    await page.goto(`/vault/${a.id}`);
+    await editableEditor(page);
+    await page.goto(`/vault/${randomUUID()}`);
+    await expect(page.getByRole("heading", { name: "This page could not be found." })).toBeVisible();
+
+    const me = await testUserId();
+    const team = await createTeamWorkspace(uniqueTitle("Switch Team"), me);
+    const title = uniqueTitle("Team note");
+    const teamNote = await seedNote(title, `# ${title}\n\nteam body\n`, undefined, { workspaceId: team, userId: me });
+    try {
+      await page.goto(`/vault/${a.id}`);
+      await editableEditor(page);
+      // The server moves the vault to the note's workspace and opens it.
+      await page.goto(`/vault/${teamNote}`);
+      await expect(page).toHaveURL(new RegExp(`/vault/${teamNote}$`));
+      await expectEditorText(page, /team body/);
+      await expect(explorerLink(page, a.id)).toHaveCount(0);
+    } finally {
+      await activateWorkspace(page.request, await personalWorkspaceId(me));
+      await deleteNote(teamNote);
+      await deleteWorkspace(team);
+    }
   });
 
   test("from a page that is not a note, a note opens through the server", async ({ page }) => {
