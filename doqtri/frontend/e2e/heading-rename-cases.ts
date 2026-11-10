@@ -157,30 +157,27 @@ export function headingRenameCases(layout: Layout) {
     expect(renames).toHaveLength(1);
   });
 
-  test("a note that opens with another level-1 heading keeps it as its title line: opening writes nothing, editing it renames", async ({
+  test("a heading that never said the title is the student's own: it never renames, and the title line goes above it", async ({
     page,
   }) => {
-    const title = uniqueTitle("Legacy Plan");
-    const legacy = `# Something I wrote${BODY}`;
-    const id = await seed(title, legacy);
+    const title = uniqueTitle("Own Title");
+    const id = await seed(title, `# Something I wrote${BODY}`);
+    const renames = watchRenames(page, id);
     const writes = watchWrites(page, id);
     await page.goto(`/vault/${id}`);
     await editableEditor(page);
+    // Opened: the title shows above the student's heading, and nothing is written.
+    await expect(page.getByTestId("title-line-preview")).toHaveText(title);
     await page.waitForTimeout(1_500);
     expect(writes).toEqual([]);
-    await expectEditorText(page, legacy);
-    // No preview either: the heading it opens with is its title line.
-    await expect(page.getByTestId("title-line-preview")).toHaveCount(0);
 
-    // Editing that line renames, and nothing is put above it.
-    const renamed = uniqueTitle("Legacy Roadmap");
-    await retypeHeading(page, "Something I wrote", renamed);
-    await expect.poll(async () => readNote(id), { timeout: 15_000 }).toEqual({
-      title: renamed,
-      markdown: `# ${renamed}${BODY}`,
-    });
-    await layout.expectTitle(page, renamed, title);
-    await layout.expectMindmap(page, renamed, ["Scope"], title);
+    await retypeHeading(page, "Something I wrote", "Something else");
+    await caretToEnd(page);
+    // The first edit brought the title line above it; the heading is content.
+    await expectSaved(id, `# ${title}\n\n# Something else${BODY}`);
+    await page.waitForTimeout(1_500);
+    expect(renames).toHaveLength(0);
+    expect((await readNote(id)).title).toBe(title);
   });
 
   test("opening an older note writes nothing and takes no lock; its first edit adds the title line, saved with it", async ({
@@ -194,30 +191,33 @@ export function headingRenameCases(layout: Layout) {
       await editableEditor(page);
       // The title it will get shows above the text, display only.
       await expect(page.getByTestId("title-line-preview")).toHaveText(title);
-      await expect(page.locator("[data-title-line]")).toHaveAttribute("data-title-line", "allowed", { timeout: 20_000 });
-      await page.waitForTimeout(1_000);
+      await page.waitForTimeout(1_500);
       expect(writes).toEqual([]);
       expect(await readNote(id)).toEqual({ title, markdown: legacy });
 
-      // The first edit: typed where the caret is, with the title line above it.
+      // The first edit: typed where the caret is; once a fresh check allows
+      // it, the title line goes above, as its own change.
       await setEditorSelection(page, -1);
       await page.keyboard.type(" More.");
-      const withTitle = `# ${title}\n\n${legacy.replace(/^\n+/, "")} More.`;
-      await expectEditorText(page, withTitle);
+      const withTitle = legacy.startsWith("\n") ? `# ${title}\n${legacy} More.` : `# ${title}\n\n${legacy} More.`;
+      await expectEditorText(page, withTitle, 20_000);
       await expectSaved(id, withTitle);
+      await expect(page.locator("[data-title-line]")).toHaveAttribute("data-title-line", "added");
       await expect(page.getByTestId("title-line-preview")).toHaveCount(0);
-      // One save for both, and the lock taken by the edit.
-      expect(writes.filter((write) => write === "PUT")).toHaveLength(1);
+      // Saved as edits are, and the lock taken by the edit; no rename.
+      expect(writes).toContain("PUT");
       expect(writes).toContain("lock");
+      expect(writes).not.toContain("PATCH");
 
-      // Undo takes the edit back and leaves the title line: saved once more, then quiet.
+      // Undo takes the edit back and leaves the title line: saved, then quiet.
       await page.keyboard.press("ControlOrMeta+z");
-      const undone = `# ${title}\n\n${legacy.replace(/^\n+/, "")}`;
+      const undone = withTitle.slice(0, -" More.".length);
       await expectEditorText(page, undone);
       await expectSaved(id, undone);
-      await page.waitForTimeout(1_500);
-      expect(writes.filter((write) => write === "PUT")).toHaveLength(2);
-      expect((await readNote(id)).title).toBe(title);
+      const saves = writes.filter((write) => write === "PUT").length;
+      await page.waitForTimeout(2_000);
+      expect(writes.filter((write) => write === "PUT")).toHaveLength(saves);
+      expect(await readNote(id)).toEqual({ title, markdown: undone });
     }
   });
 
@@ -235,11 +235,12 @@ export function headingRenameCases(layout: Layout) {
     });
     await page.goto(`/vault/${id}`);
     await editableEditor(page);
-    await expect(page.locator("[data-title-line]")).toHaveAttribute("data-title-line", "blocked", { timeout: 20_000 });
     await expect(page.getByTestId("title-line-preview")).toHaveText(title);
 
     await setEditorSelection(page, -1);
     await page.keyboard.type(" Edited.");
+    // The fresh check after the edit finds the link.
+    await expect(page.locator("[data-title-line]")).toHaveAttribute("data-title-line", "blocked", { timeout: 20_000 });
     await expectSaved(id, `${legacy} Edited.`);
     await expectEditorText(page, `${legacy} Edited.`);
     await expect(page.getByTestId("title-line-preview")).toHaveText(title);

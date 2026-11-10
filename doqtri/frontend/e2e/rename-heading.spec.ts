@@ -251,15 +251,14 @@ test.describe("rename keeps the title heading in step (DOQ-35)", () => {
     await page.goto(`/vault/${id}`);
     await editableEditor(page);
     await expect(page.getByTestId("title-line-preview")).toHaveText(renamed);
-    await expect(page.locator("[data-title-line]")).toHaveAttribute("data-title-line", "allowed", { timeout: 20_000 });
     await page.waitForTimeout(1_000);
     expect(await readNote(id)).toEqual({ title: renamed, markdown });
 
-    // ...and its first edit writes the new title line above it, saved with the edit.
+    // ...and after its first edit, the new title line goes above it.
     await setEditorSelection(page, -1);
     await page.keyboard.type("More.");
     const expected = `# ${renamed}\n\n${markdown}More.`;
-    await expectEditorText(page, expected);
+    await expectEditorText(page, expected, 20_000);
     await expect.poll(async () => readNote(id), { timeout: 15_000 }).toEqual({ title: renamed, markdown: expected });
     // The mindmap folds it into the root: Scope rings it, no lone title node.
     await rightPanel(page).getByRole("tab", { name: "Mindmap" }).click();
