@@ -13,6 +13,10 @@ import type { DocLockController } from "@/lib/doc-lock-client";
  *                         read-only and names the holder
  *   409 (stale version)   `onConflict` is called; the editor must reload
  *                         before saving again, and nothing is overwritten
+ *
+ * `leave()` is the editor's last save as it closes (DOQ-43): the server
+ * releases the lock once it is done, and the request outlives the page when
+ * it can (a keepalive request carries at most 64 KiB).
  */
 export type NoteSaver = {
   queue: SaveQueue;
@@ -20,7 +24,12 @@ export type NoteSaver = {
   readonly version: number;
   /** Adopts `version`, for text loaded or written elsewhere (reload, regenerate). */
   setVersion(version: number): void;
+  /** Saves `text` as the last write, after any in flight; the server then releases the lock. */
+  leave(text: string): Promise<void>;
 };
+
+/** Bytes, under the browsers' 64 KiB keepalive budget, with room for the headers. */
+const KEEPALIVE_BODY_LIMIT = 60_000;
 
 export function createNoteSaver(params: {
   docId: string;
@@ -33,16 +42,26 @@ export function createNoteSaver(params: {
   const { docId, lock, onConflict } = params;
   const fetchImpl = params.fetchImpl ?? ((input, init) => fetch(input, init));
   let version = params.version;
+  // The text of the last write, once leave() asked for it.
+  let last: string | null = null;
 
   const queue = createSaveQueue(params.markdown, async (text) => {
     if (!(await lock.ensure())) {
       const { phase, holderName } = lock.getState();
       throw new Error(phase === "elsewhere" ? EDITING_ELSEWHERE : editingMessage(holderName));
     }
+    const leaving = last !== null && text === last;
+    const request = JSON.stringify({
+      markdown: text,
+      version,
+      session: lock.session,
+      ...(leaving ? { release: true } : {}),
+    });
     const res = await fetchImpl(`/api/notes/${encodeURIComponent(docId)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ markdown: text, version, session: lock.session }),
+      body: request,
+      ...(leaving && new TextEncoder().encode(request).length <= KEEPALIVE_BODY_LIMIT ? { keepalive: true } : {}),
     });
     const payload: unknown = await res.json().catch(() => null);
     const body = (payload && typeof payload === "object" ? payload : {}) as {
@@ -65,6 +84,10 @@ export function createNoteSaver(params: {
     },
     setVersion(next) {
       version = next;
+    },
+    leave(text) {
+      last = text;
+      return queue.save(text);
     },
   };
 }

@@ -115,4 +115,42 @@ describe("createNoteSaver", () => {
     const [, init] = (fetchImpl.mock.calls as unknown as [string, RequestInit][])[0];
     expect(JSON.parse(String(init.body)).version).toBe(7);
   });
+
+  it("sends the last save as it leaves with the lock's release, as a keepalive request (DOQ-43)", async () => {
+    const fetchImpl = vi.fn(async () => respond(200, { id: DOC, version: 4 }));
+    const saver = createNoteSaver({
+      docId: DOC,
+      markdown: "# a",
+      version: 3,
+      lock: fakeLock(),
+      onConflict: vi.fn(),
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const earlier = saver.queue.save("# b");
+    await Promise.all([earlier, saver.leave("# c")]);
+    const calls = fetchImpl.mock.calls as unknown as [string, RequestInit][];
+    // Only the last write asks for the release: an earlier one queued
+    // before it must not free the lock under it.
+    expect(JSON.parse(String(calls[0][1].body))).toEqual({ markdown: "# b", version: 3, session: TAB });
+    expect(calls[0][1].keepalive).toBeUndefined();
+    expect(JSON.parse(String(calls[1][1].body))).toEqual({ markdown: "# c", version: 4, session: TAB, release: true });
+    expect(calls[1][1].keepalive).toBe(true);
+    expect(saver.queue.saved).toBe("# c");
+  });
+
+  it("sends a last save too large for keepalive as a plain request", async () => {
+    const fetchImpl = vi.fn(async () => respond(200, { id: DOC, version: 2 }));
+    const saver = createNoteSaver({
+      docId: DOC,
+      markdown: "# a",
+      version: 1,
+      lock: fakeLock(),
+      onConflict: vi.fn(),
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await saver.leave("x".repeat(70_000));
+    const [, init] = (fetchImpl.mock.calls as unknown as [string, RequestInit][])[0];
+    expect(JSON.parse(String(init.body)).release).toBe(true);
+    expect(init.keepalive).toBeUndefined();
+  });
 });

@@ -86,6 +86,11 @@ async function refuseIfLockedByOther(
  * holder), and that nobody saved since their copy was loaded (else 409
  * STALE_VERSION, with the current version). Nothing is written unless all
  * three hold, so no save overwrites another.
+ *
+ * With `release: true` (an editor's last save as it closes, DOQ-43) the
+ * session's lock is released once the save is done, saved or refused, in the
+ * same request: a separate release could reach the server before the save
+ * and have it refused, and none is sent when the tab is closing.
  */
 export async function PUT(
   request: Request,
@@ -109,9 +114,16 @@ export async function PUT(
   let markdown: string | null = null;
   let version: number | null = null;
   let editSession: string | null = null;
+  let release = false;
   try {
-    const body = (await request.json()) as { markdown?: unknown; version?: unknown; session?: unknown };
+    const body = (await request.json()) as {
+      markdown?: unknown;
+      version?: unknown;
+      session?: unknown;
+      release?: unknown;
+    };
     if (typeof body.markdown === "string") markdown = body.markdown;
+    release = body.release === true;
     editSession = parseEditSession(body.session);
     if (typeof body.version === "number" && Number.isSafeInteger(body.version) && body.version >= 1) {
       version = body.version;
@@ -137,6 +149,9 @@ export async function PUT(
     p_base_version: version,
     p_session: editSession,
   });
+  if (release) {
+    await supabase.rpc("release_doc_lock", { p_document_id: id, p_session: editSession });
+  }
 
   if (error) {
     const answer = lockErrorAnswer(error);
