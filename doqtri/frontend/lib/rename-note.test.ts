@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NoResponseError } from "@/lib/no-response";
-import { RenameError, renameNote } from "@/lib/rename-note";
+import { renameNote } from "@/lib/rename-note";
 
 function answer(status: number, body: unknown) {
   vi.stubGlobal(
@@ -14,46 +14,34 @@ afterEach(() => {
 });
 
 describe("renameNote", () => {
-  it("sends the title and the editor's session, and answers the rename", async () => {
+  it("sends the title alone, and answers the rename (D-121)", async () => {
     answer(200, { id: "n1", title: "Roadmap", previousTitle: "Plan" });
-    await expect(renameNote("n1", "Roadmap", "s1")).resolves.toEqual({ title: "Roadmap", previousTitle: "Plan" });
+    await expect(renameNote("n1", "Roadmap")).resolves.toEqual({ title: "Roadmap", previousTitle: "Plan" });
     const [url, init] = vi.mocked(fetch).mock.calls[0];
     expect(url).toBe("/api/notes/n1");
     expect(init).toMatchObject({ method: "PATCH" });
-    expect(JSON.parse(String(init?.body))).toEqual({ title: "Roadmap", session: "s1" });
+    expect(JSON.parse(String(init?.body))).toEqual({ title: "Roadmap" });
   });
 
-  it("throws a RenameError with the status and code of a refusal (DOQ-36)", async () => {
+  it("throws the server's reason for a refusal", async () => {
     answer(409, { error: "Another note is already called “Roadmap”", code: "TITLE_TAKEN" });
     const error = await renameNote("n1", "Roadmap").catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(RenameError);
-    expect(error).toMatchObject({ message: "Another note is already called “Roadmap”", status: 409, code: "TITLE_TAKEN" });
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(NoResponseError);
+    expect(error).toMatchObject({ message: "Another note is already called “Roadmap”" });
   });
 
-  it("sends the title the caller expects the note to have, and reads the current one off TITLE_CHANGED", async () => {
-    answer(409, { error: "This note was renamed", code: "TITLE_CHANGED", title: "Their Title" });
-    const error = await renameNote("n1", "Roadmap", "s1", "Plan").catch((e: unknown) => e);
-    expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body))).toEqual({
-      title: "Roadmap",
-      session: "s1",
-      expectedTitle: "Plan",
-    });
-    expect(error).toBeInstanceOf(RenameError);
-    expect(error).toMatchObject({ status: 409, code: "TITLE_CHANGED", title: "Their Title" });
-  });
-
-  it("still throws a RenameError, without a code, when the answer is not JSON", async () => {
+  it("still throws, with the status, when the answer is not JSON", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("oops", { status: 500 })));
     const error = await renameNote("n1", "Roadmap").catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(RenameError);
-    expect(error).toMatchObject({ message: "Could not rename note (500)", status: 500, code: undefined });
+    expect(error).not.toBeInstanceOf(NoResponseError);
+    expect(error).toMatchObject({ message: "Could not rename note (500)" });
   });
 
   // A gateway's own page (DOQ-32): the rename may have happened, so it is not a refusal.
-  it("throws NoResponseError, not a RenameError, for a gateway answer that is not JSON", async () => {
+  it("throws NoResponseError for a gateway answer that is not JSON", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("oops", { status: 502 })));
     const error = await renameNote("n1", "Roadmap").catch((e: unknown) => e);
     expect(error).toBeInstanceOf(NoResponseError);
-    expect(error).not.toBeInstanceOf(RenameError);
   });
 });

@@ -238,10 +238,12 @@ Two supporting tables:
   caller without the lock in that session (`DQLCK`) or with a stale version
   (`DQVER`). A rename goes through
   `rename_document(id, title, markdown, base_version, session)` (DOQ-35),
-  which writes the title and, when the note's `# <title>` heading changes
-  with it, the new text in one UPDATE: refused while another user holds the
-  lock, and, when the text changes, unless the lock is free or held from
-  that session. A plain client UPDATE of `markdown` is refused. Removing or
+  refused while another user holds the lock. The app calls it with no text
+  (D-121): the title lives in `documents.title` alone, and a rename never
+  rewrites the note's text. (The function can still write a changed
+  `# <title>` heading with the title, unless the lock is held from another
+  session; nothing uses that any more.) A plain client UPDATE of `markdown`
+  is refused. Removing or
   demoting a member drops their locks. A tab that closes or reloads releases
   its lock with a keepalive request; when that request never arrives, the old
   session's lock stays live, and a reloaded tab shows the note as being

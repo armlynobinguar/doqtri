@@ -183,7 +183,7 @@ describe("mindmapFromHeadings", () => {
   });
 
   it("folds a title heading that has siblings too, its sections first (D-120)", () => {
-    // A title line put above an older opening heading: no lone title node beside it.
+    // An older note's title line, put above its opening heading: no lone title node beside it.
     const map = mindmapFromHeadings("Doc", "# Doc\n## A\n# Other\n## B\n");
     expect(labels(map.root.children)).toEqual(["A", "Other"]);
     expect(labels(map.root.children[1].children)).toEqual(["B"]);

@@ -10,7 +10,6 @@ import {
   SearchIcon,
 } from "lucide-react";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
-import { useDraftTitle } from "@/components/vault/note-overlay";
 import { AccountMenu, type AccountPage } from "@/components/vault/account-menu";
 import { NavLink } from "@/components/vault/navigation";
 import type { RibbonAction } from "@/components/vault/ribbon";
@@ -27,7 +26,6 @@ import { cn } from "@/lib/utils";
 
 export function MobileTopBar({
   title,
-  noteId,
   saveState,
   creating,
   canCreate = true,
@@ -35,8 +33,6 @@ export function MobileTopBar({
   accountPage,
 }: {
   title: string;
-  /** The open note, whose title line may be being typed (DOQ-44); none on a vault-wide view. */
-  noteId?: string;
   saveState: SaveState;
   creating: boolean;
   /** False for a viewer of the active workspace (D-14): nothing to add to. */
@@ -45,7 +41,6 @@ export function MobileTopBar({
   /** On an account page (profile, members): the avatar shows as current. */
   accountPage?: AccountPage;
 }) {
-  const shownTitle = useDraftTitle(noteId, title);
   return (
     <header className="bg-sidebar border-border flex h-[calc(3rem+env(safe-area-inset-top))] shrink-0 items-center gap-2 border-b pt-[env(safe-area-inset-top)] pr-1.5 pl-2 lg:hidden">
       <NavLink
@@ -58,7 +53,7 @@ export function MobileTopBar({
 
       <div className="flex min-w-0 flex-1 items-center gap-2">
         <h1 className="text-foreground truncate text-[15px] font-semibold tracking-tight">
-          {shownTitle}
+          {title}
         </h1>
         <SaveIndicator state={saveState} />
       </div>

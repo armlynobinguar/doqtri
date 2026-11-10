@@ -1,6 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { deleteNote, noteEditor, seedNote, uniqueTitle } from "./helpers";
-import { headingRenameCases } from "./heading-rename-cases";
+import { deleteNote, editableEditor, editorHasFocus, noteEditor, readNote, seedNote, uniqueTitle } from "./helpers";
 
 /*
  * The vault's compact layout (below `lg`). Runs under the `mobile` project, on
@@ -166,11 +165,12 @@ test.describe("mobile vault", () => {
 });
 
 /*
- * Editing the title heading renames the note (DOQ-36), on the phone layout:
- * the title shows in the top bar, and the mindmap and backlinks are in the
- * Map view.
+ * The title bar on the phone layout (D-121): above the text in the Note view,
+ * and its rename shows in the top bar and the Map view's mindmap at once.
  */
-test.describe("mobile: editing the title heading renames the note", () => {
+test.describe("mobile: the title bar renames the note", () => {
+  let id: string | undefined;
+
   test.beforeEach(async ({ page }) => {
     // See "mobile vault": the dev indicator covers the bottom-left corner.
     await page.addInitScript(() => {
@@ -182,37 +182,38 @@ test.describe("mobile: editing the title heading renames the note", () => {
     });
   });
 
-  /** Runs `check` in the Map view, then goes back to the note. */
-  async function inMapView(page: Page, check: () => Promise<void>) {
+  test.afterEach(async () => {
+    if (id) await deleteNote(id);
+    id = undefined;
+  });
+
+  test("Done renames: the top bar and the mindmap follow, the text does not", async ({ page }) => {
+    const title = uniqueTitle("Phone Plan");
+    const text = "## Scope\n\nFirst line.\n";
+    id = await seedNote(title, text);
+    await page.goto(`/vault/${id}`);
+    await editableEditor(page);
+
+    const bar = page.getByRole("textbox", { name: "Note title" });
+    await expect(bar).toHaveValue(title);
+    await expect(bar).not.toHaveAttribute("readonly");
+    const renamed = uniqueTitle("Phone Roadmap");
+    await bar.tap();
+    await bar.fill(renamed);
+    await bar.press("Enter");
+
+    // The top bar names the note by its new title at once, and the caret is in the text.
+    await expect(page.getByRole("heading", { level: 1, name: renamed, exact: true })).toBeVisible();
+    await expect.poll(() => editorHasFocus(page)).toBe(true);
+    await expect.poll(async () => readNote(id!), { timeout: 15_000 }).toEqual({ title: renamed, markdown: text });
+
     await page.getByRole("tab", { name: "Map" }).tap();
-    await check();
+    await page.getByTestId("right-panel").getByRole("tab", { name: "Mindmap" }).tap();
+    const mindmap = page.getByTestId("right-panel").getByTestId("mindmap");
+    await expect(mindmap.getByRole("paragraph").first()).toHaveText(renamed);
+    await expect(mindmap.locator(":scope > ul > li > span")).toHaveText(["Scope"]);
     await page.getByRole("tab", { name: "Note" }).tap();
     await expect(noteEditor(page)).toBeVisible();
-  }
-
-  headingRenameCases({
-    // The top bar names the open note.
-    titleOf: () => "header h1",
-    async expectTitle(page, title, old) {
-      await expect(page.getByRole("heading", { level: 1, name: title, exact: true })).toBeVisible({ timeout: 15_000 });
-      await expect(page.getByRole("heading", { level: 1, name: old, exact: true })).toHaveCount(0);
-    },
-    async expectMindmap(page, title, sections, old) {
-      await inMapView(page, async () => {
-        await page.getByTestId("right-panel").getByRole("tab", { name: "Mindmap" }).tap();
-        const mindmap = page.getByTestId("right-panel").getByTestId("mindmap");
-        await expect(mindmap.getByRole("paragraph").first()).toHaveText(title);
-        await expect(mindmap.locator(":scope > ul > li > span")).toHaveText(sections);
-        await expect(mindmap.getByText(old, { exact: true })).toHaveCount(0);
-        await expect(mindmap.getByText(title, { exact: true })).toHaveCount(1);
-      });
-    },
-    async expectBacklinks(page, count) {
-      await inMapView(page, async () => {
-        await expect(page.getByTestId("backlinks").locator("header")).toContainText(String(count), {
-          timeout: 15_000,
-        });
-      });
-    },
+    await expect(bar).toHaveValue(renamed);
   });
 });

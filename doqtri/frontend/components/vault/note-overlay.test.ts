@@ -14,8 +14,6 @@ import {
   overlayNotes,
   settleOverlay,
   useNoteOverlayState,
-  createDraftStore,
-  type NoteTitleDrafts,
   type NoteOverlay,
   type RunChange,
 } from "@/components/vault/note-overlay";
@@ -29,8 +27,7 @@ import { NavigationProvider, useNavigate, useNavigationStatus } from "@/componen
  */
 const router = vi.hoisted(() => ({ push: (() => {}) as (href: string) => void, refresh: () => {} }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
-import type { Doc, FailedImport, NoteSummary } from "@/lib/types";
-import { buildBacklinks, buildGraph } from "@/lib/wikilinks";
+import type { FailedImport, NoteSummary } from "@/lib/types";
 
 const notes: NoteSummary[] = [
   { id: "a", title: "Alpha", updated_at: "2026-11-01" },
@@ -255,14 +252,12 @@ function mountVault() {
   const routes: string[] = [];
   const refresh = vi.fn();
   let run!: RunChange;
-  let drafts!: NoteTitleDrafts;
   let setRoute!: (route: string) => void;
 
   function Vault(server: Server) {
     const state = useNoteOverlayState({ ...server, isNavigating: () => server.navigating, refresh });
     const [route, set] = useState("note-a");
     run = state.run;
-    drafts = state.titleDrafts;
     setRoute = set;
     overlays.push(state.overlay);
     routes.push(route);
@@ -279,7 +274,6 @@ function mountVault() {
     refresh,
     root,
     run: (...args: Parameters<RunChange>) => run(...args),
-    drafts: () => drafts,
     navigate: (route: string) => startTransition(() => setRoute(route)),
     /** New server data (or pathname), as a refresh or navigation would bring. */
     serve: async (next: Partial<Server>) => {
@@ -445,165 +439,6 @@ describe("useNoteOverlayState", () => {
     } finally {
       vi.unstubAllGlobals();
     }
-  });
-});
-
-describe("createDraftStore (DOQ-44)", () => {
-  it("tells its listeners of a note's draft as it changes, and only when it does", () => {
-    const store = createDraftStore();
-    const listener = vi.fn();
-    store.subscribe(listener);
-    store.set("a", "Ap");
-    store.set("a", "Ap");
-    store.set("a", "Apex");
-    expect(store.get("a")).toBe("Apex");
-    expect(store.get("b")).toBeUndefined();
-    store.set("a", null);
-    store.set("a", null);
-    expect(store.get("a")).toBeUndefined();
-    expect(listener).toHaveBeenCalledTimes(3);
-  });
-
-  it("prunes a draft once the note shows its title, and one settling whatever it shows", () => {
-    const store = createDraftStore();
-    store.set("a", "Apex");
-    store.set("b", "Betamax");
-    store.prune((id) => (id === "a" ? "Alpha" : "Beta"));
-    expect([store.get("a"), store.get("b")]).toEqual(["Apex", "Betamax"]);
-    store.prune((id) => (id === "a" ? "Apex" : "Beta"));
-    expect([store.get("a"), store.get("b")]).toEqual([undefined, "Betamax"]);
-    store.settle("b");
-    store.prune(() => "Beta");
-    expect(store.get("b")).toBeUndefined();
-    // A draft typed after a settle was asked for is a new one: it stays.
-    store.set("a", "Apex");
-    store.settle("a");
-    store.set("a", "Apexes");
-    store.prune(() => "Alpha");
-    expect(store.get("a")).toBe("Apexes");
-  });
-});
-
-describe("drafts in the vault (DOQ-44)", () => {
-  let vault: ReturnType<typeof mountVault> | null = null;
-
-  afterEach(async () => {
-    await act(async () => vault?.root.unmount());
-    vault = null;
-  });
-
-  async function mount() {
-    vault = mountVault();
-    await vault.serve({});
-    return vault;
-  }
-
-  it("keeps a draft out of the overlay: no re-render, notes, pending state or refresh from it", async () => {
-    const v = await mount();
-    const renders = v.overlays.length;
-    const overlay = v.overlays.at(-1)!;
-    await act(async () => v.drafts().drafts.set("a", "Apex"));
-    expect(v.overlays.length).toBe(renders);
-    expect(isNotePending(overlay, "a")).toBe(false);
-    expect(overlayNotes(notes, overlay)).toBe(notes);
-    expect(v.refresh).not.toHaveBeenCalled();
-  });
-
-  it("keeps the graph's data and backlinks on the confirmed title while a draft shows", async () => {
-    const v = await mount();
-    const docs: Doc[] = [
-      { id: "a", title: "Alpha", markdown: "# Alpha" } as Doc,
-      { id: "b", title: "Beta", markdown: "See [[Alpha]]." } as Doc,
-    ];
-    await act(async () => v.drafts().drafts.set("a", "Alphax"));
-    const shown = overlayNotes(docs, v.overlays.at(-1)!);
-    expect(shown).toBe(docs);
-    expect(buildBacklinks(shown, "a").map((doc) => doc.id)).toEqual(["b"]);
-    const graph = buildGraph(shown);
-    expect(graph.nodes.map((node) => node.label)).toEqual(["Alpha", "Beta"]);
-    expect(graph.nodes.some((node) => node.ghost)).toBe(false);
-  });
-
-  it("shows a rename that landed as accepted, then drops its draft once that has committed", async () => {
-    const v = await mount();
-    const { drafts, landed } = v.drafts();
-    await act(async () => drafts.set("a", "Apex"));
-    await act(async () => landed({ id: "a", title: "Apex", previousTitle: "Alpha" }));
-    expect(v.frames.at(-1)).toEqual(["Apex", "Beta"]);
-    expect(v.overlays.at(-1)?.titles.get("a")?.confirmedAt).toEqual(expect.any(Number));
-    expect(v.refresh).toHaveBeenCalledTimes(1);
-    expect(drafts.get("a")).toBeUndefined();
-    // Held until server data shows it, as the explorer's renames are.
-    await v.serve({ notes: [...notes] });
-    expect(v.frames.at(-1)).toEqual(["Apex", "Beta"]);
-    await v.serve({ notes: [{ ...notes[0], title: "Apex" }, notes[1]] });
-    expect(v.overlays.at(-1)).toEqual(EMPTY_OVERLAY);
-  });
-
-  it("keeps a draft typed on past the rename that landed", async () => {
-    const v = await mount();
-    const { drafts, landed } = v.drafts();
-    await act(async () => drafts.set("a", "Apexes"));
-    await act(async () => landed({ id: "a", title: "Apex", previousTitle: "Alpha" }));
-    expect(drafts.get("a")).toBe("Apexes");
-  });
-
-  it("falls back to the title the note has now, never an older rename that landed", async () => {
-    const v = await mount();
-    const { drafts, landed } = v.drafts();
-    // Alpha → Beta landed, then the explorer renamed it back within the wait.
-    await act(async () => landed({ id: "a", title: "Beta", previousTitle: "Alpha" }));
-    const patch = deferred();
-    await act(async () => v.run({ kind: "rename", id: "a", title: "Alpha", previousTitle: "Beta" }, patch.action, () => {}));
-    await act(async () => drafts.set("a", "Alphax"));
-    await act(async () => drafts.set("a", null));
-    expect(v.frames.at(-1)?.[0]).toBe("Alpha");
-    await act(async () => patch.resolve());
-    await v.serve({ notes: [...notes] });
-    expect(v.overlays.at(-1)).toEqual(EMPTY_OVERLAY);
-    expect(isNotePending(v.overlays.at(-1)!, "a")).toBe(false);
-  });
-
-  it("shows a rename from the explorer at once in place of a draft, and keeps other notes' drafts (DOQ-46)", async () => {
-    const v = await mount();
-    const { drafts } = v.drafts();
-    // The title line retyped, its rename not fired yet: the row shows the draft.
-    await act(async () => drafts.set("a", "Alph"));
-    await act(async () => drafts.set("b", "Bet"));
-    const patch = deferred();
-    await act(async () =>
-      v.run({ kind: "rename", id: "a", title: "Alphasdffga", previousTitle: "Alpha" }, patch.action, () => {}),
-    );
-    // Before any answer: the new title, and no draft over it.
-    expect(drafts.get("a")).toBeUndefined();
-    expect(v.frames.at(-1)?.[0]).toBe("Alphasdffga");
-    expect(drafts.get("b")).toBe("Bet");
-    await act(async () => patch.resolve());
-    expect(v.frames.at(-1)?.[0]).toBe("Alphasdffga");
-  });
-
-  it("never covers an explorer rename still on its way with a title-line rename answered after it (DOQ-46)", async () => {
-    const v = await mount();
-    const { landed } = v.drafts();
-    const patch = deferred();
-    await act(async () => v.run({ kind: "rename", id: "a", title: "Roadmap", previousTitle: "Alpha" }, patch.action, () => {}));
-    await act(async () => landed({ id: "a", title: "Alph", previousTitle: "Alpha" }));
-    expect(v.frames.at(-1)?.[0]).toBe("Roadmap");
-    expect(v.frames.some((frame) => frame[0] === "Alph")).toBe(false);
-    await act(async () => patch.resolve());
-    expect(v.frames.at(-1)?.[0]).toBe("Roadmap");
-    // Once that one is answered and shown by the server's data, a later title-line rename shows as usual.
-    await v.serve({ notes: [{ ...notes[0], title: "Roadmap" }, notes[1]] });
-    await act(async () => landed({ id: "a", title: "Roadmaps", previousTitle: "Roadmap" }));
-    expect(v.frames.at(-1)?.[0]).toBe("Roadmaps");
-  });
-
-  it("drops a settling draft after the next commit", async () => {
-    const v = await mount();
-    const { drafts, settle } = v.drafts();
-    await act(async () => drafts.set("a", "Apex"));
-    await act(async () => settle("a"));
-    expect(drafts.get("a")).toBeUndefined();
   });
 });
 
