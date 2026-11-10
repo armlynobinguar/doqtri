@@ -88,25 +88,43 @@ function hasPrefix(doc: Text): boolean {
 }
 
 /**
- * Whether the guard holds (see above): read afresh from the rule when the
- * text is loaded, the title changes or the editor adds the title line, and
- * kept otherwise while line 1 has its `# `.
+ * Whether the guard holds (see above), and whether line 1 still says an
+ * older title (`stale`).
+ *
+ * The guard is read afresh from the rule when the text is loaded, the title
+ * changes or the editor adds the title line, and kept otherwise while line 1
+ * has its `# `. One exception: a title changed from outside the editor (a
+ * rename from the sidebar) while line 1 is the title line keeps the guard.
+ * Line 1 is still the title line; it only says the old title until the
+ * renamed text lands, and shows the new one meanwhile (see StaleTitle).
+ * Without this, line 1 would stop being the title line for a moment, and the
+ * new title would show above it as a second line.
  */
-const guardField = StateField.define<boolean>({
-  create: (state) => isTitleHeading(state.doc.line(1).text, state.field(titleField)),
-  update(held, tr) {
+type Guard = { held: boolean; stale: boolean };
+
+const guardField = StateField.define<Guard>({
+  create: (state) => ({ held: isTitleHeading(state.doc.line(1).text, state.field(titleField)), stale: false }),
+  update(guard, tr) {
     let title: string | null = null;
     for (const effect of tr.effects) if (effect.is(setNoteTitle)) title = effect.value;
-    if (title !== null || tr.annotation(external) || tr.annotation(titleLineChange)) {
-      return isTitleHeading(tr.newDoc.line(1).text, title ?? tr.startState.field(titleField));
+    const loaded = tr.annotation(external) || tr.annotation(titleLineChange);
+    const line = tr.newDoc.line(1).text;
+    if (title !== null && !loaded && !tr.docChanged && guard.held && hasPrefix(tr.newDoc)) {
+      return { held: true, stale: !isTitleHeading(line, title) };
     }
-    return tr.docChanged ? held && hasPrefix(tr.newDoc) : held;
+    if (title !== null || loaded) {
+      return { held: isTitleHeading(line, title ?? tr.startState.field(titleField)), stale: false };
+    }
+    if (!tr.docChanged) return guard;
+    // Editing line 1 while it shows a newer title shows its real text again.
+    const touched = tr.changes.touchesRange(0, tr.startState.doc.line(1).to);
+    return { held: guard.held && hasPrefix(tr.newDoc), stale: guard.stale && !touched };
   },
 });
 
 /** Whether the guard holds for `state`: line 1 is the note's title line, being edited or not. */
 export function guarded(state: EditorState): boolean {
-  return state.field(guardField, false) ?? false;
+  return state.field(guardField, false)?.held ?? false;
 }
 
 /** One change of a transaction, in the coordinates of the text before it, with its inserted lines. */
@@ -426,6 +444,28 @@ class TitlePreview extends WidgetType {
   }
 }
 
+/** The note's new title, shown over line 1's text while that still says the old one. */
+class StaleTitle extends WidgetType {
+  constructor(readonly title: string) {
+    super();
+  }
+
+  eq(other: StaleTitle) {
+    return other.title === this.title;
+  }
+
+  toDOM() {
+    const text = document.createElement("span");
+    text.dataset.testid = "title-line-pending";
+    text.textContent = this.title;
+    return text;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
 /**
  * Line 1 is styled as the note's title. A note that does not open with its
  * title line (and is not guarded) shows the one it will get, above the text and outside it:
@@ -440,7 +480,13 @@ export function titleLineDecorations(state: EditorState): DecorationSet {
     ]);
   }
   if (!guarded(state)) return Decoration.none;
-  return Decoration.set([Decoration.line({ class: "cm-title-line" }).range(0)]);
+  const line = Decoration.line({ class: "cm-title-line" }).range(0);
+  const first = state.doc.line(1);
+  if (state.field(guardField).stale && title.trim() && first.to > PREFIX) {
+    const shown = Decoration.replace({ widget: new StaleTitle(title.trim()) }).range(PREFIX, first.to);
+    return Decoration.set([line, shown]);
+  }
+  return Decoration.set([line]);
 }
 
 const decorations = StateField.define<DecorationSet>({

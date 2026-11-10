@@ -363,6 +363,62 @@ describe("the title line guard (D-120)", () => {
     });
   });
 
+  describe("a rename from outside the editor (the sidebar), before the renamed text lands", () => {
+    const pending = (state: EditorState) => {
+      const shown: string[] = [];
+      titleLineDecorations(state).between(0, state.doc.length, (from, to, deco) => {
+        if (from < to && deco.spec.widget) shown.push(`${from}-${to}:${(deco.spec.widget as { title: string }).title}`);
+      });
+      return shown;
+    };
+    const blockWidgets = (state: EditorState) => {
+      let count = 0;
+      titleLineDecorations(state).between(0, 0, (_from, _to, deco) => {
+        if (deco.spec.block) count++;
+      });
+      return count;
+    };
+    const renamed = () => make(`# Plan${BODY}`).update({ effects: setNoteTitle.of("Roadmap") }).state;
+
+    it("keeps line 1 the title line and shows the new title in it, with no second title above", () => {
+      const state = renamed();
+      expect(pending(state)).toEqual(["2-6:Roadmap"]);
+      expect(blockWidgets(state)).toBe(0);
+      // Still guarded: the `# ` cannot be deleted.
+      expect(edit(state, { changes: { from: 0, to: 2 }, userEvent: "delete" }).text).toBe(`# Plan${BODY}`);
+    });
+
+    it("shows the real line again once the renamed text lands", () => {
+      const landed = renamed().update({
+        changes: { from: 2, to: 6, insert: "Roadmap" },
+        annotations: [external.of(true), Transaction.addToHistory.of(false)],
+      }).state;
+      expect(landed.doc.line(1).text).toBe("# Roadmap");
+      expect(pending(landed)).toEqual([]);
+      expect(blockWidgets(landed)).toBe(0);
+    });
+
+    it("shows the old title again when the rename is undone (it failed)", () => {
+      const reverted = renamed().update({ effects: setNoteTitle.of("Plan") }).state;
+      expect(pending(reverted)).toEqual([]);
+      expect(blockWidgets(reverted)).toBe(0);
+    });
+
+    it("shows line 1's real text again when it is edited meanwhile, and keeps an edit below it pending", () => {
+      const below = edit(renamed(), { changes: { from: 9, insert: "x" }, userEvent: "input.type" }).state;
+      expect(pending(below)).toEqual(["2-6:Roadmap"]);
+      const onLine = edit(renamed(), { changes: { from: 6, insert: "s" }, userEvent: "input.type" }).state;
+      expect(onLine.doc.line(1).text).toBe("# Plans");
+      expect(pending(onLine)).toEqual([]);
+    });
+
+    it("a note whose line 1 is not its title line still shows the new title above it", () => {
+      const state = make(`# Introduction${BODY}`).update({ effects: setNoteTitle.of("Roadmap") }).state;
+      expect(pending(state)).toEqual([]);
+      expect(blockWidgets(state)).toBe(1);
+    });
+  });
+
   it("leaves Enter with several carets to the default, which the guard then keeps on track", () => {
     const state = EditorState.create({
       doc: `# Plan${BODY}`,
