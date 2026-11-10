@@ -13,8 +13,8 @@ import { firstNonBlankLine, headingLabel } from "@/lib/title-heading";
  * read it (`# [[Target|Alias]]` says Alias). Since D-120 that line is the
  * note's title line (lib/title-line.ts): the editor keeps it first and keeps
  * its `# `, and a note that opened with something else gets one above it
- * when it is opened for editing. So whatever it says is the title, and a
- * change to it renames, whether or not it said the title before.
+ * with its first edit. So whatever it says is the title, and a change to it
+ * renames, whether or not it said the title before.
  */
 
 /** What the first non-blank line of a note is, for the rule below. */
