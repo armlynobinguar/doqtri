@@ -9,6 +9,8 @@ export type DocumentRow = {
   workspace_id: string;
   title: string;
   markdown: string;
+  /** When the note was created; rows from before the column have their updated_at (DOQ-39). */
+  created_at: string;
   updated_at: string;
   mindmap: DocMindmap | null;
   mindmap_hash: string | null;
@@ -71,4 +73,6 @@ export type Doc = {
   mindmapStale?: boolean;
   /** The save version `markdown` was read at; absent in the demo vault. */
   version?: number;
+  /** When the note was created (DOQ-39); absent in the demo vault. */
+  created_at?: string;
 };

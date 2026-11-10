@@ -9,13 +9,26 @@ import type { SavedStyle } from "@/lib/mindmap-style-sync";
 import { useNavigate } from "@/components/vault/navigation";
 import { MindmapPromoBanner } from "@/components/promo/mindmap-promo-banner";
 import { useOverlaidNotes } from "@/components/vault/note-overlay";
+import { SendToHackathonButton, type HackathonSendSetup } from "@/components/vault/send-to-hackathon-dialog";
 
 /**
  * The vault-wide mindmap. Concepts from every document in one map, with the
  * ones several documents reach drawn as hubs. Pending renames and deletes
  * from the explorer show here at once.
+ *
+ * `hackathon` is what "Send to qdit hackathon" needs (WP-4.7), or null to hide
+ * it: the page passes it only to a workspace admin or owner with qdit
+ * connected, and the button stays hidden unless NEXT_PUBLIC_QDIT_HACKATHON=1.
  */
-export function GlobalMindmap({ docs: serverDocs, savedStyle }: { docs: Doc[]; savedStyle: SavedStyle }) {
+export function GlobalMindmap({
+  docs: serverDocs,
+  savedStyle,
+  hackathon = null,
+}: {
+  docs: Doc[];
+  savedStyle: SavedStyle;
+  hackathon?: HackathonSendSetup | null;
+}) {
   const navigate = useNavigate();
   const docs = useOverlaidNotes(serverDocs);
   const graph = useMemo(() => buildGlobalMindmap(docs), [docs]);
@@ -47,6 +60,7 @@ export function GlobalMindmap({ docs: serverDocs, savedStyle }: { docs: Doc[]; s
             color={MINDMAP_COLORS.hub.stroke}
             label={`Shared (${hubCount})`}
           />
+          <SendToHackathonButton setup={hackathon} noteCount={documentCount} />
         </div>
       </header>
 
