@@ -61,6 +61,12 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261101110000_chain_writes_status.sql    # NOT recorded (WP-4.1, DOQ-5): confirm on the remote before deploying
 20261101120000_wallet_topups.sql          # NOT recorded (WP-4.1, DOQ-6): confirm on the remote before deploying
 20261103100000_ops_snapshot.sql           # applied 2026-11-03 as `ops_snapshot` (WP-4.3, DOQ-14)
+20261107100000_referral_eligibility.sql   # applied 2026-11-10 as `referral_eligibility` (WP-4.6, DOQ-23)
+20261107110000_referral_dashboard.sql     # applied 2026-11-10 as `referral_dashboard` (WP-4.6, DOQ-24)
+20261107120000_referral_payout_profiles.sql  # applied 2026-11-10 as `referral_payout_profiles` (WP-4.6, DOQ-25)
+20261107130000_referral_payouts.sql          # applied 2026-11-10 as `referral_payouts` (WP-4.6, DOQ-26)
+20261107140000_referral_testimonials.sql     # applied 2026-11-10 as `referral_testimonials` (WP-4.6, DOQ-28)
+20261109100000_rename_document.sql        # applied 2026-11-10 as `rename_document` (WP-1.7, DOQ-35)
 20261110100000_documents_created_at.sql   # NOT yet applied (WP-4.7, DOQ-39): apply before deploying (loadVaultDocs selects created_at) and before any hackathon opens
 ```
 
@@ -120,9 +126,31 @@ Two supporting tables:
   the code in a signed cookie; after sign-up the vault calls
   `/api/referrals/claim`, which records it through `claim_referral()` only for
   an account created after the code was seen, never for the user's own code.
-  Both functions are service role only. Owners can read their own code;
-  referrals are exposed only as counts, total and by source, on the profile
-  page, and in full to admins at `/admin/referrals`.
+  Both functions are service role only. Owners can read their own code. The
+  referrals table is never readable by clients: the profile page shows counts,
+  total and by source, and admins see it in full at `/admin/referrals`. Referred
+  users reach their referrer only masked, through `GET /api/referrals`
+  (DOQ-24, D-111), which reads them through `referral_dashboard()`, service role
+  only.
+- `public.referral_chain_activity`, `public.referral_rewards`,
+  `public.referral_reward_limits`, `public.referral_activity_sync` — what a
+  referral has earned (WP-4.6, DOQ-23). RLS on with no policies, every privilege
+  revoked from `anon` and `authenticated`, and every function service role only.
+  `referral_chain_activity` holds one row per `(network, tx_hash)`: each
+  referred user's successful calls to a Doqtri contract since their referral,
+  stored because testnet resets. The relay records passkey wallets' confirmed
+  writes, and each `/api/chain/jobs` run reads wallet logins' from Horizon and
+  sweeps confirmed `chain_writes` (`lib/referral-activity.ts`).
+  `referral_rewards` holds one row per qualified referral, `eligible`,
+  `over_limit`, `paid` or `void`; eligibility never reverses. Both users are
+  `on delete set null`: a deleted referred user's reward stays, and a deleted
+  referrer's unpaid rewards are voided while paid ones stay. A wallet earns once
+  per network, even after the account is deleted (a second account's row is void
+  with `duplicate_wallet`). `referral_reward_limits` holds a referrer's limit
+  where an admin changed the default; when a place opens, the oldest over-limit
+  reward moves up, under a per-referrer advisory lock.
+  `referral_activity_sync` only orders the sync fairly. The threshold, reward and
+  default limit live in `lib/referral-program.ts` and reach SQL as arguments.
 - `public.mindmap_styles` — each user's mindmap studio style, one row per map
   (`global`, or `doc:<id>` with a cascading `document_id`), so a look follows
   the user across devices. The browser upserts its own rows under RLS a moment
@@ -202,13 +230,18 @@ Two supporting tables:
   names it, so a user's second tab is read-only and cannot release the
   first's); it frees after ten minutes without a heartbeat, and an admin or
   owner may take it over (anyone may take over their own lock from another
-  tab). Written only by `take_doc_lock()`, `release_doc_lock()` and
-  `save_document()`; workspace members read who holds it, and only editors
+  tab). Written only by `take_doc_lock()`, `release_doc_lock()`,
+  `save_document()` and `rename_document()`; workspace members read who holds it, and only editors
   and above are told the holder's name. `documents.version` counts saves,
   and the browser saves text only through
   `save_document(id, markdown, base_version, session)`, which refuses a
   caller without the lock in that session (`DQLCK`) or with a stale version
-  (`DQVER`). A plain client UPDATE of `markdown` is refused. Removing or
+  (`DQVER`). A rename goes through
+  `rename_document(id, title, markdown, base_version, session)` (DOQ-35),
+  which writes the title and, when the note's `# <title>` heading changes
+  with it, the new text in one UPDATE: refused while another user holds the
+  lock, and, when the text changes, unless the lock is free or held from
+  that session. A plain client UPDATE of `markdown` is refused. Removing or
   demoting a member drops their locks. A tab that closes or reloads releases
   its lock with a keepalive request; when that request never arrives, the old
   session's lock stays live, and a reloaded tab shows the note as being

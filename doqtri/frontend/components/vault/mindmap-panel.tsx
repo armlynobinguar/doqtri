@@ -1,18 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { NavLink } from "@/components/vault/navigation";
-import { useRouter } from "next/navigation";
 import { Loader2Icon, Maximize2Icon, RefreshCwIcon } from "lucide-react";
-import { toast } from "sonner";
 import { buttonVariants } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  mindmapFromHeadings,
-  type ConceptNode,
-  type DocMindmap,
-} from "@/lib/mindmap-types";
+import { mindmapFromHeadings, type ConceptNode } from "@/lib/mindmap-types";
+import { withRootLabel, type MindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
 
 /**
  * The compact mindmap: the document's concept tree, in the right-hand panel.
@@ -23,56 +18,29 @@ import {
  * from is the whole point of the feature: the stored concept map when there is
  * one, and the heading hierarchy only as a fallback — headings alone say
  * almost nothing about a document that has none.
+ *
+ * The concept map and its rebuild come from the note's workspace, shared with
+ * the live mindmap beside the editor; see useMindmapRebuild.
  */
 export function MindmapPanel({
   docId,
   title,
   markdown,
-  mindmap,
-  stale,
+  concept,
 }: {
   docId: string;
   title: string;
   markdown: string;
-  mindmap: DocMindmap | null;
-  stale: boolean;
+  concept: MindmapRebuild;
 }) {
-  const router = useRouter();
-  const [building, setBuilding] = useState(false);
+  const { mindmap, stale, building, rebuild } = concept;
 
   const fallback = useMemo(
     () => mindmapFromHeadings(title, markdown),
     [title, markdown],
   );
-  const tree = mindmap ?? fallback;
+  const tree = mindmap ? withRootLabel(mindmap, title) : fallback;
   const derived = mindmap === null;
-
-  async function rebuild() {
-    setBuilding(true);
-    try {
-      const res = await fetch("/api/mindmap", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: docId }),
-      });
-      const payload: unknown = await res.json().catch(() => null);
-
-      if (!res.ok) {
-        const message =
-          payload && typeof payload === "object" && "error" in payload
-            ? String((payload as { error: unknown }).error)
-            : `Could not build the mindmap (${res.status})`;
-        throw new Error(message);
-      }
-
-      toast.success("Mindmap rebuilt");
-      router.refresh();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Mindmap failed");
-    } finally {
-      setBuilding(false);
-    }
-  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

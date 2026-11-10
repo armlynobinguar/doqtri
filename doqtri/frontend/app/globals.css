@@ -363,252 +363,44 @@ html[data-reduce-motion] *::after {
 }
 
 /*
- * @uiw/react-md-editor overrides. The editor ships its own light theme and a
- * `data-color-mode="dark"` variant; both are repointed at our tokens so the
- * editor is indistinguishable from the rest of the app.
+ * The note editor (components/vault/live-editor). Its look is a CodeMirror
+ * theme in live-editor/theme.ts, built from the tokens above; only the sizes
+ * it reads are set here, where the Text size setting and the phone
+ * breakpoint can reach them.
  */
-html[data-color-mode] .w-md-editor {
-  --color-canvas-default: var(--background);
-  --color-canvas-subtle: var(--muted);
-  --color-border-default: var(--border);
-  --color-border-muted: var(--border);
-  --color-fg-default: var(--foreground);
-  --color-fg-muted: var(--muted-foreground);
-  --color-fg-subtle: var(--label);
-  --color-accent-fg: var(--primary);
-  background-color: var(--background);
-  color: var(--foreground);
-  box-shadow: none;
+.doqtri-editor {
+  --lp-font-size: var(--editor-font-size, 14px);
+  --lp-line-height: var(--editor-line-height, 22px);
+  --lp-pad-x: var(--editor-pad-x, 28px);
 }
 
-/*
- * The library's ESM entry also imports its own stylesheet, which lands when the
- * lazily loaded editor chunk does — after globals.css. Every override below is
- * therefore prefixed with `html[data-color-mode] .w-md-editor` so it wins on
- * specificity, never on load order.
- */
-/* The toolbar is a glass strip, its buttons quiet until hovered. */
-html[data-color-mode] .w-md-editor .w-md-editor-toolbar {
-  background-color: var(--glass);
-  border-bottom: 1px solid var(--border);
-  box-shadow: inset 0 1px 0 0 var(--glass-lo);
-  padding: 4px 8px;
-}
-
-html[data-color-mode] .w-md-editor .w-md-editor-toolbar li > button {
+/* The `[[` list's key hints, under the titles; not on touch screens. */
+.cm-tooltip.cm-wikilink-suggest::after {
+  content: "↑↓ navigate   ↵ link   esc dismiss";
+  display: block;
+  margin-top: 4px;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--border);
   color: var(--muted-foreground);
-  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: pre;
 }
-
-html[data-color-mode] .w-md-editor .w-md-editor-toolbar li > button:hover,
-html[data-color-mode] .w-md-editor .w-md-editor-toolbar li > button:focus-visible {
-  background-color: var(--glass-strong);
-  color: var(--foreground);
-}
-
-html[data-color-mode] .w-md-editor .w-md-editor-toolbar li.active > button {
-  background-color: var(--glass-strong);
-  color: var(--foreground);
-  box-shadow: inset 0 1px 0 0 var(--glass-hi);
-}
-
-html[data-color-mode] .w-md-editor .w-md-editor-toolbar-divider {
-  background-color: var(--border);
-}
-
-/*
- * The editor is a transparent <textarea> (which owns the caret) stacked over a
- * syntax-highlighted <pre> (which owns the visible glyphs). Any difference in
- * how the two lay out text puts the caret somewhere other than the letters, so
- * all three layers get identical metrics. The library already reads the font
- * from --md-editor-font-family with !important on each layer, so the font is
- * set through that variable rather than fought over.
- */
-html[data-color-mode] .w-md-editor {
-  --md-editor-font-family: var(--font-code), ui-monospace, SFMono-Regular, Menlo,
-    Consolas, monospace;
-}
-
-html[data-color-mode] .w-md-editor .w-md-editor-text,
-html[data-color-mode] .w-md-editor .w-md-editor-text-pre,
-html[data-color-mode] .w-md-editor .w-md-editor-text-pre > code,
-html[data-color-mode] .w-md-editor .w-md-editor-text-input {
-  font-family: var(--md-editor-font-family) !important;
-  font-size: var(--editor-font-size, 13px) !important;
-  line-height: var(--editor-line-height, 22px) !important;
-  font-weight: 400 !important;
-  font-style: normal !important;
-  letter-spacing: normal !important;
-  word-spacing: normal !important;
-  font-variant-ligatures: none !important;
-  font-feature-settings: normal !important;
-  font-kerning: none !important;
-  text-rendering: auto !important;
-  text-transform: none !important;
-  text-indent: 0 !important;
-  tab-size: 4 !important;
-  white-space: pre-wrap !important;
-  word-break: break-word !important;
-  overflow-wrap: break-word !important;
-}
-
-/*
- * Tokens inside the <pre> must never change glyph metrics — bold headings or
- * inline code in a different face would drift away from the textarea.
- */
-html[data-color-mode] .w-md-editor .w-md-editor-text-pre code * {
-  font-family: inherit !important;
-  font-size: inherit !important;
-  line-height: inherit !important;
-  font-weight: inherit !important;
-  font-style: inherit !important;
-  letter-spacing: inherit !important;
-  padding: 0 !important;
-  margin: 0 !important;
-  border: 0 !important;
-}
-
-html[data-color-mode] .w-md-editor .w-md-editor-preview {
-  box-shadow: inset 1px 0 0 0 var(--border);
-  background-color: var(--background);
-}
-
-/*
- * The preview's own dark theme is scoped under `[data-color-mode*='dark']`
- * (specificity 0,2,0), so these overrides are prefixed to outrank it. The
- * library stylesheet is imported before globals.css in app/layout.tsx.
- */
-html[data-color-mode] .wmde-markdown {
-  background-color: var(--background);
-  color: var(--foreground);
-  font-size: 14px;
-}
-
-html[data-color-mode] .wmde-markdown h1,
-html[data-color-mode] .wmde-markdown h2,
-html[data-color-mode] .wmde-markdown h3,
-html[data-color-mode] .wmde-markdown h4 {
-  border-bottom: none;
-  color: var(--foreground);
-  font-family: var(--font-sans);
-  letter-spacing: -0.02em;
-}
-
-html[data-color-mode] .wmde-markdown a {
-  color: var(--primary);
-}
-
-html[data-color-mode] .wmde-markdown code {
-  background-color: var(--glass-strong);
-  border-radius: 6px;
-  font-family: var(--font-code), ui-monospace, monospace;
-}
-
-html[data-color-mode] .wmde-markdown pre {
-  background-color: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-html[data-color-mode] .wmde-markdown pre code {
-  background-color: transparent;
-}
-
-html[data-color-mode] .wmde-markdown blockquote {
-  border-left-color: var(--brand-purple);
-  color: var(--muted-foreground);
-}
-
-/*
- * Wikilinks are the one place the accent appears inside prose. The editor's
- * syntax highlighter does not know about [[...]], so the raw token in the
- * textarea keeps the default color and only rendered previews are styled.
- */
-.wikilink {
-  color: var(--primary);
-  cursor: pointer;
-  text-decoration: none;
-}
-
-.wikilink:hover {
-  text-decoration: underline;
-}
-
-.wikilink-ghost {
-  color: var(--ghost);
-  cursor: pointer;
-  text-decoration: none;
-}
-
-.wikilink-ghost:hover {
-  text-decoration: underline dotted;
+@media (pointer: coarse) {
+  .cm-tooltip.cm-wikilink-suggest::after {
+    display: none;
+  }
 }
 
 /*
  * The vault's compact layout: phones and portrait tablets, below `lg` (see
  * useIsCompactVault). iOS zooms the page into any focused field set below
- * 16px, so the editor's three stacked layers move up together — the caret alignment above
- * only needs them to match each other. The toolbar becomes one swipeable row
- * of finger-sized buttons instead of wrapping into a column beside the text.
+ * 16px, so the editor's text moves up to 16px there.
  */
 @media (max-width: 1023px) {
-  html[data-color-mode] .w-md-editor .w-md-editor-text,
-  html[data-color-mode] .w-md-editor .w-md-editor-text-pre,
-  html[data-color-mode] .w-md-editor .w-md-editor-text-pre > code,
-  html[data-color-mode] .w-md-editor .w-md-editor-text-input {
-    font-size: 16px !important;
-    line-height: 26px !important;
-  }
-
-  html[data-color-mode] .w-md-editor .w-md-editor-toolbar {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    scrollbar-width: none;
-    gap: 12px;
-    padding: 4px 6px;
-    min-height: 44px;
-  }
-
-  html[data-color-mode] .w-md-editor .w-md-editor-toolbar::-webkit-scrollbar {
-    display: none;
-  }
-
-  html[data-color-mode] .w-md-editor .w-md-editor-toolbar ul {
-    display: flex;
-    flex-wrap: nowrap;
-    align-items: center;
-    flex-shrink: 0;
-    white-space: nowrap;
-  }
-
-  html[data-color-mode] .w-md-editor .w-md-editor-toolbar li > button {
-    height: 36px;
-    min-width: 36px;
-    padding: 0 9px;
-  }
-
-  html[data-color-mode] .w-md-editor .w-md-editor-toolbar li > button svg {
-    width: 15px;
-    height: 15px;
-  }
-
-  /* No room for a second window on a phone, and the help page is a new tab. */
-  html[data-color-mode] .w-md-editor .w-md-editor-toolbar li > button[data-name="fullscreen"],
-  html[data-color-mode] .w-md-editor .w-md-editor-toolbar li > button[data-name="help"] {
-    display: none;
-  }
-
-  html[data-color-mode] .w-md-editor .w-md-editor-content .w-md-editor-text {
-    padding: 14px 16px;
-  }
-
-  html[data-color-mode] .w-md-editor .w-md-editor-preview {
-    padding: 14px 16px;
-    box-shadow: none;
-  }
-
-  html[data-color-mode] .wmde-markdown {
-    font-size: 16px;
+  .doqtri-editor {
+    --lp-font-size: 16px;
+    --lp-line-height: 26px;
+    --lp-pad-x: var(--editor-pad-x, 16px);
   }
 }

@@ -46,6 +46,9 @@ export async function proxy(request: NextRequest) {
   // Public audit pages and the docs must open for anyone, signed in or not.
   const isAuditRoute = pathname.startsWith("/d/");
   const isDocsRoute = pathname === "/docs" || pathname.startsWith("/docs/");
+  // So must the legal pages, which sign-up links to. Each is a 404 until the
+  // gate in lib/legal.ts is on.
+  const isLegalRoute = pathname === "/privacy" || pathname === "/terms";
   // The promo portal is linked from the landing; it shows sign-in when needed.
   const isPromoRoute = pathname === "/promo";
   // The read-only demo vault is for visitors, and signed-in users may open it too.
@@ -54,7 +57,7 @@ export async function proxy(request: NextRequest) {
   const isAuthCallback = pathname.startsWith("/auth/");
   // Shared referral links remember the code, then send the visitor to sign up.
   const isReferralLink = pathname.startsWith("/r/");
-  if (isAuditRoute || isDocsRoute || isPromoRoute || isDemoRoute || isAuthCallback || isReferralLink) {
+  if (isAuditRoute || isDocsRoute || isLegalRoute || isPromoRoute || isDemoRoute || isAuthCallback || isReferralLink) {
     return response;
   }
 

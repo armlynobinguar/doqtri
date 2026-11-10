@@ -1,16 +1,16 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { NavLink, useNavigate } from "@/components/vault/navigation";
-import { useRouter } from "next/navigation";
 import { ArrowLeftIcon, Loader2Icon, NetworkIcon, SparklesIcon } from "lucide-react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { MindmapStudio } from "@/components/vault/mindmap-studio";
 import { MindmapPromoBanner } from "@/components/promo/mindmap-promo-banner";
 import { graphFromMindmap } from "@/lib/mindmap-graph";
 import { mindmapFromHeadings, type DocMindmap } from "@/lib/mindmap-types";
 import type { SavedStyle } from "@/lib/mindmap-style-sync";
+import { useMindmapRebuild, withRootLabel } from "@/components/vault/use-mindmap-rebuild";
+import { useNoteTitle } from "@/components/vault/note-overlay";
 
 /**
  * The full-screen mindmap of a single document.
@@ -21,10 +21,10 @@ import type { SavedStyle } from "@/lib/mindmap-style-sync";
  */
 export function DocumentMindmap({
   docId,
-  title,
+  title: storedTitle,
   markdown,
-  mindmap,
-  stale,
+  mindmap: stored,
+  stale: storedStale,
   savedStyle,
 }: {
   docId: string;
@@ -34,43 +34,21 @@ export function DocumentMindmap({
   stale: boolean;
   savedStyle: SavedStyle;
 }) {
-  const router = useRouter();
   const navigate = useNavigate();
-  const [building, setBuilding] = useState(false);
+  // Renamed from the explorer while this view is open: show the new title now.
+  const title = useNoteTitle(docId, storedTitle);
+  const { mindmap, stale, building, rebuild } = useMindmapRebuild({
+    docId,
+    stored,
+    stale: storedStale,
+  });
 
   const derived = mindmap === null;
   const tree = useMemo(
-    () => mindmap ?? mindmapFromHeadings(title, markdown),
+    () => (mindmap ? withRootLabel(mindmap, title) : mindmapFromHeadings(title, markdown)),
     [mindmap, title, markdown],
   );
   const graph = useMemo(() => graphFromMindmap(tree), [tree]);
-
-  async function rebuild() {
-    setBuilding(true);
-    try {
-      const res = await fetch("/api/mindmap", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: docId }),
-      });
-      const payload: unknown = await res.json().catch(() => null);
-
-      if (!res.ok) {
-        const message =
-          payload && typeof payload === "object" && "error" in payload
-            ? String((payload as { error: unknown }).error)
-            : `Could not build the mindmap (${res.status})`;
-        throw new Error(message);
-      }
-
-      toast.success("Mindmap rebuilt");
-      router.refresh();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Mindmap failed");
-    } finally {
-      setBuilding(false);
-    }
-  }
 
   return (
     <div className="flex h-full min-h-0 flex-col">

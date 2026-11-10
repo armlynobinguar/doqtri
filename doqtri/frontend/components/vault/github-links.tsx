@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { startTransition, useCallback, useEffect, useOptimistic, useState } from "react";
 import { ArrowRightIcon, GitPullRequestIcon, Loader2Icon, RefreshCwIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,9 @@ import { loadWriteTarget, reportWorkspaceAssignment } from "@/lib/stellar/write-
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { formatRef, parseGitHubRef, refUrl } from "@/lib/github/refs";
 import { isReadyToSync, type GitHubItem, type Suggestion } from "@/lib/github/status";
-import { GITHUB_LINK_COLUMNS, linkableNodes } from "@/lib/node-links";
+import { GITHUB_LINK_COLUMNS, linkableNodes, withoutLink } from "@/lib/node-links";
+import { ReadSequence } from "@/lib/read-sequence";
+import { mayHaveLanded, supabaseWriteError, WRITE_TIMEOUT_MS, writeFailureMessage } from "@/lib/write-outcome";
 
 type Node = { id: string; label: string };
 
@@ -85,7 +87,10 @@ export function GitHubLinks({
   onLinkedChange?: (nodeIds: string[]) => void;
 }) {
   const wallet = useWallet();
-  const [links, setLinks] = useState<LinkRow[]>([]);
+  // The rows last loaded, and the ones shown: those minus any link whose
+  // delete has not answered yet (DOQ-33).
+  const [stored, setLinks] = useState<LinkRow[]>([]);
+  const [links, hideLink] = useOptimistic<LinkRow[], string>(stored, withoutLink);
   const [checks, setChecks] = useState<Record<string, CheckResult>>({});
   const [chain, setChain] = useState<Record<string, string | null>>({});
   const [busy, setBusy] = useState<"check" | "link" | "sync" | null>(null);
@@ -95,7 +100,12 @@ export function GitHubLinks({
 
   const labelOf = useCallback((id: string) => nodes.find((n) => n.id === id)?.label, [nodes]);
 
+  // An unlink reloads without waiting, so loads can overlap; one overtaken
+  // by a newer load or a successful delete keeps its rows to itself.
+  const [reads] = useState(() => new ReadSequence());
+
   const loadLinks = useCallback(async (): Promise<LinkRow[]> => {
+    const ticket = reads.start();
     const { data, error } = await createSupabaseBrowserClient()
       .from("node_links")
       .select(GITHUB_LINK_COLUMNS)
@@ -107,10 +117,12 @@ export function GitHubLinks({
       return [];
     }
     const rows = (data ?? []) as LinkRow[];
-    setLinks(rows);
-    onLinkedChange?.(rows.map((r) => r.node_id));
+    if (reads.isCurrent(ticket)) {
+      setLinks(rows);
+      onLinkedChange?.(rows.map((r) => r.node_id));
+    }
     return rows;
-  }, [docId, onLinkedChange]);
+  }, [docId, onLinkedChange, reads]);
 
   const readChain = useCallback(
     async (rows: LinkRow[]) => {
@@ -205,13 +217,39 @@ export function GitHubLinks({
     }
   }
 
-  async function removeLink(link: LinkRow) {
-    const { error } = await createSupabaseBrowserClient().from("node_links").delete().eq("id", link.id);
-    if (error) {
-      toast.error("Could not remove the link");
-      return;
-    }
-    await loadLinks();
+  // The row goes before the delete answers. A refused delete brings it back
+  // with the server's message. No answer brings it back too, and reloads to
+  // see whether the delete landed anyway. The reload runs after the
+  // transition, not inside it: React holds every pending action until all of
+  // them finish, so awaiting it here would keep another unlink's refused row
+  // hidden.
+  function removeLink(link: LinkRow) {
+    startTransition(async () => {
+      hideLink(link.id);
+      try {
+        const { data, error, status } = await createSupabaseBrowserClient()
+          .from("node_links")
+          .delete()
+          .eq("id", link.id)
+          .select("id")
+          .abortSignal(AbortSignal.timeout(WRITE_TIMEOUT_MS));
+        if (error) throw supabaseWriteError(error, status);
+        // Row-level security turns a delete it refuses into one that matches
+        // nothing, with no error: only the note's editors may unlink. A link
+        // someone else already removed matches nothing too; the reload shows which.
+        if (!data?.length) {
+          toast.error("This link wasn't removed: only editors of this note can unlink it.");
+          void loadLinks();
+          return;
+        }
+        reads.invalidate();
+        setLinks((rows) => withoutLink(rows, link.id));
+        void loadLinks();
+      } catch (e) {
+        toast.error(writeFailureMessage(e, "Could not remove the link"));
+        if (mayHaveLanded(e)) void loadLinks();
+      }
+    });
   }
 
   /** Links whose heading moved since they were made; never synced. */
@@ -292,7 +330,7 @@ export function GitHubLinks({
             chainStatus={chain[link.node_id] ?? null}
             drifted={drifted(link)}
             anchored={anchored}
-            onRemove={() => void removeLink(link)}
+            onRemove={() => removeLink(link)}
           />
         ))}
       </LinkList>

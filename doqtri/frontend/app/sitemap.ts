@@ -1,5 +1,6 @@
 import type { MetadataRoute } from "next";
 import { DEMO_NOTES } from "@/lib/demo-vault";
+import { legalPagesLive } from "@/lib/legal";
 import { SITE_URL } from "@/lib/site-url";
 
 /** /sitemap.xml: the public pages, including every note in the demo vault. */
@@ -10,6 +11,13 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${SITE_URL}/signup`, changeFrequency: "monthly", priority: 0.6 },
     { url: `${SITE_URL}/login`, changeFrequency: "monthly", priority: 0.3 },
   ];
+  // Absent until the gate in lib/legal.ts is on: they are a 404 until then.
+  if (legalPagesLive()) {
+    pages.push(
+      { url: `${SITE_URL}/privacy`, changeFrequency: "yearly", priority: 0.3 },
+      { url: `${SITE_URL}/terms`, changeFrequency: "yearly", priority: 0.3 },
+    );
+  }
   const demo: MetadataRoute.Sitemap = DEMO_NOTES.map((note) => ({
     url: `${SITE_URL}/demo/${note.id}`,
     changeFrequency: "monthly",

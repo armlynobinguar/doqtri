@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
-import { deleteNote, seedNote, uniqueTitle } from "./helpers";
+import { deleteNote, noteEditor, seedNote, uniqueTitle } from "./helpers";
+import { headingRenameCases } from "./heading-rename-cases";
 
 /*
  * The vault's compact layout (below `lg`). Runs under the `mobile` project, on
@@ -82,23 +83,51 @@ test.describe("mobile vault", () => {
   test("a note splits into Note, Map and Ship views", async ({ page }) => {
     await page.goto(`/vault/${noteId}`);
 
-    await expect(page.locator(".w-md-editor-text-input")).toBeVisible();
+    // The same live-preview editor as on desktop, alone: no mindmap beside it.
+    await expect(noteEditor(page)).toBeVisible();
+    await expect(page.getByTestId("live-mindmap")).toHaveCount(0);
     // At 16px or more, iOS does not zoom the page when the editor is focused.
-    const fontSize = await page
-      .locator(".w-md-editor-text-input")
-      .evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    const fontSize = await noteEditor(page).evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
     expect(fontSize).toBeGreaterThanOrEqual(16);
+    // Finger-sized formatting buttons.
+    const bold = page.getByRole("toolbar", { name: "Formatting" }).getByRole("button", { name: "Bold" });
+    expect((await bold.boundingBox())!.height).toBeGreaterThanOrEqual(44);
 
     await page.getByRole("tab", { name: "Map" }).tap();
     await expect(page.getByRole("tab", { name: "Graph" })).toBeVisible();
     await expect(page.getByTestId("backlinks")).toContainText(linkedTitle);
-    await expect(page.locator(".w-md-editor-text-input")).toBeHidden();
+    await expect(noteEditor(page)).toBeHidden();
 
     await page.getByRole("tab", { name: "Ship" }).tap();
     await expect(page.getByText("Stellar proof")).toBeVisible();
 
     await page.getByRole("tab", { name: "Note" }).tap();
-    await expect(page.locator(".w-md-editor-text-input")).toBeVisible();
+    await expect(noteEditor(page)).toBeVisible();
+    await expectNoHorizontalScroll(page);
+  });
+
+  test("the formatting bar scrolls sideways with finger-sized targets", async ({ page }) => {
+    await page.goto(`/vault/${noteId}`);
+    const bar = page.getByRole("toolbar", { name: "Formatting" });
+    await expect(bar).toBeVisible();
+    // No More menu on a phone: every group is in the one scrolling row.
+    await expect(bar.getByRole("button", { name: "More formatting" })).toHaveCount(0);
+    // 20 tools, the style menu, the View menu and full screen.
+    await expect(bar.locator("[data-tool-id]")).toHaveCount(23);
+    for (const control of await bar.locator("[data-tool-id]").all()) {
+      const box = (await control.boundingBox())!;
+      expect(box.width).toBeGreaterThanOrEqual(44);
+      expect(box.height).toBeGreaterThanOrEqual(44);
+    }
+    const scroll = await bar.evaluate((el) => {
+      const before = el.scrollLeft;
+      el.scrollLeft = el.scrollWidth;
+      return { room: el.scrollWidth - el.clientWidth, moved: el.scrollLeft - before };
+    });
+    expect(scroll.room).toBeGreaterThan(0);
+    expect(scroll.moved).toBeGreaterThan(0);
+    // The last control scrolls into reach; the page itself never scrolls sideways.
+    await expect(bar.getByRole("button", { name: "Full screen", exact: true })).toBeInViewport();
     await expectNoHorizontalScroll(page);
   });
 
@@ -133,5 +162,55 @@ test.describe("mobile vault", () => {
     const tabs = page.getByRole("navigation", { name: "Primary" });
     await expect(tabs.locator('[aria-current="page"]')).toHaveCount(0);
     await expectNoHorizontalScroll(page);
+  });
+});
+
+/*
+ * Editing the title heading renames the note (DOQ-36), on the phone layout:
+ * the title shows in the top bar, and the mindmap and backlinks are in the
+ * Map view.
+ */
+test.describe("mobile: editing the title heading renames the note", () => {
+  test.beforeEach(async ({ page }) => {
+    // See "mobile vault": the dev indicator covers the bottom-left corner.
+    await page.addInitScript(() => {
+      document.addEventListener("DOMContentLoaded", () => {
+        const style = document.createElement("style");
+        style.textContent = "nextjs-portal { display: none !important; }";
+        document.head.appendChild(style);
+      });
+    });
+  });
+
+  /** Runs `check` in the Map view, then goes back to the note. */
+  async function inMapView(page: Page, check: () => Promise<void>) {
+    await page.getByRole("tab", { name: "Map" }).tap();
+    await check();
+    await page.getByRole("tab", { name: "Note" }).tap();
+    await expect(noteEditor(page)).toBeVisible();
+  }
+
+  headingRenameCases({
+    async expectTitle(page, title, old) {
+      await expect(page.getByRole("heading", { level: 1, name: title, exact: true })).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByRole("heading", { level: 1, name: old, exact: true })).toHaveCount(0);
+    },
+    async expectMindmap(page, title, sections, old) {
+      await inMapView(page, async () => {
+        await page.getByTestId("right-panel").getByRole("tab", { name: "Mindmap" }).tap();
+        const mindmap = page.getByTestId("right-panel").getByTestId("mindmap");
+        await expect(mindmap.getByRole("paragraph").first()).toHaveText(title);
+        await expect(mindmap.locator(":scope > ul > li > span")).toHaveText(sections);
+        await expect(mindmap.getByText(old, { exact: true })).toHaveCount(0);
+        await expect(mindmap.getByText(title, { exact: true })).toHaveCount(1);
+      });
+    },
+    async expectBacklinks(page, count) {
+      await inMapView(page, async () => {
+        await expect(page.getByTestId("backlinks").locator("header")).toContainText(String(count), {
+          timeout: 15_000,
+        });
+      });
+    },
   });
 });

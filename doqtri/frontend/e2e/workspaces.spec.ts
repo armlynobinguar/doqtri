@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { test, expect, type BrowserContext, type Page } from "@playwright/test";
+import { test, expect, type BrowserContext, type Page, type Route } from "@playwright/test";
 import { shortenAddress } from "@/lib/wallet";
+import { UNCONFIRMED_WRITE } from "@/lib/write-outcome";
 import { assertNotProduction } from "./guard";
-import { deleteNote, editableEditor, personalWorkspaceId, seedNote, serviceRest, testUserId, uniqueTitle, userIdForWallet } from "./helpers";
+import { deleteNote, editableEditor, expectEditorText, noteEditor, personalWorkspaceId, setEditorSelection, seedNote, serviceRest, testUserId, uniqueTitle, userIdForWallet } from "./helpers";
 import { createTeamWorkspace, deleteWorkspace, memberRole, setMember } from "./teams";
 import { e2eKeypair, signedInContext } from "./wallet-session";
 
@@ -18,7 +19,6 @@ import { e2eKeypair, signedInContext } from "./wallet-session";
 const B = e2eKeypair("doqtri-e2e-wallet-b");
 const B_SHORT = shortenAddress(B.publicKey());
 
-const editor = (page: Page) => page.locator("textarea.w-md-editor-text-input");
 
 let aId: string;
 let bId: string;
@@ -50,7 +50,7 @@ async function expectNoteNotFound(page: Page, noteId: string, title: string) {
   await page.goto(`/vault/${noteId}`);
   await expect(page.getByText("This page could not be found.")).toBeVisible();
   await expect(page.getByText(title)).toHaveCount(0);
-  await expect(page.locator("textarea.w-md-editor-text-input")).toHaveCount(0);
+  await expect(noteEditor(page)).toHaveCount(0);
 }
 
 async function switchWorkspace(page: Page, name: string) {
@@ -194,6 +194,84 @@ test.describe("members screen", () => {
     }
   });
 
+  test("a role change shows before the RPC answers, and goes back when it is refused or unanswered", async ({ page }) => {
+    await setMember(team, bId, "viewer");
+    await page.goto(`/vault/workspace/members?ws=${team}`);
+    const role = page.getByLabel(`Role of ${B_SHORT}`);
+    await expect(role).toHaveText("Viewer");
+
+    // Each step holds the RPC until the screen has shown the new role, so the
+    // test proves the change appears before the server answers (DOQ-33).
+    const RPC = "**/rest/v1/rpc/set_workspace_member_role";
+    async function pick(option: string, answer: (route: Route) => Promise<void>) {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      await page.route(RPC, async (route) => {
+        await held;
+        await answer(route);
+      });
+      const stored = await memberRole(team, bId);
+      await role.click();
+      await page.getByRole("option", { name: option }).click();
+      await expect(role).toHaveText(option);
+      expect(await memberRole(team, bId)).toBe(stored);
+      release();
+    }
+
+    // Accepted: the role stays, and the database has it.
+    await pick("Editor", (route) => route.continue());
+    await expect(page.getByText(new RegExp(`${B_SHORT} is now editor`, "i"))).toBeVisible();
+    await expect.poll(() => memberRole(team, bId)).toBe("editor");
+    await expect(role).toHaveText("Editor");
+    await page.unroute(RPC);
+
+    // Refused, as PostgREST answers a raised exception: the old role comes back with the server's message.
+    await pick("Admin", (route) =>
+      route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "P0001", message: "E2E refused this role change", details: null, hint: null }),
+      }),
+    );
+    await expect(page.getByText("E2E refused this role change")).toBeVisible();
+    await expect(role).toHaveText("Editor");
+    expect(await memberRole(team, bId)).toBe("editor");
+    await page.unroute(RPC);
+
+    // No answer at all: the old role comes back and the toast says it may not have saved.
+    await pick("Viewer", (route) => route.abort("failed"));
+    await expect(page.getByText(UNCONFIRMED_WRITE)).toBeVisible();
+    await expect(role).toHaveText("Editor");
+    expect(await memberRole(team, bId)).toBe("editor");
+    await page.unroute(RPC);
+  });
+
+  test("removing someone hides their row before the RPC answers, and a refusal brings it back", async ({ page }) => {
+    await setMember(team, bId, "viewer");
+    await page.goto(`/vault/workspace/members?ws=${team}`);
+    const row = page.getByTestId("member-row").filter({ hasText: B_SHORT });
+    await expect(row).toBeVisible();
+
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route("**/rest/v1/rpc/remove_workspace_member", async (route) => {
+      await held;
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "P0001", message: "E2E refused this removal", details: null, hint: null }),
+      });
+    });
+    await page.getByRole("button", { name: `Remove ${B_SHORT}` }).click();
+    await expect(row).toHaveCount(0);
+    expect(await memberRole(team, bId)).toBe("viewer");
+    release();
+
+    await expect(page.getByText("E2E refused this removal")).toBeVisible();
+    await expect(row).toBeVisible();
+    expect(await memberRole(team, bId)).toBe("viewer");
+  });
+
   // The RPCs behind these controls refuse the same callers; that is covered
   // per role in backend/tests/workspace_members_management.test.sql.
   test("an editor gets no invite or role controls; an owner can grant up to admin only", async ({ page }) => {
@@ -240,7 +318,7 @@ test.describe("roles in the editor", () => {
     try {
       await bPage.goto(`/vault/${noteId}`);
       await expect(bPage.getByTestId("read-only-banner")).toHaveText(/You can read this note but not edit it/);
-      await expect(editor(bPage)).toHaveAttribute("readonly", "");
+      await expect(noteEditor(bPage)).toHaveAttribute("contenteditable", "false");
       await expect(bPage.getByRole("button", { name: "New note" })).toBeDisabled();
 
       const session = randomUUID();
@@ -266,9 +344,9 @@ test.describe("roles in the editor", () => {
 
     // A starts typing, which takes the lock.
     await page.goto(`/vault/${noteId}`);
-    await (await editableEditor(page)).click();
-    await editor(page).press("End");
-    await editor(page).pressSequentially(" Typed by A.");
+    await editableEditor(page);
+    await setEditorSelection(page, -1);
+    await page.keyboard.type(" Typed by A.");
     await expect(page.getByText("Saved")).toBeVisible({ timeout: 15_000 });
 
     const bPage = await bContext.newPage();
@@ -278,7 +356,7 @@ test.describe("roles in the editor", () => {
       await expect(banner).toContainText("is editing this note");
       // An editor cannot take the lock; only an admin or owner can.
       await expect(banner.getByRole("button", { name: "Take over" })).toHaveCount(0);
-      await expect(editor(bPage)).toHaveAttribute("readonly", "");
+      await expect(noteEditor(bPage)).toHaveAttribute("contenteditable", "false");
 
       // The server refuses B's save, whatever the UI shows.
       const session = randomUUID();
@@ -293,9 +371,9 @@ test.describe("roles in the editor", () => {
       expect((await save.json()).code).toBe("NOT_LOCK_HOLDER");
 
       // A saves again; B's read-only copy follows (polled every 15 s).
-      await editor(page).pressSequentially(" Second save.");
+      await page.keyboard.type(" Second save.");
       await expect(page.getByText("Saved")).toBeVisible({ timeout: 15_000 });
-      await expect(editor(bPage)).toHaveValue(/Second save\./, { timeout: 30_000 });
+      await expectEditorText(bPage, /Second save\./, 30_000);
     } finally {
       await bPage.close();
     }
@@ -306,9 +384,9 @@ test.describe("roles in the editor", () => {
     await setMember(team, bId, "admin");
 
     await page.goto(`/vault/${noteId}`);
-    await (await editableEditor(page)).click();
-    await editor(page).press("End");
-    await editor(page).pressSequentially(" A holds it.");
+    await editableEditor(page);
+    await setEditorSelection(page, -1);
+    await page.keyboard.type(" A holds it.");
     await expect(page.getByText("Saved")).toBeVisible({ timeout: 15_000 });
 
     const bPage = await bContext.newPage();
@@ -318,13 +396,14 @@ test.describe("roles in the editor", () => {
       await banner.getByRole("button", { name: "Take over" }).click();
       await expect(bPage.getByText("You are editing this note now")).toBeVisible();
       await expect(banner).toHaveCount(0);
-      await expect(editor(bPage)).not.toHaveAttribute("readonly", "");
+      await expect(noteEditor(bPage)).toHaveAttribute("contenteditable", "true");
 
       // A's next save is refused, and A's copy says who has it now.
-      await editor(page).pressSequentially(" Too late.");
+      await setEditorSelection(page, -1);
+      await page.keyboard.type(" Too late.");
       await expect(page.getByText(/is editing this note now\. This copy is read-only\./)).toBeVisible({ timeout: 30_000 });
       await expect(page.getByTestId("edit-lock-banner")).toBeVisible();
-      await expect(editor(page)).toHaveAttribute("readonly", "");
+      await expect(noteEditor(page)).toHaveAttribute("contenteditable", "false");
 
       const [{ markdown }] = await serviceRest<{ markdown: string }[]>(`documents?id=eq.${noteId}&select=markdown`);
       expect(markdown).not.toContain("Too late.");

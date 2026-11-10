@@ -28,6 +28,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useLegalLive } from "@/components/legal/legal-live";
+import { SignUpNotice } from "@/components/legal/legal-links";
 import { useNavigate } from "@/components/vault/navigation";
 import { useWallet } from "@/components/vault/wallet-provider";
 import { qditIntegrationEnabled } from "@/lib/integrations/qdit-config";
@@ -77,6 +79,7 @@ export function AccountMenu({
   variant?: Variant;
 }) {
   const wallet = useWallet();
+  const legalLive = useLegalLive();
   const [busy, setBusy] = useState(false);
   const { sessionAddress, walletAddress, mismatch, balance, balanceError } = wallet;
 
@@ -209,6 +212,8 @@ export function AccountMenu({
                     <ArrowLeftRightIcon />
                     Switch vault to {shortenAddress(walletAddress)}
                   </DropdownMenuItem>
+                  {/* Switching to a wallet with no account creates one. */}
+                  {legalLive && <SignUpNotice className="px-2 py-1.5" />}
                 </>
               )}
             </DropdownMenuGroup>

@@ -6,7 +6,7 @@ import { MindmapPanel } from "@/components/vault/mindmap-panel";
 import { BacklinksList } from "@/components/vault/backlinks-list";
 import { ShipPanel } from "@/components/vault/ship-panel";
 import { useVaultStatus, type RightTab } from "@/components/vault/vault-status";
-import type { DocMindmap } from "@/lib/mindmap-types";
+import type { MindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
 import type { Doc } from "@/lib/types";
 
 export function RightPanel({
@@ -14,8 +14,7 @@ export function RightPanel({
   activeId,
   title,
   markdown,
-  mindmap,
-  mindmapStale,
+  concept,
   onSave,
   showShip = true,
 }: {
@@ -24,9 +23,8 @@ export function RightPanel({
   activeId: string;
   title: string;
   markdown: string;
-  /** The active note's stored concept map, null when it has none. */
-  mindmap: DocMindmap | null;
-  mindmapStale: boolean;
+  /** The active note's concept map (null when it has none) and its rebuild. */
+  concept: MindmapRebuild;
   /** Saves the note now and resolves with the text stored; see ShipPanel. */
   onSave: () => Promise<string>;
   /** Off on phones, where the ship panel is a view of its own. */
@@ -35,7 +33,7 @@ export function RightPanel({
   const { rightTab, setRightTab } = useVaultStatus();
 
   return (
-    <div className="bg-sidebar flex h-full min-h-0 flex-col">
+    <div className="bg-sidebar flex h-full min-h-0 flex-col" data-testid="right-panel">
       <div className="border-border flex h-11 shrink-0 items-center border-b px-2">
         <Tabs
           value={rightTab}
@@ -81,8 +79,7 @@ export function RightPanel({
               docId={activeId}
               title={title}
               markdown={markdown}
-              mindmap={mindmap}
-              stale={mindmapStale}
+              concept={concept}
             />
           )}
         </div>

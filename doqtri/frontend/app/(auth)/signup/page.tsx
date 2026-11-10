@@ -3,6 +3,8 @@ import { AuthCard, AuthPage, AuthSwitch } from "@/components/auth/auth-card";
 import { EmailAuthForm } from "@/components/auth/email-auth-form";
 import { ReferralCodeField } from "@/components/auth/referral-code-field";
 import { WalletOption } from "@/components/auth/wallet-option";
+import { SignUpNotice } from "@/components/legal/legal-links";
+import { legalPagesLive } from "@/lib/legal";
 import { safeNextPath, withNext } from "@/lib/email-auth";
 import { readReferralCookie, REFERRAL_COOKIE } from "@/lib/referral";
 
@@ -26,6 +28,7 @@ export default async function SignUpPage({
       >
         <EmailAuthForm mode="sign-up" next={next} />
         <WalletOption next={next} />
+        {legalPagesLive() && <SignUpNotice className="mt-1" />}
         <ReferralCodeField initialCode={referral?.code ?? null} />
         <AuthSwitch prompt="Already have an account?" href={withNext("/login", next)} label="Sign in" />
       </AuthCard>

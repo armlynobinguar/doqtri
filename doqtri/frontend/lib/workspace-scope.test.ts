@@ -152,6 +152,7 @@ describe("pathAfterSwitch", () => {
     expect(pathAfterSwitch("/vault/mindmap")).toBe("/vault/mindmap");
     expect(pathAfterSwitch("/vault/templates")).toBe("/vault/templates");
     expect(pathAfterSwitch("/vault/profile")).toBe("/vault/profile");
+    expect(pathAfterSwitch("/vault/referrals")).toBe("/vault/referrals");
     expect(pathAfterSwitch("/vault/0d3c/mindmap")).toBe("/vault");
     expect(pathAfterSwitch("/vault/0d3c")).toBe("/vault");
     expect(pathAfterSwitch("/vault")).toBe("/vault");

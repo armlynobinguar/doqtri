@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { readNote, seedNote, serviceRest, uniqueTitle } from "../helpers";
+import { editableEditor, readNote, seedNote, serviceRest, setEditorSelection, uniqueTitle } from "../helpers";
 import { activateWorkspace, createTeamWorkspace, deleteWorkspace, setMember } from "../teams";
 import { createChainUser, deleteChainUser, type ChainUser } from "./accounts";
 import { MARKET_CONTRACT_ID } from "@/lib/stellar/config";
@@ -116,11 +116,9 @@ test("Save & anchor registers v1, then v2, and an up-to-date note offers nothing
   await page.goto(`/vault/${anchoredId}`);
   await saveAndAnchor(page, /Saved & registered as v1/, "first anchor");
 
-  const editor = page.locator("textarea.w-md-editor-text-input");
-  await expect(editor).not.toHaveAttribute("readonly", /.*/);
-  await editor.click();
-  await editor.press("ControlOrMeta+End");
-  await editor.pressSequentially("\nSecond version.");
+  await editableEditor(page);
+  await setEditorSelection(page, -1);
+  await page.keyboard.type("\nSecond version.");
   await saveAndAnchor(page, /Saved & updated to v2/, "second anchor");
 
   // The chain already holds this text: the button turns itself off, so no

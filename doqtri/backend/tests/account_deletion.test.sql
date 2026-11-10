@@ -21,11 +21,14 @@
 --   u  unconfirmed@example.com, never confirmed (D-49)
 --   m  market@example.com    editor of Acme, has a template draft and
 --                            has bought one of o's
+--   r  referrer@example.com  referred four accounts (WP-4.6, DOQ-23),
+--                            saved payout details (DOQ-25), and shared
+--                            feedback an admin approved (DOQ-28)
 
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(43);
+select plan(53);
 
 insert into auth.users (id, email, email_confirmed_at) values
   ('00000000-0000-4000-8000-0000000000c1', 'owner@example.com', now()),
@@ -335,6 +338,103 @@ select results_eq(
   $$ select template_id, buyer_id, buyer_wallet from public.market_purchases where template_id = 'aaaaaaaaaaaaaaaa' $$,
   $$ values ('aaaaaaaaaaaaaaaa'::text, null::uuid, 'G' || repeat('M', 55)) $$,
   'and its purchase stays on record, by its wallet');
+
+-- ---------------------------------------------------------------------------
+-- Referrals and their rewards (WP-4.6, DOQ-23)
+-- ---------------------------------------------------------------------------
+--
+-- r referred e, who hasn't qualified; q, who has; and p and u, one paid and one
+-- not. Rewards come from the app's own function; the wallets are made up, as
+-- nothing here reads them.
+
+insert into auth.users (id, email, email_confirmed_at) values
+  ('00000000-0000-4000-8000-0000000000c8', 'referrer@example.com', now()),
+  ('00000000-0000-4000-8000-0000000000c9', 'early@example.com', now()),
+  ('00000000-0000-4000-8000-0000000000ca', 'qualified@example.com', now()),
+  ('00000000-0000-4000-8000-0000000000cb', 'paid@example.com', now()),
+  ('00000000-0000-4000-8000-0000000000cc', 'unpaid@example.com', now());
+insert into public.referrals (referred_user_id, referrer_user_id, code, created_at)
+select id::uuid, '00000000-0000-4000-8000-0000000000c8', 'abcdefgh', now() - interval '1 hour'
+  from unnest(array['00000000-0000-4000-8000-0000000000c9', '00000000-0000-4000-8000-0000000000ca',
+                    '00000000-0000-4000-8000-0000000000cb', '00000000-0000-4000-8000-0000000000cc']) as id;
+
+-- p_count calls by one user, from a wallet named after a letter of their own.
+create function pg_temp.referred_activity(p_user uuid, p_letter text, p_count int) returns void
+language sql as $$
+  select public.record_referral_activity(p_user, 'testnet', repeat(lower(p_letter), 63) || n::text,
+           'G' || repeat(p_letter, 55), 'anchor', now(), 3, 30, 30)
+    from generate_series(1, p_count) as n
+$$;
+select pg_temp.referred_activity('00000000-0000-4000-8000-0000000000c9', 'E', 2);
+select pg_temp.referred_activity('00000000-0000-4000-8000-0000000000ca', 'A', 3);
+select pg_temp.referred_activity('00000000-0000-4000-8000-0000000000cb', 'B', 3);
+select pg_temp.referred_activity('00000000-0000-4000-8000-0000000000cc', 'C', 3);
+
+select lives_ok(
+  $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c9' $$,
+  'a referred user who hadn''t qualified deletes themselves');
+select is(
+  (select count(*)::int from public.referrals where referred_user_id = '00000000-0000-4000-8000-0000000000c9')
+  + (select count(*)::int from public.referral_chain_activity where user_id = '00000000-0000-4000-8000-0000000000c9')
+  + (select count(*)::int from public.referral_rewards where referred_wallet = 'G' || repeat('E', 55)),
+  0, 'and the referral goes, as it always did, with their activity and no reward');
+
+select lives_ok(
+  $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000ca' $$,
+  'a referred user who had qualified deletes themselves');
+select results_eq(
+  $$ select referred_user_id, referrer_user_id, status, amount_php from public.referral_rewards
+      where referred_wallet = 'G' || repeat('A', 55) $$,
+  $$ values (null::uuid, '00000000-0000-4000-8000-0000000000c8'::uuid, 'eligible'::text, 30) $$,
+  'and the reward stays, for the app to show as Former user');
+
+-- r's payout details (DOQ-25), written as the route writes them: as the service role.
+set local role service_role;
+insert into public.referral_payout_profiles (user_id, method, name, xlm_address, xlm_memo, xlm_memo_type)
+values ('00000000-0000-4000-8000-0000000000c8', 'xlm', 'Referrer Name', 'G' || repeat('R', 55), '4242', 'id');
+reset role;
+select is((select count(*)::int from public.referral_payout_profiles
+            where user_id = '00000000-0000-4000-8000-0000000000c8'),
+  1, 'the referrer has payout details saved');
+-- p's reward is paid, the only way a reward can be (DOQ-26), by an admin.
+insert into auth.users (id, email, email_confirmed_at) values
+  ('00000000-0000-4000-8000-0000000000cd', 'admin@example.com', now());
+set local role service_role;
+select public.start_referral_payout('00000000-0000-4000-8000-0000000000c8', array[(select id from public.referral_rewards where referred_user_id = '00000000-0000-4000-8000-0000000000cb')], 30, (select updated_at from public.referral_payout_profiles where user_id = '00000000-0000-4000-8000-0000000000c8'), '00000000-0000-4000-8000-0000000000cd');
+select public.mark_referral_rewards_paid(
+  '00000000-0000-4000-8000-0000000000c8',
+  array[(select id from public.referral_rewards where referred_user_id = '00000000-0000-4000-8000-0000000000cb')],
+  30,
+  (select updated_at from public.referral_payout_profiles where user_id = '00000000-0000-4000-8000-0000000000c8'),
+  null,
+  '00000000-0000-4000-8000-0000000000cd');
+-- r's feedback, shared and approved (DOQ-28): on the landing page until now.
+insert into public.referral_testimonials (user_id, feedback, consent)
+values ('00000000-0000-4000-8000-0000000000c8', 'Referrer feedback for the landing page.', true);
+select public.referral_testimonial_review('00000000-0000-4000-8000-0000000000c8',
+  (select updated_at from public.referral_testimonials where user_id = '00000000-0000-4000-8000-0000000000c8'),
+  true, '00000000-0000-4000-8000-0000000000cd');
+select is((select count(*)::int from public.referral_testimonials_public() where feedback = 'Referrer feedback for the landing page.'),
+  1, 'the referrer''s approved testimonial is public');
+reset role;
+
+select lives_ok(
+  $$ delete from auth.users where id = '00000000-0000-4000-8000-0000000000c8' $$,
+  'a referrer deletes themselves');
+select is((select count(*)::int from public.referral_testimonials
+            where user_id = '00000000-0000-4000-8000-0000000000c8'),
+  0, 'and their testimonial goes with the account, so it is off the site (DOQ-28)');
+select is((select count(*)::int from public.referral_payout_profiles
+            where user_id = '00000000-0000-4000-8000-0000000000c8'),
+  0, 'and their payout details go with the account (DOQ-25)');
+select results_eq(
+  $$ select referred_wallet, referrer_user_id, status, void_reason from public.referral_rewards
+      where referred_wallet in ('G' || repeat('A', 55), 'G' || repeat('B', 55), 'G' || repeat('C', 55))
+      order by referred_wallet $$,
+  $$ values ('G' || repeat('A', 55), null::uuid, 'void'::text, 'referrer_deleted'::text),
+            ('G' || repeat('B', 55), null::uuid, 'paid'::text, null::text),
+            ('G' || repeat('C', 55), null::uuid, 'void'::text, 'referrer_deleted'::text) $$,
+  'and their unpaid rewards are voided, while the paid one stays as the accounting record');
 
 select * from finish();
 rollback;
