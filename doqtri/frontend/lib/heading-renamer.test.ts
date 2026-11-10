@@ -544,6 +544,32 @@ describe("createHeadingRenamer", () => {
       expect(t.renameNote).toHaveBeenCalledOnce();
     });
 
+    it("an edit of the title line overtaken by a refused explorer rename renames from the title it went back to", async () => {
+      const t = setup("Plan");
+      t.editor.text = note("Pla");
+      // The explorer's rename shows, and the edit settles against it: no rename.
+      t.renamer.setPageTitle("Roadmap");
+      t.renamer.check(t.ctx);
+      await settle();
+      expect(t.renameNote).not.toHaveBeenCalled();
+      // Refused: the page's title goes back, and the edit renames after all.
+      t.renamer.setPageTitle("Plan");
+      await settle();
+      expect(t.renameNote).toHaveBeenCalledExactlyOnceWith("n1", "Pla", "session-1", "Plan");
+      expect(t.renamer.title).toBe("Pla");
+    });
+
+    it("but a confirmed explorer rename followed by another back to the old title is not a refusal", async () => {
+      const t = setup("Plan");
+      t.editor.text = note("Pla");
+      t.renamer.setPageTitle("Roadmap");
+      t.renamer.noteRenamed({ title: "Roadmap", previousTitle: "Plan" }, note("Roadmap"));
+      t.editor.text = note("Roadmap");
+      t.renamer.setPageTitle("Plan");
+      await settle();
+      expect(t.renameNote).not.toHaveBeenCalled();
+    });
+
     it("tells its own renames apart from the explorer's", async () => {
       const t = setup("Old");
       const answers: RenamedNote[] = [];

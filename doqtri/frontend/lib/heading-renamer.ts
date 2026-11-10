@@ -118,6 +118,10 @@ export function createHeadingRenamer(init: {
   // Bumped by every title change from elsewhere (DOQ-46): an own rename
   // answered after one is superseded by it.
   let outside = 0;
+  // An explorer rename shows before it is answered (DOQ-32). Refused, the
+  // page's title goes back to `title`, and the comparison to `baseline`, as
+  // it was before (DOQ-46).
+  let revert: { title: string; baseline: string } | null = null;
 
   let snapshot: HeadingRenamerSnapshot = { notice: null, overlay: null };
   const listeners = new Set<() => void>();
@@ -201,6 +205,7 @@ export function createHeadingRenamer(init: {
           // Renamed from the explorer meanwhile (DOQ-46): that title is the
           // later word and shows already; this one is not shown over it.
           if (outside !== outsideAt) return;
+          revert = null;
           latest = renamed.title;
           pending = renamed.title === pageTitle ? [] : [...pending, renamed.title];
           const previousTitle = renamed.previousTitle || current;
@@ -270,11 +275,19 @@ export function createHeadingRenamer(init: {
       if (title === pageTitle) return;
       pageTitle = title;
       const at = pending.lastIndexOf(title);
+      let restored = false;
       if (at >= 0) {
         pending = pending.slice(at + 1);
         if (pending.length === 0) latest = title;
       } else {
         outside++;
+        if (revert && title === revert.title) {
+          baseline = revert.baseline;
+          revert = null;
+          restored = true;
+        } else {
+          revert = { title: latest, baseline };
+        }
         pending = [];
         latest = title;
       }
@@ -282,6 +295,9 @@ export function createHeadingRenamer(init: {
       // A draft worked out against the old title is not one now: a rename
       // from the explorer replaces it with its own title (DOQ-46).
       typed();
+      // The explorer's rename was refused: an edit of the title line made
+      // meanwhile renames from the title it went back to.
+      if (restored) check();
     },
 
     typed,
@@ -289,6 +305,7 @@ export function createHeadingRenamer(init: {
     /** Text loaded from outside (a reload, a regenerate): the next edit is compared with it. */
     reset(text: string) {
       baseline = text;
+      revert = null;
       if (notice?.kind === "clash") setNotice(null);
       typed();
     },
@@ -316,6 +333,7 @@ export function createHeadingRenamer(init: {
       if (text !== undefined) baseline = text;
       if (own.has(renamed)) return;
       outside++;
+      revert = null;
       latest = renamed.title;
       pending = [];
       notice = null;
