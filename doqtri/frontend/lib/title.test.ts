@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveTitle, isTitleTaken, uniqueTitle } from "@/lib/title";
+import { deriveTitle, hasControlCharacters, isTitleTaken, uniqueTitle } from "@/lib/title";
 
 describe("deriveTitle", () => {
   it("prefers the first h1", () => {
@@ -68,5 +68,19 @@ describe("isTitleTaken", () => {
 
   it("is false when nothing matches", () => {
     expect(isTitleTaken("Plan", ["Plans", "Other"])).toBe(false);
+  });
+});
+
+describe("hasControlCharacters (DOQ-35)", () => {
+  it("finds line breaks, tabs and other control characters", () => {
+    for (const title of ["a\nb", "a\rb", "a\tb", "\u0000", "a\u001fb", "a\u007f"]) {
+      expect(hasControlCharacters(title), JSON.stringify(title)).toBe(true);
+    }
+  });
+
+  it("passes ordinary titles, accents and emoji included", () => {
+    for (const title of ["Roadmap 2027", "C# notes", "Café — plan", "Launch 🚀", "[[Linked]]"]) {
+      expect(hasControlCharacters(title), title).toBe(false);
+    }
   });
 });

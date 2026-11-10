@@ -15,6 +15,7 @@ import { QuickSwitcher } from "@/components/vault/quick-switcher";
 import { UploadDialog, type RetryTarget } from "@/components/vault/upload-dialog";
 import { DeleteNoteDialog } from "@/components/vault/delete-note-dialog";
 import { RenameNoteDialog } from "@/components/vault/rename-note-dialog";
+import { OpenNoteProvider, useOpenNoteSlot } from "@/components/vault/open-note";
 import { SettingsDialog } from "@/components/vault/settings-dialog";
 import type { AccountPage } from "@/components/vault/account-menu";
 import type { NoteTemplate } from "@/lib/templates";
@@ -247,15 +248,18 @@ function VaultShellInner({
   );
 
   // Errors are rethrown so the dialog can show them beside the title field.
+  // The note open in the editor is renamed through it (DOQ-35), since the
+  // rename may rewrite its title heading.
+  const openNote = useOpenNoteSlot();
   const handleRenameNote = useCallback(
     async (note: NoteSummary, title: string) => {
-      const renamed = await renameNote(note.id, title);
+      const renamed = await openNote.rename(note.id, (session) => renameNote(note.id, title, session));
       toast.success(`Renamed to “${renamed.title}”`);
       // The explorer, tabs, and mindmap root all read the title from the
       // layout's server data.
       router.refresh();
     },
-    [router],
+    [openNote, router],
   );
 
   useEffect(() => {
@@ -383,7 +387,7 @@ function VaultShellInner({
           )}
 
           <ResizablePanel id="main" className="relative min-h-0">
-            {children}
+            <OpenNoteProvider slot={openNote}>{children}</OpenNoteProvider>
             <NavigationOverlay />
           </ResizablePanel>
         </ResizablePanelGroup>

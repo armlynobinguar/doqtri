@@ -76,4 +76,20 @@ describe("POST /api/notes", () => {
     session.user = null;
     expect((await post({})).status).toBe(401);
   });
+
+  it("refuses a title that is not one line (DOQ-35), creating nothing", async () => {
+    workspaceForCreate.mockResolvedValue({ ok: true, workspaceId: PERSONAL });
+    for (const title of ["New\n## Injected", "New\r## X", "Tab\there", "Nul\u0000", "Del\u007f"]) {
+      const res = await post({ title });
+      expect(res.status, JSON.stringify(title)).toBe(400);
+      expect((await res.json()).code).toBe("BAD_TITLE");
+    }
+    expect(insertWorkspaceDocument).not.toHaveBeenCalled();
+  });
+
+  it("still trims the whitespace around a title", async () => {
+    workspaceForCreate.mockResolvedValue({ ok: true, workspaceId: PERSONAL });
+    expect((await post({ title: "  Plan \n" })).status).toBe(200);
+    expect(insertWorkspaceDocument.mock.calls[0][1]).toMatchObject({ title: "Plan" });
+  });
 });
