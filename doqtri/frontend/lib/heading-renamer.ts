@@ -1,7 +1,12 @@
 import { decideHeadingRename, movesBaseline, type HeadingNotice } from "@/lib/heading-rename";
 import { normalizeConcept } from "@/lib/mindmap-types";
 import { NoResponseError } from "@/lib/no-response";
-import { RenameError, renameNote as defaultRenameNote, type RenamedNote } from "@/lib/rename-note";
+import {
+  RenameError,
+  renameNote as defaultRenameNote,
+  SaveBeforeRenameError,
+  type RenamedNote,
+} from "@/lib/rename-note";
 
 /**
  * When an edit of a note's title heading renames the note (DOQ-36), and what
@@ -205,10 +210,12 @@ export function createHeadingRenamer(init: {
         },
         (error: unknown) => {
           if (!(error instanceof RenameError)) {
-            // A save that failed first, or no answer: said, since nothing
-            // else says the heading did not rename the note (DOQ-46). The
-            // baseline stays, so the next settled edit tries again.
+            // No answer, or a failure nothing else explains, is said (DOQ-46).
+            // A save that failed first already says so itself (its toast, the
+            // save status or the edit-lock banner). The baseline stays, so
+            // the next settled edit tries again.
             if (!left) ctx.draft(null);
+            if (error instanceof SaveBeforeRenameError) return;
             init.onError?.(
               error instanceof NoResponseError
                 ? `Could not reach doqtri, so the note may not have been renamed to “${decision.title}”.`

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHeadingRenamer, type HeadingCheck } from "@/lib/heading-renamer";
 import { NoResponseError } from "@/lib/no-response";
-import { RenameError, type RenamedNote } from "@/lib/rename-note";
+import { RenameError, SaveBeforeRenameError, type RenamedNote } from "@/lib/rename-note";
 
 const BODY = "\n\n## Scope\n\nBody.";
 const note = (heading: string) => `# ${heading}${BODY}`;
@@ -565,28 +565,38 @@ describe("createHeadingRenamer", () => {
   });
 
   describe("failures that are not refusals say so (DOQ-46)", () => {
-    it("a save that failed before the rename", async () => {
+    it("not a save that failed before the rename, which says so itself, nor a lost lock", async () => {
       const onError = vi.fn();
       const t = setup("Old", { onError });
-      const ctx: HeadingCheck = {
+      const failing = (message: string): HeadingCheck => ({
         ...t.ctx,
         rename: async () => {
-          throw new Error("Your edits could not be saved, so the note was not renamed. Could not save (500)");
+          throw new SaveBeforeRenameError(message);
         },
-      };
+      });
       t.editor.text = note("New");
-      t.renamer.typed(ctx);
-      t.renamer.check(ctx);
+      t.renamer.typed(t.ctx);
+      t.renamer.check(failing("Your edits could not be saved, so the note was not renamed. Could not save (500)"));
       await settle();
-      expect(onError).toHaveBeenCalledExactlyOnceWith(
-        "Your edits could not be saved, so the note was not renamed. Could not save (500)",
-      );
+      t.renamer.check(failing("Your edits could not be saved, so the note was not renamed. Ana is editing this note"));
+      await settle();
+      expect(onError).not.toHaveBeenCalled();
       expect(t.drafts.shown).toBeNull();
       expect(t.renamer.title).toBe("Old");
       // The baseline stayed: the next settled edit tries again.
       t.renamer.check(t.ctx);
       await settle();
       expect(t.renameNote).toHaveBeenCalledExactlyOnceWith("n1", "New", "session-1", "Old");
+    });
+
+    it("a failure nothing else explains", async () => {
+      const onError = vi.fn();
+      const t = setup("Old", { onError });
+      t.renameNote.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      t.editor.text = note("New");
+      t.renamer.check(t.ctx);
+      await settle();
+      expect(onError).toHaveBeenCalledExactlyOnceWith("Failed to fetch");
     });
 
     it("no answer from the server", async () => {

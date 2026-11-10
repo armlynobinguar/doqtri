@@ -33,6 +33,18 @@ export class RenameError extends Error {
 }
 
 /**
+ * The open editor could not save its text before a rename, so nothing was
+ * renamed (DOQ-46). The save itself already says why: the autosave's toast,
+ * the save status, or the edit-lock banner.
+ */
+export class SaveBeforeRenameError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SaveBeforeRenameError";
+  }
+}
+
+/**
  * Renames a note through the API. Throws a RenameError with the server's
  * reason — notably when another note already has the title, which the dialog
  * shows inline — or NoResponseError when no answer came, in which case the

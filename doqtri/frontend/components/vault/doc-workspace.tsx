@@ -32,7 +32,7 @@ import {
 } from "@/components/vault/note-overlay";
 import { useMindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
 import type { Doc } from "@/lib/types";
-import type { RenamedNote } from "@/lib/rename-note";
+import { SaveBeforeRenameError, type RenamedNote } from "@/lib/rename-note";
 import { adoptRename } from "@/lib/rename-adopt";
 import { settleTitleLine } from "@/lib/title-line-settle";
 import { useRegisterOpenNote } from "@/components/vault/open-note";
@@ -366,7 +366,7 @@ export function DocWorkspace({
           await saveNow();
         } catch (e) {
           const reason = e instanceof Error ? ` ${e.message}` : "";
-          throw new Error(`Your edits could not be saved, so the note was not renamed.${reason}`);
+          throw new SaveBeforeRenameError(`Your edits could not be saved, so the note was not renamed.${reason}`);
         }
       }
       // Whether the editor takes text from the answer that says the new title:
