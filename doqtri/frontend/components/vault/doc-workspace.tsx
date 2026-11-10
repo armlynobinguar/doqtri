@@ -17,7 +17,7 @@ import { useIsCompactVault } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 import { useVaultStatus } from "@/components/vault/vault-status";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
-import { useNavigate } from "@/components/vault/navigation";
+import { useCheckedCopy, useOpenNote } from "@/components/vault/note-store";
 import { resolveLinkTitle } from "@/lib/wikilinks";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { createNoteSaver } from "@/lib/note-saver";
@@ -27,6 +27,7 @@ import { EDITING_ELSEWHERE, editingMessage } from "@/lib/doc-lock";
 import { useNoteTitle, useOverlaidNotes } from "@/components/vault/note-overlay";
 import { useMindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
 import type { Doc } from "@/lib/types";
+import type { EditorCopy, NoteRow } from "@/lib/note-store";
 import type { RenamedNote } from "@/lib/rename-note";
 import { adoptRename } from "@/lib/rename-adopt";
 import { useRegisterOpenNote } from "@/components/vault/open-note";
@@ -50,8 +51,11 @@ const MOBILE_VIEWS: { id: MobileView; label: string }[] = [
  * truth: the editor writes it, Supabase persists it, and both the graph and
  * the mindmap are derived from it — nothing else is stored.
  *
- * Mounted with `key={active.id}` by the page, so navigating between notes
- * remounts rather than reconciling stale editor state.
+ * Mounted with `key={active.id}` by the vault's note host, so navigating
+ * between notes remounts rather than reconciling stale editor state. Opened
+ * from the vault's copy of the notes (DOQ-43), it starts on any text left
+ * unsaved there (`draft`), stays read-only until `check` (the row read again)
+ * answers, and hands its copy back on leaving (`onLeave`).
  *
  * Edits are locked (WP-1.6, D-17): the first keystroke takes the note's edit
  * lock, and every save goes through /api/notes/[id] with the version the text
@@ -70,9 +74,15 @@ const MOBILE_VIEWS: { id: MobileView; label: string }[] = [
 export function DocWorkspace({
   docs: serverDocs,
   active,
+  draft,
+  check,
+  onLeave,
 }: {
   docs: Doc[];
   active: Doc;
+  draft?: string;
+  check?: Promise<NoteRow | null | undefined>;
+  onLeave?: (copy: EditorCopy) => void;
 }) {
   const router = useRouter();
   const docs = useOverlaidNotes(serverDocs);
@@ -88,7 +98,7 @@ export function DocWorkspace({
   });
   const { setWordCount, setSaveState, setEditorStats } = useVaultStatus();
 
-  const [markdown, setMarkdown] = useState(active.markdown);
+  const [markdown, setMarkdown] = useState(draft ?? active.markdown);
   const [regenerateOpen, setRegenerateOpen] = useState(false);
   const isMobile = useIsCompactVault();
   const [mobileView, setMobileView] = useState<MobileView>("note");
@@ -124,6 +134,20 @@ export function DocWorkspace({
   );
   const saves = saver.queue;
 
+  /** Makes `latest` the editor's text and its saved copy, at its version. */
+  const adoptLatest = useCallback(
+    (latest: { markdown: string; version: number }) => {
+      saver.setVersion(latest.version);
+      saves.markSaved(latest.markdown);
+      markdownRef.current = latest.markdown;
+      resetHeading(latest.markdown);
+      setMarkdown(latest.markdown);
+      setConflict(false);
+      setSaveState("saved");
+    },
+    [resetHeading, saver, saves, setSaveState],
+  );
+
   /** Replaces the editor's text with the stored note and its version. */
   const reloadLatest = useCallback(async () => {
     const supabase = createSupabaseBrowserClient();
@@ -136,14 +160,27 @@ export function DocWorkspace({
       toast.error("Could not load the latest version of this note");
       return;
     }
-    saver.setVersion(Number(data.version));
-    saves.markSaved(data.markdown);
-    markdownRef.current = data.markdown;
-    resetHeading(data.markdown);
-    setMarkdown(data.markdown);
-    setConflict(false);
-    setSaveState("saved");
-  }, [active.id, resetHeading, saver, saves, setSaveState]);
+    adoptLatest({ markdown: data.markdown, version: Number(data.version) });
+  }, [active.id, adoptLatest]);
+
+  // Opened from the vault's copy: no save goes out on its version before the
+  // row has been read again (DOQ-43).
+  const checking = useCheckedCopy(check, {
+    version: () => saver.version,
+    unsaved: () => markdownRef.current !== saves.saved,
+    adopt: adoptLatest,
+    conflict: () => setConflict(true),
+  });
+
+  // Leaving: the vault keeps this copy, unsaved text included, for the next visit.
+  const leaveRef = useRef(onLeave);
+  useEffect(() => {
+    leaveRef.current = onLeave;
+  }, [onLeave]);
+  useEffect(() => {
+    const copy = () => ({ saved: saves.saved, version: saver.version, text: markdownRef.current });
+    return () => leaveRef.current?.(copy());
+  }, [saver, saves]);
 
   useEffect(() => {
     controller.setHandlers({
@@ -168,13 +205,15 @@ export function DocWorkspace({
 
   const readOnly =
     conflict ||
+    checking ||
     !lock.canEdit ||
     lock.phase === "loading" ||
     lock.phase === "other" ||
     lock.phase === "elsewhere";
-  // Read-only only because the lock's status has not arrived yet (DOQ-17):
-  // the editor keeps its caret so typing works the moment it does.
-  const lockPending = lock.phase === "loading" && !conflict;
+  // Read-only only because the lock's status has not arrived yet (DOQ-17),
+  // or the row is still being read again (DOQ-43): the editor keeps its
+  // caret so typing works the moment it does.
+  const lockPending = (lock.phase === "loading" || checking) && !conflict;
   const readOnlyRef = useRef(readOnly);
   useEffect(() => {
     readOnlyRef.current = readOnly;
@@ -388,13 +427,13 @@ export function DocWorkspace({
 
   // A followed [[link]] opens the note it names, as the graph would. A ghost
   // link names no note, and does nothing.
-  const navigate = useNavigate();
+  const showNote = useOpenNote();
   const openNote = useCallback(
     (title: string) => {
       const target = resolveLinkTitle(docs, title);
-      if (target && target.id !== active.id) navigate(`/vault/${target.id}`);
+      if (target && target.id !== active.id) showNote(target.id);
     },
-    [docs, active.id, navigate],
+    [docs, active.id, showNote],
   );
 
   // Every other note, offered by the editor's `[[` autocomplete.

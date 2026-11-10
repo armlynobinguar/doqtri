@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo } from "react";
-import { NavLink, useNavigate } from "@/components/vault/navigation";
+import { NavLink } from "@/components/vault/navigation";
+import { NoteLink, useOpenNote } from "@/components/vault/note-store";
 import { ArrowLeftIcon, Loader2Icon, NetworkIcon, SparklesIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MindmapStudio } from "@/components/vault/mindmap-studio";
@@ -34,7 +35,7 @@ export function DocumentMindmap({
   stale: boolean;
   savedStyle: SavedStyle;
 }) {
-  const navigate = useNavigate();
+  const openNote = useOpenNote();
   // Renamed from the explorer while this view is open: show the new title now.
   const title = useNoteTitle(docId, storedTitle);
   const { mindmap, stale, building, rebuild } = useMindmapRebuild({
@@ -54,13 +55,13 @@ export function DocumentMindmap({
     <div className="flex h-full min-h-0 flex-col">
       <header className="border-border bg-background flex h-11 shrink-0 items-center justify-between gap-2 border-b px-2 max-lg:h-11">
         <div className="flex min-w-0 items-center gap-1.5">
-          <NavLink
-            href={`/vault/${docId}`}
+          <NoteLink
+            noteId={docId}
             aria-label="Back to note"
             className="text-muted-foreground hover:text-foreground flex size-7 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[var(--glass-strong)] pointer-coarse:size-9"
           >
             <ArrowLeftIcon className="size-3.5" strokeWidth={1.75} />
-          </NavLink>
+          </NoteLink>
           <h1 className="text-foreground truncate text-[14px] font-semibold tracking-tight">{title}</h1>
           <span className="text-label shrink-0 text-[11px] max-lg:hidden">
             {derived
@@ -114,7 +115,7 @@ export function DocumentMindmap({
         graph={graph}
         // Every node belongs to this one note, so there is only one place a
         // click can usefully go.
-        onNodeClick={() => navigate(`/vault/${docId}`)}
+        onNodeClick={() => openNote(docId)}
         emptyMessage="No mindmap yet. Use Build mindmap to generate one from this note."
       />
     </div>

@@ -48,6 +48,8 @@ import {
   useNavigate,
   useNavigationStatus,
 } from "@/components/vault/navigation";
+import { NoteStoreProvider, useNoteStore, useOpenNote, useShownNoteId } from "@/components/vault/note-store";
+import { NoteHost } from "@/components/vault/note-host";
 import {
   NoteOverlayProvider,
   isNotePending,
@@ -88,15 +90,17 @@ export function VaultShell({
         <VaultStatusProvider>
           <NavigationProvider>
             <ActiveWorkspaceProvider active={workspace} workspaces={workspaces}>
-              <VaultShellInner
-                notes={notes}
-                failedImports={failedImports}
-                identity={identity}
-                isAdmin={isAdmin}
-                referralsLive={referralsLive}
-              >
-                {children}
-              </VaultShellInner>
+              <NoteStoreProvider workspaceId={workspace.id}>
+                <VaultShellInner
+                  notes={notes}
+                  failedImports={failedImports}
+                  identity={identity}
+                  isAdmin={isAdmin}
+                  referralsLive={referralsLive}
+                >
+                  {children}
+                </VaultShellInner>
+              </NoteStoreProvider>
             </ActiveWorkspaceProvider>
             <WalletSetupDialog />
           </NavigationProvider>
@@ -128,6 +132,11 @@ function VaultShellInner({
   const { navigating, isNavigating } = useNavigationStatus();
   const { wordCount, saveState } = useVaultStatus();
   const { active: workspace, canCreate } = useActiveWorkspace();
+  // The vault's copy of the notes, which the note host shows (DOQ-43).
+  const noteStore = useNoteStore();
+  const noteDeleted = noteStore?.deleted;
+  const noteRenamed = noteStore?.renamed;
+  const shownNoteId = useShownNoteId();
 
   const isMobile = useIsCompactVault();
   const [explorerOpen, setExplorerOpen] = useState(true);
@@ -183,7 +192,8 @@ function VaultShellInner({
   const accountPage = segment === "profile" || segment === "earnings" || segment === "workspace";
   const currentAccountPage: AccountPage | undefined =
     segment === "profile" ? "profile" : segment === "workspace" ? "members" : undefined;
-  const activeId = routeAction || accountPage ? undefined : segment;
+  // A note opened on the client shows before the router reports its URL.
+  const activeId = shownNoteId ?? (routeAction || accountPage ? undefined : segment);
 
   // What the mobile top bar calls the current pane. The desktop layout has no
   // equivalent: there the explorer's highlight and the tab strip say it.
@@ -252,12 +262,13 @@ function VaultShellInner({
     };
   }, [noteIdKey]);
 
+  const showNote = useOpenNote();
   const handleDeleteNote = useCallback(
     (note: NoteSummary) => {
       const wasOpen = activeId === note.id;
       // Leaving the note has to be undone by hand if the delete is refused.
       const reopen = wasOpen
-        ? { action: { label: "Open note", onClick: () => navigate(`/vault/${note.id}`) } }
+        ? { action: { label: "Open note", onClick: () => showNote(note.id) } }
         : undefined;
       // The request runs outside any transition, so this commits at once.
       if (wasOpen) navigate("/vault");
@@ -265,6 +276,7 @@ function VaultShellInner({
         { kind: "delete", id: note.id },
         async () => {
           const { purgedUploads } = await deleteNote(note.id);
+          noteDeleted?.(note.id);
           toast.success(
             purgedUploads > 0
               ? `Deleted “${note.title}” and its archived original`
@@ -285,7 +297,7 @@ function VaultShellInner({
         },
       );
     },
-    [activeId, navigate, run],
+    [activeId, navigate, noteDeleted, run, showNote],
   );
 
   // A title another note already has is refused here, before any request,
@@ -321,7 +333,8 @@ function VaultShellInner({
       run(
         { kind: "rename", id: note.id, title, previousTitle: note.title },
         async () => {
-          await openNote.rename(note.id, (session) => renameNote(note.id, title, session));
+          const renamed = await openNote.rename(note.id, (session) => renameNote(note.id, title, session));
+          noteRenamed?.(note.id, renamed);
         },
         (error) => {
           if (error instanceof NoResponseError) {
@@ -332,7 +345,7 @@ function VaultShellInner({
         },
       );
     },
-    [openNote, run, shownNotes],
+    [noteRenamed, openNote, run, shownNotes],
   );
 
   const handleDismissImport = useCallback(
@@ -493,7 +506,10 @@ function VaultShellInner({
             )}
 
             <ResizablePanel id="main" className="relative min-h-0">
-              <OpenNoteProvider slot={openNote}>{children}</OpenNoteProvider>
+              <OpenNoteProvider slot={openNote}>
+                {children}
+                <NoteHost />
+              </OpenNoteProvider>
               <NavigationOverlay />
             </ResizablePanel>
           </ResizablePanelGroup>
