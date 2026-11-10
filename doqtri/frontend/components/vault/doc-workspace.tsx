@@ -27,7 +27,7 @@ import { EDITING_ELSEWHERE, editingMessage } from "@/lib/doc-lock";
 import { useNoteTitle, useOverlaidNotes } from "@/components/vault/note-overlay";
 import { useMindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
 import type { Doc } from "@/lib/types";
-import type { EditorCopy, NoteRow } from "@/lib/note-store";
+import type { EditorCopy, UnsavedText } from "@/lib/note-store";
 import type { RenamedNote } from "@/lib/rename-note";
 import { adoptRename } from "@/lib/rename-adopt";
 import { useRegisterOpenNote } from "@/components/vault/open-note";
@@ -53,9 +53,10 @@ const MOBILE_VIEWS: { id: MobileView; label: string }[] = [
  *
  * Mounted with `key={active.id}` by the vault's note host, so navigating
  * between notes remounts rather than reconciling stale editor state. Opened
- * from the vault's copy of the notes (DOQ-43), it starts on any text left
- * unsaved there (`draft`), stays read-only until `check` (the row read again)
- * answers, and hands its copy back on leaving (`onLeave`).
+ * from the vault's copy of the notes (DOQ-43, `recheck`), it stays read-only
+ * until its row has been read again. Leaving, it saves what is typed before
+ * its lock goes and hands the stored copy back (`onLeave`); text that save
+ * could not store comes back as `unsaved`, and is never reloaded over.
  *
  * Edits are locked (WP-1.6, D-17): the first keystroke takes the note's edit
  * lock, and every save goes through /api/notes/[id] with the version the text
@@ -74,15 +75,15 @@ const MOBILE_VIEWS: { id: MobileView; label: string }[] = [
 export function DocWorkspace({
   docs: serverDocs,
   active,
-  draft,
-  check,
+  unsaved,
+  recheck = false,
   onLeave,
 }: {
   docs: Doc[];
   active: Doc;
-  draft?: string;
-  check?: Promise<NoteRow | null | undefined>;
-  onLeave?: (copy: EditorCopy) => void;
+  unsaved?: UnsavedText;
+  recheck?: boolean;
+  onLeave?: (copy: EditorCopy | Promise<EditorCopy>) => void;
 }) {
   const router = useRouter();
   const docs = useOverlaidNotes(serverDocs);
@@ -98,7 +99,7 @@ export function DocWorkspace({
   });
   const { setWordCount, setSaveState, setEditorStats } = useVaultStatus();
 
-  const [markdown, setMarkdown] = useState(draft ?? active.markdown);
+  const [markdown, setMarkdown] = useState(unsaved?.text ?? active.markdown);
   const [regenerateOpen, setRegenerateOpen] = useState(false);
   const isMobile = useIsCompactVault();
   const [mobileView, setMobileView] = useState<MobileView>("note");
@@ -111,7 +112,9 @@ export function DocWorkspace({
   }, [conflict]);
   const markdownRef = useRef(markdown);
 
-  const { lock, controller } = useDocLock(active.id);
+  // The last save, run as the editor closes, before the lock is released.
+  const lastSave = useRef<(() => Promise<unknown> | null) | null>(null);
+  const { lock, controller } = useDocLock(active.id, lastSave);
 
   // Editing the title heading renames the note (DOQ-36).
   const headingRename = useHeadingRename({
@@ -127,12 +130,16 @@ export function DocWorkspace({
     createNoteSaver({
       docId: active.id,
       markdown: active.markdown,
-      version: active.version ?? 1,
+      version: unsaved?.version ?? active.version ?? 1,
       lock: controller,
       onConflict: () => setConflict(true),
     }),
   );
   const saves = saver.queue;
+  // Text a failed last save left (DOQ-43): nothing reloads over it while it
+  // is unsaved; when the note has moved on, the conflict banner says so.
+  const [restored] = useState(unsaved !== undefined);
+  const keepsUnsaved = useCallback(() => restored && markdownRef.current !== saves.saved, [restored, saves]);
 
   /** Makes `latest` the editor's text and its saved copy, at its version. */
   const adoptLatest = useCallback(
@@ -148,8 +155,8 @@ export function DocWorkspace({
     [resetHeading, saver, saves, setSaveState],
   );
 
-  /** Replaces the editor's text with the stored note and its version. */
-  const reloadLatest = useCallback(async () => {
+  /** Replaces the editor's text with the stored note and its version; false when it could not. */
+  const reloadLatest = useCallback(async (): Promise<boolean> => {
     const supabase = createSupabaseBrowserClient();
     const { data, error } = await supabase
       .from("documents")
@@ -158,29 +165,28 @@ export function DocWorkspace({
       .maybeSingle();
     if (error || !data) {
       toast.error("Could not load the latest version of this note");
-      return;
+      return false;
     }
     adoptLatest({ markdown: data.markdown, version: Number(data.version) });
+    return true;
   }, [active.id, adoptLatest]);
 
   // Opened from the vault's copy: no save goes out on its version before the
   // row has been read again (DOQ-43).
-  const checking = useCheckedCopy(check, {
+  const checking = useCheckedCopy(recheck ? active.id : null, {
     version: () => saver.version,
+    text: () => markdownRef.current,
     unsaved: () => markdownRef.current !== saves.saved,
     adopt: adoptLatest,
     conflict: () => setConflict(true),
+    reload: reloadLatest,
   });
-
-  // Leaving: the vault keeps this copy, unsaved text included, for the next visit.
-  const leaveRef = useRef(onLeave);
+  // Read by the lock callbacks: while the row is read again, that read
+  // decides which version the editor starts on.
+  const checkingRef = useRef(checking);
   useEffect(() => {
-    leaveRef.current = onLeave;
-  }, [onLeave]);
-  useEffect(() => {
-    const copy = () => ({ saved: saves.saved, version: saver.version, text: markdownRef.current });
-    return () => leaveRef.current?.(copy());
-  }, [saver, saves]);
+    checkingRef.current = checking;
+  }, [checking]);
 
   useEffect(() => {
     controller.setHandlers({
@@ -188,7 +194,11 @@ export function DocWorkspace({
         if (status.version === saver.version) return;
         // The conflict banner asked the user to copy their text first; only
         // its Reload button replaces it.
-        if (conflictRef.current) return;
+        if (conflictRef.current || checkingRef.current) return;
+        if (keepsUnsaved()) {
+          setConflict(true);
+          return;
+        }
         // Someone else's save moved the note on. Load it, unless this user
         // holds the lock with edits not yet saved: those are theirs, and
         // the version check refuses their save if it would overwrite.
@@ -198,10 +208,10 @@ export function DocWorkspace({
       onLost: (status) => {
         const who = status.mineElsewhere ? EDITING_ELSEWHERE : editingMessage(status.holderName);
         toast.info(`${who} now. This copy is read-only.`);
-        if (!conflictRef.current) void reloadLatest();
+        if (!conflictRef.current && !keepsUnsaved()) void reloadLatest();
       },
     });
-  }, [controller, reloadLatest, saver, saves]);
+  }, [controller, keepsUnsaved, reloadLatest, saver, saves]);
 
   const readOnly =
     conflict ||
@@ -219,6 +229,29 @@ export function DocWorkspace({
     readOnlyRef.current = readOnly;
   }, [readOnly]);
 
+  // Leaving (DOQ-43): what is typed is saved with the lock still held, and
+  // the vault's copy takes the stored text, version and map once that save
+  // settles. Text it could not store stays with the copy.
+  const leaveRef = useRef(onLeave);
+  useEffect(() => {
+    leaveRef.current = onLeave;
+    lastSave.current = () => {
+      const text = markdownRef.current;
+      const copy = (): EditorCopy => ({
+        saved: saves.saved,
+        version: saver.version,
+        mindmap: concept.mindmap,
+        // Text saved since the map's staleness was decided may not match it.
+        mindmapStale: concept.mindmap !== null && (concept.stale || saves.saved !== active.markdown),
+        unsaved: text === saves.saved ? undefined : { text, version: saver.version },
+      });
+      // Settles either way: the copy says what the save could not store.
+      const saved = text === saves.saved || readOnlyRef.current ? null : saver.leave(text).then(copy, copy);
+      leaveRef.current?.(saved ?? copy());
+      return saved;
+    };
+  });
+
   /** The editor's onChange: the first edit takes the lock. */
   const handleChange = useCallback(
     (next: string) => {
@@ -229,21 +262,21 @@ export function DocWorkspace({
       void controller.noteEdit().then((held) => {
         // Lost the race for a free lock: drop the keystroke for their text.
         const { phase } = controller.getState();
-        if (!held && (phase === "other" || phase === "elsewhere")) void reloadLatest();
+        if (!held && (phase === "other" || phase === "elsewhere") && !keepsUnsaved()) void reloadLatest();
       });
     },
-    [controller, reloadLatest],
+    [controller, keepsUnsaved, reloadLatest],
   );
 
   const handleTakeOver = useCallback(async () => {
     if (await controller.takeOver()) {
       // Nobody else can save now, so the text loaded here is the latest.
-      await reloadLatest();
+      if (!keepsUnsaved()) await reloadLatest();
       toast.success("You are editing this note now");
     } else {
       toast.error(controller.getState().error ?? "Could not take over this note");
     }
-  }, [controller, reloadLatest]);
+  }, [controller, keepsUnsaved, reloadLatest]);
 
   const lockBanner = (
     <EditLockBanner
@@ -287,6 +320,9 @@ export function DocWorkspace({
     // A read-only copy has nothing of its own to save; a keystroke that lost
     // the race for the lock is about to be replaced by the holder's text.
     if (readOnly) return;
+    // Text the editor no longer holds, e.g. the copy's from before a newer
+    // row was adopted (DOQ-43): the debounce brings the current text next.
+    if (settled !== markdownRef.current) return;
 
     let cancelled = false;
 

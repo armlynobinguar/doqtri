@@ -12,15 +12,15 @@ import { useNoteStore } from "@/components/vault/note-store";
 export function NoteHost() {
   const store = useNoteStore();
   if (!store?.shown) return null;
-  const { shown, docs, drafts, check, keep } = store;
+  const { shown, docs, unsaved, recheck, leave } = store;
   return (
     <DocWorkspace
       key={shown.id}
       docs={docs}
       active={shown}
-      draft={drafts.get(shown.id)}
-      check={check ?? undefined}
-      onLeave={(copy) => keep(shown.id, copy)}
+      unsaved={unsaved.get(shown.id)}
+      recheck={recheck}
+      onLeave={(copy) => leave(shown.id, copy)}
     />
   );
 }

@@ -11,22 +11,25 @@ import type { Doc } from "@/lib/types";
  * components/vault/note-store.tsx.
  */
 
+/** Text an editor could not save as it closed, and the version it was typed over. */
+export type UnsavedText = { text: string; version: number };
+
 export type NoteStore = {
   /** The workspace the copy belongs to; null before any snapshot. */
   workspaceId: string | null;
   /** When the newest snapshot applied was read on the server (ms). */
   loadedAt: number;
-  /** In the order the server lists them (by title). */
+  /** Saved text and versions, in the order the server lists them (by title). */
   docs: Doc[];
   /**
-   * Text typed into a note and not yet saved when its editor closed. It is
-   * based on that note's `markdown` at its `version`, which stay as they were
-   * so the next save of it is checked against the version it came from.
+   * Only for an editor whose last save failed as it closed: its text, kept
+   * so the next visit shows it, never reloaded over, with the version it was
+   * typed over so a save of it is refused if the note has moved on.
    */
-  drafts: ReadonlyMap<string, string>;
+  unsaved: ReadonlyMap<string, UnsavedText>;
 };
 
-export const EMPTY_NOTE_STORE: NoteStore = { workspaceId: null, loadedAt: 0, docs: [], drafts: new Map() };
+export const EMPTY_NOTE_STORE: NoteStore = { workspaceId: null, loadedAt: 0, docs: [], unsaved: new Map() };
 
 /** What a note page sends: the active workspace's notes, read at `loadedAt`. */
 export type NoteSnapshot = { workspaceId: string; loadedAt: number; docs: Doc[] };
@@ -35,80 +38,71 @@ function version(doc: Doc): number {
   return doc.version ?? 0;
 }
 
+function unsavedOnly(store: NoteStore, keep: (id: string) => boolean): ReadonlyMap<string, UnsavedText> {
+  if ([...store.unsaved.keys()].every(keep)) return store.unsaved;
+  return new Map([...store.unsaved].filter(([id]) => keep(id)));
+}
+
 /**
  * The store with a server snapshot taken in. Another workspace's snapshot
  * replaces it. A snapshot older than one already taken in (a page brought
  * back from the router's cache) changes nothing. Otherwise the server's list
- * wins, except for a note this client holds at a newer version, or with
- * unsaved text: its text and version stay (the title comes from the server).
+ * wins, except for a note this client holds at a newer version: its text and
+ * version stay (the title comes from the server).
  */
 export function seedNotes(store: NoteStore, snapshot: NoteSnapshot): NoteStore {
   if (store.workspaceId !== snapshot.workspaceId) {
-    return { workspaceId: snapshot.workspaceId, loadedAt: snapshot.loadedAt, docs: snapshot.docs, drafts: new Map() };
+    return { workspaceId: snapshot.workspaceId, loadedAt: snapshot.loadedAt, docs: snapshot.docs, unsaved: new Map() };
   }
   if (snapshot.loadedAt < store.loadedAt) return store;
 
   const local = new Map(store.docs.map((doc) => [doc.id, doc]));
   const docs = snapshot.docs.map((doc) => {
     const mine = local.get(doc.id);
-    if (!mine) return doc;
-    if (store.drafts.has(doc.id) || version(mine) > version(doc)) {
-      return mine.title === doc.title ? mine : { ...mine, title: doc.title };
-    }
-    return doc;
+    if (!mine || version(mine) <= version(doc)) return doc;
+    return mine.title === doc.title ? mine : { ...mine, title: doc.title };
   });
-  let drafts = store.drafts;
   const ids = new Set(docs.map((doc) => doc.id));
-  for (const id of store.drafts.keys()) {
-    if (ids.has(id)) continue;
-    if (drafts === store.drafts) drafts = new Map(store.drafts);
-    (drafts as Map<string, string>).delete(id);
-  }
-  return { workspaceId: store.workspaceId, loadedAt: snapshot.loadedAt, docs, drafts };
+  return { ...store, loadedAt: snapshot.loadedAt, docs, unsaved: unsavedOnly(store, (id) => ids.has(id)) };
 }
 
-/** What an editor holds when it closes: the stored text at its version, and its own text. */
-export type EditorCopy = { saved: string; version: number; text: string };
+/**
+ * What an editor reports once it has closed and its last save has settled:
+ * the stored text at its version, the map it showed, and the text that last
+ * save could not store, if it failed.
+ */
+export type EditorCopy = Pick<Doc, "mindmap" | "mindmapStale"> & {
+  saved: string;
+  version: number;
+  unsaved?: UnsavedText;
+};
 
 /**
  * The store once a note's editor has closed, so the next visit shows what it
- * showed. Its saved text replaces the store's unless the store already has a
- * newer version. Unsaved text is kept as a draft with the saved text it was
- * typed over, even when that is older: its save must then be refused.
+ * showed: its saved text, version and map, unless the store already holds a
+ * newer version. Unsaved text is kept only when the editor reports one.
  */
 export function keepEditorCopy(store: NoteStore, id: string, copy: EditorCopy): NoteStore {
   const index = store.docs.findIndex((doc) => doc.id === id);
   if (index < 0) return store;
   const doc = store.docs[index];
-  const unsaved = copy.text !== copy.saved;
-  if (!unsaved && copy.version < version(doc)) {
-    if (!store.drafts.has(id)) return store;
-    const drafts = new Map(store.drafts);
-    drafts.delete(id);
-    return { ...store, drafts };
-  }
   const docs = [...store.docs];
-  docs[index] = doc.markdown === copy.saved && version(doc) === copy.version
-    ? doc
-    : { ...doc, markdown: copy.saved, version: copy.version };
-  const drafts = new Map(store.drafts);
-  if (unsaved) drafts.set(id, copy.text);
-  else drafts.delete(id);
-  return { ...store, docs, drafts };
+  if (copy.version >= version(doc)) {
+    docs[index] = { ...doc, markdown: copy.saved, version: copy.version, mindmap: copy.mindmap, mindmapStale: copy.mindmapStale };
+  }
+  const unsaved = new Map(store.unsaved);
+  if (copy.unsaved) unsaved.set(id, copy.unsaved);
+  else unsaved.delete(id);
+  return { ...store, docs, unsaved };
 }
 
 /** A note's row as read again on opening it from the store. */
 export type NoteRow = Required<Pick<Doc, "markdown" | "version" | "mindmap" | "mindmapStale">>;
 
-/**
- * The store with a re-read row taken in: the row's text, version and map
- * replace the copy's when it is at least as new and the copy has no unsaved
- * text. Unsaved text keeps the version it was typed over, so the editor sees
- * the conflict.
- */
+/** The store with a re-read row taken in, unless the copy is newer already. */
 export function takeRow(store: NoteStore, id: string, row: NoteRow): NoteStore {
   const index = store.docs.findIndex((doc) => doc.id === id);
-  if (index < 0 || store.drafts.has(id)) return store;
+  if (index < 0) return store;
   const doc = store.docs[index];
   if (row.version < version(doc)) return store;
   const docs = [...store.docs];
@@ -119,24 +113,25 @@ export function takeRow(store: NoteStore, id: string, row: NoteRow): NoteStore {
 /**
  * What an editor opened from the store does with its re-read row:
  * - `keep`: the row is no newer than the editor's copy;
- * - `adopt`: the row is newer and nothing is typed over the copy, so the
- *   editor takes the row's text and version before it can save;
- * - `conflict`: the row is newer and the editor holds unsaved text typed over
- *   the older copy. The text stays, and the editor stops saving and offers a
- *   reload, as when the server refuses a save as stale.
+ * - `adopt`: the row is newer, and the editor holds no unsaved text (or the
+ *   row holds exactly that text), so it takes the row's text and version
+ *   before it can save;
+ * - `conflict`: the row is newer and the editor holds text a failed save
+ *   left over the older copy. The text stays, and the editor stops saving and
+ *   offers a reload, as when the server refuses a save as stale.
  */
 export function refreshVerdict(
-  editor: { version: number; unsaved: boolean },
-  row: { version: number },
+  editor: { version: number; text: string; unsaved: boolean },
+  row: { version: number; markdown: string },
 ): "keep" | "adopt" | "conflict" {
   if (row.version <= editor.version) return "keep";
-  return editor.unsaved ? "conflict" : "adopt";
+  return editor.unsaved && row.markdown !== editor.text ? "conflict" : "adopt";
 }
 
 /**
  * The store once the server has renamed a note: its new title, and the text
  * the rename wrote (it may rewrite the title heading) unless this client
- * already holds a newer version, or unsaved text typed over the old one.
+ * already holds a newer version.
  */
 export function takeRename(
   store: NoteStore,
@@ -147,12 +142,7 @@ export function takeRename(
   if (index < 0) return store;
   const doc = store.docs[index];
   let next: Doc = doc.title === renamed.title ? doc : { ...doc, title: renamed.title };
-  if (
-    renamed.markdown !== undefined &&
-    renamed.version !== undefined &&
-    renamed.version > version(doc) &&
-    !store.drafts.has(id)
-  ) {
+  if (renamed.markdown !== undefined && renamed.version !== undefined && renamed.version > version(doc)) {
     next = { ...next, markdown: renamed.markdown, version: renamed.version };
   }
   if (next === doc) return store;
@@ -164,9 +154,11 @@ export function takeRename(
 /** The store without a note the server has deleted. */
 export function dropNote(store: NoteStore, id: string): NoteStore {
   if (!store.docs.some((doc) => doc.id === id)) return store;
-  const drafts = new Map(store.drafts);
-  drafts.delete(id);
-  return { ...store, docs: store.docs.filter((doc) => doc.id !== id), drafts };
+  return {
+    ...store,
+    docs: store.docs.filter((doc) => doc.id !== id),
+    unsaved: unsavedOnly(store, (other) => other !== id),
+  };
 }
 
 /** The note a vault path opens, as `/vault/<id>`; null for every other route. */
@@ -175,25 +167,56 @@ export function notePathId(pathname: string): string | null {
   return match ? match[1] : null;
 }
 
-/**
- * Which note the vault's host may show, and from which URL (see
- * components/vault/note-store.tsx). `via` lists the paths the router may
- * still report while it catches up with a pushed URL: its update is a
- * transition, which can wait behind another one in flight.
+/*
+ * Which note the vault's host shows (components/vault/note-store.tsx).
+ *
+ * `trusted` is the note the host may show from the copy: one opened here
+ * from a shown note, or by back/forward (`recheck`: its row is read again),
+ * or the one a server render of the note page just sent its snapshot for.
+ * `pushed` is a URL this client pushed (a switch, or back/forward between
+ * notes) that the router has not reported yet. Its update is a transition,
+ * which can wait behind another one in flight, so until then the host
+ * follows `pushed`.
  */
-export type HostTrust = { id: string; path: string; via: string[] };
+export type HostState = { pushed: string | null; trusted: { id: string; recheck: boolean } | null };
 
-/** The path the host follows: the trusted one while the router still reports a path it passed through. */
-export function hostPath(trust: HostTrust | null, pathname: string): string {
-  return trust && trust.via.includes(pathname) ? trust.path : pathname;
+export type HostEvent =
+  /** A switch from a shown note: the URL was pushed. */
+  | { type: "open"; id: string }
+  /** Back or forward to a note in the copy, from a shown note or another route. */
+  | { type: "popstate"; id: string; fromNote: boolean }
+  /** The router reports `pathname`; `location` is the browser's. */
+  | { type: "router"; pathname: string; location: string }
+  /** A note page's snapshot was taken in; `fresh` unless it was older than the copy. */
+  | { type: "seed"; id: string; location: string; fresh: boolean };
+
+export const EMPTY_HOST: HostState = { pushed: null, trusted: null };
+
+export function hostStep(state: HostState, event: HostEvent): HostState {
+  switch (event.type) {
+    case "open":
+      return { pushed: `/vault/${event.id}`, trusted: { id: event.id, recheck: true } };
+    case "popstate":
+      // From another route the host waits for the router, so that route's
+      // page is gone by the time the note shows.
+      return { pushed: event.fromNote ? `/vault/${event.id}` : null, trusted: { id: event.id, recheck: true } };
+    case "router": {
+      const pushed = state.pushed && event.pathname !== event.location ? state.pushed : null;
+      // Gone elsewhere: a later server render of this note waits for its
+      // own snapshot.
+      const trusted =
+        state.trusted && notePathId(pushed ?? event.pathname) === state.trusted.id ? state.trusted : null;
+      return pushed === state.pushed && trusted === state.trusted ? state : { pushed, trusted };
+    }
+    case "seed":
+      // A refresh started on another note may answer after a switch.
+      if (event.location !== `/vault/${event.id}` || state.trusted?.id === event.id) return state;
+      return { ...state, trusted: { id: event.id, recheck: !event.fresh } };
+  }
 }
 
-/** The paths a switch made now passes through, starting at what the router reports. */
-export function switchVia(trust: HostTrust | null, pathname: string): string[] {
-  return trust && trust.via.includes(pathname) ? [...trust.via, trust.path] : [pathname];
-}
-
-/** Whether the trust still holds once the router reports `pathname`. */
-export function trustHolds(trust: HostTrust, pathname: string): boolean {
-  return trust.path === pathname || trust.via.includes(pathname);
+/** The note the host shows while the router reports `pathname`, if any. */
+export function hostShows(state: HostState, pathname: string): string | null {
+  const id = notePathId(state.pushed ?? pathname);
+  return id !== null && state.trusted?.id === id ? id : null;
 }

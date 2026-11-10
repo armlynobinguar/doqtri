@@ -1,16 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   dropNote,
+  EMPTY_HOST,
   EMPTY_NOTE_STORE,
-  hostPath,
+  hostShows,
+  hostStep,
   keepEditorCopy,
   notePathId,
   refreshVerdict,
   seedNotes,
-  switchVia,
   takeRename,
   takeRow,
-  trustHolds,
+  type HostEvent,
+  type HostState,
   type NoteStore,
 } from "@/lib/note-store";
 import type { Doc } from "@/lib/types";
@@ -18,6 +20,9 @@ import type { Doc } from "@/lib/types";
 const A = "aaaaaaaa-0000-4000-8000-000000000001";
 const B = "bbbbbbbb-0000-4000-8000-000000000002";
 const C = "cccccccc-0000-4000-8000-000000000003";
+const pathA = `/vault/${A}`;
+const pathB = `/vault/${B}`;
+const pathC = `/vault/${C}`;
 
 function doc(id: string, markdown: string, version: number, title = id.slice(0, 1)): Doc {
   return { id, title, markdown, version, mindmap: null, mindmapStale: false };
@@ -31,6 +36,8 @@ function find(store: NoteStore, id: string): Doc | undefined {
   return store.docs.find((d) => d.id === id);
 }
 
+const noMap = { mindmap: null, mindmapStale: false };
+
 describe("seedNotes", () => {
   it("takes the first snapshot whole", () => {
     const store = seeded([doc(A, "a", 1), doc(B, "b", 1)]);
@@ -38,11 +45,16 @@ describe("seedNotes", () => {
     expect(store.docs.map((d) => d.id)).toEqual([A, B]);
   });
 
-  it("replaces the copy, drafts included, for another workspace", () => {
-    const store = keepEditorCopy(seeded([doc(A, "a", 1)]), A, { saved: "a", version: 1, text: "a typed" });
+  it("replaces the copy, unsaved text included, for another workspace", () => {
+    const store = keepEditorCopy(seeded([doc(A, "a", 1)]), A, {
+      saved: "a",
+      version: 1,
+      ...noMap,
+      unsaved: { text: "a typed", version: 1 },
+    });
     const next = seedNotes(store, { workspaceId: "w2", loadedAt: 50, docs: [doc(C, "c", 1)] });
     expect(next.docs.map((d) => d.id)).toEqual([C]);
-    expect(next.drafts.size).toBe(0);
+    expect(next.unsaved.size).toBe(0);
   });
 
   it("ignores a snapshot older than one already taken in", () => {
@@ -59,59 +71,63 @@ describe("seedNotes", () => {
     ]);
   });
 
-  it("never lets a snapshot overwrite text this client holds at a newer version", () => {
-    const saved = keepEditorCopy(seeded([doc(A, "a", 1)]), A, { saved: "a mine", version: 2, text: "a mine" });
+  it("never lets a snapshot overwrite text this client saved at a newer version", () => {
+    const saved = keepEditorCopy(seeded([doc(A, "a", 1)]), A, { saved: "a mine", version: 2, ...noMap });
     // Read on the server before that save landed, but delivered after it.
     const next = seedNotes(saved, { workspaceId: "w1", loadedAt: 200, docs: [doc(A, "a", 1, "Renamed")] });
     expect(find(next, A)).toMatchObject({ markdown: "a mine", version: 2, title: "Renamed" });
   });
 
-  it("keeps a note with unsaved text as it was, even under a newer version", () => {
-    const store = keepEditorCopy(seeded([doc(A, "a", 1)]), A, { saved: "a", version: 1, text: "a typed" });
+  it("keeps unsaved text with its own version while the saved copy moves on", () => {
+    const store = keepEditorCopy(seeded([doc(A, "a", 1)]), A, {
+      saved: "a",
+      version: 1,
+      ...noMap,
+      unsaved: { text: "a typed", version: 1 },
+    });
     const next = seedNotes(store, { workspaceId: "w1", loadedAt: 200, docs: [doc(A, "a theirs", 2)] });
-    expect(find(next, A)).toMatchObject({ markdown: "a", version: 1 });
-    expect(next.drafts.get(A)).toBe("a typed");
-  });
-
-  it("drops the draft of a note the server no longer lists", () => {
-    const store = keepEditorCopy(seeded([doc(A, "a", 1), doc(B, "b", 1)]), A, { saved: "a", version: 1, text: "x" });
-    const next = seedNotes(store, { workspaceId: "w1", loadedAt: 200, docs: [doc(B, "b", 1)] });
-    expect(next.drafts.has(A)).toBe(false);
+    expect(find(next, A)).toMatchObject({ markdown: "a theirs", version: 2 });
+    expect(next.unsaved.get(A)).toEqual({ text: "a typed", version: 1 });
   });
 });
 
 describe("keepEditorCopy", () => {
-  it("keeps the editor's saved text and version", () => {
-    const next = keepEditorCopy(seeded([doc(A, "a", 1)]), A, { saved: "a edited", version: 2, text: "a edited" });
-    expect(find(next, A)).toMatchObject({ markdown: "a edited", version: 2 });
-    expect(next.drafts.has(A)).toBe(false);
+  it("keeps the saved text, version and map", () => {
+    const map = { version: 1, root: { id: "r", label: "A", kind: "root", children: [] } } as unknown as Doc["mindmap"];
+    const next = keepEditorCopy(seeded([doc(A, "a", 1)]), A, {
+      saved: "a edited",
+      version: 2,
+      mindmap: map,
+      mindmapStale: true,
+    });
+    expect(find(next, A)).toMatchObject({ markdown: "a edited", version: 2, mindmap: map, mindmapStale: true });
+    expect(next.unsaved.has(A)).toBe(false);
   });
 
-  it("keeps unsaved text as a draft over the saved text it was typed on", () => {
-    const next = keepEditorCopy(seeded([doc(A, "a", 1)]), A, { saved: "a", version: 1, text: "a typed" });
+  it("keeps text only when the editor says its last save failed", () => {
+    const next = keepEditorCopy(seeded([doc(A, "a", 1)]), A, {
+      saved: "a",
+      version: 1,
+      ...noMap,
+      unsaved: { text: "a typed", version: 1 },
+    });
     expect(find(next, A)).toMatchObject({ markdown: "a", version: 1 });
-    expect(next.drafts.get(A)).toBe("a typed");
+    expect(next.unsaved.get(A)).toEqual({ text: "a typed", version: 1 });
+    const saved = keepEditorCopy(next, A, { saved: "a typed", version: 2, ...noMap });
+    expect(saved.unsaved.has(A)).toBe(false);
   });
 
-  it("does not take an older copy over a newer one, unless it carries unsaved text", () => {
+  it("does not take an older copy over a newer one", () => {
     const store = seeded([doc(A, "a3", 3)]);
-    expect(keepEditorCopy(store, A, { saved: "a2", version: 2, text: "a2" })).toBe(store);
-    const typed = keepEditorCopy(store, A, { saved: "a2", version: 2, text: "a2 typed" });
-    // The draft stays on the version it was typed over, so its save is refused.
-    expect(find(typed, A)).toMatchObject({ markdown: "a2", version: 2 });
-    expect(typed.drafts.get(A)).toBe("a2 typed");
-  });
-
-  it("clears a draft once the text is saved", () => {
-    const store = keepEditorCopy(seeded([doc(A, "a", 1)]), A, { saved: "a", version: 1, text: "a typed" });
-    const next = keepEditorCopy(store, A, { saved: "a typed", version: 2, text: "a typed" });
-    expect(next.drafts.has(A)).toBe(false);
-    expect(find(next, A)).toMatchObject({ markdown: "a typed", version: 2 });
+    expect(find(keepEditorCopy(store, A, { saved: "a2", version: 2, ...noMap }), A)).toMatchObject({
+      markdown: "a3",
+      version: 3,
+    });
   });
 
   it("ignores a note no longer in the copy", () => {
     const store = seeded([doc(A, "a", 1)]);
-    expect(keepEditorCopy(store, B, { saved: "b", version: 1, text: "b" })).toBe(store);
+    expect(keepEditorCopy(store, B, { saved: "b", version: 1, ...noMap })).toBe(store);
   });
 });
 
@@ -126,25 +142,21 @@ describe("takeRow", () => {
     const store = seeded([doc(A, "a3", 3)]);
     expect(takeRow(store, A, row)).toBe(store);
   });
-
-  it("leaves a note with unsaved text on the version it was typed over", () => {
-    const store = keepEditorCopy(seeded([doc(A, "a", 1)]), A, { saved: "a", version: 1, text: "a typed" });
-    expect(takeRow(store, A, row)).toBe(store);
-  });
 });
 
 describe("refreshVerdict", () => {
   it("keeps the copy when the row is no newer", () => {
-    expect(refreshVerdict({ version: 2, unsaved: false }, { version: 2 })).toBe("keep");
-    expect(refreshVerdict({ version: 2, unsaved: true }, { version: 1 })).toBe("keep");
+    expect(refreshVerdict({ version: 2, text: "a", unsaved: false }, { version: 2, markdown: "a" })).toBe("keep");
+    expect(refreshVerdict({ version: 2, text: "x", unsaved: true }, { version: 1, markdown: "a" })).toBe("keep");
   });
 
-  it("adopts a newer row when nothing is typed over the copy", () => {
-    expect(refreshVerdict({ version: 1, unsaved: false }, { version: 2 })).toBe("adopt");
+  it("adopts a newer row when nothing unsaved is held, or the row holds that very text", () => {
+    expect(refreshVerdict({ version: 1, text: "a", unsaved: false }, { version: 2, markdown: "b" })).toBe("adopt");
+    expect(refreshVerdict({ version: 1, text: "b", unsaved: true }, { version: 2, markdown: "b" })).toBe("adopt");
   });
 
-  it("is a conflict when unsaved text was typed over an older copy", () => {
-    expect(refreshVerdict({ version: 1, unsaved: true }, { version: 2 })).toBe("conflict");
+  it("is a conflict when text a failed save left sits over an older copy", () => {
+    expect(refreshVerdict({ version: 1, text: "x", unsaved: true }, { version: 2, markdown: "b" })).toBe("conflict");
   });
 });
 
@@ -154,53 +166,118 @@ describe("takeRename and dropNote", () => {
     expect(find(next, A)).toMatchObject({ title: "Z", markdown: "# Z", version: 2 });
   });
 
-  it("keeps newer local text and drafts, taking only the title", () => {
-    const store = keepEditorCopy(seeded([doc(A, "# A", 1, "A")]), A, { saved: "# A", version: 1, text: "# A typed" });
-    const next = takeRename(store, A, { title: "Z", markdown: "# Z", version: 2 });
-    expect(find(next, A)).toMatchObject({ title: "Z", markdown: "# A", version: 1 });
+  it("takes only the title when the copy is newer", () => {
+    const next = takeRename(seeded([doc(A, "# A", 3, "A")]), A, { title: "Z", markdown: "# Z", version: 2 });
+    expect(find(next, A)).toMatchObject({ title: "Z", markdown: "# A", version: 3 });
   });
 
-  it("drops a deleted note and its draft", () => {
-    const store = keepEditorCopy(seeded([doc(A, "a", 1), doc(B, "b", 1)]), A, { saved: "a", version: 1, text: "x" });
+  it("drops a deleted note and its unsaved text", () => {
+    const store = keepEditorCopy(seeded([doc(A, "a", 1), doc(B, "b", 1)]), A, {
+      saved: "a",
+      version: 1,
+      ...noMap,
+      unsaved: { text: "x", version: 1 },
+    });
     const next = dropNote(store, A);
     expect(next.docs.map((d) => d.id)).toEqual([B]);
-    expect(next.drafts.has(A)).toBe(false);
+    expect(next.unsaved.has(A)).toBe(false);
     expect(dropNote(next, A)).toBe(next);
   });
 });
 
 describe("notePathId", () => {
   it("names the note of a note page only", () => {
-    expect(notePathId(`/vault/${A}`)).toBe(A);
-    expect(notePathId(`/vault/${A}/mindmap`)).toBeNull();
+    expect(notePathId(pathA)).toBe(A);
+    expect(notePathId(`${pathA}/mindmap`)).toBeNull();
     expect(notePathId("/vault/graph")).toBeNull();
     expect(notePathId("/vault")).toBeNull();
   });
 });
 
-describe("host trust", () => {
-  const a = `/vault/${A}`;
-  const b = `/vault/${B}`;
-  const c = `/vault/${C}`;
+/** Runs events through the host, as the provider does. */
+function run(events: HostEvent[], from: HostState = EMPTY_HOST): HostState {
+  return events.reduce(hostStep, from);
+}
 
-  it("follows a pushed URL before the router reports it", () => {
-    const trust = { id: B, path: b, via: switchVia(null, a) };
-    expect(hostPath(trust, a)).toBe(b);
-    expect(hostPath(trust, b)).toBe(b);
-    expect(trustHolds(trust, a)).toBe(true);
+describe("the note host", () => {
+  const loadedA = run([
+    { type: "router", pathname: pathA, location: pathA },
+    { type: "seed", id: A, location: pathA, fresh: true },
+  ]);
+
+  it("shows a server-rendered note once its snapshot is in, without reading it again", () => {
+    expect(hostShows(EMPTY_HOST, pathA)).toBeNull();
+    expect(hostShows(loadedA, pathA)).toBe(A);
+    expect(loadedA.trusted).toEqual({ id: A, recheck: false });
   });
 
-  it("chains quick switches, so a path the router passes through never shows", () => {
-    const first = { id: B, path: b, via: switchVia(null, a) };
-    const second = { id: C, path: c, via: switchVia(first, a) };
-    expect(second.via).toEqual([a, b]);
-    expect(hostPath(second, a)).toBe(c);
-    expect(hostPath(second, b)).toBe(c);
+  it("reads again a note whose page came back from the router's cache, older than the copy", () => {
+    const state = run([{ type: "seed", id: A, location: pathA, fresh: false }]);
+    expect(state.trusted).toEqual({ id: A, recheck: true });
   });
 
-  it("gives way to a navigation elsewhere", () => {
-    const trust = { id: B, path: b, via: [a] };
-    expect(hostPath(trust, "/vault/graph")).toBe("/vault/graph");
-    expect(trustHolds(trust, "/vault/graph")).toBe(false);
+  it("switches at once on open, while the router still reports the old note", () => {
+    const state = hostStep(loadedA, { type: "open", id: B });
+    expect(hostShows(state, pathA)).toBe(B);
+    expect(state.trusted).toEqual({ id: B, recheck: true });
+    // The router catches up, and the pushed URL is no longer needed.
+    const caughtUp = hostStep(state, { type: "router", pathname: pathB, location: pathB });
+    expect(caughtUp.pushed).toBeNull();
+    expect(hostShows(caughtUp, pathB)).toBe(B);
+  });
+
+  it("never shows a note the router passes through on quick switches", () => {
+    const state = run([
+      { type: "open", id: B },
+      { type: "open", id: C },
+      // The router reports the first push while the browser is at the second.
+      { type: "router", pathname: pathB, location: pathC },
+    ], loadedA);
+    expect(hostShows(state, pathB)).toBe(C);
+    expect(hostShows(hostStep(state, { type: "router", pathname: pathC, location: pathC }), pathC)).toBe(C);
+  });
+
+  it("ignores a refresh's snapshot for the note it was started on, after a switch", () => {
+    const state = run([
+      { type: "open", id: B },
+      { type: "seed", id: A, location: pathB, fresh: true },
+    ], loadedA);
+    expect(hostShows(state, pathA)).toBe(B);
+  });
+
+  it("follows back and forward between notes at once", () => {
+    const onB = run([
+      { type: "open", id: B },
+      { type: "router", pathname: pathB, location: pathB },
+    ], loadedA);
+    const back = hostStep(onB, { type: "popstate", id: A, fromNote: true });
+    expect(hostShows(back, pathB)).toBe(A);
+  });
+
+  it("from another route, waits for the router before showing the note", () => {
+    const onGraph = hostStep(loadedA, { type: "router", pathname: "/vault/graph", location: "/vault/graph" });
+    expect(onGraph.trusted).toBeNull();
+    const back = hostStep(onGraph, { type: "popstate", id: A, fromNote: false });
+    expect(hostShows(back, "/vault/graph")).toBeNull();
+    expect(hostShows(hostStep(back, { type: "router", pathname: pathA, location: pathA }), pathA)).toBe(A);
+  });
+
+  it("keeps showing the note until the router reaches a page that is not one", () => {
+    // Back to the graph: nothing changes on popstate, so no loader in between.
+    expect(hostShows(loadedA, pathA)).toBe(A);
+    const there = hostStep(loadedA, { type: "router", pathname: "/vault/graph", location: "/vault/graph" });
+    expect(hostShows(there, "/vault/graph")).toBeNull();
+  });
+
+  it("makes a later server render of a note wait for its own snapshot", () => {
+    const state = run([
+      { type: "open", id: B },
+      { type: "router", pathname: "/vault/graph", location: "/vault/graph" },
+      // A server navigation back to B: the copy is not trusted until B's
+      // snapshot is in, so the editor never starts on older text.
+      { type: "router", pathname: pathB, location: pathB },
+    ], loadedA);
+    expect(hostShows(state, pathB)).toBeNull();
+    expect(hostShows(hostStep(state, { type: "seed", id: B, location: pathB, fresh: true }), pathB)).toBe(B);
   });
 });
