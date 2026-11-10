@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { EditorSelection, EditorState, StateEffect, Transaction, type TransactionSpec } from "@codemirror/state";
 import {
+  insertNewline,
   copyLineDown,
   copyLineUp,
   history,
@@ -14,6 +15,7 @@ import { external, readOnlyGuard } from "@/components/vault/live-editor/read-onl
 import {
   enterFromTitle,
   lineMoveKeys,
+  setNoteTitle,
   titleLine,
   titleLineChange,
   titleLineDecorations,
@@ -332,6 +334,48 @@ describe("the title line guard (D-120)", () => {
     });
   });
 
+  describe("when it guards (one rule: lib/title-heading.ts isTitleHeading)", () => {
+    it("guards line 1 only when it is the title line: it says the title, is exactly `# <title>`, or is an empty `# `", () => {
+      const deleteHash = (state: EditorState) => edit(state, { changes: { from: 0, to: 2 }, userEvent: "delete" }).text;
+      expect(deleteHash(make(`# Plan${BODY}`))).toBe(`# Plan${BODY}`);
+      expect(deleteHash(make(`# [[Target|Plan]]${BODY}`))).toBe(`# [[Target|Plan]]${BODY}`);
+      expect(deleteHash(make(`# ${BODY}`))).toBe(`# ${BODY}`);
+      // A heading that says something else is the note's own: edited as any text.
+      expect(deleteHash(make(`# Introduction${BODY}`))).toBe(`Introduction${BODY}`);
+    });
+
+    it("keeps guarding a title being retyped, before the rename it asks for lands", () => {
+      const retyped = edit(make(`# Plan${BODY}`), { changes: { from: 2, to: 6, insert: "Roadmap" }, userEvent: "input.type" });
+      expect(retyped.text).toBe(`# Roadmap${BODY}`);
+      expect(edit(retyped.state, { changes: { from: 0, to: 2 }, userEvent: "delete" }).text).toBe(`# Roadmap${BODY}`);
+    });
+
+    it("reads the rule afresh when the title changes, and when text is loaded from outside", () => {
+      const other = make(`# Other${BODY}`);
+      const titled = other.update({ effects: setNoteTitle.of("Other") }).state;
+      expect(edit(titled, { changes: { from: 0, to: 2 }, userEvent: "delete" }).text).toBe(`# Other${BODY}`);
+      // Someone else's text, with a heading the title does not say: not guarded.
+      const loaded = make(`# Plan${BODY}`).update({
+        changes: { from: 2, to: 6, insert: "Theirs" },
+        annotations: [external.of(true), Transaction.addToHistory.of(false)],
+      }).state;
+      expect(edit(loaded, { changes: { from: 0, to: 2 }, userEvent: "delete" }).text).toBe(`Theirs${BODY}`);
+    });
+  });
+
+  it("leaves Enter with several carets to the default, which the guard then keeps on track", () => {
+    const state = EditorState.create({
+      doc: `# Plan${BODY}`,
+      selection: EditorSelection.create([EditorSelection.cursor(4), EditorSelection.cursor(11)]),
+      extensions: [EditorState.allowMultipleSelections.of(true), titleLine("Plan")],
+    });
+    expect(press(state).handled).toBe(false);
+    const after = run(state, insertNewline);
+    // The title is not split; the body's line is.
+    expect(after.text).toBe("# Plan\n\n## \nScope\n\nText.");
+    expect(after.state.selection.ranges).toHaveLength(2);
+  });
+
   it("keeps every caret of a multiple selection when it corrects an edit", () => {
     const state = EditorState.create({
       doc: `# Plan${BODY}`,
@@ -400,8 +444,13 @@ describe("the title line guard (D-120)", () => {
       }
     });
 
-    it("shows no preview over a level-1 heading the note opens with: that is its title line", () => {
-      expect(shown(make(`# Other${BODY}`, { readOnly: true }))).toEqual(["line:cm-title-line"]);
+    it("shows the preview over a level-1 heading that says something else: that is content, not the title line", () => {
+      for (const readOnly of [true, false]) {
+        expect(shown(make(`# Introduction${BODY}`, { readOnly }))).toEqual(["preview:Plan"]);
+      }
+      // Its title line written exactly, for a title that reads differently once cleaned.
+      const week = EditorState.create({ doc: `# Week #${BODY}`, extensions: [titleLine("Week #")] });
+      expect(shown(week)).toEqual(["line:cm-title-line"]);
     });
   });
 });
