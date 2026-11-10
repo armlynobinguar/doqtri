@@ -60,6 +60,20 @@ function fallbackTree(doc: Doc): DocMindmap {
 }
 
 export function buildGlobalMindmap(docs: Doc[]): MindmapGraph {
+  return buildGlobalMindmapWithReach(docs).graph;
+}
+
+/**
+ * buildGlobalMindmap(), plus which documents reach each node: a document node
+ * is reached by itself and by every other document whose map points at it,
+ * a concept or hub by every document whose map names it. The hackathon
+ * snapshot sends this as each node's `doc_ids` (WP-4.7); the canvas does not
+ * need it.
+ */
+export function buildGlobalMindmapWithReach(docs: Doc[]): {
+  graph: MindmapGraph;
+  reachedBy: Map<string, Set<string>>;
+} {
   // A concept whose name is also a document's title is that document, not a
   // separate idea — the same resolution the vault graph does for [[links]].
   const docIdByTitle = new Map<string, string>();
@@ -70,8 +84,16 @@ export function buildGlobalMindmap(docs: Doc[]): MindmapGraph {
   const nodes = new Map<string, MapNode>();
   const links: MindmapGraph["links"] = [];
   const seenLinks = new Set<string>();
-  /** Which documents reach each concept, which is what promotes it to a hub. */
+  /**
+   * Which documents reach each node. For a concept this is what promotes it
+   * to a hub.
+   */
   const reachedBy = new Map<string, Set<string>>();
+  const reach = (nodeId: string, docId: string) => {
+    const owners = reachedBy.get(nodeId) ?? new Set<string>();
+    owners.add(docId);
+    reachedBy.set(nodeId, owners);
+  };
 
   function addLink(source: string, target: string) {
     if (source === target) return;
@@ -90,6 +112,7 @@ export function buildGlobalMindmap(docs: Doc[]): MindmapGraph {
       depth: 0,
       href: `/vault/${doc.id}/mindmap`,
     });
+    reach(docNodeId, doc.id);
   }
 
   for (const doc of docs) {
@@ -108,6 +131,7 @@ export function buildGlobalMindmap(docs: Doc[]): MindmapGraph {
           // The concept is another note. Point at it rather than duplicating
           // its title as a concept node.
           childId = `${DOC_PREFIX}${otherDocId}`;
+          reach(childId, doc.id);
         } else if (otherDocId === doc.id) {
           // A concept named after its own document: skip the node, keep the
           // subtree, so the map does not grow a self-loop.
@@ -132,9 +156,7 @@ export function buildGlobalMindmap(docs: Doc[]): MindmapGraph {
             });
           }
 
-          const owners = reachedBy.get(childId) ?? new Set<string>();
-          owners.add(doc.id);
-          reachedBy.set(childId, owners);
+          reach(childId, doc.id);
         }
 
         addLink(parentId, childId);
@@ -145,11 +167,11 @@ export function buildGlobalMindmap(docs: Doc[]): MindmapGraph {
     walk(tree.root, docNodeId, 1);
   }
 
-  for (const [conceptId, owners] of reachedBy) {
+  for (const [nodeId, owners] of reachedBy) {
     if (owners.size < 2) continue;
-    const node = nodes.get(conceptId);
-    if (node) node.kind = "hub";
+    const node = nodes.get(nodeId);
+    if (node?.kind === "concept") node.kind = "hub";
   }
 
-  return { nodes: [...nodes.values()], links };
+  return { graph: { nodes: [...nodes.values()], links }, reachedBy };
 }

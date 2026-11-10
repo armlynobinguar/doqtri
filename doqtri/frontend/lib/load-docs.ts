@@ -22,22 +22,44 @@ import type { Doc } from "@/lib/types";
 export async function loadVaultDocs(supabase: SupabaseClient, workspaceId: string): Promise<Doc[]> {
   const { data, error } = await supabase
     .from("documents")
-    .select("id, title, markdown, mindmap, mindmap_hash, version")
+    .select(VAULT_DOC_COLUMNS)
     .eq("workspace_id", workspaceId)
     .order("title", { ascending: true });
 
   if (error) throw new Error(`Failed to load vault: ${error.message}`);
 
-  return (data ?? []).map((row) => {
-    const mindmap = parseDocMindmap(row.mindmap);
-    return {
-      id: row.id,
-      title: row.title,
-      markdown: row.markdown,
-      version: Number(row.version),
-      mindmap,
-      // A note with no map is not "stale" — it has nothing to be stale against.
-      mindmapStale: mindmap !== null && isMindmapStale(row.markdown, row.mindmap_hash),
-    };
-  });
+  return (data ?? []).map(docFromRow);
+}
+
+/** The columns docFromRow() reads. */
+export const VAULT_DOC_COLUMNS = "id, title, markdown, mindmap, mindmap_hash, version, created_at";
+
+export type VaultDocRow = {
+  id: string;
+  title: string;
+  markdown: string;
+  mindmap: unknown;
+  mindmap_hash: string | null;
+  version: number | string;
+  created_at: string;
+};
+
+/**
+ * One documents row as a `Doc`: the stored mindmap parsed and its staleness
+ * decided. Shared with the hackathon snapshot (lib/integrations/qdit-hackathon.ts),
+ * so the global mindmap it sends is built from exactly what the vault pages
+ * show.
+ */
+export function docFromRow(row: VaultDocRow): Doc {
+  const mindmap = parseDocMindmap(row.mindmap);
+  return {
+    id: row.id,
+    title: row.title,
+    markdown: row.markdown,
+    version: Number(row.version),
+    created_at: row.created_at,
+    mindmap,
+    // A note with no map is not "stale" — it has nothing to be stale against.
+    mindmapStale: mindmap !== null && isMindmapStale(row.markdown, row.mindmap_hash),
+  };
 }
