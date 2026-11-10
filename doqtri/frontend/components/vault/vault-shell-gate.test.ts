@@ -29,6 +29,7 @@ vi.mock("@/components/ui/resizable", () => ({
 vi.mock("@/components/ui/sheet", () => ({ Sheet: nothing, SheetContent: nothing, SheetTitle: nothing }));
 vi.mock("@/components/vault/account-menu", () => ({ AccountMenu: nothing }));
 vi.mock("@/components/vault/file-explorer", () => ({ FileExplorer: nothing }));
+vi.mock("@/components/vault/note-host", () => ({ NoteHost: nothing }));
 vi.mock("@/components/vault/status-bar", () => ({ StatusBar: nothing }));
 vi.mock("@/components/vault/quick-switcher", () => ({ QuickSwitcher: nothing }));
 vi.mock("@/components/vault/upload-dialog", () => ({ UploadDialog: nothing }));

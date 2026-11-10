@@ -31,6 +31,19 @@ export async function loadVaultDocs(supabase: SupabaseClient, workspaceId: strin
   return (data ?? []).map(docFromRow);
 }
 
+/**
+ * loadVaultDocs(), dated: `loadedAt` is when the read started, so the
+ * client's copy of the notes can tell an older snapshot from a newer one
+ * (DOQ-43, lib/note-store.ts).
+ */
+export async function loadVaultSnapshot(
+  supabase: SupabaseClient,
+  workspaceId: string,
+): Promise<{ docs: Doc[]; loadedAt: number }> {
+  const loadedAt = Date.now();
+  return { docs: await loadVaultDocs(supabase, workspaceId), loadedAt };
+}
+
 /** The columns docFromRow() reads. */
 export const VAULT_DOC_COLUMNS = "id, title, markdown, mindmap, mindmap_hash, version, created_at";
 

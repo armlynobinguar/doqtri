@@ -232,6 +232,29 @@ describe("PUT /api/notes/[id] (save)", () => {
     expect(await res.json()).toMatchObject({ code: "STALE_VERSION", version: 5 });
   });
 
+  it("releases the session's lock after the save when asked, in the same request (DOQ-43)", async () => {
+    session.rpc.mockResolvedValue({ data: 4, error: null });
+    const res = await PUT(put({ markdown: "# v4", version: 3, session: TAB, release: true }), ctx());
+    expect(res.status).toBe(200);
+    expect(session.rpc.mock.calls.map(([fn]) => fn)).toEqual(["save_document", "release_doc_lock"]);
+    expect(session.rpc).toHaveBeenLastCalledWith("release_doc_lock", { p_document_id: DOC, p_session: TAB });
+  });
+
+  it("releases it after a refused save too, and only when asked", async () => {
+    session.rpc.mockResolvedValue({
+      data: null,
+      error: { code: "DQVER", message: "this note was saved elsewhere", details: "5" },
+    });
+    const refused = await PUT(put({ markdown: "# old", version: 3, session: TAB, release: true }), ctx());
+    expect(refused.status).toBe(409);
+    expect(session.rpc.mock.calls.map(([fn]) => fn)).toEqual(["save_document", "release_doc_lock"]);
+
+    session.rpc.mockClear();
+    session.rpc.mockResolvedValue({ data: 4, error: null });
+    await PUT(put({ markdown: "# v4", version: 3, session: TAB, release: "yes" }), ctx());
+    expect(session.rpc.mock.calls.map(([fn]) => fn)).toEqual(["save_document"]);
+  });
+
   it("answers 403 for a viewer and 404 for a note the caller cannot see", async () => {
     session.rpc.mockResolvedValueOnce({
       data: null,

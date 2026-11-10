@@ -11,7 +11,7 @@ import { useNodePointer } from "@/components/vault/use-node-pointer";
 import { buildGraph, type GraphNode } from "@/lib/wikilinks";
 import { GRAPH_COLORS } from "@/lib/theme";
 import type { Doc } from "@/lib/types";
-import { useNavigate } from "@/components/vault/navigation";
+import { useOpenNote } from "@/components/vault/note-store";
 
 type NodeDatum = GraphNode;
 type SimNode = NodeObject<NodeDatum>;
@@ -85,7 +85,7 @@ export function GraphPanel({
   docs: Doc[];
   activeId?: string;
 }) {
-  const navigate = useNavigate();
+  const openNote = useOpenNote();
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<GraphInstance<SimNode> | undefined>(undefined);
   const nodesRef = useRef<SimNode[]>([]);
@@ -133,7 +133,7 @@ export function GraphPanel({
     hitTest: hitsNode,
     // Ghost nodes have no note behind them yet.
     isClickable: (node) => !node.ghost,
-    onClick: (node) => navigate(`/vault/${String(node.id)}`),
+    onClick: (node) => openNote(String(node.id)),
     onDragEnd: (node) => {
       // Hand the node back to the layout, as force-graph's own drag did.
       node.fx = undefined;

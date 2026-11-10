@@ -1,6 +1,6 @@
 "use client";
 
-import { NavLink } from "@/components/vault/navigation";
+import { NoteLink } from "@/components/vault/note-store";
 import {
   LayoutTemplateIcon,
   FileTextIcon,
@@ -320,8 +320,8 @@ function NoteRow({
           : "text-sidebar-foreground border-transparent hover:bg-[var(--glass)] hover:text-foreground",
       )}
     >
-      <NavLink
-        href={`/vault/${note.id}`}
+      <NoteLink
+        noteId={note.id}
         aria-current={isActive ? "page" : undefined}
         data-note-link={note.id}
         className="flex min-w-0 flex-1 items-center gap-2 py-[5px] pl-2.5 pointer-coarse:gap-3 pointer-coarse:py-3"
@@ -331,7 +331,7 @@ function NoteRow({
           strokeWidth={1.5}
         />
         <span className="truncate">{note.title}</span>
-      </NavLink>
+      </NoteLink>
       {onRename ? <RenameRowAction note={note} pending={pending} onRename={onRename} /> : null}
       <NoteRowAction note={note} anchored={anchored} pending={pending} onDelete={onDelete} />
     </li>

@@ -3,6 +3,7 @@ import type { DocLockStatus } from "@/lib/doc-lock";
 import {
   createDocLockApi,
   createDocLockController,
+  stopAfterLastSave,
   type DocLockApi,
 } from "@/lib/doc-lock-client";
 
@@ -381,6 +382,73 @@ describe("leaving", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(c.getState().phase).toBe("free");
     c.stop();
+  });
+});
+
+describe("leaving after the editor's last save (DOQ-43)", () => {
+  async function editing() {
+    const fake = fakeApi();
+    const c = controllerFor(fake.api);
+    c.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await c.noteEdit();
+    fake.calls.length = 0;
+    return { ...fake, c };
+  }
+
+  function deferred() {
+    let settle!: () => void;
+    const done = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    return { done, settle };
+  }
+
+  it("stops the heartbeat at once and releases only once the save settles", async () => {
+    const { c, calls } = await editing();
+    const save = deferred();
+    stopAfterLastSave(c, { done: save.done, outlivesPage: () => true }, new EventTarget());
+    // No heartbeat may take the lock again for a session that is leaving.
+    await vi.advanceTimersByTimeAsync(HEARTBEAT * 3);
+    expect(calls).toEqual([]);
+
+    save.settle();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual(["release:keepalive"]);
+  });
+
+  it("releases at once when there is nothing to save", async () => {
+    const { c, calls } = await editing();
+    stopAfterLastSave(c, null, new EventTarget());
+    expect(calls).toEqual(["release:keepalive"]);
+  });
+
+  it("releases on page hide when the save's request would not outlive the page", async () => {
+    const { c, calls } = await editing();
+    const page = new EventTarget();
+    const save = deferred();
+    stopAfterLastSave(c, { done: save.done, outlivesPage: () => false }, page);
+    page.dispatchEvent(new Event("pagehide"));
+    expect(calls).toEqual(["release:keepalive"]);
+    save.settle();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual(["release:keepalive"]);
+  });
+
+  it("leaves the release to a keepalive save that is already out when the page hides", async () => {
+    const { c, calls } = await editing();
+    const page = new EventTarget();
+    const save = deferred();
+    stopAfterLastSave(c, { done: save.done, outlivesPage: () => true }, page);
+    // Releasing now could reach the server before the save and refuse it.
+    page.dispatchEvent(new Event("pagehide"));
+    expect(calls).toEqual([]);
+    save.settle();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual(["release:keepalive"]);
+    // Detached once done.
+    page.dispatchEvent(new Event("pagehide"));
+    expect(calls).toEqual(["release:keepalive"]);
   });
 });
 

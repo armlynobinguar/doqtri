@@ -96,6 +96,12 @@ export type DocLockController = {
   takeOver(): Promise<boolean>;
   /** Re-reads the status now, e.g. after a save was refused. */
   refresh(): Promise<void>;
+  /**
+   * Stops the heartbeat and polling but keeps the lock, for the editor's last
+   * save as it closes (DOQ-43): no heartbeat may take the lock again after
+   * that save released it. stop() releases it; start() resumes.
+   */
+  pause(): void;
   /** Stops the schedule and releases the lock if held. Safe to call twice. */
   stop(options?: { keepalive?: boolean }): void;
   /** Replaces the status and lost-lock callbacks. */
@@ -134,6 +140,7 @@ export function createDocLockController(params: {
   const listeners = new Set<() => void>();
   let timer: unknown = null;
   let stopped = false;
+  let paused = false;
   let lastEdit = 0;
   let editedSinceBeat = false;
   let inflight: Promise<boolean> | null = null;
@@ -169,14 +176,14 @@ export function createDocLockController(params: {
   }
 
   function schedule() {
-    if (stopped) return;
+    if (stopped || paused) return;
     if (timer !== null) timers.clearTimeout(timer);
     timer = timers.setTimeout(tick, state.phase === "mine" ? heartbeatMs : pollMs);
   }
 
   async function tick() {
     timer = null;
-    if (stopped) return;
+    if (stopped || paused) return;
     try {
       if (state.phase === "mine") {
         if (editedSinceBeat) {
@@ -230,6 +237,7 @@ export function createDocLockController(params: {
     },
     start() {
       stopped = false;
+      paused = false;
       // The idle timer counts from opening (or coming back to) the note, not
       // from the epoch: a status that says the lock is already this
       // session's must not read as ten idle minutes.
@@ -274,6 +282,11 @@ export function createDocLockController(params: {
     },
     setHandlers(next) {
       handlers = next;
+    },
+    pause() {
+      paused = true;
+      if (timer !== null) timers.clearTimeout(timer);
+      timer = null;
     },
     stop(options) {
       if (stopped) return;
@@ -329,4 +342,39 @@ export function createDocLockApi(
       await fetchImpl(url, { method: "DELETE", keepalive: options?.keepalive ?? false });
     },
   };
+}
+
+/**
+ * An editor's last save as it closes (DOQ-43): `done` settles when it has;
+ * `outlivesPage` says whether its request survives the page unloading (a
+ * keepalive request that releases the lock itself).
+ */
+export type LastSave = { done: Promise<unknown>; outlivesPage: () => boolean };
+
+/**
+ * Lets go of the lock as an editor closes. The heartbeat and polling stop at
+ * once; the release waits for `last` (null: nothing to save) to settle. If
+ * the page is hidden meanwhile and the save's request would not outlive it
+ * (still queued behind another write, or too large for keepalive), the lock
+ * is released at once with keepalive, as when a page closes with no save out.
+ */
+export function stopAfterLastSave(
+  controller: Pick<DocLockController, "pause" | "stop">,
+  last: LastSave | null,
+  page: Pick<EventTarget, "addEventListener" | "removeEventListener">,
+): void {
+  controller.pause();
+  if (!last) {
+    controller.stop({ keepalive: true });
+    return;
+  }
+  const stop = () => {
+    page.removeEventListener("pagehide", onPageHide);
+    controller.stop({ keepalive: true });
+  };
+  const onPageHide = () => {
+    if (!last.outlivesPage()) stop();
+  };
+  page.addEventListener("pagehide", onPageHide);
+  void last.done.finally(stop);
 }

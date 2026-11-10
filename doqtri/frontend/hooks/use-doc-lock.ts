@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore, type RefObject } from "react";
 import {
   createDocLockApi,
   createDocLockController,
+  stopAfterLastSave,
+  type LastSave,
   type DocLockController,
   type DocLockState,
 } from "@/lib/doc-lock-client";
@@ -19,8 +21,17 @@ import {
  * reloaded tab's lock keeps its heartbeat and its session, so a reloaded tab
  * stays "elsewhere" (read-only) until that lock times out (DOC_LOCK_IDLE_MS,
  * ten minutes) or the user clicks Edit here; polling does not clear it.
+ *
+ * `beforeStop` is the editor's last save (DOQ-43): run on unmount while the
+ * lock is still held. The heartbeat stops at once and the release waits for
+ * the save to settle (the server releases the lock with that save, so a
+ * closing tab loses neither); see stopAfterLastSave(). It returns null when
+ * there is nothing to save.
  */
-export function useDocLock(docId: string): { lock: DocLockState; controller: DocLockController } {
+export function useDocLock(
+  docId: string,
+  beforeStop?: RefObject<(() => LastSave | null) | null>,
+): { lock: DocLockState; controller: DocLockController } {
   // The page remounts the editor per note, so one controller per mount, and
   // with it one edit session: each tab, and each visit to a note, holds the
   // lock as itself (lib/doc-lock.ts).
@@ -39,9 +50,12 @@ export function useDocLock(docId: string): { lock: DocLockState; controller: Doc
     return () => {
       window.removeEventListener("pagehide", onPageHide);
       window.removeEventListener("pageshow", onPageShow);
-      controller.stop({ keepalive: true });
+      // The editor's latest last save, as it is now: what it is set to on
+      // closing is what has to go out.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      stopAfterLastSave(controller, beforeStop?.current?.() ?? null, window);
     };
-  }, [controller]);
+  }, [controller, beforeStop]);
 
   const lock = useSyncExternalStore(controller.subscribe, controller.getState, controller.getState);
   return { lock, controller };

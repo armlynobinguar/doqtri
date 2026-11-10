@@ -11,7 +11,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import type { NoteSummary } from "@/lib/types";
-import { useNavigate } from "@/components/vault/navigation";
+import { useOpenNote } from "@/components/vault/note-store";
 
 /** Obsidian-style quick switcher. Opened with ⌘K from the shell. */
 export function QuickSwitcher({
@@ -23,7 +23,7 @@ export function QuickSwitcher({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const navigate = useNavigate();
+  const openNote = useOpenNote();
 
   return (
     <CommandDialog
@@ -52,7 +52,7 @@ export function QuickSwitcher({
                 value={note.title}
                 onSelect={() => {
                   onOpenChange(false);
-                  navigate(`/vault/${note.id}`);
+                  openNote(note.id);
                 }}
               >
                 <FileTextIcon className="opacity-60" strokeWidth={1.5} />
