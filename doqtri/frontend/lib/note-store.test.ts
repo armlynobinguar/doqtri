@@ -113,7 +113,19 @@ describe("keepEditorCopy", () => {
     });
     expect(find(next, A)).toMatchObject({ markdown: "a", version: 1 });
     expect(next.unsaved.get(A)).toEqual({ text: "a typed", version: 1 });
-    const saved = keepEditorCopy(next, A, { saved: "a typed", version: 2, ...noMap });
+    // Reopened on it and saved it: gone.
+    const saved = keepEditorCopy(next, A, { saved: "a typed", version: 2, ...noMap, restored: next.unsaved.get(A) });
+    expect(saved.unsaved.has(A)).toBe(false);
+  });
+
+  it("never drops unsaved text the closing editor did not open on", () => {
+    const left = { text: "a typed", version: 1 };
+    // An earlier editor's last save failed after this one had opened.
+    const store = keepEditorCopy(seeded([doc(A, "a", 1)]), A, { saved: "a", version: 1, ...noMap, unsaved: left });
+    const kept = keepEditorCopy(store, A, { saved: "a", version: 1, ...noMap });
+    expect(kept.unsaved.get(A)).toBe(left);
+    // The editor that opened on it, and saved it, drops it.
+    const saved = keepEditorCopy(store, A, { saved: "a typed", version: 2, ...noMap, restored: left });
     expect(saved.unsaved.has(A)).toBe(false);
   });
 

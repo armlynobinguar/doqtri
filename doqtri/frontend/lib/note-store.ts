@@ -75,12 +75,16 @@ export type EditorCopy = Pick<Doc, "mindmap" | "mindmapStale"> & {
   saved: string;
   version: number;
   unsaved?: UnsavedText;
+  /** The unsaved text the editor opened on, if any. */
+  restored?: UnsavedText;
 };
 
 /**
  * The store once a note's editor has closed, so the next visit shows what it
  * showed: its saved text, version and map, unless the store already holds a
- * newer version. Unsaved text is kept only when the editor reports one.
+ * newer version. Unsaved text is kept when the editor reports one; one the
+ * editor did not open on (an earlier editor's, landed since) is never
+ * dropped by it.
  */
 export function keepEditorCopy(store: NoteStore, id: string, copy: EditorCopy): NoteStore {
   const index = store.docs.findIndex((doc) => doc.id === id);
@@ -92,7 +96,7 @@ export function keepEditorCopy(store: NoteStore, id: string, copy: EditorCopy): 
   }
   const unsaved = new Map(store.unsaved);
   if (copy.unsaved) unsaved.set(id, copy.unsaved);
-  else unsaved.delete(id);
+  else if (unsaved.get(id) === copy.restored) unsaved.delete(id);
   return { ...store, docs, unsaved };
 }
 

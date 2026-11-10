@@ -22,6 +22,7 @@ import { resolveLinkTitle } from "@/lib/wikilinks";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { createNoteSaver } from "@/lib/note-saver";
 import { useDocLock } from "@/hooks/use-doc-lock";
+import type { LastSave } from "@/lib/doc-lock-client";
 import { EditLockBanner } from "@/components/vault/edit-lock-banner";
 import { EDITING_ELSEWHERE, editingMessage } from "@/lib/doc-lock";
 import { useNoteTitle, useOverlaidNotes } from "@/components/vault/note-overlay";
@@ -113,7 +114,7 @@ export function DocWorkspace({
   const markdownRef = useRef(markdown);
 
   // The last save, run as the editor closes, before the lock is released.
-  const lastSave = useRef<(() => Promise<unknown> | null) | null>(null);
+  const lastSave = useRef<(() => LastSave | null) | null>(null);
   const { lock, controller } = useDocLock(active.id, lastSave);
 
   // Editing the title heading renames the note (DOQ-36).
@@ -244,11 +245,17 @@ export function DocWorkspace({
         // Text saved since the map's staleness was decided may not match it.
         mindmapStale: concept.mindmap !== null && (concept.stale || saves.saved !== active.markdown),
         unsaved: text === saves.saved ? undefined : { text, version: saver.version },
+        restored: unsaved,
       });
+      if (text === saves.saved || readOnlyRef.current) {
+        leaveRef.current?.(copy());
+        return null;
+      }
+      const leaving = saver.leave(text);
       // Settles either way: the copy says what the save could not store.
-      const saved = text === saves.saved || readOnlyRef.current ? null : saver.leave(text).then(copy, copy);
-      leaveRef.current?.(saved ?? copy());
-      return saved;
+      const done = leaving.done.then(copy, copy);
+      leaveRef.current?.(done);
+      return { done, outlivesPage: leaving.outlivesPage };
     };
   });
 

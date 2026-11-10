@@ -123,9 +123,6 @@ async function readRow(id: string, workspaceId: string): Promise<NoteRow | null 
   }
 }
 
-/** How long a note whose last save is still out stays hidden at most. */
-const LEAVE_WAIT_MS = 10_000;
-
 /** The vault's copy of the active workspace's notes; the vault shell provides it. */
 export function NoteStoreProvider({ workspaceId, children }: { workspaceId: string; children: React.ReactNode }) {
   const pathname = usePathname();
@@ -261,23 +258,19 @@ export function NoteStoreProvider({ workspaceId, children }: { workspaceId: stri
         update((store) => keepEditorCopy(store, id, copy));
         return;
       }
+      // Hidden until the save settles, which it does within the saver's
+      // LEAVE_TIMEOUT_MS: a save that times out counts as failed, and its
+      // text comes back as unsaved.
       setLeaving((ids) => new Set(ids).add(id));
-      const shown = () =>
-        setLeaving((ids) => {
-          if (!ids.has(id)) return ids;
-          const next = new Set(ids);
-          next.delete(id);
-          return next;
-        });
-      // A save that never answers must not hide the note for good; opened
-      // again, its row is read again, and a save on an old version is refused.
-      const giveUp = setTimeout(shown, LEAVE_WAIT_MS);
       void copy
         .then((settled) => update((store) => keepEditorCopy(store, id, settled)))
-        .finally(() => {
-          clearTimeout(giveUp);
-          shown();
-        });
+        .finally(() =>
+          setLeaving((ids) => {
+            const next = new Set(ids);
+            next.delete(id);
+            return next;
+          }),
+        );
     },
     [update],
   );

@@ -16,7 +16,9 @@ import type { DocLockController } from "@/lib/doc-lock-client";
  *
  * `leave()` is the editor's last save as it closes (DOQ-43): the server
  * releases the lock once it is done, and the request outlives the page when
- * it can (a keepalive request carries at most 64 KiB).
+ * it can (a keepalive request carries at most 64 KiB). It gives up after
+ * `leaveTimeoutMs`, queue wait included, aborting its request: a failed save,
+ * so the editor keeps the text.
  */
 export type NoteSaver = {
   queue: SaveQueue;
@@ -24,12 +26,25 @@ export type NoteSaver = {
   readonly version: number;
   /** Adopts `version`, for text loaded or written elsewhere (reload, regenerate). */
   setVersion(version: number): void;
-  /** Saves `text` as the last write, after any in flight; the server then releases the lock. */
-  leave(text: string): Promise<void>;
+  /**
+   * Saves `text` as the last write, after any in flight; the server then
+   * releases the lock. `outlivesPage` says whether that request has gone
+   * out as one that survives the page unloading.
+   */
+  leave(text: string): { done: Promise<void>; outlivesPage: () => boolean };
 };
+
+/** How long an editor's last save may take, waiting for earlier ones included. */
+export const LEAVE_TIMEOUT_MS = 10_000;
 
 /** Bytes, under the browsers' 64 KiB keepalive budget, with room for the headers. */
 const KEEPALIVE_BODY_LIMIT = 60_000;
+
+/** Fetch options for the last write: its abort signal, and keepalive when the body fits. */
+function leaveOptions(leaving: { signal: AbortSignal; keepalive: boolean }, body: string): RequestInit {
+  leaving.keepalive = new TextEncoder().encode(body).length <= KEEPALIVE_BODY_LIMIT;
+  return leaving.keepalive ? { signal: leaving.signal, keepalive: true } : { signal: leaving.signal };
+}
 
 export function createNoteSaver(params: {
   docId: string;
@@ -38,19 +53,21 @@ export function createNoteSaver(params: {
   lock: Pick<DocLockController, "session" | "ensure" | "refresh" | "getState">;
   onConflict: () => void;
   fetchImpl?: typeof fetch;
+  leaveTimeoutMs?: number;
 }): NoteSaver {
   const { docId, lock, onConflict } = params;
   const fetchImpl = params.fetchImpl ?? ((input, init) => fetch(input, init));
   let version = params.version;
-  // The text of the last write, once leave() asked for it.
-  let last: string | null = null;
+  // The last write, once leave() asked for it: its text, the signal that
+  // aborts it, and whether it went out as a keepalive request.
+  let last: { text: string; signal: AbortSignal; keepalive: boolean } | null = null;
 
   const queue = createSaveQueue(params.markdown, async (text) => {
     if (!(await lock.ensure())) {
       const { phase, holderName } = lock.getState();
       throw new Error(phase === "elsewhere" ? EDITING_ELSEWHERE : editingMessage(holderName));
     }
-    const leaving = last !== null && text === last;
+    const leaving = last !== null && text === last.text ? last : null;
     const request = JSON.stringify({
       markdown: text,
       version,
@@ -61,7 +78,7 @@ export function createNoteSaver(params: {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: request,
-      ...(leaving && new TextEncoder().encode(request).length <= KEEPALIVE_BODY_LIMIT ? { keepalive: true } : {}),
+      ...(leaving ? leaveOptions(leaving, request) : {}),
     });
     const payload: unknown = await res.json().catch(() => null);
     const body = (payload && typeof payload === "object" ? payload : {}) as {
@@ -86,8 +103,15 @@ export function createNoteSaver(params: {
       version = next;
     },
     leave(text) {
-      last = text;
-      return queue.save(text);
+      const abort = new AbortController();
+      const leaving = { text, signal: abort.signal, keepalive: false };
+      last = leaving;
+      const timedOut = new Promise<never>((_, reject) => {
+        abort.signal.addEventListener("abort", () => reject(new Error("The last save did not finish in time")));
+      });
+      const timer = setTimeout(() => abort.abort(), params.leaveTimeoutMs ?? LEAVE_TIMEOUT_MS);
+      const done = Promise.race([queue.save(text), timedOut]).finally(() => clearTimeout(timer));
+      return { done, outlivesPage: () => leaving.keepalive };
     },
   };
 }
