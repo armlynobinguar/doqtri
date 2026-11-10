@@ -61,12 +61,12 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261101110000_chain_writes_status.sql    # NOT recorded (WP-4.1, DOQ-5): confirm on the remote before deploying
 20261101120000_wallet_topups.sql          # NOT recorded (WP-4.1, DOQ-6): confirm on the remote before deploying
 20261103100000_ops_snapshot.sql           # applied 2026-11-03 as `ops_snapshot` (WP-4.3, DOQ-14)
-20261107100000_referral_eligibility.sql   # NOT yet applied (WP-4.6, DOQ-23): needs 20261101110000_chain_writes_status.sql first
-20261107110000_referral_dashboard.sql     # NOT yet applied (WP-4.6, DOQ-24): needs 20261107100000_referral_eligibility.sql first
-20261107120000_referral_payout_profiles.sql  # NOT yet applied (WP-4.6, DOQ-25): needs 20261107110000_referral_dashboard.sql first
-20261107130000_referral_payouts.sql          # NOT yet applied (WP-4.6, DOQ-26): needs 20261107120000_referral_payout_profiles.sql first
-20261107140000_referral_testimonials.sql     # NOT yet applied (WP-4.6, DOQ-28): needs 20261107120000_referral_payout_profiles.sql first
-20261109100000_rename_document.sql        # NOT yet applied (WP-1.7, DOQ-35): apply before deploying; /api/notes/[id] PATCH needs it
+20261107100000_referral_eligibility.sql   # applied 2026-11-10 as `referral_eligibility` (WP-4.6, DOQ-23)
+20261107110000_referral_dashboard.sql     # applied 2026-11-10 as `referral_dashboard` (WP-4.6, DOQ-24)
+20261107120000_referral_payout_profiles.sql  # applied 2026-11-10 as `referral_payout_profiles` (WP-4.6, DOQ-25)
+20261107130000_referral_payouts.sql          # applied 2026-11-10 as `referral_payouts` (WP-4.6, DOQ-26)
+20261107140000_referral_testimonials.sql     # applied 2026-11-10 as `referral_testimonials` (WP-4.6, DOQ-28)
+20261109100000_rename_document.sql        # applied 2026-11-10 as `rename_document` (WP-1.7, DOQ-35)
 20261110100000_documents_created_at.sql   # NOT yet applied (WP-4.7, DOQ-39): apply before deploying (loadVaultDocs selects created_at) and before any hackathon opens
 ```
 
