@@ -604,6 +604,24 @@ export async function readPendingWrites(docId: string): Promise<PendingChainWrit
   }));
 }
 
+/**
+ * Whether the index holds any write for the note, pending or not: it was
+ * registered or anchored, or such a write is on its way. Throws when the
+ * index cannot be read. The title line (lib/title-line-safety.ts) is never
+ * added to a note with one, since it would move every heading's id.
+ */
+export async function hasIndexedWrites(docId: string): Promise<boolean> {
+  if (!UUID.test(docId)) return false;
+  const { data, error } = await writeIndex()
+    .from("chain_writes")
+    .select("tx_hash")
+    .eq("network", NETWORK)
+    .eq("document_id", docId)
+    .limit(1);
+  if (error) throw new Error(`Write index unavailable: ${error.message}`);
+  return (data ?? []).length > 0;
+}
+
 /** `history` with the index's pending writes, when there are any. */
 function withPending(history: DocumentHistory, pending: PendingChainWrite[]): DocumentHistory {
   return pending.length ? { ...history, pending } : history;
