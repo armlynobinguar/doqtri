@@ -13,7 +13,9 @@ import {
 } from "@codemirror/state";
 import { Decoration, EditorView, keymap, WidgetType, type DecorationSet } from "@codemirror/view";
 import { completionStatus } from "@codemirror/autocomplete";
+import { isolateHistory } from "@codemirror/commands";
 import { hasTitleLine } from "@/lib/title-line";
+import { hasControlCharacters } from "@/lib/title";
 import { isTitleHeading } from "@/lib/title-heading";
 import { external } from "@/components/vault/live-editor/read-only";
 
@@ -154,8 +156,33 @@ export function guarded(state: EditorState): boolean {
  */
 export type TitleLineHandle = {
   held(): boolean;
+  /** Line 1's text as the editor shows it now. */
+  line(): string;
+  /** Rewrites line 1 to `# <title>` when it still says `expected` (retitleLine); the text after, or null. */
+  retitle(title: string, expected: string): string | null;
   release(): void;
 };
+
+/**
+ * Line 1 rewritten to `# <title>` after a rename from outside that left it
+ * saying something else (DOQ-46), or null when the editor cannot take it:
+ * read-only, line 1 not held as the title line, or no longer saying
+ * `expected` (typed on since). An edit of this editor like any other,
+ * reported and saved, and its own step in undo history: undoing it puts back
+ * exactly what line 1 said, and the guard keeps holding it. Not checked by
+ * the guard (titleLineChange), which reads line 1 afresh from the rule.
+ */
+export function retitleLine(state: EditorState, title: string, expected: string): TransactionSpec | null {
+  const name = title.trim();
+  if (state.readOnly || !guarded(state) || !name || hasControlCharacters(name)) return null;
+  const line = state.doc.line(1);
+  const insert = `# ${name}`;
+  if (line.text !== expected || line.text === insert) return null;
+  return {
+    changes: { from: 0, to: line.to, insert },
+    annotations: [titleLineChange.of(true), isolateHistory.of("full")],
+  };
+}
 
 /** One change of a transaction, in the coordinates of the text before it, with its inserted lines. */
 type Edit = { from: number; to: number; lines: string[] };

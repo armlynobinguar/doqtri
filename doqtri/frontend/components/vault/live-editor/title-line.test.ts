@@ -17,6 +17,7 @@ import {
   guarded,
   lineMoveKeys,
   releaseTitleLine,
+  retitleLine,
   setNoteTitle,
   titleLine,
   titleLineChange,
@@ -473,18 +474,43 @@ describe("the title line guard (D-120)", () => {
         expect(blockWidgets(released)).toBe(1);
       });
 
-      it("line 1 rewritten from outside to the new title is guarded and shows as it is", () => {
-        // The workspace's rewrite of a retyped line 1 (rename-adopt.ts titleLineAfterRename).
+      it("line 1 rewritten to the new title (retitleLine) is guarded and shows as it is", () => {
         const renamedAway = retyped().update({ effects: setNoteTitle.of("Roadmap") }).state;
-        const rewritten = renamedAway.update({
-          changes: { from: 2, to: 5, insert: "Roadmap" },
-          annotations: [external.of(true), Transaction.addToHistory.of(false)],
-        }).state;
+        const spec = retitleLine(renamedAway, "Roadmap", "# Pla");
+        expect(spec).not.toBeNull();
+        const rewritten = renamedAway.update(spec!).state;
         expect(rewritten.doc.toString()).toBe(`# Roadmap${BODY}`);
         expect(guarded(rewritten)).toBe(true);
         expect(styled(rewritten)).toBe(true);
         expect(pending(rewritten)).toEqual([]);
         expect(blockWidgets(rewritten)).toBe(0);
+      });
+
+      it("undoing the rewrite puts back what line 1 said, still guarded, and the edit before it after", () => {
+        // The review's case: `# Plan`, Backspace, renamed to Roadmap from the sidebar, rewritten, Ctrl+Z.
+        // Rewritten as text loaded from outside, the undo mapped the Backspace across it: `# Roadmapn`.
+        let state = retyped().update({ effects: setNoteTitle.of("Roadmap") }).state;
+        state = state.update(retitleLine(state, "Roadmap", "# Pla")!).state;
+        const dispatch = (tr: Transaction) => {
+          state = tr.state;
+        };
+        expect(undo({ state, dispatch })).toBe(true);
+        expect(state.doc.toString()).toBe(`# Pla${BODY}`);
+        expect(guarded(state)).toBe(true);
+        expect(undo({ state, dispatch })).toBe(true);
+        expect(state.doc.toString()).toBe(`# Plan${BODY}`);
+        expect(redo({ state, dispatch })).toBe(true);
+        expect(redo({ state, dispatch })).toBe(true);
+        expect(state.doc.toString()).toBe(`# Roadmap${BODY}`);
+      });
+
+      it("rewrites nothing when line 1 says something else by now, is not held, or the copy is read-only", () => {
+        const renamedAway = retyped().update({ effects: setNoteTitle.of("Roadmap") }).state;
+        expect(retitleLine(renamedAway, "Roadmap", "# Plan")).toBeNull();
+        expect(retitleLine(renamedAway.update({ effects: releaseTitleLine.of(null) }).state, "Roadmap", "# Pla")).toBeNull();
+        expect(retitleLine(make(`# Introduction${BODY}`), "Roadmap", "# Introduction")).toBeNull();
+        expect(retitleLine(make(`# Plan${BODY}`, { readOnly: true }), "Roadmap", "# Plan")).toBeNull();
+        expect(retitleLine(renamedAway, "Two\nlines", "# Pla")).toBeNull();
       });
     });
   });

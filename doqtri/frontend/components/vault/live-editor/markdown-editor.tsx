@@ -23,6 +23,7 @@ import { headingNoticeText, type HeadingNotice } from "@/lib/heading-rename";
 import {
   guarded,
   releaseTitleLine,
+  retitleLine,
   setNoteTitle,
   titleLine as titleLineGuard,
   titleLineChange,
@@ -458,6 +459,13 @@ export default function MarkdownEditor({
     if (!view || !titleLineHandleRef) return;
     titleLineHandleRef.current = {
       held: () => guarded(view.state),
+      line: () => view.state.doc.line(1).text,
+      retitle: (title, expected) => {
+        const spec = retitleLine(view.state, title, expected);
+        if (!spec) return null;
+        view.dispatch(spec);
+        return view.state.doc.toString();
+      },
       release: () => view.dispatch({ effects: releaseTitleLine.of(null) }),
     };
     return () => {

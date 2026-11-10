@@ -173,6 +173,17 @@ test.describe("rename keeps the title heading in step (DOQ-35)", () => {
     // The field starts from the title the row shows, the one being typed.
     await expect(field).toHaveValue(typed);
 
+    // The rename's answer and the saves after it: the end state must come from
+    // the editor's own rewrite, saved, not from the server's.
+    const answers: Record<string, unknown>[] = [];
+    const saved: string[] = [];
+    page.on("response", async (res) => {
+      if (new URL(res.url()).pathname !== `/api/notes/${id}`) return;
+      const method = res.request().method();
+      if (method === "PATCH") answers.push((await res.json()) as Record<string, unknown>);
+      if (method === "PUT" && answers.length > 0) saved.push(String(res.request().postDataJSON()?.markdown));
+    });
+
     // Held, so what shows while the rename is on its way can be checked.
     let answer!: () => void;
     const answered = new Promise<void>((resolve) => (answer = resolve));
@@ -201,6 +212,10 @@ test.describe("rename keeps the title heading in step (DOQ-35)", () => {
     const expected = `# ${renamed}${body}`;
     await expectEditorText(page, expected, 20_000);
     await expect.poll(async () => readNote(id), { timeout: 15_000 }).toEqual({ title: renamed, markdown: expected });
+    expect(answers).toHaveLength(1);
+    expect(answers[0]).toMatchObject({ title: renamed, previousTitle: title });
+    expect(answers[0]).not.toHaveProperty("markdown");
+    expect(saved).toContain(expected);
     await expect(page.getByTestId("title-line-pending")).toHaveCount(0);
     await expect(page.getByTestId("title-line-preview")).toHaveCount(0);
     await expect(page.getByRole("tab", { name: renamed, exact: true })).toBeVisible();
