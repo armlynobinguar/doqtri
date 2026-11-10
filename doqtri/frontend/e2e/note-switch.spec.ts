@@ -242,6 +242,59 @@ test.describe("note switching", () => {
     await expect(page.getByTestId("edit-lock-elsewhere-banner")).toHaveCount(0);
   });
 
+  /** Makes A's last save as its editor closes fail, as a server error. */
+  async function failLastSave(page: Page): Promise<() => boolean> {
+    let failed = false;
+    await page.route(`**/api/notes/${a.id}`, async (route) => {
+      const request = route.request();
+      if (request.method() === "PUT" && (request.postDataJSON() as { release?: boolean }).release) {
+        failed = true;
+        await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "boom" }) });
+        return;
+      }
+      await route.fallback();
+    });
+    return () => failed;
+  }
+
+  test("text a failed last save left comes back, and is saved when the note has not moved on", async ({ page }) => {
+    await page.goto(`/vault/${a.id}`);
+    const failed = await failLastSave(page);
+    await typeWithLock(page, a.id, "kept words");
+    await explorerLink(page, b.id).click();
+    await expect.poll(failed).toBe(true);
+    await page.unrouteAll();
+    expect((await readNote(a.id)).markdown).not.toMatch(/kept words/);
+
+    await explorerLink(page, a.id).click();
+    await expectEditorText(page, /alpha body\nkept words$/);
+    await expect
+      .poll(async () => (await readNote(a.id)).markdown, { timeout: 15_000 })
+      .toBe(`# ${a.title}\n\n## Alpha theme\n\nalpha body\nkept words`);
+    await expect(page.getByTestId("edit-conflict-banner")).toHaveCount(0);
+  });
+
+  test("text a failed last save left comes back with the conflict banner when the note moved on", async ({ page }) => {
+    await page.goto(`/vault/${a.id}`);
+    const failed = await failLastSave(page);
+    await typeWithLock(page, a.id, "kept words");
+    await explorerLink(page, b.id).click();
+    await expect.poll(failed).toBe(true);
+    await page.unrouteAll();
+    // Someone else saves A meanwhile.
+    await serviceRest(`documents?id=eq.${a.id}`, {
+      method: "PATCH",
+      body: { markdown: `# ${a.title}\n\nalpha theirs\n` },
+    });
+
+    await explorerLink(page, a.id).click();
+    await expect(page.getByTestId("edit-conflict-banner")).toBeVisible();
+    // The text stays to be copied, and nothing overwrote theirs.
+    await expectEditorText(page, /kept words$/);
+    await page.waitForTimeout(1_500);
+    expect((await readNote(a.id)).markdown).toBe(`# ${a.title}\n\nalpha theirs\n`);
+  });
+
   test("the edit lock is taken on the first keystroke and released on leaving", async ({ page, context }) => {
     await page.goto(`/vault/${a.id}`);
     await editableEditor(page);
