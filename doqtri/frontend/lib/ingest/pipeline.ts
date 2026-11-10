@@ -133,7 +133,7 @@ export async function runIngest(params: {
       userId,
       workspaceId,
       title: deriveTitle(markdown, source.filename),
-      markdown: () => markdown,
+      markdown,
     });
     if ("error" in inserted) throw new IngestFailure("SAVE_FAILED", inserted.error);
     const { title } = inserted;

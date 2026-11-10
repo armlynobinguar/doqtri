@@ -21,18 +21,23 @@ describe("template ids", () => {
 });
 
 describe("templateBodyFromNote", () => {
-  it("drops the leading title and the blank lines after it", () => {
-    expect(templateBodyFromNote("# Launch plan\n\n## Goals\nShip it\n")).toBe("## Goals\nShip it\n");
-    expect(templateBodyFromNote("\n\n# Title\r\n\r\nBody")).toBe("Body\n");
+  it("drops a leading line that repeats the note's title, and the blank lines after it", () => {
+    expect(templateBodyFromNote("# Launch plan\n\n## Goals\nShip it\n", "Launch plan")).toBe("## Goals\nShip it\n");
+    expect(templateBodyFromNote("\n\n# Title\r\n\r\nBody", "title")).toBe("Body\n");
+    expect(templateBodyFromNote("# [[Launch  Plan]] #\nBody", "launch plan")).toBe("Body\n");
+  });
+
+  it("keeps a first heading of the note's own (D-121)", () => {
+    expect(templateBodyFromNote("# Goals\n\nShip it\n", "Launch plan")).toBe("# Goals\n\nShip it\n");
   });
 
   it("keeps notes that don't start with a title", () => {
-    expect(templateBodyFromNote("## Goals\nShip it")).toBe("## Goals\nShip it\n");
-    expect(templateBodyFromNote("Intro\n# Later heading")).toBe("Intro\n# Later heading\n");
+    expect(templateBodyFromNote("## Goals\nShip it", "Goals")).toBe("## Goals\nShip it\n");
+    expect(templateBodyFromNote("Intro\n# Later heading", "Later heading")).toBe("Intro\n# Later heading\n");
   });
 
   it("only treats `# ` as a title, not `##`", () => {
-    expect(templateBodyFromNote("## Section\ntext")).toBe("## Section\ntext\n");
+    expect(templateBodyFromNote("## Section\ntext", "Section")).toBe("## Section\ntext\n");
   });
 });
 

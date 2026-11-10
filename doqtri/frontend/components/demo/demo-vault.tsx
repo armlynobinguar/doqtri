@@ -9,6 +9,7 @@ import { FileTextIcon, LockIcon, NetworkIcon } from "lucide-react";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { DoqtriLoader } from "@/components/brand/doqtri-loader";
 import { MindmapStudio } from "@/components/vault/mindmap-studio";
+import { NOTE_TITLE_COLUMN, NOTE_TITLE_TEXT } from "@/components/vault/note-title-bar";
 import { graphFromMindmap } from "@/lib/mindmap-graph";
 import { mindmapFromHeadings } from "@/lib/mindmap-types";
 import type { DemoNote } from "@/lib/demo-vault";
@@ -130,6 +131,8 @@ export function DemoVault({ notes, active }: { notes: readonly DemoNote[]; activ
                 readOnly
                 placeholder=""
                 autoHeight
+                // The title above the text, as a vault note's title bar shows it (D-121).
+                header={() => <h1 className={cn(NOTE_TITLE_COLUMN, NOTE_TITLE_TEXT, "pt-0 pb-3")}>{active.title}</h1>}
                 // Wikilinks between demo notes open them, as in a real vault.
                 onOpenNote={(title) => {
                   const target = resolveLinkTitle(notes, title);

@@ -87,6 +87,16 @@ describe("POST /api/notes", () => {
     expect(insertWorkspaceDocument).not.toHaveBeenCalled();
   });
 
+  it("starts the text without a `# <title>` line, blank or from a template (D-121)", async () => {
+    workspaceForCreate.mockResolvedValue({ ok: true, workspaceId: PERSONAL });
+    await post({ title: "Plan" });
+    const blank = insertWorkspaceDocument.mock.calls[0][1].markdown as string;
+    expect(blank.startsWith("## Overview\n")).toBe(true);
+    expect(blank).not.toMatch(/^# /m);
+    await post({ title: "Plan", body: "## Goals\nShip it\n" });
+    expect(insertWorkspaceDocument.mock.calls[1][1].markdown).toBe("## Goals\nShip it\n");
+  });
+
   it("still trims the whitespace around a title", async () => {
     workspaceForCreate.mockResolvedValue({ ok: true, workspaceId: PERSONAL });
     expect((await post({ title: "  Plan \n" })).status).toBe(200);

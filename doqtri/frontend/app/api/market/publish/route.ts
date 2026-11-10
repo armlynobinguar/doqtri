@@ -75,15 +75,15 @@ export async function POST(request: Request) {
   // A template is listed in its creator's name and pays them, so only the
   // note's author may publish it, and only while still an editor of its
   // workspace (D-41): a teammate's note is not theirs to sell.
-  const found = await loadAuthoredDocument<{ markdown: string; source_template_id: string | null }>(admin, {
+  const found = await loadAuthoredDocument<{ title: string; markdown: string; source_template_id: string | null }>(admin, {
     userId: user.id,
     docId: noteId,
-    columns: "markdown, source_template_id",
+    columns: "title, markdown, source_template_id",
   });
   if (!found.ok) return fail("That note isn't in your vault.", 404);
   const note = found.doc;
 
-  const body = templateBodyFromNote(note.markdown ?? "");
+  const body = templateBodyFromNote(note.markdown ?? "", note.title ?? "");
   if (!body.trim()) return fail("This note is empty. Write something before publishing it.", 400);
   if (body.length > MAX_TEMPLATE_BODY) return fail("This note is too long to publish as a template.", 413);
 

@@ -235,7 +235,8 @@ export async function createNote(target: Target, session: Session, title: string
   const body = `Load test note.\n\n## Overview\n${title}\n`;
   const res = await api(target, session, "/api/notes", { title, body });
   if (res.status !== 200 || typeof res.json.id !== "string") throw new Error(`creating a note: ${res.status} ${String(res.json.error ?? "")}`);
-  return { id: res.json.id, markdown: `# ${title}\n\n${body}` };
+  // Stored as sent: the title is not part of the text (D-121).
+  return { id: res.json.id, markdown: body };
 }
 
 /** `register_document` for a new note, built by the bindings client as contract-client.ts does. */

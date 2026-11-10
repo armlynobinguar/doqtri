@@ -132,9 +132,8 @@ const CREATE_ATTEMPTS = 3;
  * made unique within that workspace. Titles are unique per workspace in the
  * database, so a teammate creating the same title at the same moment makes
  * the insert fail; the titles are then re-read and the next free one taken.
- *
- * `markdown` is given the final title, since a new note's body usually
- * starts with it.
+ * The title is not written into `markdown` (D-121), so a suffixed title
+ * changes nothing in the text.
  */
 export async function insertWorkspaceDocument(
   admin: SupabaseClient,
@@ -142,7 +141,7 @@ export async function insertWorkspaceDocument(
     userId: string;
     workspaceId: string;
     title: string;
-    markdown: (title: string) => string;
+    markdown: string;
     extra?: Record<string, unknown>;
   },
 ): Promise<{ id: string; title: string } | { error: string }> {
@@ -156,7 +155,7 @@ export async function insertWorkspaceDocument(
     const title = uniqueTitle(params.title, titles);
     const { data, error } = await admin
       .from("documents")
-      .insert({ ...extra, user_id: userId, workspace_id: workspaceId, title, markdown: markdown(title) })
+      .insert({ ...extra, user_id: userId, workspace_id: workspaceId, title, markdown })
       .select("id")
       .single();
     if (!error && data) return { id: data.id as string, title };

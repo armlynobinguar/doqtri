@@ -195,11 +195,11 @@ describe("insertWorkspaceDocument", () => {
       userId: "u",
       workspaceId: "ws-1",
       title: "Plan",
-      markdown: (title) => `# ${title}`,
+      markdown: "## Goals\n",
     });
     expect(result).toEqual({ id: "doc-2", title: "Plan 2" });
     expect(calls[0].filters).toEqual([["eq", "workspace_id", "ws-1"]]);
-    expect(calls[1].insert).toEqual({ user_id: "u", workspace_id: "ws-1", title: "Plan 2", markdown: "# Plan 2" });
+    expect(calls[1].insert).toEqual({ user_id: "u", workspace_id: "ws-1", title: "Plan 2", markdown: "## Goals\n" });
   });
 
   it("takes the next free title when a teammate took this one first", async () => {
@@ -215,7 +215,7 @@ describe("insertWorkspaceDocument", () => {
       userId: "u",
       workspaceId: "ws-1",
       title: "Plan",
-      markdown: (title) => `# ${title}`,
+      markdown: "## Goals\n",
       extra: { source_template_id: "tpl" },
     });
     expect(result).toEqual({ id: "doc-3", title: "Plan 2" });
@@ -230,7 +230,7 @@ describe("insertWorkspaceDocument", () => {
       ],
     });
     expect(
-      await insertWorkspaceDocument(client, { userId: "u", workspaceId: "ws-1", title: "Plan", markdown: () => "" }),
+      await insertWorkspaceDocument(client, { userId: "u", workspaceId: "ws-1", title: "Plan", markdown: "" }),
     ).toEqual({ error: "boom" });
   });
 });

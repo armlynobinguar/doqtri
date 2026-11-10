@@ -35,7 +35,6 @@ import { buildMindmap, type MindmapNode } from "@/lib/mindmap";
 import {
   TEMPLATE_CATEGORIES,
   TEMPLATES,
-  templateMarkdown,
   type NoteTemplate,
   type TemplateCategory,
 } from "@/lib/templates";
@@ -333,9 +332,8 @@ function StarterGallery({
     [category],
   );
   const selected = TEMPLATES.find((t) => t.id === selectedId) ?? TEMPLATES[0];
-  const markdown = templateMarkdown(selected);
-  // The body alone: the root is already the title, so this skips the `# Title`
-  // heading that would otherwise repeat it as the only child.
+  // The body is the whole note a copy starts with; its title is the row's (D-121).
+  const markdown = selected.body;
   const tree = useMemo(() => buildMindmap(selected.title, selected.body), [selected]);
   const nodeCount = useMemo(() => {
     const count = (n: MindmapNode): number => n.children.reduce((sum, c) => sum + count(c), 1);

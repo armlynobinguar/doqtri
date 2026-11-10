@@ -484,8 +484,3 @@ export const TEMPLATES: readonly NoteTemplate[] = [
     ),
   },
 ];
-
-/** The body a template contributes, with the title line the API would write. */
-export function templateMarkdown(template: NoteTemplate): string {
-  return `# ${template.title}\n\n${template.body}`;
-}

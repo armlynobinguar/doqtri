@@ -121,7 +121,8 @@ export async function POST(request: Request) {
     userId: user.id,
     workspaceId,
     title: row.title,
-    markdown: (title) => `# ${title}\n\n${row.body}`,
+    // The template's body as it is: the title is the row's alone (D-121).
+    markdown: row.body,
     extra: { source_template_id: templateId },
   });
   if ("error" in inserted) return fail(inserted.error, 500);
