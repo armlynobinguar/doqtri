@@ -110,6 +110,9 @@ export function createHeadingRenamer(init: {
   // The answers to this editor's own heading renames, told apart from any
   // other rename that goes through the editor (the explorer's).
   const own = new WeakSet<RenamedNote>();
+  // Bumped by every title change from elsewhere (DOQ-46): an own rename
+  // answered after one is superseded by it.
+  let outside = 0;
 
   let snapshot: HeadingRenamerSnapshot = { notice: null, overlay: null };
   const listeners = new Set<() => void>();
@@ -178,6 +181,7 @@ export function createHeadingRenamer(init: {
     if (refused(decision.title, current)) return;
 
     busy = true;
+    const outsideAt = outside;
     const backlinks = ctx.backlinks();
     ctx
       .rename(async (session) => {
@@ -189,6 +193,9 @@ export function createHeadingRenamer(init: {
         (renamed) => {
           // The text that named the new title is what the next edit is compared with.
           baseline = text;
+          // Renamed from the explorer meanwhile (DOQ-46): that title is the
+          // later word and shows already; this one is not shown over it.
+          if (outside !== outsideAt) return;
           latest = renamed.title;
           pending = renamed.title === pageTitle ? [] : [...pending, renamed.title];
           const previousTitle = renamed.previousTitle || current;
@@ -260,6 +267,7 @@ export function createHeadingRenamer(init: {
         pending = pending.slice(at + 1);
         if (pending.length === 0) latest = title;
       } else {
+        outside++;
         pending = [];
         latest = title;
       }
@@ -300,6 +308,7 @@ export function createHeadingRenamer(init: {
     noteRenamed(renamed: RenamedNote, text?: string) {
       if (text !== undefined) baseline = text;
       if (own.has(renamed)) return;
+      outside++;
       latest = renamed.title;
       pending = [];
       notice = null;

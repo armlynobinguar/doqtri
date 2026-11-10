@@ -582,6 +582,22 @@ describe("drafts in the vault (DOQ-44)", () => {
     expect(v.frames.at(-1)?.[0]).toBe("Alphasdffga");
   });
 
+  it("never covers an explorer rename still on its way with a title-line rename answered after it (DOQ-46)", async () => {
+    const v = await mount();
+    const { landed } = v.drafts();
+    const patch = deferred();
+    await act(async () => v.run({ kind: "rename", id: "a", title: "Roadmap", previousTitle: "Alpha" }, patch.action, () => {}));
+    await act(async () => landed({ id: "a", title: "Alph", previousTitle: "Alpha" }));
+    expect(v.frames.at(-1)?.[0]).toBe("Roadmap");
+    expect(v.frames.some((frame) => frame[0] === "Alph")).toBe(false);
+    await act(async () => patch.resolve());
+    expect(v.frames.at(-1)?.[0]).toBe("Roadmap");
+    // Once that one is answered and shown by the server's data, a later title-line rename shows as usual.
+    await v.serve({ notes: [{ ...notes[0], title: "Roadmap" }, notes[1]] });
+    await act(async () => landed({ id: "a", title: "Roadmaps", previousTitle: "Roadmap" }));
+    expect(v.frames.at(-1)?.[0]).toBe("Roadmaps");
+  });
+
   it("drops a settling draft after the next commit", async () => {
     const v = await mount();
     const { drafts, settle } = v.drafts();

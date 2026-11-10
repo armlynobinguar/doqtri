@@ -458,7 +458,12 @@ export function useNoteOverlayState({
         const rename = { kind: "rename" as const, ...change };
         const token = ++nextToken.current;
         const now = Date.now();
-        setRaw((prev) => confirmChange(applyChange(prev, rename, token), rename, token, now));
+        setRaw((prev) => {
+          // A rename from the explorer still on its way is the later word
+          // (DOQ-46): this one, answered after it was made, does not cover it.
+          if (prev.titles.get(change.id)?.confirmedAt === null) return prev;
+          return confirmChange(applyChange(prev, rename, token), rename, token, now);
+        });
         scheduler.answered();
         scheduler.want(true);
       },

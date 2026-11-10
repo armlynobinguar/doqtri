@@ -516,6 +516,34 @@ describe("createHeadingRenamer", () => {
       expect(t.renamer.title).toBe("No titlesdffg");
     });
 
+    it("an own rename answered after the explorer's was confirmed does not show over it", async () => {
+      // The review's order: the title line's rename to "Pla" in flight, then the
+      // explorer's rename to "Roadmap" confirmed, then the own answer.
+      const t = setup("Plan");
+      let answer!: () => void;
+      t.renameNote.mockImplementationOnce(
+        (_id, next) => new Promise((resolve) => (answer = () => resolve({ title: next, previousTitle: "Plan" }))),
+      );
+      t.editor.text = note("Pla");
+      t.renamer.check(t.ctx);
+      expect(t.renameNote).toHaveBeenCalledOnce();
+      t.renamer.setPageTitle("Roadmap");
+      expect(t.shown("Roadmap")).toBe("Roadmap");
+      answer();
+      await settle();
+      // No Roadmap → Pla → Roadmap: nothing pending, nothing landed over it.
+      expect(t.renamer.title).toBe("Roadmap");
+      expect(t.renamer.getSnapshot().overlay).toBeNull();
+      expect(t.shown("Roadmap")).toBe("Roadmap");
+      expect(t.landed).not.toHaveBeenCalled();
+      // Its text is compared from now on: the explorer's rewrite of it renames nothing.
+      t.renamer.noteRenamed({ title: "Roadmap", previousTitle: "Pla" }, note("Roadmap"));
+      t.editor.text = note("Roadmap");
+      t.renamer.check(t.ctx);
+      await settle();
+      expect(t.renameNote).toHaveBeenCalledOnce();
+    });
+
     it("tells its own renames apart from the explorer's", async () => {
       const t = setup("Old");
       const answers: RenamedNote[] = [];
