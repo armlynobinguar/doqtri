@@ -14,8 +14,12 @@ import {
 import { external, readOnlyGuard } from "@/components/vault/live-editor/read-only";
 import {
   enterFromTitle,
+  guarded,
   lineMoveKeys,
+  releaseTitleLine,
+  retitleLine,
   setNoteTitle,
+  titleLineHandle,
   titleLine,
   titleLineChange,
   titleLineDecorations,
@@ -416,6 +420,123 @@ describe("the title line guard (D-120)", () => {
       const state = make(`# Introduction${BODY}`).update({ effects: setNoteTitle.of("Roadmap") }).state;
       expect(pending(state)).toEqual([]);
       expect(blockWidgets(state)).toBe(1);
+    });
+
+    describe("settling with no renamed text coming (DOQ-46)", () => {
+      /** Whether line 1 is styled as the title. */
+      const styled = (state: EditorState) => {
+        let found = false;
+        titleLineDecorations(state).between(0, 0, (_from, _to, deco) => {
+          if ((deco.spec as { class?: string }).class === "cm-title-line") found = true;
+        });
+        return found;
+      };
+      /** `# Pla`: the title line with one character deleted, its rename not fired yet. */
+      const retyped = () => edit(make(`# Plan${BODY}`), { changes: { from: 5, to: 6 }, userEvent: "delete.backward" }).state;
+
+      it("without a release, the new title stays over the old line however long nothing lands", () => {
+        // What the drifted prod note showed: line 1 kept its old text under the new title.
+        let state = renamed();
+        for (let at = 9; at < 12; at++) state = state.update({ selection: EditorSelection.cursor(at) }).state;
+        expect(pending(state)).toEqual(["2-6:Roadmap"]);
+        expect(guarded(state)).toBe(true);
+      });
+
+      it("a release lets a line 1 that does not say the title go: not styled, not guarded, the title above it", () => {
+        const released = renamed().update({ effects: releaseTitleLine.of(null) }).state;
+        expect(guarded(released)).toBe(false);
+        expect(pending(released)).toEqual([]);
+        expect(blockWidgets(released)).toBe(1);
+        expect(styled(released)).toBe(false);
+        // Its `# ` is ordinary text now.
+        expect(edit(released, { changes: { from: 0, to: 2 }, userEvent: "delete" }).text).toBe(`Plan${BODY}`);
+      });
+
+      it("a release keeps a line 1 that says the title, which shows as it is", () => {
+        const landed = renamed().update({
+          changes: { from: 2, to: 6, insert: "Roadmap" },
+          annotations: [external.of(true), Transaction.addToHistory.of(false)],
+        }).state;
+        const released = landed.update({ effects: releaseTitleLine.of(null) }).state;
+        expect(guarded(released)).toBe(true);
+        expect(styled(released)).toBe(true);
+        expect(pending(released)).toEqual([]);
+        expect(blockWidgets(released)).toBe(0);
+      });
+
+      it("a release lets go of a title being retyped that the rename overtook", () => {
+        const state = retyped();
+        expect(guarded(state)).toBe(true);
+        const renamedAway = state.update({ effects: setNoteTitle.of("Roadmap") }).state;
+        expect(pending(renamedAway)).toEqual(["2-5:Roadmap"]);
+        const released = renamedAway.update({ effects: releaseTitleLine.of(null) }).state;
+        expect(guarded(released)).toBe(false);
+        expect(pending(released)).toEqual([]);
+        expect(blockWidgets(released)).toBe(1);
+      });
+
+      it("line 1 rewritten to the new title (retitleLine) is guarded and shows as it is", () => {
+        const renamedAway = retyped().update({ effects: setNoteTitle.of("Roadmap") }).state;
+        const spec = retitleLine(renamedAway, "Roadmap", "# Pla");
+        expect(spec).not.toBeNull();
+        const rewritten = renamedAway.update(spec!).state;
+        expect(rewritten.doc.toString()).toBe(`# Roadmap${BODY}`);
+        expect(guarded(rewritten)).toBe(true);
+        expect(styled(rewritten)).toBe(true);
+        expect(pending(rewritten)).toEqual([]);
+        expect(blockWidgets(rewritten)).toBe(0);
+      });
+
+      it("undoing the rewrite puts back what line 1 said, still guarded, and the edit before it after", () => {
+        // The review's case: `# Plan`, Backspace, renamed to Roadmap from the sidebar, rewritten, Ctrl+Z.
+        // Rewritten as text loaded from outside, the undo mapped the Backspace across it: `# Roadmapn`.
+        let state = retyped().update({ effects: setNoteTitle.of("Roadmap") }).state;
+        state = state.update(retitleLine(state, "Roadmap", "# Pla")!).state;
+        const dispatch = (tr: Transaction) => {
+          state = tr.state;
+        };
+        expect(undo({ state, dispatch })).toBe(true);
+        expect(state.doc.toString()).toBe(`# Pla${BODY}`);
+        expect(guarded(state)).toBe(true);
+        expect(undo({ state, dispatch })).toBe(true);
+        expect(state.doc.toString()).toBe(`# Plan${BODY}`);
+        expect(redo({ state, dispatch })).toBe(true);
+        expect(redo({ state, dispatch })).toBe(true);
+        expect(state.doc.toString()).toBe(`# Roadmap${BODY}`);
+      });
+
+      it("a handle closed with its view holds nothing and rewrites nothing (an editor remounted meanwhile)", () => {
+        let state = retyped().update({ effects: setNoteTitle.of("Roadmap") }).state;
+        const view = {
+          get state() {
+            return state;
+          },
+          dispatch: (spec: TransactionSpec) => {
+            state = state.update(spec).state;
+          },
+        };
+        const open = titleLineHandle(view);
+        expect(open.held()).toBe(true);
+        expect(open.line()).toBe("# Pla");
+        const closed = titleLineHandle(view);
+        closed.close();
+        expect(closed.held()).toBe(false);
+        expect(closed.retitle("Roadmap", "# Pla")).toBeNull();
+        closed.release();
+        expect(state.doc.toString()).toBe(`# Pla${BODY}`);
+        expect(guarded(state)).toBe(true);
+        // The open one still works.
+        expect(open.retitle("Roadmap", "# Pla")).toBe(`# Roadmap${BODY}`);
+      });
+
+      it("rewrites nothing when line 1 says something else by now, is not held, or the copy is read-only", () => {
+        const renamedAway = retyped().update({ effects: setNoteTitle.of("Roadmap") }).state;
+        expect(retitleLine(renamedAway, "Roadmap", "# Plan")).toBeNull();
+        expect(retitleLine(renamedAway.update({ effects: releaseTitleLine.of(null) }).state, "Roadmap", "# Pla")).toBeNull();
+        expect(retitleLine(make(`# Introduction${BODY}`), "Roadmap", "# Introduction")).toBeNull();
+        expect(retitleLine(make(`# Plan${BODY}`, { readOnly: true }), "Roadmap", "# Plan")).toBeNull();
+        expect(retitleLine(renamedAway, "Two\nlines", "# Pla")).toBeNull();
+      });
     });
   });
 

@@ -1,6 +1,12 @@
 import { decideHeadingRename, movesBaseline, type HeadingNotice } from "@/lib/heading-rename";
 import { normalizeConcept } from "@/lib/mindmap-types";
-import { RenameError, renameNote as defaultRenameNote, type RenamedNote } from "@/lib/rename-note";
+import { NoResponseError } from "@/lib/no-response";
+import {
+  RenameError,
+  renameNote as defaultRenameNote,
+  SaveBeforeRenameError,
+  type RenamedNote,
+} from "@/lib/rename-note";
 
 /**
  * When an edit of a note's title heading renames the note (DOQ-36), and what
@@ -109,6 +115,13 @@ export function createHeadingRenamer(init: {
   // The answers to this editor's own heading renames, told apart from any
   // other rename that goes through the editor (the explorer's).
   const own = new WeakSet<RenamedNote>();
+  // Bumped by every title change from elsewhere (DOQ-46): an own rename
+  // answered after one is superseded by it.
+  let outside = 0;
+  // An explorer rename shows before it is answered (DOQ-32). Refused, the
+  // page's title goes back to `title`, and the comparison to `baseline`, as
+  // it was before (DOQ-46).
+  let revert: { title: string; baseline: string } | null = null;
 
   let snapshot: HeadingRenamerSnapshot = { notice: null, overlay: null };
   const listeners = new Set<() => void>();
@@ -177,6 +190,7 @@ export function createHeadingRenamer(init: {
     if (refused(decision.title, current)) return;
 
     busy = true;
+    const outsideAt = outside;
     const backlinks = ctx.backlinks();
     ctx
       .rename(async (session) => {
@@ -188,6 +202,10 @@ export function createHeadingRenamer(init: {
         (renamed) => {
           // The text that named the new title is what the next edit is compared with.
           baseline = text;
+          // Renamed from the explorer meanwhile (DOQ-46): that title is the
+          // later word and shows already; this one is not shown over it.
+          if (outside !== outsideAt) return;
+          revert = null;
           latest = renamed.title;
           pending = renamed.title === pageTitle ? [] : [...pending, renamed.title];
           const previousTitle = renamed.previousTitle || current;
@@ -197,9 +215,19 @@ export function createHeadingRenamer(init: {
         },
         (error: unknown) => {
           if (!(error instanceof RenameError)) {
-            // A save that failed first, which the save status already shows.
-            // The baseline stays, so the next settled edit tries again.
+            // No answer, or a failure nothing else explains, is said (DOQ-46).
+            // A save that failed first already says so itself (its toast, the
+            // save status or the edit-lock banner). The baseline stays, so
+            // the next settled edit tries again.
             if (!left) ctx.draft(null);
+            if (error instanceof SaveBeforeRenameError) return;
+            init.onError?.(
+              error instanceof NoResponseError
+                ? `Could not reach doqtri, so the note may not have been renamed to “${decision.title}”.`
+                : error instanceof Error && error.message
+                  ? error.message
+                  : `Could not rename the note to “${decision.title}”.`,
+            );
             return;
           }
           if (error.code === "TITLE_TAKEN") {
@@ -247,14 +275,29 @@ export function createHeadingRenamer(init: {
       if (title === pageTitle) return;
       pageTitle = title;
       const at = pending.lastIndexOf(title);
+      let restored = false;
       if (at >= 0) {
         pending = pending.slice(at + 1);
         if (pending.length === 0) latest = title;
       } else {
+        outside++;
+        if (revert && title === revert.title) {
+          baseline = revert.baseline;
+          revert = null;
+          restored = true;
+        } else {
+          revert = { title: latest, baseline };
+        }
         pending = [];
         latest = title;
       }
       emit();
+      // A draft worked out against the old title is not one now: a rename
+      // from the explorer replaces it with its own title (DOQ-46).
+      typed();
+      // The explorer's rename was refused: an edit of the title line made
+      // meanwhile renames from the title it went back to.
+      if (restored) check();
     },
 
     typed,
@@ -262,6 +305,7 @@ export function createHeadingRenamer(init: {
     /** Text loaded from outside (a reload, a regenerate): the next edit is compared with it. */
     reset(text: string) {
       baseline = text;
+      revert = null;
       if (notice?.kind === "clash") setNotice(null);
       typed();
     },
@@ -288,10 +332,20 @@ export function createHeadingRenamer(init: {
     noteRenamed(renamed: RenamedNote, text?: string) {
       if (text !== undefined) baseline = text;
       if (own.has(renamed)) return;
+      outside++;
+      revert = null;
       latest = renamed.title;
       pending = [];
       notice = null;
       emit();
+      // No draft is worked out here: the editor may not show the renamed text
+      // yet. The explorer's rename already replaced the draft when its title
+      // showed (setPageTitle, and the overlay's run).
+    },
+
+    /** Whether `renamed` answers one of this editor's own heading renames, not one from elsewhere. */
+    isOwn(renamed: RenamedNote): boolean {
+      return own.has(renamed);
     },
 
     dismiss() {

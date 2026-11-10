@@ -34,3 +34,4 @@ export function adoptRename(params: {
       : (rewriteTitleHeading(current, renamed.previousTitle, renamed.title) ?? current);
   return { version, saved: markdown, text };
 }
+

@@ -420,11 +420,15 @@ export function useNoteOverlayState({
     scheduler.setEnv({ refresh, isNavigating, isOffline, probe: isServerReachable });
   }, [scheduler, refresh, isNavigating]);
 
+  const [drafts] = useState(createDraftStore);
   const nextToken = useRef(0);
   const run = useCallback<RunChange>(
     (change, action, onError) => {
       const token = ++nextToken.current;
       setRaw((prev) => applyChange(prev, change, token));
+      // A rename from the explorer replaces any title being typed into the
+      // note's title line: the new title shows at once, not that draft (DOQ-46).
+      if (change.kind === "rename") drafts.set(change.id, null);
       void (async () => {
         try {
           await action();
@@ -442,10 +446,9 @@ export function useNoteOverlayState({
         scheduler.want(true);
       })();
     },
-    [scheduler],
+    [drafts, scheduler],
   );
 
-  const [drafts] = useState(createDraftStore);
   // Bumped by `settle`, so the prune below runs after the commit that shows what landed.
   const [settles, setSettles] = useState(0);
   const titleDrafts = useMemo<NoteTitleDrafts>(
@@ -455,7 +458,12 @@ export function useNoteOverlayState({
         const rename = { kind: "rename" as const, ...change };
         const token = ++nextToken.current;
         const now = Date.now();
-        setRaw((prev) => confirmChange(applyChange(prev, rename, token), rename, token, now));
+        setRaw((prev) => {
+          // A rename from the explorer still on its way is the later word
+          // (DOQ-46): this one, answered after it was made, does not cover it.
+          if (prev.titles.get(change.id)?.confirmedAt === null) return prev;
+          return confirmChange(applyChange(prev, rename, token), rename, token, now);
+        });
         scheduler.answered();
         scheduler.want(true);
       },

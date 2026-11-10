@@ -1,13 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHeadingRenamer, type HeadingCheck } from "@/lib/heading-renamer";
-import { RenameError, type RenamedNote } from "@/lib/rename-note";
+import { NoResponseError } from "@/lib/no-response";
+import { RenameError, SaveBeforeRenameError, type RenamedNote } from "@/lib/rename-note";
 
 const BODY = "\n\n## Scope\n\nBody.";
 const note = (heading: string) => `# ${heading}${BODY}`;
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 /** A renamer for a note titled `title`, its server, and a workspace driving it. */
-function setup(title: string, options: { canRename?: () => boolean; backlinks?: number } = {}) {
+function setup(
+  title: string,
+  options: { canRename?: () => boolean; backlinks?: number; onError?: (message: string) => void } = {},
+) {
   const server = { title, refuse: null as RenameError | null };
   const renameNote = vi.fn(async (...[, next]: [id: string, title: string, session?: string, expected?: string]) => {
     if (server.refuse) throw server.refuse;
@@ -15,7 +19,13 @@ function setup(title: string, options: { canRename?: () => boolean; backlinks?: 
     server.title = next;
     return { title: next, previousTitle } satisfies RenamedNote;
   });
-  const renamer = createHeadingRenamer({ docId: "n1", title, markdown: note(title), renameNote });
+  const renamer = createHeadingRenamer({
+    docId: "n1",
+    title,
+    markdown: note(title),
+    renameNote,
+    onError: options.onError,
+  });
   const editor = { text: note(title) };
   const refresh = vi.fn();
   // The label the draft store shows, as the workspace would keep it.
@@ -450,6 +460,191 @@ describe("createHeadingRenamer", () => {
       expect(t.drafts.settled).toBe(true);
       // Nothing drafted after the note closed: no flash back to "New" or "Old".
       expect(t.draft).toHaveBeenCalledTimes(draftedBefore);
+    });
+  });
+
+  describe("a rename from the explorer that overtakes an edit of the title line (DOQ-46)", () => {
+    it("drops the edit's rename and its draft: the explorer's title is the one shown", async () => {
+      // The prod drift: one character deleted from the title line, then renamed from
+      // the explorer before that edit settled. The explorer's rename is the later word.
+      const t = setup("No title");
+      t.editor.text = note("No titl");
+      t.renamer.typed(t.ctx);
+      expect(t.drafts.shown).toBe("No titl");
+
+      // The explorer's rename shows at once (DOQ-32's overlay)...
+      t.renamer.setPageTitle("No titlesdffga");
+      // ...and the draft worked out against the old title goes with it.
+      expect(t.drafts.shown).toBeNull();
+
+      // The edit settles: compared with the explorer's title, it renames nothing.
+      t.renamer.check(t.ctx);
+      await settle();
+      expect(t.renameNote).not.toHaveBeenCalled();
+      expect(t.drafts.shown).toBeNull();
+      expect(t.renamer.title).toBe("No titlesdffga");
+    });
+
+    it("drafts nothing from the explorer's answer, read before the editor shows the renamed text", () => {
+      // The workspace hands over the rewritten text before the editor shows it:
+      // compared then, the old heading would read as a rename back to the old title.
+      const t = setup("Untitled");
+      t.renamer.typed(t.ctx);
+      t.renamer.setPageTitle("Renamed");
+      const drafted = t.draft.mock.calls.length;
+      t.renamer.noteRenamed({ title: "Renamed", previousTitle: "Untitled" }, note("Renamed"));
+      expect(t.draft).toHaveBeenCalledTimes(drafted);
+      expect(t.drafts.shown).toBeNull();
+      t.editor.text = note("Renamed");
+      t.renamer.typed();
+      expect(t.drafts.shown).toBeNull();
+    });
+
+    it("once line 1 is rewritten to the explorer's title, editing it renames from that title", async () => {
+      const t = setup("No title");
+      t.editor.text = note("No titl");
+      t.renamer.setPageTitle("No titlesdffga");
+      t.renamer.check(t.ctx);
+      await settle();
+      // The workspace rewrites line 1 (rename-adopt.ts titleLineAfterRename) and resets the comparison.
+      t.editor.text = note("No titlesdffga");
+      t.renamer.reset(t.editor.text);
+      t.editor.text = note("No titlesdffg");
+      t.renamer.check(t.ctx);
+      await settle();
+      expect(t.renameNote).toHaveBeenCalledExactlyOnceWith("n1", "No titlesdffg", "session-1", "No titlesdffga");
+      expect(t.renamer.title).toBe("No titlesdffg");
+    });
+
+    it("an own rename answered after the explorer's was confirmed does not show over it", async () => {
+      // The review's order: the title line's rename to "Pla" in flight, then the
+      // explorer's rename to "Roadmap" confirmed, then the own answer.
+      const t = setup("Plan");
+      let answer!: () => void;
+      t.renameNote.mockImplementationOnce(
+        (_id, next) => new Promise((resolve) => (answer = () => resolve({ title: next, previousTitle: "Plan" }))),
+      );
+      t.editor.text = note("Pla");
+      t.renamer.check(t.ctx);
+      expect(t.renameNote).toHaveBeenCalledOnce();
+      t.renamer.setPageTitle("Roadmap");
+      expect(t.shown("Roadmap")).toBe("Roadmap");
+      answer();
+      await settle();
+      // No Roadmap → Pla → Roadmap: nothing pending, nothing landed over it.
+      expect(t.renamer.title).toBe("Roadmap");
+      expect(t.renamer.getSnapshot().overlay).toBeNull();
+      expect(t.shown("Roadmap")).toBe("Roadmap");
+      expect(t.landed).not.toHaveBeenCalled();
+      // Its text is compared from now on: the explorer's rewrite of it renames nothing.
+      t.renamer.noteRenamed({ title: "Roadmap", previousTitle: "Pla" }, note("Roadmap"));
+      t.editor.text = note("Roadmap");
+      t.renamer.check(t.ctx);
+      await settle();
+      expect(t.renameNote).toHaveBeenCalledOnce();
+    });
+
+    it("an edit of the title line overtaken by a refused explorer rename renames from the title it went back to", async () => {
+      const t = setup("Plan");
+      t.editor.text = note("Pla");
+      // The explorer's rename shows, and the edit settles against it: no rename.
+      t.renamer.setPageTitle("Roadmap");
+      t.renamer.check(t.ctx);
+      await settle();
+      expect(t.renameNote).not.toHaveBeenCalled();
+      // Refused: the page's title goes back, and the edit renames after all.
+      t.renamer.setPageTitle("Plan");
+      await settle();
+      expect(t.renameNote).toHaveBeenCalledExactlyOnceWith("n1", "Pla", "session-1", "Plan");
+      expect(t.renamer.title).toBe("Pla");
+    });
+
+    it("but a confirmed explorer rename followed by another back to the old title is not a refusal", async () => {
+      const t = setup("Plan");
+      t.editor.text = note("Pla");
+      t.renamer.setPageTitle("Roadmap");
+      t.renamer.noteRenamed({ title: "Roadmap", previousTitle: "Plan" }, note("Roadmap"));
+      t.editor.text = note("Roadmap");
+      t.renamer.setPageTitle("Plan");
+      await settle();
+      expect(t.renameNote).not.toHaveBeenCalled();
+    });
+
+    it("tells its own renames apart from the explorer's", async () => {
+      const t = setup("Old");
+      const answers: RenamedNote[] = [];
+      const ctx: HeadingCheck = {
+        ...t.ctx,
+        rename: async (request) => {
+          const result = await request("session-1");
+          answers.push(result);
+          return result;
+        },
+      };
+      t.editor.text = note("New");
+      t.renamer.check(ctx);
+      await settle();
+      expect(answers).toHaveLength(1);
+      expect(t.renamer.isOwn(answers[0])).toBe(true);
+      expect(t.renamer.isOwn({ title: "Other", previousTitle: "New" })).toBe(false);
+    });
+  });
+
+  describe("failures that are not refusals say so (DOQ-46)", () => {
+    it("not a save that failed before the rename, which says so itself, nor a lost lock", async () => {
+      const onError = vi.fn();
+      const t = setup("Old", { onError });
+      const failing = (message: string): HeadingCheck => ({
+        ...t.ctx,
+        rename: async () => {
+          throw new SaveBeforeRenameError(message);
+        },
+      });
+      t.editor.text = note("New");
+      t.renamer.typed(t.ctx);
+      t.renamer.check(failing("Your edits could not be saved, so the note was not renamed. Could not save (500)"));
+      await settle();
+      t.renamer.check(failing("Your edits could not be saved, so the note was not renamed. Ana is editing this note"));
+      await settle();
+      expect(onError).not.toHaveBeenCalled();
+      expect(t.drafts.shown).toBeNull();
+      expect(t.renamer.title).toBe("Old");
+      // The baseline stayed: the next settled edit tries again.
+      t.renamer.check(t.ctx);
+      await settle();
+      expect(t.renameNote).toHaveBeenCalledExactlyOnceWith("n1", "New", "session-1", "Old");
+    });
+
+    it("a failure nothing else explains", async () => {
+      const onError = vi.fn();
+      const t = setup("Old", { onError });
+      t.renameNote.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      t.editor.text = note("New");
+      t.renamer.check(t.ctx);
+      await settle();
+      expect(onError).toHaveBeenCalledExactlyOnceWith("Failed to fetch");
+    });
+
+    it("no answer from the server", async () => {
+      const onError = vi.fn();
+      const t = setup("Old", { onError });
+      t.renameNote.mockRejectedValueOnce(new NoResponseError());
+      t.editor.text = note("New");
+      t.renamer.check(t.ctx);
+      await settle();
+      expect(onError).toHaveBeenCalledExactlyOnceWith(
+        "Could not reach doqtri, so the note may not have been renamed to “New”.",
+      );
+    });
+
+    it("but not a lock refusal, which the edit-lock banner already explains", async () => {
+      const onError = vi.fn();
+      const t = setup("Old", { onError });
+      t.server.refuse = new RenameError("Someone is editing this note", 423, "LOCKED");
+      t.editor.text = note("New");
+      t.renamer.check(t.ctx);
+      await settle();
+      expect(onError).not.toHaveBeenCalled();
     });
   });
 });

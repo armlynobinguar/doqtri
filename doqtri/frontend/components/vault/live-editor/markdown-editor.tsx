@@ -20,7 +20,13 @@ import { editorKeymap, findAndReplace, searchKeymap, shortcutKeys } from "@/comp
 import { FormatToolbar, type EditorMode } from "@/components/vault/live-editor/format-toolbar";
 import { headingNotice, headingNoticeDismiss, setHeadingNotice } from "@/components/vault/live-editor/heading-notice";
 import { headingNoticeText, type HeadingNotice } from "@/lib/heading-rename";
-import { setNoteTitle, titleLine as titleLineGuard, titleLineChange } from "@/components/vault/live-editor/title-line";
+import {
+  setNoteTitle,
+  titleLine as titleLineGuard,
+  titleLineChange,
+  titleLineHandle,
+  type TitleLineHandle,
+} from "@/components/vault/live-editor/title-line";
 import {
   createTitleLineWriter,
   type TitleLineWrite,
@@ -200,6 +206,7 @@ export default function MarkdownEditor({
   title,
   onTitleLine,
   titleLineWrite,
+  titleLineHandleRef,
 }: {
   value: string;
   onChange: (markdown: string) => void;
@@ -240,6 +247,11 @@ export default function MarkdownEditor({
    * of whether it may (title-line-writer.ts).
    */
   titleLineWrite?: TitleLineWrite;
+  /**
+   * Filled in while the editor is mounted: its title line's guard, for the
+   * workspace once a rename from the explorer settles (DOQ-46).
+   */
+  titleLineHandleRef?: { current: TitleLineHandle | null };
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -440,6 +452,16 @@ export default function MarkdownEditor({
   useEffect(() => {
     if (view && title !== undefined) view.dispatch({ effects: setNoteTitle.of(title) });
   }, [view, title]);
+
+  useEffect(() => {
+    if (!view || !titleLineHandleRef) return;
+    const handle = titleLineHandle(view);
+    titleLineHandleRef.current = handle;
+    return () => {
+      handle.close();
+      if (titleLineHandleRef.current === handle) titleLineHandleRef.current = null;
+    };
+  }, [view, titleLineHandleRef]);
 
   // Full screen ends on Esc — unless Esc is closing something first: the
   // find panel, the link list, or a menu or popover (focused outside this

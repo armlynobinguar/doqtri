@@ -46,3 +46,4 @@ describe("adoptRename (DOQ-35)", () => {
     ).toBeNull();
   });
 });
+

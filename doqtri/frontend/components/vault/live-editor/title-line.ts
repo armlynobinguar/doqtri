@@ -13,7 +13,9 @@ import {
 } from "@codemirror/state";
 import { Decoration, EditorView, keymap, WidgetType, type DecorationSet } from "@codemirror/view";
 import { completionStatus } from "@codemirror/autocomplete";
+import { isolateHistory } from "@codemirror/commands";
 import { hasTitleLine } from "@/lib/title-line";
+import { hasControlCharacters } from "@/lib/title";
 import { isTitleHeading } from "@/lib/title-heading";
 import { external } from "@/components/vault/live-editor/read-only";
 
@@ -74,6 +76,13 @@ export const titleLineChange = Annotation.define<boolean>();
 /** Tells the editor the note's title, for the title line shown above a note that has none yet. */
 export const setNoteTitle = StateEffect.define<string>();
 
+/**
+ * A rename from outside settled and no renamed text is coming (DOQ-46): a
+ * line 1 that does not say the title is no longer the title line, so the
+ * guard lets it go and the title shows above it (TitlePreview).
+ */
+export const releaseTitleLine = StateEffect.define<null>();
+
 const titleField = StateField.define<string>({
   create: () => "",
   update(title, tr) {
@@ -99,6 +108,11 @@ function hasPrefix(doc: Text): boolean {
  * renamed text lands, and shows the new one meanwhile (see StaleTitle).
  * Without this, line 1 would stop being the title line for a moment, and the
  * new title would show above it as a second line.
+ *
+ * That lasts only while the renamed text is on its way. When the rename
+ * settles without it (releaseTitleLine: the server left line 1 alone and the
+ * workspace may not rewrite it, DOQ-46), a line 1 that does not say the
+ * title stops being the title line.
  */
 type Guard = { held: boolean; stale: boolean };
 
@@ -106,9 +120,17 @@ const guardField = StateField.define<Guard>({
   create: (state) => ({ held: isTitleHeading(state.doc.line(1).text, state.field(titleField)), stale: false }),
   update(guard, tr) {
     let title: string | null = null;
-    for (const effect of tr.effects) if (effect.is(setNoteTitle)) title = effect.value;
+    let release = false;
+    for (const effect of tr.effects) {
+      if (effect.is(setNoteTitle)) title = effect.value;
+      if (effect.is(releaseTitleLine)) release = true;
+    }
     const loaded = tr.annotation(external) || tr.annotation(titleLineChange);
     const line = tr.newDoc.line(1).text;
+    if (release && !loaded) {
+      const held = guard.held && isTitleHeading(line, title ?? tr.state.field(titleField));
+      return { held, stale: false };
+    }
     if (title !== null && !loaded && !tr.docChanged && guard.held && hasPrefix(tr.newDoc)) {
       return { held: true, stale: !isTitleHeading(line, title) };
     }
@@ -125,6 +147,71 @@ const guardField = StateField.define<Guard>({
 /** Whether the guard holds for `state`: line 1 is the note's title line, being edited or not. */
 export function guarded(state: EditorState): boolean {
   return state.field(guardField, false)?.held ?? false;
+}
+
+/**
+ * The open editor's title line, for the workspace once a rename from
+ * outside has settled (DOQ-46): whether the guard holds line 1, and letting
+ * it go when no renamed text is coming (releaseTitleLine).
+ */
+export type TitleLineHandle = {
+  held(): boolean;
+  /** Line 1's text as the editor shows it now. */
+  line(): string;
+  /** Rewrites line 1 to `# <title>` when it still says `expected` (retitleLine); the text after, or null. */
+  retitle(title: string, expected: string): string | null;
+  release(): void;
+};
+
+/**
+ * The handle for `view` (DOQ-46), until `close()`: the editor closes it when
+ * its view goes (a remount, say, when the layout changes). A closed handle
+ * holds nothing and changes nothing, so a settle still waiting on its safety
+ * reads cannot rewrite a view no longer on screen: a destroyed EditorView
+ * still takes a transaction, but nothing hears it.
+ */
+export function titleLineHandle(view: {
+  readonly state: EditorState;
+  dispatch(spec: TransactionSpec): void;
+}): TitleLineHandle & { close(): void } {
+  let open = true;
+  return {
+    held: () => open && guarded(view.state),
+    line: () => (open ? view.state.doc.line(1).text : ""),
+    retitle(title, expected) {
+      const spec = open ? retitleLine(view.state, title, expected) : null;
+      if (!spec) return null;
+      view.dispatch(spec);
+      return view.state.doc.toString();
+    },
+    release() {
+      if (open) view.dispatch({ effects: releaseTitleLine.of(null) });
+    },
+    close() {
+      open = false;
+    },
+  };
+}
+
+/**
+ * Line 1 rewritten to `# <title>` after a rename from outside that left it
+ * saying something else (DOQ-46), or null when the editor cannot take it:
+ * read-only, line 1 not held as the title line, or no longer saying
+ * `expected` (typed on since). An edit of this editor like any other,
+ * reported and saved, and its own step in undo history: undoing it puts back
+ * exactly what line 1 said, and the guard keeps holding it. Not checked by
+ * the guard (titleLineChange), which reads line 1 afresh from the rule.
+ */
+export function retitleLine(state: EditorState, title: string, expected: string): TransactionSpec | null {
+  const name = title.trim();
+  if (state.readOnly || !guarded(state) || !name || hasControlCharacters(name)) return null;
+  const line = state.doc.line(1);
+  const insert = `# ${name}`;
+  if (line.text !== expected || line.text === insert) return null;
+  return {
+    changes: { from: 0, to: line.to, insert },
+    annotations: [titleLineChange.of(true), isolateHistory.of("full")],
+  };
 }
 
 /** One change of a transaction, in the coordinates of the text before it, with its inserted lines. */
@@ -492,7 +579,7 @@ export function titleLineDecorations(state: EditorState): DecorationSet {
 const decorations = StateField.define<DecorationSet>({
   create: titleLineDecorations,
   update(value, tr) {
-    const titleChanged = tr.effects.some((effect) => effect.is(setNoteTitle));
+    const titleChanged = tr.effects.some((effect) => effect.is(setNoteTitle) || effect.is(releaseTitleLine));
     if (!tr.docChanged && !titleChanged) return value;
     return titleLineDecorations(tr.state);
   },

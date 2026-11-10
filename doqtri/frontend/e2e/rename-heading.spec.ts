@@ -152,6 +152,108 @@ test.describe("rename keeps the title heading in step (DOQ-35)", () => {
     expect(conflicts).toEqual([]);
   });
 
+  test("a rename confirmed before an edit of the title line settled still ends with line 1 saying the new title (DOQ-46)", async ({
+    page,
+  }) => {
+    const title = uniqueTitle("Retyped Title");
+    const body = "\n\n## Scope\n";
+    const id = await seedNote(title, `# ${title}${body}`);
+    notes.push(id);
+    await page.goto(`/vault/${id}`);
+    await editableEditor(page);
+
+    // The rename's answer and the saves after it: the end state must come from
+    // the editor's own rewrite, saved, not from the server's.
+    const answers: Record<string, unknown>[] = [];
+    const saved: string[] = [];
+    let patched = false;
+    page.on("response", async (res) => {
+      if (new URL(res.url()).pathname !== `/api/notes/${id}`) return;
+      const method = res.request().method();
+      // Noted at once: reading the body takes a while, and a save may answer meanwhile.
+      if (method === "PUT" && patched) saved.push(String(res.request().postDataJSON()?.markdown));
+      if (method === "PATCH") {
+        patched = true;
+        answers.push((await res.json()) as Record<string, unknown>);
+      }
+    });
+
+    // The title line's own rename names the title it renames from. Should it
+    // fire before the sidebar's (the edit settles in 700 ms), it gets no answer
+    // and renames nothing, so the rename under test is the sidebar's however
+    // long these steps take. The sidebar's is held, so what shows while it is
+    // on its way can be checked.
+    let titleLineRenames = 0;
+    let answer!: () => void;
+    const answered = new Promise<void>((resolve) => (answer = resolve));
+    await page.route(`**/api/notes/${id}`, async (route) => {
+      const request = route.request();
+      if (request.method() === "PATCH") {
+        const body = request.postDataJSON() as { expectedTitle?: unknown } | null;
+        if (body?.expectedTitle !== undefined) {
+          titleLineRenames++;
+          await route.abort();
+          return;
+        }
+        await answered;
+      }
+      await route.continue();
+    });
+
+    // One character deleted from the title line, and straight into the dialog.
+    await setEditorSelection(page, `# ${title}`.length);
+    await page.keyboard.press("Backspace");
+    const typed = title.slice(0, -1);
+    await page.getByRole("button", { name: `Rename ${title}`, exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    const field = dialog.getByLabel("Note title");
+    await expect(field).toBeVisible();
+    // The field starts from the title the row shows, the one being typed: unless
+    // that edit's rename already fired and failed, which takes its draft away.
+    const prefill = await field.inputValue();
+    if (titleLineRenames === 0) expect(prefill).toBe(typed);
+    else expect([typed, title]).toContain(prefill);
+
+    const renamed = `${typed} Renamed`;
+    await field.fill(renamed);
+    await dialog.getByRole("button", { name: "Rename", exact: true }).click();
+    await expect(dialog).toBeHidden();
+
+    // At once, before any answer: the new title in the row, the tab and line 1, and neither older one.
+    for (const old of [title, typed]) {
+      await expect(page.getByRole("link", { name: old, exact: true })).toHaveCount(0);
+      await expect(page.getByRole("tab", { name: old, exact: true })).toHaveCount(0);
+    }
+    await expect(page.getByRole("link", { name: renamed, exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("tab", { name: renamed, exact: true })).toBeVisible();
+    await expect(page.getByTestId("title-line-pending")).toHaveText(renamed);
+
+    // The server finds line 1 saying neither title and renames the title alone;
+    // the editor rewrites its title line, and saves it.
+    answer();
+    const expected = `# ${renamed}${body}`;
+    await expectEditorText(page, expected, 20_000);
+    await expect.poll(async () => readNote(id), { timeout: 15_000 }).toEqual({ title: renamed, markdown: expected });
+    // The events reach the test a little after the server has the text.
+    await expect.poll(() => saved).toContain(expected);
+    expect(answers).toHaveLength(1);
+    expect(answers[0]).toMatchObject({ title: renamed, previousTitle: title });
+    expect(answers[0]).not.toHaveProperty("markdown");
+    await expect(page.getByTestId("title-line-pending")).toHaveCount(0);
+    await expect(page.getByTestId("title-line-preview")).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: renamed, exact: true })).toBeVisible();
+
+    // Reopened, it is one title line; editing it renames the note again.
+    await page.unroute(`**/api/notes/${id}`);
+    await page.reload();
+    await editableEditor(page);
+    await expect(page.getByTestId("title-line-preview")).toHaveCount(0);
+    await setEditorSelection(page, `# ${renamed}`.length);
+    await page.keyboard.press("Backspace");
+    const again = renamed.slice(0, -1);
+    await expect.poll(async () => readNote(id), { timeout: 15_000 }).toEqual({ title: again, markdown: `# ${again}${body}` });
+  });
+
   test("a stored concept map reads as stale after a heading-changing rename", async ({ page }) => {
     const title = uniqueTitle("Mapped");
     const id = await seedNote(

@@ -46,6 +46,7 @@ export function useHeadingRename({
     typed: renamer.typed,
     reset: renamer.reset,
     noteRenamed: renamer.noteRenamed,
+    isOwn: renamer.isOwn,
     dismiss: renamer.dismiss,
   };
 }

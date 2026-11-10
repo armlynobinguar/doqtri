@@ -144,7 +144,9 @@ function VaultShellInner({
   // notes in one group instead of guessing which are on-chain.
   const [anchored, setAnchored] = useState<ReadonlySet<string> | null>(null);
   const [pendingDelete, setPendingDelete] = useState<NoteSummary | null>(null);
-  // `draft` is the title typed last time, when a refused rename is retried.
+  // `draft` is what the field starts with instead of the title: the title
+  // typed last time, when a refused rename is retried, or the one being typed
+  // into the note's title line, which its row already shows (DOQ-44, DOQ-46).
   const [pendingRename, setPendingRename] = useState<{ note: NoteSummary; draft?: string } | null>(null);
 
   // Renames, deletes and dismissals show at once and hold until the server's
@@ -442,7 +444,7 @@ function VaultShellInner({
       onDeleteNote={setPendingDelete}
       onRenameNote={(note) => {
         setDrawerOpen(false);
-        setPendingRename({ note });
+        setPendingRename({ note, draft: titleDrafts.drafts.get(note.id) });
       }}
     />
   );
