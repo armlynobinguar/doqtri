@@ -24,14 +24,19 @@ import { createNoteSaver } from "@/lib/note-saver";
 import { useDocLock } from "@/hooks/use-doc-lock";
 import { EditLockBanner } from "@/components/vault/edit-lock-banner";
 import { EDITING_ELSEWHERE, editingMessage } from "@/lib/doc-lock";
-import { useNoteTitle, useOverlaidNotes } from "@/components/vault/note-overlay";
+import {
+  useNoteDrafts,
+  useNoteTitle,
+  useNoteTitleWithoutDraft,
+  useOverlaidNotes,
+} from "@/components/vault/note-overlay";
 import { useMindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
 import type { Doc } from "@/lib/types";
 import type { RenamedNote } from "@/lib/rename-note";
 import { adoptRename } from "@/lib/rename-adopt";
 import { useRegisterOpenNote } from "@/components/vault/open-note";
 import type { EditorStats } from "@/lib/text-stats";
-import { useHeadingRename } from "@/components/vault/use-heading-rename";
+import { useHeadingRename, type HeadingCheck } from "@/components/vault/use-heading-rename";
 import { buildBacklinks } from "@/lib/wikilinks";
 import { checkTitleLineSafety } from "@/components/vault/title-line-safety-reads";
 
@@ -79,7 +84,9 @@ export function DocWorkspace({
   const docs = useOverlaidNotes(serverDocs);
   // Through the vault's pending renames (DOQ-32), so a rename from the
   // explorer shows here in the same frame; the heading renamer builds on it.
-  const pageTitle = useNoteTitle(active.id, active.title);
+  // Not through a title still being typed (DOQ-44): that is the renamer's own.
+  const pageTitle = useNoteTitleWithoutDraft(active.id, active.title);
+  const drafts = useNoteDrafts();
   // One concept map for the note, shown by the right panel and the live
   // mindmap beside the editor alike: a rebuild from either shows in both.
   const concept = useMindmapRebuild({
@@ -101,6 +108,8 @@ export function DocWorkspace({
     conflictRef.current = conflict;
   }, [conflict]);
   const markdownRef = useRef(markdown);
+  // Shows the title line's draft (DOQ-44); set once the heading check is made, below.
+  const typedHeadingRef = useRef<() => void>(() => {});
 
   const { lock, controller } = useDocLock(active.id);
 
@@ -191,6 +200,8 @@ export function DocWorkspace({
       // same editor update (DOQ-36).
       markdownRef.current = next;
       setMarkdown(next);
+      // The title being typed shows everywhere in this same render (DOQ-44).
+      typedHeadingRef.current();
       void controller.noteEdit().then((held) => {
         // Lost the race for a free lock: drop the keystroke for their text.
         const { phase } = controller.getState();
@@ -354,28 +365,46 @@ export function DocWorkspace({
    * mindmap read the title from the layout's server data, as after a rename
    * from the explorer.
    */
-  const checkHeadingNow = headingRename.check;
-  const checkHeading = useCallback(() => {
-    checkHeadingNow({
+  const { check: checkHeadingNow, typed: typedHeadingNow } = headingRename;
+  const headingContext = useMemo<HeadingCheck>(
+    () => ({
       text: () => markdownRef.current,
       canRename: () => !readOnlyRef.current,
       rename: renameHere,
-      backlinks: () => buildBacklinks(docs, active.id).length,
-      refresh: () => router.refresh(),
-    });
-  }, [checkHeadingNow, renameHere, docs, active.id, router]);
-  const checkHeadingRef = useRef(checkHeading);
+      backlinks: (current) =>
+        buildBacklinks(
+          docs.map((doc) => (doc.id === active.id ? { ...doc, title: current } : doc)),
+          active.id,
+        ).length,
+      refresh: drafts.refresh,
+      // What the title line is being typed as, everywhere the title shows,
+      // before any request (DOQ-44).
+      draft: (next, previousTitle) =>
+        next === null ? drafts.drop(active.id) : drafts.show(active.id, next, previousTitle),
+      confirm: (next, previousTitle) => drafts.confirm(active.id, next, previousTitle),
+    }),
+    [renameHere, docs, active.id, drafts],
+  );
+  const checkHeadingRef = useRef(() => checkHeadingNow(headingContext));
   useEffect(() => {
-    checkHeadingRef.current = checkHeading;
-  }, [checkHeading]);
+    checkHeadingRef.current = () => checkHeadingNow(headingContext);
+    typedHeadingRef.current = () => typedHeadingNow(headingContext);
+  }, [checkHeadingNow, typedHeadingNow, headingContext]);
   // Also once the copy can be edited again, for an edit that settled while
-  // the lock's status was reloading.
+  // the lock's status was reloading; and a copy turned read-only shows no
+  // draft.
   useEffect(() => {
     checkHeadingRef.current();
   }, [settled, readOnly]);
+  useEffect(() => {
+    typedHeadingRef.current();
+  }, [readOnly]);
   // Called from inside an editor update: run once it has finished.
   const leaveTitleLine = useCallback(() => queueMicrotask(() => checkHeadingRef.current()), []);
-  const title = headingRename.title;
+  // The confirmed title: the page's, or one a rename here set. The title line
+  // and the ship panel go by it; everything else shows a title being typed.
+  const confirmedTitle = headingRename.title;
+  const title = useNoteTitle(active.id, confirmedTitle);
 
   /**
    * The title line an older note gets after its first edit (D-120,
@@ -386,8 +415,8 @@ export function DocWorkspace({
    */
   const checkTitleLine = useCallback(() => checkTitleLineSafety(active.id), [active.id]);
   const titleLineWrite = useMemo(
-    () => ({ title: title === active.title ? active.title : null, check: checkTitleLine }),
-    [title, active.title, checkTitleLine],
+    () => ({ title: confirmedTitle === active.title ? active.title : null, check: checkTitleLine }),
+    [confirmedTitle, active.title, checkTitleLine],
   );
 
   /**
@@ -534,6 +563,7 @@ export function DocWorkspace({
           <EditorPane
             compact
             title={title}
+            lineTitle={confirmedTitle}
             concept={concept}
             markdown={markdown}
             onChange={handleChange}
@@ -581,6 +611,7 @@ export function DocWorkspace({
         <ResizablePanel id="editor" minSize={320} className="flex min-h-0 flex-col">
           <EditorPane
             title={title}
+            lineTitle={confirmedTitle}
             concept={concept}
             markdown={markdown}
             onChange={handleChange}

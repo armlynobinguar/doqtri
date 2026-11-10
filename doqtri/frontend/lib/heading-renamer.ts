@@ -39,6 +39,15 @@ import { RenameError, renameNote as defaultRenameNote, type RenamedNote } from "
  * was renamed elsewhere meanwhile the server refuses with TITLE_CHANGED: no
  * rename and no clash, the heading as it is now becomes the baseline, and the
  * page is refreshed to show the title the note has.
+ *
+ * Drafts (DOQ-44). As the title line is typed, `typed()` shows the title it
+ * would rename to everywhere the note's title shows (the vault's
+ * NoteOverlay), before any request: the same decision check() makes, so only
+ * a heading that would rename shows, never an emptied or invalid one, nor one
+ * a clash refused. When the rename lands the draft is confirmed, and holds
+ * until the page's data shows it; when it is refused, or fails, the draft
+ * goes and the confirmed title shows again. When the editor goes (`leave()`),
+ * a rename in flight still settles its draft; with none, the draft goes.
  */
 
 /** What a check needs from the workspace at the moment it runs. */
@@ -53,10 +62,17 @@ export type HeadingCheck = {
    * edit session.
    */
   rename(request: (session: string) => Promise<RenamedNote>): Promise<RenamedNote>;
-  /** How many other notes link to this one under its current title. */
-  backlinks(): number;
-  /** Fetches the page's data again, so everything showing the title catches up. */
+  /** How many other notes link to this one under `title`, its current one. */
+  backlinks(title: string): number;
+  /** Asks for the page's data again, so everything showing the title catches up. */
   refresh(): void;
+  /**
+   * Shows `title`, being typed, as the note's title everywhere, renamed from
+   * `previousTitle`; with null, the confirmed title again (NoteDrafts).
+   */
+  draft(title: string | null, previousTitle: string): void;
+  /** The rename to `title` from `previousTitle` landed; also asks for the page's data again. */
+  confirm(title: string, previousTitle: string): void;
 };
 
 export type HeadingRenamerSnapshot = {
@@ -87,6 +103,8 @@ export function createHeadingRenamer(init: {
   let again = false;
   let last: HeadingCheck | null = null;
   let notice: HeadingNotice | null = null;
+  // The editor is gone: nothing more is checked or drafted.
+  let left = false;
   // The answers to this editor's own heading renames, told apart from any
   // other rename that goes through the editor (the explorer's).
   const own = new WeakSet<RenamedNote>();
@@ -104,17 +122,45 @@ export function createHeadingRenamer(init: {
     emit();
   }
 
+  /** Whether a clash already refused renaming `current` to `title`. */
+  function refused(title: string, current: string) {
+    return (
+      notice?.kind === "clash" &&
+      normalizeConcept(notice.heading) === normalizeConcept(title) &&
+      normalizeConcept(notice.title) === normalizeConcept(current)
+    );
+  }
+
+  /** The title the text renames to now, or null (see Drafts above). */
+  function draftTitle(ctx: HeadingCheck): string | null {
+    if (!ctx.canRename()) return null;
+    const decision = decideHeadingRename(baseline, ctx.text(), latest);
+    if (!decision.rename || refused(decision.title, latest)) return null;
+    return decision.title;
+  }
+
+  /** The text changed: shows the title it would rename to, at once. */
+  function typed(context?: HeadingCheck) {
+    if (context) last = context;
+    const ctx = last;
+    if (!ctx || left) return;
+    ctx.draft(draftTitle(ctx), latest);
+  }
+
   function check(context?: HeadingCheck) {
     if (context) last = context;
     const ctx = last;
-    if (!ctx) return;
+    if (!ctx || left) return;
     if (busy) {
       again = true;
       return;
     }
     // Nothing fires from a copy that cannot be edited. Its text changes only
     // from outside, and those loads reset the baseline themselves.
-    if (!ctx.canRename()) return;
+    if (!ctx.canRename()) {
+      ctx.draft(null, latest);
+      return;
+    }
 
     const text = ctx.text();
     const current = latest;
@@ -127,16 +173,10 @@ export function createHeadingRenamer(init: {
     }
 
     // Refused already; asking again would only be refused again.
-    if (
-      notice?.kind === "clash" &&
-      normalizeConcept(notice.heading) === normalizeConcept(decision.title) &&
-      normalizeConcept(notice.title) === normalizeConcept(current)
-    ) {
-      return;
-    }
+    if (refused(decision.title, current)) return;
 
     busy = true;
-    const backlinks = ctx.backlinks();
+    const backlinks = ctx.backlinks(current);
     ctx
       .rename(async (session) => {
         const renamed = await renameNote(init.docId, decision.title, session, current);
@@ -152,9 +192,12 @@ export function createHeadingRenamer(init: {
           const previousTitle = renamed.previousTitle || current;
           setNotice(backlinks > 0 ? { kind: "renamed", title: renamed.title, previousTitle, backlinks } : null);
           emit();
-          ctx.refresh();
+          // Gone meanwhile: nothing will draft again, so the draft is this rename's.
+          if (left) ctx.draft(renamed.title, current);
+          ctx.confirm(renamed.title, current);
         },
         (error: unknown) => {
+          ctx.draft(null, latest);
           if (!(error instanceof RenameError)) {
             // A save that failed first, which the save status already shows.
             // The baseline stays, so the next settled edit tries again.
@@ -177,7 +220,7 @@ export function createHeadingRenamer(init: {
       )
       .finally(() => {
         busy = false;
-        if (again) {
+        if (again && !left) {
           again = false;
           check();
         }
@@ -210,10 +253,25 @@ export function createHeadingRenamer(init: {
       emit();
     },
 
+    typed,
+
     /** Text loaded from outside (a reload, a regenerate): the next edit is compared with it. */
     reset(text: string) {
       baseline = text;
       if (notice?.kind === "clash") setNotice(null);
+      typed();
+    },
+
+    /** The editor is gone (the note closed): a rename in flight settles its draft; else the draft goes. */
+    leave() {
+      if (left) return;
+      left = true;
+      if (!busy) last?.draft(null, latest);
+    },
+
+    /** The editor is back (React remounting it in development): checks and drafts run again. */
+    resume() {
+      left = false;
     },
 
     /**

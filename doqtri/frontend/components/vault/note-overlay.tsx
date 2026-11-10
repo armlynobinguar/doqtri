@@ -37,10 +37,17 @@ import { isServerReachable, NoResponseError } from "@/lib/no-response";
 /** One pending change. `confirmedAt` is set when the server accepted it. */
 type Pending = { token: number; confirmedAt: number | null };
 
+/**
+ * A title on its way. `draft` marks one typed into the note's title line
+ * (DOQ-44): shown at once, before its rename is asked for; see
+ * useNoteOverlayState's `drafts`.
+ */
+export type TitleEntry = Pending & { title: string; previousTitle: string; draft?: boolean };
+
 /** What the client has asked the server for and not yet seen back. */
 export type NoteOverlay = {
   /** Note id → the title it is being renamed to, and the one it had. */
-  titles: ReadonlyMap<string, Pending & { title: string; previousTitle: string }>;
+  titles: ReadonlyMap<string, TitleEntry>;
   /** Notes being deleted. */
   deleted: ReadonlyMap<string, Pending>;
   /** Failed imports (ingest ids) being dismissed. */
@@ -198,6 +205,32 @@ export type RunChange = (
   onError: (error: unknown) => void,
 ) => void;
 
+/**
+ * The title being typed into a note's title line (DOQ-44), shown everywhere
+ * the note's title shows before its rename is asked for. One per note; see
+ * useNoteOverlayState.
+ */
+export type NoteDrafts = {
+  /** Shows `title` for the note now, renamed from `previousTitle`; replaces its earlier draft. */
+  show(id: string, title: string, previousTitle: string): void;
+  /**
+   * The rename to `title` (from `previousTitle`) landed: a draft of it holds
+   * until server data shows it, as an accepted rename does, and a refresh is
+   * asked for. A draft typed on since stays a draft, now renamed from `title`.
+   */
+  confirm(id: string, title: string, previousTitle: string): void;
+  /** No draft now: the note shows its confirmed title (the last that landed, if any). */
+  drop(id: string): void;
+  /** Asks for a refresh through the scheduler, never router.refresh() directly. */
+  refresh(): void;
+};
+
+/** A draft's entry with this title, unconfirmed; `entry` itself when it says that already. */
+export function draftEntry(entry: TitleEntry | undefined, token: number, title: string, previousTitle: string): TitleEntry {
+  if (entry?.token === token && entry.title === title) return entry;
+  return { token, confirmedAt: null, title, previousTitle, draft: true };
+}
+
 /** How long a refresh may take before another may start regardless. */
 export const REFRESH_WAIT_MS = 10_000;
 
@@ -339,7 +372,7 @@ export function useNoteOverlayState({
   navigating: boolean;
   isNavigating: () => boolean;
   refresh: () => void;
-}): { overlay: NoteOverlay; run: RunChange } {
+}): { overlay: NoteOverlay; run: RunChange; drafts: NoteDrafts } {
   const [raw, setRaw] = useState(EMPTY_OVERLAY);
   const overlay = useMemo(() => settleOverlay(raw, notes, failedImports), [raw, notes, failedImports]);
   // Settled entries leave the state on this same render, so one cannot
@@ -379,6 +412,60 @@ export function useNoteOverlayState({
     },
     [scheduler],
   );
+
+  // Each note's draft (DOQ-44): the token of its entry, and the rename of it
+  // that landed last, which a draft typed over it falls back to when dropped
+  // (settleOverlay clears that one once server data shows it, or has moved
+  // on). A note's entry put there by another change (the explorer's rename)
+  // is left alone.
+  const draftState = useRef(new Map<string, { token: number; landed: TitleEntry | null }>());
+  const drafts = useMemo<NoteDrafts>(() => {
+    const setTitle = (id: string, token: number, next: (entry: TitleEntry | undefined) => TitleEntry | null) =>
+      setRaw((prev) => {
+        const entry = prev.titles.get(id);
+        if (entry && entry.token !== token) return prev;
+        const value = next(entry);
+        if (value === (entry ?? null)) return prev;
+        const titles = new Map(prev.titles);
+        if (value) titles.set(id, value);
+        else titles.delete(id);
+        return { ...prev, titles };
+      });
+    return {
+      show(id, title, previousTitle) {
+        let state = draftState.current.get(id);
+        if (!state) {
+          state = { token: ++nextToken.current, landed: null };
+          draftState.current.set(id, state);
+        }
+        const { token } = state;
+        setTitle(id, token, (entry) => draftEntry(entry, token, title, previousTitle));
+      },
+      confirm(id, title, previousTitle) {
+        const state = draftState.current.get(id);
+        if (state) {
+          const landed: TitleEntry = { token: state.token, confirmedAt: Date.now(), title, previousTitle, draft: true };
+          state.landed = landed;
+          setTitle(id, state.token, (entry) => {
+            if (!entry || entry.title === title) return landed;
+            return { ...entry, previousTitle: title };
+          });
+        }
+        scheduler.answered();
+        scheduler.want(true);
+      },
+      drop(id) {
+        const state = draftState.current.get(id);
+        if (!state) return;
+        const { landed } = state;
+        // Only a draft still being typed goes; one that landed settles on its own.
+        setTitle(id, state.token, (entry) => (entry && entry.confirmedAt === null ? landed : (entry ?? null)));
+      },
+      refresh() {
+        scheduler.want(true);
+      },
+    };
+  }, [scheduler]);
 
   // New server data: the refresh out, if any, is done.
   useEffect(() => {
@@ -423,12 +510,22 @@ export function useNoteOverlayState({
     return () => clearTimeout(timer);
   }, [overlay]);
 
-  return { overlay, run };
+  return { overlay, run, drafts };
 }
 
 const NoteOverlayContext = createContext<NoteOverlay>(EMPTY_OVERLAY);
 
 export const NoteOverlayProvider = NoteOverlayContext.Provider;
+
+const NO_DRAFTS: NoteDrafts = { show() {}, confirm() {}, drop() {}, refresh() {} };
+const NoteDraftsContext = createContext<NoteDrafts>(NO_DRAFTS);
+
+export const NoteDraftsProvider = NoteDraftsContext.Provider;
+
+/** Shows the title typed into a note's title line (DOQ-44); does nothing outside the vault shell. */
+export function useNoteDrafts(): NoteDrafts {
+  return useContext(NoteDraftsContext);
+}
 
 /** The vault's pending changes; empty outside the vault shell. */
 export function useNoteOverlay(): NoteOverlay {
@@ -441,7 +538,13 @@ export function useOverlaidNotes<T extends { id: string; title: string }>(items:
   return useMemo(() => overlayNotes(items, overlay), [items, overlay]);
 }
 
-/** A note's title, or the one it is being renamed to. */
+/** A note's title, or the one it is being renamed to, or typed as. */
 export function useNoteTitle(id: string, title: string): string {
   return useNoteOverlay().titles.get(id)?.title ?? title;
+}
+
+/** As useNoteTitle, but not a title still being typed (DOQ-44): the one the heading renamer compares with. */
+export function useNoteTitleWithoutDraft(id: string, title: string): string {
+  const entry = useNoteOverlay().titles.get(id);
+  return entry && !entry.draft ? entry.title : title;
 }

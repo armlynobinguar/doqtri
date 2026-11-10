@@ -14,6 +14,7 @@ import {
   overlayNotes,
   settleOverlay,
   useNoteOverlayState,
+  type NoteDrafts,
   type NoteOverlay,
   type RunChange,
 } from "@/components/vault/note-overlay";
@@ -252,12 +253,14 @@ function mountVault() {
   const routes: string[] = [];
   const refresh = vi.fn();
   let run!: RunChange;
+  let drafts!: NoteDrafts;
   let setRoute!: (route: string) => void;
 
   function Vault(server: Server) {
     const state = useNoteOverlayState({ ...server, isNavigating: () => server.navigating, refresh });
     const [route, set] = useState("note-a");
     run = state.run;
+    drafts = state.drafts;
     setRoute = set;
     overlays.push(state.overlay);
     routes.push(route);
@@ -274,6 +277,7 @@ function mountVault() {
     refresh,
     root,
     run: (...args: Parameters<RunChange>) => run(...args),
+    drafts: () => drafts,
     navigate: (route: string) => startTransition(() => setRoute(route)),
     /** New server data (or pathname), as a refresh or navigation would bring. */
     serve: async (next: Partial<Server>) => {
@@ -439,6 +443,86 @@ describe("useNoteOverlayState", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("drafts (DOQ-44)", () => {
+  let vault: ReturnType<typeof mountVault> | null = null;
+
+  afterEach(async () => {
+    await act(async () => vault?.root.unmount());
+    vault = null;
+  });
+
+  async function mount() {
+    vault = mountVault();
+    await vault.serve({});
+    return vault;
+  }
+
+  it("shows a draft at once, pending, and replaces it as typing goes on, with no refresh", async () => {
+    const v = await mount();
+    await act(async () => v.drafts().show("a", "Ap", "Alpha"));
+    expect(v.frames.at(-1)).toEqual(["Ap", "Beta"]);
+    await act(async () => v.drafts().show("a", "Apex", "Alpha"));
+    expect(v.frames.at(-1)).toEqual(["Apex", "Beta"]);
+    expect(isNotePending(v.overlays.at(-1)!, "a")).toBe(true);
+    expect(v.overlays.at(-1)?.titles.get("a")).toMatchObject({ draft: true, confirmedAt: null });
+    expect(v.refresh).not.toHaveBeenCalled();
+  });
+
+  it("drops a draft back to the confirmed title", async () => {
+    const v = await mount();
+    await act(async () => v.drafts().show("a", "Apex", "Alpha"));
+    await act(async () => v.drafts().drop("a"));
+    expect(v.frames.at(-1)).toEqual(["Alpha", "Beta"]);
+    expect(v.overlays.at(-1)).toEqual(EMPTY_OVERLAY);
+    expect(v.refresh).not.toHaveBeenCalled();
+  });
+
+  it("holds a confirmed draft until server data shows it, with no frame of the old title", async () => {
+    const v = await mount();
+    await act(async () => v.drafts().show("a", "Apex", "Alpha"));
+    await act(async () => v.drafts().confirm("a", "Apex", "Alpha"));
+    expect(v.refresh).toHaveBeenCalledTimes(1);
+    expect(v.overlays.at(-1)?.titles.get("a")?.confirmedAt).toEqual(expect.any(Number));
+    // A later edit elsewhere in the note drops nothing that landed.
+    await act(async () => v.drafts().drop("a"));
+    await v.serve({ notes: [...notes] });
+    expect(v.frames.at(-1)).toEqual(["Apex", "Beta"]);
+    await v.serve({ notes: [{ ...notes[0], title: "Apex" }, notes[1]] });
+    expect(v.overlays.at(-1)).toEqual(EMPTY_OVERLAY);
+    const shownAt = v.frames.findIndex((frame) => frame[0] === "Apex");
+    expect(v.frames.slice(shownAt).every((frame) => frame[0] === "Apex")).toBe(true);
+  });
+
+  it("keeps a draft typed on while its rename was out, and falls back to the landed title when dropped", async () => {
+    const v = await mount();
+    await act(async () => v.drafts().show("a", "Apex", "Alpha"));
+    await act(async () => v.drafts().show("a", "Apexes", "Alpha"));
+    await act(async () => v.drafts().confirm("a", "Apex", "Alpha"));
+    // Still the one being typed, now renamed from the one that landed.
+    expect(v.overlays.at(-1)?.titles.get("a")).toMatchObject({ title: "Apexes", previousTitle: "Apex", confirmedAt: null });
+    // A refresh from before the rename: still the draft.
+    await v.serve({ notes: [...notes] });
+    expect(v.frames.at(-1)).toEqual(["Apexes", "Beta"]);
+
+    // Emptied before the server shows the rename: the landed title, not the old one.
+    await act(async () => v.drafts().drop("a"));
+    expect(v.frames.at(-1)).toEqual(["Apex", "Beta"]);
+    await v.serve({ notes: [{ ...notes[0], title: "Apex" }, notes[1]] });
+    expect(v.overlays.at(-1)).toEqual(EMPTY_OVERLAY);
+    expect(v.frames.slice(1).every((frame) => frame[0] !== "Alpha")).toBe(true);
+  });
+
+  it("leaves another change's entry for the note alone", async () => {
+    const v = await mount();
+    const patch = deferred();
+    await act(async () => v.run(rename("a", "Apex"), patch.action, () => {}));
+    await act(async () => v.drafts().show("a", "Typed", "Alpha"));
+    await act(async () => v.drafts().drop("a"));
+    expect(v.frames.at(-1)).toEqual(["Apex", "Beta"]);
+    await act(async () => patch.resolve());
   });
 });
 

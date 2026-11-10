@@ -18,6 +18,12 @@ function setup(title: string, options: { canRename?: () => boolean; backlinks?: 
   const renamer = createHeadingRenamer({ docId: "n1", title, markdown: note(title), renameNote });
   const editor = { text: note(title) };
   const refresh = vi.fn();
+  // The draft the overlay shows, as the workspace's NoteDrafts would keep it.
+  const drafts = { shown: null as string | null };
+  const draft = vi.fn((title: string | null) => {
+    drafts.shown = title;
+  });
+  const confirm = vi.fn();
   const ctx: HeadingCheck = {
     text: () => editor.text,
     canRename: options.canRename ?? (() => true),
@@ -28,10 +34,12 @@ function setup(title: string, options: { canRename?: () => boolean; backlinks?: 
     },
     backlinks: () => options.backlinks ?? 0,
     refresh,
+    draft,
+    confirm,
   };
   /** What the workspace shows as the title, for a page title of `page`. */
   const shown = (page: string) => renamer.getSnapshot().overlay ?? page;
-  return { renamer, renameNote, server, editor, ctx, refresh, shown };
+  return { renamer, renameNote, server, editor, ctx, refresh, shown, drafts, draft, confirm };
 }
 
 describe("createHeadingRenamer", () => {
@@ -42,7 +50,9 @@ describe("createHeadingRenamer", () => {
     await settle();
     expect(t.renameNote).toHaveBeenCalledExactlyOnceWith("n1", "New", "session-1", "Old");
     expect(t.renamer.title).toBe("New");
-    expect(t.refresh).toHaveBeenCalledOnce();
+    // Confirmed through the overlay, which asks for the refresh (DOQ-44).
+    expect(t.confirm).toHaveBeenCalledExactlyOnceWith("New", "Old");
+    expect(t.refresh).not.toHaveBeenCalled();
     // The settle after the caret left asks for nothing more.
     t.renamer.check(t.ctx);
     await settle();
@@ -269,6 +279,8 @@ describe("createHeadingRenamer", () => {
         rename: (request) => request("s"),
         backlinks: () => 0,
         refresh: () => {},
+        draft: () => {},
+        confirm: () => {},
       };
       renameNote.mockRejectedValueOnce(new RenameError("Someone else is editing", 423, "LOCKED"));
       renamer.check(ctx);
@@ -294,5 +306,108 @@ describe("createHeadingRenamer", () => {
     });
     t.renamer.dismiss();
     expect(t.renamer.getSnapshot().notice).toBeNull();
+  });
+
+  describe("drafts (DOQ-44)", () => {
+    it("shows the heading as it is typed, before any rename, and confirms it when the rename lands", async () => {
+      const t = setup("Old");
+      t.editor.text = note("Ne");
+      t.renamer.typed(t.ctx);
+      expect(t.drafts.shown).toBe("Ne");
+      expect(t.draft).toHaveBeenLastCalledWith("Ne", "Old");
+      t.editor.text = note("New");
+      t.renamer.typed();
+      expect(t.drafts.shown).toBe("New");
+      expect(t.renameNote).not.toHaveBeenCalled();
+
+      t.renamer.check(t.ctx);
+      await settle();
+      expect(t.renameNote).toHaveBeenCalledOnce();
+      expect(t.confirm).toHaveBeenCalledExactlyOnceWith("New", "Old");
+      expect(t.drafts.shown).toBe("New");
+    });
+
+    it("shows no draft for an emptied, invalid or unchanged heading, nor from a copy that cannot rename", () => {
+      let editable = true;
+      const t = setup("Old", { canRename: () => editable });
+      t.editor.text = note("New");
+      t.renamer.typed(t.ctx);
+      expect(t.drafts.shown).toBe("New");
+      t.editor.text = "# \n\n## Scope\n\nBody.";
+      t.renamer.typed();
+      expect(t.drafts.shown).toBeNull();
+      t.editor.text = note("x".repeat(1000));
+      t.renamer.typed();
+      expect(t.drafts.shown).toBeNull();
+      t.editor.text = note("old");
+      t.renamer.typed();
+      expect(t.drafts.shown).toBeNull();
+      editable = false;
+      t.editor.text = note("New");
+      t.renamer.typed();
+      expect(t.drafts.shown).toBeNull();
+    });
+
+    it("drops the draft when the rename is refused, and shows none for the clashing heading again", async () => {
+      const t = setup("Old");
+      t.server.refuse = new RenameError("Taken", 409, "TITLE_TAKEN");
+      t.editor.text = note("Taken");
+      t.renamer.typed(t.ctx);
+      expect(t.drafts.shown).toBe("Taken");
+      t.renamer.check();
+      await settle();
+      expect(t.drafts.shown).toBeNull();
+      expect(t.confirm).not.toHaveBeenCalled();
+      expect(t.renamer.getSnapshot().notice?.kind).toBe("clash");
+      // An edit in the body while the clash stands brings no draft back.
+      t.editor.text = `${note("Taken")} More.`;
+      t.renamer.typed();
+      expect(t.drafts.shown).toBeNull();
+    });
+
+    it.each([
+      ["TITLE_CHANGED", new RenameError("Renamed elsewhere", 409, "TITLE_CHANGED", "Theirs")],
+      ["a lock refusal", new RenameError("Someone else is editing", 423, "LOCKED")],
+      ["an invalid title", new RenameError("Invalid title", 400, "INVALID_TITLE")],
+    ])("drops the draft on %s", async (_, refusal) => {
+      const t = setup("Old");
+      t.server.refuse = refusal;
+      t.editor.text = note("New");
+      t.renamer.typed(t.ctx);
+      t.renamer.check();
+      await settle();
+      expect(t.drafts.shown).toBeNull();
+      expect(t.confirm).not.toHaveBeenCalled();
+    });
+
+    it("drops the draft when the note closes before the edit settles", () => {
+      const t = setup("Old");
+      t.renamer.check(t.ctx);
+      t.editor.text = note("New");
+      t.renamer.typed();
+      t.renamer.leave();
+      expect(t.drafts.shown).toBeNull();
+      t.renamer.check();
+      t.renamer.typed();
+      expect(t.renameNote).not.toHaveBeenCalled();
+      expect(t.drafts.shown).toBeNull();
+    });
+
+    it("lets a rename in flight when the note closes settle its draft, as the title it landed", async () => {
+      const t = setup("Old");
+      t.editor.text = note("New");
+      t.renamer.typed(t.ctx);
+      t.renamer.check();
+      // Typed on, then closed, while the rename was out.
+      t.editor.text = note("Newer");
+      t.renamer.typed();
+      t.renamer.check();
+      t.renamer.leave();
+      expect(t.drafts.shown).toBe("Newer");
+      await settle();
+      expect(t.renameNote).toHaveBeenCalledOnce();
+      expect(t.drafts.shown).toBe("New");
+      expect(t.confirm).toHaveBeenCalledExactlyOnceWith("New", "Old");
+    });
   });
 });

@@ -8,6 +8,7 @@ function rightPanel(page: Page) {
 
 test.describe("editing the title heading renames the note (DOQ-36)", () => {
   headingRenameCases({
+    titleOf: (id) => `[data-note-link="${id}"]`,
     async expectTitle(page, title, old) {
       // The explorer and the editor's tab.
       await expect(page.getByRole("link", { name: title, exact: true }).first()).toBeVisible({ timeout: 15_000 });
