@@ -33,8 +33,7 @@ import { useRegisterOpenNote } from "@/components/vault/open-note";
 import type { EditorStats } from "@/lib/text-stats";
 import { useHeadingRename } from "@/components/vault/use-heading-rename";
 import { buildBacklinks } from "@/lib/wikilinks";
-import { hasTitleLine } from "@/lib/title-line";
-import { useTitleLineSafety } from "@/components/vault/use-title-line-safety";
+import { checkTitleLineSafety } from "@/components/vault/title-line-safety-reads";
 
 const SETTLE_MS = 700;
 
@@ -379,16 +378,16 @@ export function DocWorkspace({
   const title = headingRename.title;
 
   /**
-   * The title line an older note gets with its first edit (D-120,
-   * lib/title-line.ts). Never for a note whose headings are linked or
-   * anchored, nor before that is known (lib/title-line-safety.ts), which is
-   * only asked for a note that lacks the line. Written with the title the
-   * page's data confirms: not while a rename is still on its way.
+   * The title line an older note gets after its first edit (D-120,
+   * lib/title-line.ts), written by the editor (title-line-writer.ts). It asks
+   * afresh, at that moment, whether the note's headings are linked or
+   * anchored (lib/title-line-safety.ts), and writes with the title the page's
+   * data confirms: not while a rename is still on its way.
    */
-  const titleLineSafety = useTitleLineSafety(active.id, !hasTitleLine(markdown, active.title));
+  const checkTitleLine = useCallback(() => checkTitleLineSafety(active.id), [active.id]);
   const titleLineWrite = useMemo(
-    () => ({ safety: titleLineSafety, title: title === active.title ? active.title : null }),
-    [titleLineSafety, title, active.title],
+    () => ({ title: title === active.title ? active.title : null, check: checkTitleLine }),
+    [title, active.title, checkTitleLine],
   );
 
   /**

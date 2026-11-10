@@ -1,6 +1,3 @@
-"use client";
-
-import { useEffect, useRef, useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { readTitleLineSafety, type SafetyReads, type TitleLineSafety } from "@/lib/title-line-safety";
 
@@ -27,18 +24,10 @@ const browserReads: SafetyReads = {
 };
 
 /**
- * Whether the open note may be given its title line (lib/title-line-safety.ts).
- * Read once, from the first render where it is `needed`: a note that opens
- * with its title line never asks. "loading" until the answer is in, which
- * writes nothing. The workspace is remounted per note, so `docId` is fixed.
+ * Whether the open note may be given its title line now (lib/title-line-safety.ts),
+ * read afresh: the editor asks after a note's first edit, and nothing is kept
+ * from one ask to the next, so a link or anchor made since counts.
  */
-export function useTitleLineSafety(docId: string, needed: boolean): TitleLineSafety {
-  const [safety, setSafety] = useState<TitleLineSafety>("loading");
-  const started = useRef(false);
-  useEffect(() => {
-    if (!needed || started.current) return;
-    started.current = true;
-    void readTitleLineSafety(docId, browserReads).then(setSafety);
-  }, [docId, needed]);
-  return safety;
+export function checkTitleLineSafety(docId: string): Promise<Exclude<TitleLineSafety, "loading">> {
+  return readTitleLineSafety(docId, browserReads);
 }

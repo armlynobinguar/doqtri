@@ -11,7 +11,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { LiveMindmapPane } from "@/components/vault/live-mindmap-pane";
 import type { MindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
 import type { HeadingNotice } from "@/lib/heading-rename";
-import type { TitleLineSafety } from "@/lib/title-line-safety";
+import type { TitleLineWrite } from "@/components/vault/live-editor/title-line-writer";
 import { cn } from "@/lib/utils";
 import type { EditorStats } from "@/lib/text-stats";
 
@@ -121,8 +121,8 @@ export function EditorPane({
   onLeaveTitleLine?: () => void;
   /** The editor put the note's title line in (D-120); see MarkdownEditor. */
   onTitleLine?: (markdown: string) => void;
-  /** Whether, and with which title, the title line may be added with the first edit; see MarkdownEditor. */
-  titleLineWrite?: { safety: TitleLineSafety; title: string | null };
+  /** How a note that lacks its title line gets it after its first edit; see MarkdownEditor. */
+  titleLineWrite?: TitleLineWrite;
 }) {
   const mindmapShown = useSyncExternalStore(subscribeMindmapShown, readMindmapShown, () => true);
   const showMindmap = !compact && mindmapShown;
