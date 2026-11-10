@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { NoResponseError } from "@/lib/no-response";
 import { RenameError, renameNote } from "@/lib/rename-note";
 
 function answer(status: number, body: unknown) {
@@ -42,9 +43,17 @@ describe("renameNote", () => {
   });
 
   it("still throws a RenameError, without a code, when the answer is not JSON", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("oops", { status: 502 })));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("oops", { status: 500 })));
     const error = await renameNote("n1", "Roadmap").catch((e: unknown) => e);
     expect(error).toBeInstanceOf(RenameError);
-    expect(error).toMatchObject({ message: "Could not rename note (502)", status: 502, code: undefined });
+    expect(error).toMatchObject({ message: "Could not rename note (500)", status: 500, code: undefined });
+  });
+
+  // A gateway's own page (DOQ-32): the rename may have happened, so it is not a refusal.
+  it("throws NoResponseError, not a RenameError, for a gateway answer that is not JSON", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("oops", { status: 502 })));
+    const error = await renameNote("n1", "Roadmap").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(NoResponseError);
+    expect(error).not.toBeInstanceOf(RenameError);
   });
 });
