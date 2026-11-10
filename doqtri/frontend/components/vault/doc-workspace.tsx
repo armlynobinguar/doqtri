@@ -25,6 +25,7 @@ import { useDocLock } from "@/hooks/use-doc-lock";
 import { EditLockBanner } from "@/components/vault/edit-lock-banner";
 import { EDITING_ELSEWHERE, editingMessage } from "@/lib/doc-lock";
 import type { Doc } from "@/lib/types";
+import type { EditorStats } from "@/lib/text-stats";
 
 const SETTLE_MS = 700;
 
@@ -36,11 +37,6 @@ const MOBILE_VIEWS: { id: MobileView; label: string }[] = [
   { id: "map", label: "Map" },
   { id: "ship", label: "Ship" },
 ];
-
-function countWords(markdown: string): number {
-  const words = markdown.trim().split(/\s+/).filter(Boolean);
-  return words.length;
-}
 
 /**
  * Owns the markdown for the active note. The markdown is the single source of
@@ -68,7 +64,7 @@ export function DocWorkspace({
   active: Doc;
 }) {
   const router = useRouter();
-  const { setWordCount, setSaveState } = useVaultStatus();
+  const { setWordCount, setSaveState, setEditorStats } = useVaultStatus();
 
   const [markdown, setMarkdown] = useState(active.markdown);
   const [regenerateOpen, setRegenerateOpen] = useState(false);
@@ -184,9 +180,16 @@ export function DocWorkspace({
   // Keeps the Supabase write and the force simulation off the keystroke path.
   const settled = useDebouncedValue(markdown, SETTLE_MS);
 
-  useEffect(() => {
-    setWordCount(countWords(markdown));
-  }, [markdown, setWordCount]);
+  // The status bar's counts come from the editor, which has the note's
+  // parse tree already (lib/text-stats.ts); a same-number word count
+  // re-renders nothing.
+  const handleStats = useCallback(
+    (stats: EditorStats) => {
+      setEditorStats(stats);
+      setWordCount(stats.words);
+    },
+    [setEditorStats, setWordCount],
+  );
 
   useEffect(() => {
     markdownRef.current = markdown;
@@ -198,8 +201,9 @@ export function DocWorkspace({
     return () => {
       setWordCount(undefined);
       setSaveState("idle");
+      setEditorStats(undefined);
     };
-  }, [setWordCount, setSaveState]);
+  }, [setWordCount, setSaveState, setEditorStats]);
 
   useEffect(() => {
     if (settled === saves.saved) return;
@@ -392,6 +396,7 @@ export function DocWorkspace({
             readOnly={readOnly}
             pending={lockPending}
             onOpenNote={openNote}
+            onStats={handleStats}
             banner={lockBanner}
           />
         </div>
@@ -436,6 +441,7 @@ export function DocWorkspace({
             readOnly={readOnly}
             pending={lockPending}
             onOpenNote={openNote}
+            onStats={handleStats}
             banner={lockBanner}
           />
         </ResizablePanel>
