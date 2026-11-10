@@ -250,19 +250,12 @@ describe("createHeadingRenamer", () => {
       expect(t.renamer.title).toBe("Their Title");
       expect(t.refresh).toHaveBeenCalledOnce();
 
-      // The heading left saying "Mine" renames nothing by itself...
+      // "Mine" was never their title: editing it further renames nothing.
       t.server.refuse = null;
-      t.editor.text = `${note("Mine")} More.`;
-      t.renamer.check(t.ctx);
-      await settle();
-      expect(t.renameNote).toHaveBeenCalledOnce();
-
-      // ...but it is the title line (D-120): editing it renames, from their title.
       t.editor.text = note("Mine Again");
       t.renamer.check(t.ctx);
       await settle();
-      expect(t.renameNote).toHaveBeenCalledTimes(2);
-      expect(t.renameNote).toHaveBeenLastCalledWith("n1", "Mine Again", "session-1", "Their Title");
+      expect(t.renameNote).toHaveBeenCalledOnce();
     });
 
     it("says nothing more about a lock refusal, and shows any other", async () => {

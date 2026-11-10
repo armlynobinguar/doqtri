@@ -30,7 +30,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(66);
+select plan(71);
 
 insert into auth.users (id, email) values
   ('00000000-0000-4000-8000-000000000001', 'owner@example.com'),
@@ -97,6 +97,16 @@ select is(public.title_heading_rewrite(E'# Old\r\nBody\r\n', 'New'),
 select is(public.title_heading_rewrite(E'\n \t\r\n# Old #\nBody', 'New'),
   E'\n \t\r\n# New\nBody', 'blank lines before it are kept as they are');
 select is(public.title_heading_rewrite(E'\n  \n', 'New'), null, 'a note of blank lines has no line to rewrite');
+-- D-120: every title line the client recognises is one this rewrites.
+select is(public.title_heading_rewrite(E'# Week #\n\nBody', 'New'),
+  E'# New\n\nBody', 'a title written exactly as # <title>, ending in #, is rewritten');
+select is(public.title_heading_rewrite(E'# See [[A]]\r\nBody', 'New'),
+  E'# New\r\nBody', 'and one holding a wikilink');
+select is(public.title_heading_rewrite(E'# [[A|B]]\nBody', 'New'),
+  E'# New\nBody', 'and an aliased wikilink');
+select is(public.title_heading_rewrite(E'# \n\n## Scope\n', 'New'),
+  E'# New\n\n## Scope\n', 'an empty # title line is rewritten');
+select is(public.title_heading_rewrite(E'#\nBody', 'New'), null, 'a # with no space is not');
 select is(public.title_heading_rewrite(E'Some paragraph\nbody', 'New'), null, 'a first line of prose is not rewritten');
 select is(public.title_heading_rewrite(E'## Sub\nbody', 'New'), null, 'nor is a ## heading');
 

@@ -1,6 +1,6 @@
 import { normalizeConcept } from "@/lib/mindmap-types";
 import { hasControlCharacters, MAX_TITLE_LENGTH } from "@/lib/title";
-import { firstNonBlankLine, headingLabel } from "@/lib/title-heading";
+import { firstNonBlankLine, headingLabel, isTitleHeading } from "@/lib/title-heading";
 
 /**
  * Renaming a note from its title heading (DOQ-36), the other way round from
@@ -8,13 +8,13 @@ import { firstNonBlankLine, headingLabel } from "@/lib/title-heading";
  * the heading renames the note, so the two stay one thing and the mindmap
  * keeps folding the heading into its root (DOQ-30).
  *
- * The title heading is the note's first non-blank line when that line is a
- * level-1 ATX heading, read the way rewriteTitleHeading() and the mindmap
- * read it (`# [[Target|Alias]]` says Alias). Since D-120 that line is the
- * note's title line (lib/title-line.ts): the editor keeps it first and keeps
- * its `# `, and a note that opened with something else gets one above it
- * with its first edit. So whatever it says is the title, and a change to it
- * renames, whether or not it said the title before.
+ * The title heading is the note's first non-blank line when that line is its
+ * title line (isTitleHeading, D-120: the rule the editor and the rename route
+ * share): a level-1 heading that says the title, read the way the mindmap
+ * reads it (`# [[Target|Alias]]` says Alias), or is exactly `# <title>`, or
+ * is an empty `# `. A heading that never said the title is the student's
+ * own, and is left alone; since D-120 the editor puts the title line above
+ * it with the note's first edit.
  */
 
 /** What the first non-blank line of a note is, for the rule below. */
@@ -36,24 +36,27 @@ export function readFirstLine(markdown: string): FirstLine {
   return label.length > 0 ? { kind: "heading", label } : { kind: "empty-heading" };
 }
 
-/** Whether `markdown` opens with a heading that says `title`. */
+/** Whether `markdown` opens with its title line (isTitleHeading), after any blank lines. */
 export function opensWithTitle(markdown: string, title: string): boolean {
-  const first = readFirstLine(markdown);
-  return first.kind === "heading" && normalizeConcept(first.label) === normalizeConcept(title);
+  const line = firstNonBlankLine(markdown);
+  return line !== null && isTitleHeading(line.text, title);
 }
 
 export type NoRenameReason =
-  /**
-   * The heading says the title, or still says what it said before the edit:
-   * nothing about the title line changed. A heading that differs from the
-   * title without having been edited (a rename made elsewhere won, or the
-   * note was loaded that way) is left until someone edits it.
-   */
+  /** The heading still says the title. */
   | "unchanged"
-  /** The heading was emptied, or the note is blank: nothing to rename to yet. */
+  /** Before the edit the first line was not the title line (isTitleHeading): the student's own. */
+  | "not-title-heading"
+  /** The heading was deleted or emptied, or the note is blank: nothing to rename to yet. */
   | "emptied"
-  /** The first line is not a `#` heading (a `##`, prose): only text the editor did not guard. */
+  /** The first line is no longer a `#` heading (a `##`, prose). */
   | "not-heading"
+  /**
+   * The title heading line was deleted or moved down, and a `#` heading that
+   * was already further down is now first: that is another section, not a
+   * new title.
+   */
+  | "heading-removed"
   /** The new heading would be refused as a title: control characters, or too long. */
   | "invalid-title";
 
@@ -64,38 +67,60 @@ export type HeadingRenameDecision =
 /**
  * Whether an edit from `before` to `after` renames a note titled `title`,
  * and to what. A rename needs all of:
- *   - `after` opens with a level-1 heading saying something other than the
- *     title, compared as titles are; a change of case or spacing alone keeps
- *     the fold, and is not a rename
- *   - that heading changed with the edit: `before` did not open with a
- *     heading saying the same, so a heading nobody touched (one loaded from
- *     outside, or one a refused rename left behind) never renames by itself
- *   - its text is a title the server takes: one line, at most
+ *   - `before` opened with the title line (isTitleHeading): it said `title`,
+ *     or was exactly `# <title>`, or was an empty `# `
+ *   - `after` opens with a level-1 heading saying something else, compared
+ *     as titles are; a change of case or spacing alone keeps the fold, and
+ *     is not a rename
+ *   - that text is a title the server takes: one line, at most
  *     MAX_TITLE_LENGTH characters
  * The new title is the heading's text, trimmed, as the server would store it.
  *
- * What `before` opened with does not matter otherwise (D-120): the first
- * line is the title line, so editing it renames even when it never said the
- * title, say in a note whose title line was added above an older heading.
- * Editing it into text that some later heading also has renames too: the
- * note then has two headings saying its title, which is the student's to
- * tidy up.
+ * The title heading's line must also still be the one that was edited.
+ * Deleting it, or cutting it to paste it lower, brings up a `#` heading that
+ * was already further down; renaming the note after that section would be
+ * wrong, so it renames nothing (see movedUp). Editing the first line into
+ * text that some later heading also has is still an edit of that line, and
+ * renames: the note then has two headings saying its title, which is the
+ * student's to tidy up.
  */
 export function decideHeadingRename(before: string, after: string, title: string): HeadingRenameDecision {
+  if (!opensWithTitle(before, title)) return { rename: false, reason: "not-title-heading" };
+
   const first = readFirstLine(after);
   if (first.kind === "blank" || first.kind === "empty-heading") return { rename: false, reason: "emptied" };
   if (first.kind === "other") return { rename: false, reason: "not-heading" };
 
+  if (movedUp(before, after)) return { rename: false, reason: "heading-removed" };
+
   const next = first.label.trim();
   if (normalizeConcept(next) === normalizeConcept(title)) return { rename: false, reason: "unchanged" };
-  const previous = readFirstLine(before);
-  if (previous.kind === "heading" && normalizeConcept(previous.label) === normalizeConcept(next)) {
-    return { rename: false, reason: "unchanged" };
-  }
   if (hasControlCharacters(next) || next.length > MAX_TITLE_LENGTH) {
     return { rename: false, reason: "invalid-title" };
   }
   return { rename: true, title: next };
+}
+
+/** The note's lines, without their line endings. */
+function lines(markdown: string): string[] {
+  return markdown.split("\n").map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
+}
+
+/**
+ * Whether the first non-blank line of `after` is a line that was already in
+ * `before` below its first non-blank line, moved up rather than typed: it is
+ * there no more often in `after` than it was further down in `before`. Line
+ * identity is the whole line's text, so typing it anew (one more copy than
+ * before) does not count as moved.
+ */
+function movedUp(before: string, after: string): boolean {
+  const opening = firstNonBlankLine(after);
+  const title = firstNonBlankLine(before);
+  if (!opening || !title) return false;
+  const later = lines(before.slice(title.to)).slice(1);
+  const wasBelow = later.filter((line) => line === opening.text).length;
+  if (wasBelow === 0) return false;
+  return lines(after).filter((line) => line === opening.text).length <= wasBelow;
 }
 
 /**
@@ -105,9 +130,11 @@ export function decideHeadingRename(before: string, after: string, title: string
  * A heading emptied or not yet a valid title is a heading being retyped: the
  * comparison stays with the text from before, so typing a new heading once it
  * is gone still renames. Anything definite moves it on: the heading saying
- * the title or what it said before, or a first line that is not a `#`
- * heading at all (text the editor's title line guard did not see, such as a
- * read-only copy's).
+ * the title, a heading that was never the title, a first line that is no
+ * longer a `#` heading (the student made it something else), or a title
+ * heading deleted or moved down. Then an edit of the heading now first,
+ * another section's, cannot rename the note: the title heading is gone, and
+ * one typed again that says the title links them again.
  */
 export function movesBaseline(reason: NoRenameReason): boolean {
   return reason !== "emptied" && reason !== "invalid-title";
