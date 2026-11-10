@@ -1,9 +1,12 @@
+import { randomUUID } from "node:crypto";
 import { test, expect, type Page, type Request } from "@playwright/test";
 import {
   deleteNote,
   editableEditor,
+  editorSelection,
   editorText,
   expectEditorText,
+  noteEditor,
   readNote,
   replaceEditorText,
   seedNote,
@@ -18,6 +21,10 @@ import {
  * folding the heading into its root (DOQ-30). These cases run on the desktop
  * layout (heading-rename.spec.ts) and the phone's (mobile.spec.ts), which
  * show the title and the mindmap in different places: `Layout` says where.
+ *
+ * Since D-120 the first line is the note's title line: the editor keeps its
+ * `# ` and never merges or splits it, and a note that opens with something
+ * else gets `# <title>` above it once it can be edited.
  */
 export type Layout = {
   /** The note's title shows where this layout shows it, and the old one nowhere there. */
@@ -133,48 +140,214 @@ export function headingRenameCases(layout: Layout) {
     expect(renames).toHaveLength(1);
   });
 
-  test("a heading that never said the title is the student's own and never renames", async ({ page }) => {
-    const title = uniqueTitle("Own Title");
-    const id = await seed(title, `# Something I wrote${BODY}`);
+  test("a note that opens with another heading gets its title line above it once, and editing that line renames", async ({
+    page,
+  }) => {
+    const title = uniqueTitle("Legacy Plan");
+    const legacy = `# Something I wrote${BODY}`;
+    const id = await seed(title, legacy);
     const renames = watchRenames(page, id);
     await page.goto(`/vault/${id}`);
 
-    await retypeHeading(page, "Something I wrote", "Something else");
-    await caretToEnd(page);
-    await expectSaved(id, `# Something else${BODY}`);
-    await page.waitForTimeout(1_500);
-    expect(renames).toHaveLength(0);
+    // Saved by the ordinary autosave, the old heading pushed down untouched.
+    const withTitle = `# ${title}\n\n${legacy}`;
+    await expectEditorText(page, withTitle);
+    await expectSaved(id, withTitle);
     expect((await readNote(id)).title).toBe(title);
+    // The mindmap folds the title line into its root: no lone title node.
+    await layout.expectMindmap(page, title, ["Something I wrote"], "Legacy Plan placeholder");
+
+    // Opened again, nothing more is added.
+    await page.reload();
+    await editableEditor(page);
+    await page.waitForTimeout(1_500);
+    await expectEditorText(page, withTitle);
+    expect((await readNote(id)).markdown).toBe(withTitle);
+
+    // The line it got is the title: editing it renames.
+    const renamed = uniqueTitle("Legacy Roadmap");
+    await retypeHeading(page, title, renamed);
+    await expect.poll(async () => readNote(id), { timeout: 15_000 }).toEqual({
+      title: renamed,
+      markdown: `# ${renamed}\n\n${legacy}`,
+    });
+    await layout.expectTitle(page, renamed, title);
+    await layout.expectMindmap(page, renamed, ["Something I wrote"], title);
+    expect(renames).toHaveLength(1);
   });
 
-  test("deleting or emptying the heading, or making it ## or prose, does not rename; a pasted note does", async ({
+  test("a note that opens with prose or a ## section gets its title line above it, its text untouched", async ({ page }) => {
+    for (const legacy of [`Some prose.${BODY}`, BODY]) {
+      const title = uniqueTitle("Prose Plan");
+      const id = await seed(title, legacy);
+      await page.goto(`/vault/${id}`);
+      const withTitle = `# ${title}\n\n${legacy.replace(/^\n+/, "")}`;
+      await expectEditorText(page, withTitle);
+      await expectSaved(id, withTitle);
+      expect((await readNote(id)).title).toBe(title);
+    }
+  });
+
+  test("a copy that is read-only, in Reading view or waiting for its lock shows the title line and writes nothing", async ({
     page,
   }) => {
-    const title = uniqueTitle("Kept Title");
+    test.setTimeout(120_000);
+    const title = uniqueTitle("Shown Plan");
+    const legacy = `Some prose.${BODY}`;
+    const id = await seed(title, legacy);
+    const writes: string[] = [];
+    page.on("request", (req: Request) => {
+      if (["PUT", "PATCH"].includes(req.method()) && new URL(req.url()).pathname === `/api/notes/${id}`) {
+        writes.push(req.method());
+      }
+    });
+    const preview = page.getByTestId("title-line-preview");
+
+    // Another tab of this user holds the lock (taken here through the API): read-only.
+    const session = randomUUID();
+    expect((await page.request.post(`/api/notes/${id}/lock?session=${session}`)).ok()).toBe(true);
+    await page.goto(`/vault/${id}`);
+    await expect(page.getByText("You are editing this note in another tab or window")).toBeVisible();
+    await expect(preview).toHaveText(title);
+    await page.waitForTimeout(1_500);
+    await expectEditorText(page, legacy);
+
+    // The lock free but Reading view chosen: nothing is written either.
+    expect((await page.request.delete(`/api/notes/${id}/lock?session=${session}`)).ok()).toBe(true);
+    await page.evaluate(() => window.localStorage.setItem("doqtri:editor-view", "reading"));
+    await page.reload();
+    await expect(noteEditor(page)).toHaveAttribute("contenteditable", "false");
+    await expect(preview).toHaveText(title);
+    await page.waitForTimeout(1_500);
+    await expectEditorText(page, legacy);
+
+    // Live again, with the lock's status held back: pending, so still nothing.
+    await page.evaluate(() => window.localStorage.setItem("doqtri:editor-view", "live"));
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route(`**/api/notes/${id}/lock?**`, async (route) => {
+      if (route.request().method() === "GET") await held;
+      await route.continue();
+    });
+    await page.reload();
+    await expect(noteEditor(page)).toHaveAttribute("aria-readonly", "true");
+    await expect(preview).toHaveText(title);
+    await page.waitForTimeout(1_500);
+    await expectEditorText(page, legacy);
+    expect(writes).toEqual([]);
+    expect(await readNote(id)).toEqual({ title, markdown: legacy });
+
+    // Once it can be edited, the real line goes in, once, and is saved.
+    release();
+    const withTitle = `# ${title}\n\n${legacy}`;
+    await expectEditorText(page, withTitle);
+    await expectSaved(id, withTitle);
+    await expect(preview).toHaveCount(0);
+    expect(writes).toEqual(["PUT"]);
+  });
+
+  test("the title line keeps its `# `, never merges with the body, and Enter on it moves into the body", async ({
+    page,
+  }) => {
+    const title = uniqueTitle("Guard Plan");
     const original = `# ${title}${BODY}`;
     const id = await seed(title, original);
     const renames = watchRenames(page, id);
     await page.goto(`/vault/${id}`);
     await editableEditor(page);
+    const end = 2 + title.length;
 
-    for (const changed of [`# ${BODY}`, `#${BODY}`, BODY.trimStart(), `## ${title} notes${BODY}`, `Some prose.${BODY}`]) {
-      await replaceEditorText(page, changed);
-      await expectSaved(id, changed);
-      await replaceEditorText(page, original);
-      await expectSaved(id, original);
-    }
+    // Backspace at the start of the title, and over the selected `# `.
+    await setEditorSelection(page, 2);
+    await page.keyboard.press("Backspace");
+    await setEditorSelection(page, 0, 2);
+    await page.keyboard.press("Backspace");
+    // A `#` typed into the prefix, to make it `##`.
+    await setEditorSelection(page, 1);
+    await page.keyboard.type("#");
+    // Backspace at the start of line 2, Delete at the end of line 1.
+    await setEditorSelection(page, end + 1);
+    await page.keyboard.press("Backspace");
+    await setEditorSelection(page, end);
+    await page.keyboard.press("Delete");
+    await expectEditorText(page, original);
+
+    // Enter in the middle of the title splits nothing: the caret goes to the body.
+    await setEditorSelection(page, 4);
+    await page.keyboard.press("Enter");
+    await expectEditorText(page, original);
+    // Polled: a phone's Enter reaches the editor a moment after the key.
+    await expect.poll(async () => (await editorSelection(page)).head).toBe(end + 1);
+    // And typing there is body text.
+    await page.keyboard.type("Intro.");
+    const typed = `# ${title}\nIntro.${BODY.slice(1)}`;
+    await expectSaved(id, typed);
+
+    await page.waitForTimeout(1_000);
+    expect(renames).toHaveLength(0);
+    expect(await readNote(id)).toEqual({ title, markdown: typed });
+  });
+
+  test("pasting lines into the title keeps the first as the title, puts the rest at the start of the body, and renames", async ({
+    page,
+    context,
+  }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    const title = uniqueTitle("Paste Plan");
+    const id = await seed(title, `# ${title}${BODY}`);
+    await page.goto(`/vault/${id}`);
+    await editableEditor(page);
+
+    const renamed = uniqueTitle("Pasted Title");
+    await setEditorSelection(page, 2, 2 + title.length);
+    await page.evaluate((text) => navigator.clipboard.writeText(text), `${renamed}\nB\nC`);
+    await page.keyboard.press("ControlOrMeta+v");
+    const expected = `# ${renamed}\nB\nC\n${BODY.slice(1)}`;
+    await expectEditorText(page, expected);
+    await expect.poll(async () => readNote(id), { timeout: 15_000 }).toEqual({ title: renamed, markdown: expected });
+    await layout.expectTitle(page, renamed, title);
+  });
+
+  test("emptying the title or replacing the whole note leaves `# ` and renames nothing; a title typed or pasted in renames", async ({
+    page,
+  }) => {
+    const title = uniqueTitle("Kept Title");
+    const id = await seed(title, `# ${title}${BODY}`);
+    const renames = watchRenames(page, id);
+    await page.goto(`/vault/${id}`);
+    await editableEditor(page);
+
+    // Everything selected and typed over: the text goes under an empty title.
+    await setEditorSelection(page, 0, -1);
+    await page.keyboard.type("Body only");
+    await expectEditorText(page, "# \nBody only");
+    await expectSaved(id, "# \nBody only");
+    // Everything selected and deleted: the `# ` stays, with an empty title.
+    await setEditorSelection(page, 0, -1);
+    await page.keyboard.press("Backspace");
+    await expectEditorText(page, "# ");
+    await expectSaved(id, "# ");
     await page.waitForTimeout(1_000);
     expect(renames).toHaveLength(0);
     expect((await readNote(id)).title).toBe(title);
 
-    // Pasting over the whole note: the same rule, on its new first line.
+    // A title typed into the empty line renames.
+    const typed = uniqueTitle("Typed Title");
+    await setEditorSelection(page, 2);
+    await page.keyboard.type(typed);
+    await expect.poll(async () => readNote(id), { timeout: 15_000 }).toEqual({ title: typed, markdown: `# ${typed}` });
+    expect(renames).toHaveLength(1);
+
+    // Pasting over the whole note: a note with its own title line renames by the same rule.
     const pasted = uniqueTitle("Pasted Note");
     await replaceEditorText(page, `# ${pasted}\n\nAll new.`);
     await expect.poll(async () => (await readNote(id)).title, { timeout: 15_000 }).toBe(pasted);
-    expect(renames).toHaveLength(1);
+    expect(renames).toHaveLength(2);
   });
 
-  test("deleting the title heading line does not rename the note after the # heading below it", async ({ page }) => {
+  test("deleting the selected title line empties the title, keeps the # heading below in place, and renames nothing", async ({
+    page,
+  }) => {
     const title = uniqueTitle("Two Headings");
     const second = "# Second part\n\nMore.";
     const id = await seed(title, `# ${title}\n\n${second}`);
@@ -186,15 +359,20 @@ export function headingRenameCases(layout: Layout) {
     await setEditorSelection(page, 0, `# ${title}\n`.length);
     await page.keyboard.press("Backspace");
     await caretToEnd(page);
-    await expectSaved(id, `\n${second}`);
-
-    // The heading now first is another section's: editing it renames nothing either.
-    await retypeHeading(page, "Second part", "Second parts");
-    await caretToEnd(page);
-    await expectSaved(id, "\n# Second parts\n\nMore.");
+    await expectSaved(id, `# \n\n${second}`);
     await page.waitForTimeout(1_500);
     expect(renames).toHaveLength(0);
     expect((await readNote(id)).title).toBe(title);
+
+    // A new title typed into it renames; the heading below is still another section.
+    const retyped = uniqueTitle("Retyped Title");
+    await setEditorSelection(page, 2);
+    await page.keyboard.type(retyped);
+    await expect.poll(async () => readNote(id), { timeout: 15_000 }).toEqual({
+      title: retyped,
+      markdown: `# ${retyped}\n\n${second}`,
+    });
+    expect(renames).toHaveLength(1);
   });
 
   test("a clashing heading warns at the heading, keeps the text and the title, and clears when resolved", async ({
