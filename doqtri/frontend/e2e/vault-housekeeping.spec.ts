@@ -371,9 +371,7 @@ test.describe("save conflict", () => {
   test.afterEach(async () => deleteNote(id));
 
   test("a save on a stale version shows the conflict banner, and Reload loads the other text", async ({ page }) => {
-    // Opening with its title line (D-120), so opening it writes nothing of its own.
-    const title = uniqueTitle("Conflict Note");
-    id = await seedNote(title, `# ${title}\n\nFirst text.\n`);
+    id = await seedNote(uniqueTitle("Conflict Note"), "# Conflict Note\n\nFirst text.\n");
     await page.goto(`/vault/${id}`);
     await editableEditor(page);
 
@@ -381,7 +379,7 @@ test.describe("save conflict", () => {
     const [row] = await serviceRest<{ version: number }[]>(`documents?id=eq.${id}&select=version`);
     await serviceRest(`documents?id=eq.${id}`, {
       method: "PATCH",
-      body: { markdown: `# ${title}\n\nSaved elsewhere.\n`, version: row.version + 1 },
+      body: { markdown: "# Conflict Note\n\nSaved elsewhere.\n", version: row.version + 1 },
       prefer: "return=minimal",
     });
 

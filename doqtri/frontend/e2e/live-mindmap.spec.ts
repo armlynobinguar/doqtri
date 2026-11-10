@@ -28,9 +28,7 @@ const outline = (page: Page) => page.getByTestId("live-mindmap-outline");
 
 test.describe("live mindmap", () => {
   test("a new heading becomes a node a moment after typing, with no save", async ({ page }) => {
-    // Opening with its title line (D-120), so opening it saves nothing.
-    const title = uniqueTitle("Live map");
-    const id = await seedNote(title, `# ${title}\n\n## Goals\n`);
+    const id = await seedNote(uniqueTitle("Live map"), "# Live\n\n## Goals\n");
     ids.push(id);
     await page.goto(`/vault/${id}`);
     await editableEditor(page);

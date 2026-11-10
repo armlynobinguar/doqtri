@@ -8,9 +8,7 @@ test.describe("vault shell", () => {
 
   test.beforeAll(async () => {
     title = uniqueTitle("Shell Note");
-    // Opening with its title line (D-120): opening it writes nothing, so no
-    // test's visit takes the edit lock away from the next one.
-    noteId = await seedNote(title, `# ${title}\n\nBody text.\n`);
+    noteId = await seedNote(title, "# Shell Note\n\nBody text.\n");
   });
 
   test.afterAll(async () => {

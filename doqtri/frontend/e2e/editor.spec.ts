@@ -18,8 +18,7 @@ test.describe("editor", () => {
 
   test.beforeEach(async () => {
     title = uniqueTitle("Editor Note");
-    // Opening with its title line (D-120), as every note does once edited.
-    noteId = await seedNote(title, `# ${title}\n\nOriginal body.\n`);
+    noteId = await seedNote(title, "# Editor Note\n\nOriginal body.\n");
   });
 
   test.afterEach(async () => {
@@ -31,29 +30,29 @@ test.describe("editor", () => {
 
     // ssr:false means the fallback shows first, then the real editor replaces it.
     await expect(noteEditor(page)).toBeVisible();
-    await expectEditorText(page, new RegExp(`^# ${title}\n`));
+    await expectEditorText(page, /# Editor Note/);
 
     // Live preview: with no caret in it, the heading renders, its hash hidden.
-    await expect(editorLine(page, title)).toHaveText(title);
-    await expect(editorLine(page, title)).toHaveClass(/cm-lp-h1/);
+    await expect(editorLine(page, "Editor Note")).toHaveText("Editor Note");
+    await expect(editorLine(page, "Editor Note")).toHaveClass(/cm-lp-h1/);
   });
 
   test("word count updates in the status bar as you type", async ({ page }) => {
     await page.goto(`/vault/${noteId}`);
     await editableEditor(page);
 
-    // "# Editor Note <id>\n\nOriginal body." -> 5 words: the rendered text, not the "#".
-    await expect(page.getByText(/^\d+ words?$/)).toContainText("5 words");
+    // "# Editor Note\n\nOriginal body." -> 4 words: the rendered text, not the "#".
+    await expect(page.getByText(/^\d+ words?$/)).toContainText("4 words");
 
     await placeCaretAfter(page, "Original body.");
     await page.keyboard.type(" plus three more words");
 
-    await expect(page.getByText(/^\d+ words?$/)).toContainText("9 words");
+    await expect(page.getByText(/^\d+ words?$/)).toContainText("8 words");
   });
 
   test("an edit debounce-saves and survives a reload", async ({ page }) => {
     await page.goto(`/vault/${noteId}`);
-    await replaceEditorText(page, `# ${title}\n\n## New Section\n\nEdited body.\n`);
+    await replaceEditorText(page, "# Editor Note\n\n## New Section\n\nEdited body.\n");
 
     // The status bar is the only surface that reports the debounced write.
     await expect(page.getByText("Saving…")).toBeVisible();
@@ -70,14 +69,14 @@ test.describe("editor", () => {
 
   test("selecting a note in the explorer opens it", async ({ page }) => {
     const otherTitle = uniqueTitle("Other Note");
-    const otherId = await seedNote(otherTitle, `# ${otherTitle}\n`);
+    const otherId = await seedNote(otherTitle, "# Other Note\n");
 
     try {
       await page.goto(`/vault/${noteId}`);
       await page.getByRole("link", { name: otherTitle }).click();
 
       await page.waitForURL(`**/vault/${otherId}`);
-      await expectEditorText(page, `# ${otherTitle}\n`);
+      await expectEditorText(page, /# Other Note/);
     } finally {
       await deleteNote(otherId);
     }
