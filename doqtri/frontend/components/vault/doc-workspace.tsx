@@ -33,6 +33,8 @@ import { useRegisterOpenNote } from "@/components/vault/open-note";
 import type { EditorStats } from "@/lib/text-stats";
 import { useHeadingRename } from "@/components/vault/use-heading-rename";
 import { buildBacklinks } from "@/lib/wikilinks";
+import { hasTitleLine } from "@/lib/title-line";
+import { useTitleLineSafety } from "@/components/vault/use-title-line-safety";
 
 const SETTLE_MS = 700;
 
@@ -109,9 +111,9 @@ export function DocWorkspace({
     title: pageTitle,
     initialMarkdown: active.markdown,
   });
-  // Also where the editor reports the title line it put in on open (D-120):
-  // saved like an edit, but the heading it adds says the title, so the next
-  // heading check compares with it rather than with the text before.
+  // Also where the editor reports the title line it added with a first edit
+  // (D-120): saved with that edit, but the heading it adds says the title, so
+  // the next heading check compares with it rather than with the text before.
   const resetHeading = headingRename.reset;
 
   // The page remounts this per note, so the saver never outlives its row.
@@ -377,6 +379,19 @@ export function DocWorkspace({
   const title = headingRename.title;
 
   /**
+   * The title line an older note gets with its first edit (D-120,
+   * lib/title-line.ts). Never for a note whose headings are linked or
+   * anchored, nor before that is known (lib/title-line-safety.ts), which is
+   * only asked for a note that lacks the line. Written with the title the
+   * page's data confirms: not while a rename is still on its way.
+   */
+  const titleLineSafety = useTitleLineSafety(active.id, !hasTitleLine(markdown, active.title));
+  const titleLineWrite = useMemo(
+    () => ({ safety: titleLineSafety, title: title === active.title ? active.title : null }),
+    [titleLineSafety, title, active.title],
+  );
+
+  /**
    * The graph reads the settled text so the simulation is not restarted on
    * every keystroke. The mindmap reads the live text — it is cheap DOM and
    * benefits from immediate feedback.
@@ -534,6 +549,7 @@ export function DocWorkspace({
             onDismissHeadingNotice={headingRename.dismiss}
             onLeaveTitleLine={leaveTitleLine}
             onTitleLine={resetHeading}
+            titleLineWrite={titleLineWrite}
           />
         </div>
         {mobileView === "map" && (
@@ -580,6 +596,7 @@ export function DocWorkspace({
             onDismissHeadingNotice={headingRename.dismiss}
             onLeaveTitleLine={leaveTitleLine}
             onTitleLine={resetHeading}
+            titleLineWrite={titleLineWrite}
           />
         </ResizablePanel>
 

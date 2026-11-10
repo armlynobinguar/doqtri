@@ -11,6 +11,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { LiveMindmapPane } from "@/components/vault/live-mindmap-pane";
 import type { MindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
 import type { HeadingNotice } from "@/lib/heading-rename";
+import type { TitleLineSafety } from "@/lib/title-line-safety";
 import { cn } from "@/lib/utils";
 import type { EditorStats } from "@/lib/text-stats";
 
@@ -81,6 +82,7 @@ export function EditorPane({
   onDismissHeadingNotice,
   onLeaveTitleLine,
   onTitleLine,
+  titleLineWrite,
 }: {
   /** The note's title, which its first line always says (D-120). */
   title: string;
@@ -119,6 +121,8 @@ export function EditorPane({
   onLeaveTitleLine?: () => void;
   /** The editor put the note's title line in (D-120); see MarkdownEditor. */
   onTitleLine?: (markdown: string) => void;
+  /** Whether, and with which title, the title line may be added with the first edit; see MarkdownEditor. */
+  titleLineWrite?: { safety: TitleLineSafety; title: string | null };
 }) {
   const mindmapShown = useSyncExternalStore(subscribeMindmapShown, readMindmapShown, () => true);
   const showMindmap = !compact && mindmapShown;
@@ -139,6 +143,7 @@ export function EditorPane({
       onLeaveTitleLine={onLeaveTitleLine}
       title={title}
       onTitleLine={onTitleLine}
+      titleLineWrite={titleLineWrite}
     />
   );
 

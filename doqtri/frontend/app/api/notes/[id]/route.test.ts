@@ -374,7 +374,7 @@ describe("PATCH /api/notes/[id] renames the title heading with the title (DOQ-35
     expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
   });
 
-  it("renames a never-opened note that does not open with its title by title alone, for the editor to add the line (D-120)", async () => {
+  it("renames a never-opened note that does not open with its title by title alone, for its first edit to add the line (D-120)", async () => {
     const legacy = "Some paragraph\r\nbody\r\n";
     adminRows.documents = { id: DOC, workspace_id: WS, user_id: ME, title: "Roadmap", markdown: legacy, version: 3 };
     const res = await PATCH(rename("Plan 2027"), ctx());
@@ -384,9 +384,9 @@ describe("PATCH /api/notes/[id] renames the title heading with the title (DOQ-35
     expect(renameCalls()).toEqual([
       { p_document_id: DOC, p_title: "Plan 2027", p_markdown: null, p_base_version: 3, p_session: null },
     ]);
-    // ...and the next editable open puts the new title line above it.
+    // ...and the next edit to it puts the new title line above it.
     const { withTitleLine } = await import("@/lib/title-line");
-    expect(withTitleLine(legacy, "Plan 2027", "open")).toBe("# Plan 2027\r\n\r\nSome paragraph\r\nbody\r\n");
+    expect(withTitleLine(legacy, "Plan 2027")).toBe("# Plan 2027\r\n\r\nSome paragraph\r\nbody\r\n");
   });
 
   it("refuses a title another note has before calling anything", async () => {

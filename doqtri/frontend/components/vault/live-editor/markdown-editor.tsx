@@ -21,7 +21,8 @@ import { FormatToolbar, type EditorMode } from "@/components/vault/live-editor/f
 import { headingNotice, headingNoticeDismiss, setHeadingNotice } from "@/components/vault/live-editor/heading-notice";
 import { headingNoticeText, type HeadingNotice } from "@/lib/heading-rename";
 import { setNoteTitle, titleLine as titleLineGuard, titleLineChange } from "@/components/vault/live-editor/title-line";
-import { withTitleLine, type TitleLineCheck } from "@/lib/title-line";
+import { hasTitleLine, titleLineEdit } from "@/lib/title-line";
+import type { TitleLineSafety } from "@/lib/title-line-safety";
 
 /** The smallest single change that turns `from` into `to`. */
 function diff(from: string, to: string) {
@@ -59,6 +60,27 @@ function storeMode(mode: EditorMode) {
   } catch {
     // Kept for this session only; see above.
   }
+}
+
+/**
+ * Puts the note's title line in (D-120), just after the edit that asked for
+ * it: its own change, at the top, outside undo history. Every caret and
+ * selection moves with the text, so the next keystroke lands where the last
+ * one did. Returns the text it made, or null when the text gained a title
+ * line meanwhile (or can no longer be edited).
+ */
+function addTitleLine(view: EditorView, title: string): string | null {
+  const { state } = view;
+  if (state.readOnly) return null;
+  const edit = titleLineEdit(state.doc.toString(), title);
+  if (!edit) return null;
+  const changes = state.changes(edit);
+  view.dispatch({
+    changes,
+    selection: state.selection.map(changes, 1),
+    annotations: [titleLineChange.of(true), Transaction.addToHistory.of(false)],
+  });
+  return view.state.doc.toString();
 }
 
 /** What Tab can reach inside full screen. */
@@ -161,15 +183,15 @@ function caretOnTitleLine(state: EditorState): boolean {
  * from what is saved and hashed.
  *
  * Given the note's `title`, its first line is the title line (D-120,
- * title-line.ts): always `# <title>`, kept in place while editing. A note
- * that does not open with it gets it the first time it can be edited (not
- * read-only, not waiting for its lock, not in Reading view): `# <title>` goes
- * above the text as an ordinary edit, so `onChange` saves it, but outside
- * undo history, so undoing it cannot bring back a note that saves without it
- * and then gets it again. Text loaded from outside later gets one too when it
- * opens with no heading at all (lib/title-line.ts, "reload"). Until then a
- * copy that cannot be edited shows the title line above the text, writing
- * nothing.
+ * title-line.ts): always `# <title>`, kept in place while editing. Opening a
+ * note writes nothing. A note that does not open with its title line shows
+ * it above the text, display only, and gets the real one with its first edit
+ * (lib/title-line.ts), when `titleLineWrite` allows it: `# <title>` goes in
+ * just after that edit, in its own change, so the edit lands where it was
+ * made and the two are saved together. That change stays out of undo
+ * history, so undoing the edit leaves the line, and nothing is saved and
+ * added again in a loop. Text loaded from outside that lacks the line (a
+ * Regenerate) gets it with the next edit, the same way.
  *
  * Three views of the same text: Source (the raw markdown everywhere), Live
  * (the default above) and Reading (everything rendered, no caret, links open
@@ -195,6 +217,7 @@ export default function MarkdownEditor({
   onLeaveTitleLine,
   title,
   onTitleLine,
+  titleLineWrite,
 }: {
   value: string;
   onChange: (markdown: string) => void;
@@ -229,6 +252,13 @@ export default function MarkdownEditor({
   title?: string;
   /** The editor just put the title line in, with this text; `onChange` has already had it. */
   onTitleLine?: (markdown: string) => void;
+  /**
+   * Whether the title line may be added to a note that lacks it, and with
+   * which title: the confirmed one, or null while a rename is still on its
+   * way (the next edit asks again). Decided at the first edit: anything but
+   * "allowed" then means the line is not added this time.
+   */
+  titleLineWrite?: { safety: TitleLineSafety; title: string | null };
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -266,13 +296,9 @@ export default function MarkdownEditor({
   const titleLineRef = useRef(onTitleLine);
   /** The text this editor last reported, so its own echo is not re-applied. */
   const reportedRef = useRef(value);
-  /**
-   * Whether the title line has been checked for since the editor could first
-   * be edited, and whether text was loaded from outside before that (then
-   * the page's title may lag behind it, see TitleLineCheck).
-   */
-  const titleCheckedRef = useRef(false);
-  const loadedRef = useRef(false);
+  const titleWriteRef = useRef(titleLineWrite);
+  /** Whether the first edit since the text was loaded has decided about the title line. */
+  const titleDecidedRef = useRef(false);
   useEffect(() => {
     onChangeRef.current = onChange;
     titlesRef.current = linkTitles;
@@ -282,6 +308,7 @@ export default function MarkdownEditor({
     leaveTitleRef.current = onLeaveTitleLine;
     titleRef.current = title;
     titleLineRef.current = onTitleLine;
+    titleWriteRef.current = titleLineWrite;
   });
 
   /** Reading is read-only too: nothing in it may change the text. */
@@ -356,6 +383,28 @@ export default function MarkdownEditor({
             reportedRef.current = text;
             onChangeRef.current(text);
           }),
+          // The note's first edit brings its title line, when it has none yet.
+          EditorView.updateListener.of((update) => {
+            if (!update.docChanged || titleDecidedRef.current || update.startState.readOnly) return;
+            if (update.transactions.every((tr) => tr.annotation(external) || tr.annotation(titleLineChange))) return;
+            const write = titleWriteRef.current;
+            const name = write?.title ?? titleRef.current;
+            if (!write || name === undefined) return;
+            if (hasTitleLine(update.state.doc.toString(), name)) {
+              titleDecidedRef.current = true;
+              return;
+            }
+            // A rename on its way: the next edit asks again.
+            if (write.safety === "allowed" && write.title === null) return;
+            titleDecidedRef.current = true;
+            if (write.safety !== "allowed" || write.title === null) return;
+            const confirmed = write.title;
+            // Not inside this update: once it is done, before the next keystroke.
+            queueMicrotask(() => {
+              const added = addTitleLine(update.view, confirmed);
+              if (added !== null) titleLineRef.current?.(added);
+            });
+          }),
           // Reported after the change above, so the text it acts on is the edited one.
           EditorView.updateListener.of((update) => {
             if (!update.selectionSet && !update.docChanged) return;
@@ -398,24 +447,6 @@ export default function MarkdownEditor({
     view?.dispatch({ effects: setHeadingNotice.of(notice) });
   }, [view, notice]);
 
-  /**
-   * Puts the title line in when the note can be edited and has none (D-120):
-   * an edit of this editor's own, saved like typing, kept out of undo history
-   * so it cannot be undone into a note without it.
-   */
-  const addTitleLine = (target: EditorView, check: TitleLineCheck) => {
-    const name = titleRef.current;
-    if (name === undefined || target.state.readOnly) return;
-    const current = target.state.doc.toString();
-    const next = withTitleLine(current, name, check);
-    if (next === null) return;
-    target.dispatch({
-      changes: diff(current, next),
-      annotations: [titleLineChange.of(true), Transaction.addToHistory.of(false)],
-    });
-    titleLineRef.current?.(next);
-  };
-
   // Text from outside: a reload after a conflict, someone else's save, a
   // regenerate. Applied as the smallest change, so the caret stays put when
   // the edit is elsewhere, and kept out of undo history — undoing into text
@@ -425,28 +456,17 @@ export default function MarkdownEditor({
     const current = view.state.doc.toString();
     reportedRef.current = value;
     if (current === value) return;
-    loadedRef.current = true;
     view.dispatch({
       changes: diff(current, value),
       annotations: [external.of(true), Transaction.addToHistory.of(false)],
     });
-    // Text loaded while the copy can be edited gets its title line back if
-    // it came without one (D-120). Before the first check, that check does it.
-    if (titleCheckedRef.current) addTitleLine(view, "reload");
+    // Text that lacks the title line gets it with the next edit (D-120).
+    titleDecidedRef.current = false;
   }, [view, value]);
 
   useEffect(() => {
     if (view && title !== undefined) view.dispatch({ effects: setNoteTitle.of(title) });
   }, [view, title]);
-
-  // The first time the copy can be edited: the note as the page loaded it,
-  // checked against the page's title, unless text came from outside since.
-  const editable = !readOnly && shownMode !== "reading";
-  useEffect(() => {
-    if (!view || !editable || titleCheckedRef.current || titleRef.current === undefined) return;
-    titleCheckedRef.current = true;
-    addTitleLine(view, loadedRef.current ? "reload" : "open");
-  }, [view, editable]);
 
   // Full screen ends on Esc — unless Esc is closing something first: the
   // find panel, the link list, or a menu or popover (focused outside this
@@ -525,6 +545,7 @@ export default function MarkdownEditor({
     <div
       ref={rootRef}
       data-view={shownMode}
+      data-title-line={titleLineWrite?.safety}
       data-fullscreen={fullscreen || undefined}
       tabIndex={-1}
       role={fullscreen ? "dialog" : undefined}
