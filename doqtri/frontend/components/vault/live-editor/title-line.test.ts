@@ -19,6 +19,7 @@ import {
   releaseTitleLine,
   retitleLine,
   setNoteTitle,
+  titleLineHandle,
   titleLine,
   titleLineChange,
   titleLineDecorations,
@@ -502,6 +503,30 @@ describe("the title line guard (D-120)", () => {
         expect(redo({ state, dispatch })).toBe(true);
         expect(redo({ state, dispatch })).toBe(true);
         expect(state.doc.toString()).toBe(`# Roadmap${BODY}`);
+      });
+
+      it("a handle closed with its view holds nothing and rewrites nothing (an editor remounted meanwhile)", () => {
+        let state = retyped().update({ effects: setNoteTitle.of("Roadmap") }).state;
+        const view = {
+          get state() {
+            return state;
+          },
+          dispatch: (spec: TransactionSpec) => {
+            state = state.update(spec).state;
+          },
+        };
+        const open = titleLineHandle(view);
+        expect(open.held()).toBe(true);
+        expect(open.line()).toBe("# Pla");
+        const closed = titleLineHandle(view);
+        closed.close();
+        expect(closed.held()).toBe(false);
+        expect(closed.retitle("Roadmap", "# Pla")).toBeNull();
+        closed.release();
+        expect(state.doc.toString()).toBe(`# Pla${BODY}`);
+        expect(guarded(state)).toBe(true);
+        // The open one still works.
+        expect(open.retitle("Roadmap", "# Pla")).toBe(`# Roadmap${BODY}`);
       });
 
       it("rewrites nothing when line 1 says something else by now, is not held, or the copy is read-only", () => {

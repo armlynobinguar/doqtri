@@ -21,12 +21,10 @@ import { FormatToolbar, type EditorMode } from "@/components/vault/live-editor/f
 import { headingNotice, headingNoticeDismiss, setHeadingNotice } from "@/components/vault/live-editor/heading-notice";
 import { headingNoticeText, type HeadingNotice } from "@/lib/heading-rename";
 import {
-  guarded,
-  releaseTitleLine,
-  retitleLine,
   setNoteTitle,
   titleLine as titleLineGuard,
   titleLineChange,
+  titleLineHandle,
   type TitleLineHandle,
 } from "@/components/vault/live-editor/title-line";
 import {
@@ -457,19 +455,11 @@ export default function MarkdownEditor({
 
   useEffect(() => {
     if (!view || !titleLineHandleRef) return;
-    titleLineHandleRef.current = {
-      held: () => guarded(view.state),
-      line: () => view.state.doc.line(1).text,
-      retitle: (title, expected) => {
-        const spec = retitleLine(view.state, title, expected);
-        if (!spec) return null;
-        view.dispatch(spec);
-        return view.state.doc.toString();
-      },
-      release: () => view.dispatch({ effects: releaseTitleLine.of(null) }),
-    };
+    const handle = titleLineHandle(view);
+    titleLineHandleRef.current = handle;
     return () => {
-      titleLineHandleRef.current = null;
+      handle.close();
+      if (titleLineHandleRef.current === handle) titleLineHandleRef.current = null;
     };
   }, [view, titleLineHandleRef]);
 

@@ -164,6 +164,36 @@ export type TitleLineHandle = {
 };
 
 /**
+ * The handle for `view` (DOQ-46), until `close()`: the editor closes it when
+ * its view goes (a remount, say, when the layout changes). A closed handle
+ * holds nothing and changes nothing, so a settle still waiting on its safety
+ * reads cannot rewrite a view no longer on screen: a destroyed EditorView
+ * still takes a transaction, but nothing hears it.
+ */
+export function titleLineHandle(view: {
+  readonly state: EditorState;
+  dispatch(spec: TransactionSpec): void;
+}): TitleLineHandle & { close(): void } {
+  let open = true;
+  return {
+    held: () => open && guarded(view.state),
+    line: () => (open ? view.state.doc.line(1).text : ""),
+    retitle(title, expected) {
+      const spec = open ? retitleLine(view.state, title, expected) : null;
+      if (!spec) return null;
+      view.dispatch(spec);
+      return view.state.doc.toString();
+    },
+    release() {
+      if (open) view.dispatch({ effects: releaseTitleLine.of(null) });
+    },
+    close() {
+      open = false;
+    },
+  };
+}
+
+/**
  * Line 1 rewritten to `# <title>` after a rename from outside that left it
  * saying something else (DOQ-46), or null when the editor cannot take it:
  * read-only, line 1 not held as the title line, or no longer saying
