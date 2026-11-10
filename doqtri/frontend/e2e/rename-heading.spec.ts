@@ -17,8 +17,8 @@ import {
  * it, and its next save goes on without a conflict.
  *
  * A note whose first line is not the title heading keeps its text through a
- * rename; since D-120 the editor puts the title line above it when it is
- * next opened for editing.
+ * rename; since D-120 the editor shows the new title above it, and writes
+ * that title line with the note's first edit.
  */
 
 /** The side panel, which holds the Mindmap tab; the live mindmap pane beside the editor is apart from it. */
@@ -219,28 +219,21 @@ test.describe("rename keeps the title heading in step (DOQ-35)", () => {
     await tabB.close();
   });
 
-  test("a heading that is not the title moves below the title line, and a rename rewrites only the title line", async ({
-    page,
-  }) => {
+  test("a heading that is not the title is left alone", async ({ page }) => {
     const title = uniqueTitle("Own Heading");
     const markdown = "# Something I wrote\n\n## Scope\n";
     const id = await seedNote(title, markdown);
     notes.push(id);
     await page.goto(`/vault/${id}`);
     await editableEditor(page);
-    // Opened for editing, it gets its title line (D-120), saved like an edit.
-    const withTitle = `# ${title}\n\n${markdown}`;
-    await expectEditorText(page, withTitle);
-    await expect.poll(async () => (await readNote(id)).markdown, { timeout: 15_000 }).toBe(withTitle);
 
     const renamed = uniqueTitle("Own Renamed");
     await rename(page, title, renamed);
-    const expected = `# ${renamed}\n\n${markdown}`;
-    await expect.poll(async () => readNote(id)).toEqual({ title: renamed, markdown: expected });
-    await expectEditorText(page, expected);
+    await expect.poll(async () => readNote(id)).toEqual({ title: renamed, markdown });
+    await expectEditorText(page, markdown);
   });
 
-  test("a never-opened note that does not open with its title keeps its text through a rename, and gets the new title line when opened", async ({
+  test("a never-opened note that does not open with its title keeps its text through a rename, and gets the new title line with its first edit", async ({
     page,
   }) => {
     const title = uniqueTitle("Never Opened");
@@ -254,9 +247,18 @@ test.describe("rename keeps the title heading in step (DOQ-35)", () => {
     await rename(page, title, renamed);
     await expect.poll(async () => readNote(id)).toEqual({ title: renamed, markdown });
 
-    // The next editable open writes the new title above the text, untouched.
+    // Opened, it shows the new title above the text and writes nothing...
     await page.goto(`/vault/${id}`);
-    const expected = `# ${renamed}\n\n${markdown}`;
+    await editableEditor(page);
+    await expect(page.getByTestId("title-line-preview")).toHaveText(renamed);
+    await expect(page.locator("[data-title-line]")).toHaveAttribute("data-title-line", "allowed", { timeout: 20_000 });
+    await page.waitForTimeout(1_000);
+    expect(await readNote(id)).toEqual({ title: renamed, markdown });
+
+    // ...and its first edit writes the new title line above it, saved with the edit.
+    await setEditorSelection(page, -1);
+    await page.keyboard.type("More.");
+    const expected = `# ${renamed}\n\n${markdown}More.`;
     await expectEditorText(page, expected);
     await expect.poll(async () => readNote(id), { timeout: 15_000 }).toEqual({ title: renamed, markdown: expected });
     // The mindmap folds it into the root: Scope rings it, no lone title node.

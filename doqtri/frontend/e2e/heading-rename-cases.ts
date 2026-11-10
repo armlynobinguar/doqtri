@@ -12,6 +12,7 @@ import {
   seedNote,
   serviceRest,
   setEditorSelection,
+  testUserId,
   uniqueTitle,
 } from "./helpers";
 
@@ -23,8 +24,10 @@ import {
  * show the title and the mindmap in different places: `Layout` says where.
  *
  * Since D-120 the first line is the note's title line: the editor keeps its
- * `# ` and never merges or splits it, and a note that opens with something
- * else gets `# <title>` above it once it can be edited.
+ * `# ` and never merges or splits it. A note that opens with something else
+ * shows its title above the text, writes nothing when opened, and gets
+ * `# <title>` with its first edit, unless its headings are linked or
+ * anchored.
  */
 export type Layout = {
   /** The note's title shows where this layout shows it, and the old one nowhere there. */
@@ -44,6 +47,20 @@ function watchRenames(page: Page, id: string): { at: number; body: string }[] {
     if (req.method() === "PATCH" && new URL(req.url()).pathname === `/api/notes/${id}`) {
       seen.push({ at: Date.now(), body: req.postData() ?? "" });
     }
+  });
+  return seen;
+}
+
+/**
+ * This page's writes to the note: saves (PUT), renames (PATCH) and takes of
+ * its edit lock (POST to its lock), in order.
+ */
+function watchWrites(page: Page, id: string): string[] {
+  const seen: string[] = [];
+  page.on("request", (req: Request) => {
+    const path = new URL(req.url()).pathname;
+    if (path === `/api/notes/${id}` && (req.method() === "PUT" || req.method() === "PATCH")) seen.push(req.method());
+    if (path === `/api/notes/${id}/lock` && req.method() === "POST") seen.push("lock");
   });
   return seen;
 }
@@ -140,52 +157,97 @@ export function headingRenameCases(layout: Layout) {
     expect(renames).toHaveLength(1);
   });
 
-  test("a note that opens with another heading gets its title line above it once, and editing that line renames", async ({
+  test("a note that opens with another level-1 heading keeps it as its title line: opening writes nothing, editing it renames", async ({
     page,
   }) => {
     const title = uniqueTitle("Legacy Plan");
     const legacy = `# Something I wrote${BODY}`;
     const id = await seed(title, legacy);
-    const renames = watchRenames(page, id);
+    const writes = watchWrites(page, id);
     await page.goto(`/vault/${id}`);
-
-    // Saved by the ordinary autosave, the old heading pushed down untouched.
-    const withTitle = `# ${title}\n\n${legacy}`;
-    await expectEditorText(page, withTitle);
-    await expectSaved(id, withTitle);
-    expect((await readNote(id)).title).toBe(title);
-    // The mindmap folds the title line into its root: no lone title node.
-    await layout.expectMindmap(page, title, ["Something I wrote"], "Legacy Plan placeholder");
-
-    // Opened again, nothing more is added.
-    await page.reload();
     await editableEditor(page);
     await page.waitForTimeout(1_500);
-    await expectEditorText(page, withTitle);
-    expect((await readNote(id)).markdown).toBe(withTitle);
+    expect(writes).toEqual([]);
+    await expectEditorText(page, legacy);
+    // No preview either: the heading it opens with is its title line.
+    await expect(page.getByTestId("title-line-preview")).toHaveCount(0);
 
-    // The line it got is the title: editing it renames.
+    // Editing that line renames, and nothing is put above it.
     const renamed = uniqueTitle("Legacy Roadmap");
-    await retypeHeading(page, title, renamed);
+    await retypeHeading(page, "Something I wrote", renamed);
     await expect.poll(async () => readNote(id), { timeout: 15_000 }).toEqual({
       title: renamed,
-      markdown: `# ${renamed}\n\n${legacy}`,
+      markdown: `# ${renamed}${BODY}`,
     });
     await layout.expectTitle(page, renamed, title);
-    await layout.expectMindmap(page, renamed, ["Something I wrote"], title);
-    expect(renames).toHaveLength(1);
+    await layout.expectMindmap(page, renamed, ["Scope"], title);
   });
 
-  test("a note that opens with prose or a ## section gets its title line above it, its text untouched", async ({ page }) => {
+  test("opening an older note writes nothing and takes no lock; its first edit adds the title line, saved with it", async ({
+    page,
+  }) => {
     for (const legacy of [`Some prose.${BODY}`, BODY]) {
       const title = uniqueTitle("Prose Plan");
       const id = await seed(title, legacy);
+      const writes = watchWrites(page, id);
       await page.goto(`/vault/${id}`);
-      const withTitle = `# ${title}\n\n${legacy.replace(/^\n+/, "")}`;
+      await editableEditor(page);
+      // The title it will get shows above the text, display only.
+      await expect(page.getByTestId("title-line-preview")).toHaveText(title);
+      await expect(page.locator("[data-title-line]")).toHaveAttribute("data-title-line", "allowed", { timeout: 20_000 });
+      await page.waitForTimeout(1_000);
+      expect(writes).toEqual([]);
+      expect(await readNote(id)).toEqual({ title, markdown: legacy });
+
+      // The first edit: typed where the caret is, with the title line above it.
+      await setEditorSelection(page, -1);
+      await page.keyboard.type(" More.");
+      const withTitle = `# ${title}\n\n${legacy.replace(/^\n+/, "")} More.`;
       await expectEditorText(page, withTitle);
       await expectSaved(id, withTitle);
+      await expect(page.getByTestId("title-line-preview")).toHaveCount(0);
+      // One save for both, and the lock taken by the edit.
+      expect(writes.filter((write) => write === "PUT")).toHaveLength(1);
+      expect(writes).toContain("lock");
+
+      // Undo takes the edit back and leaves the title line: saved once more, then quiet.
+      await page.keyboard.press("ControlOrMeta+z");
+      const undone = `# ${title}\n\n${legacy.replace(/^\n+/, "")}`;
+      await expectEditorText(page, undone);
+      await expectSaved(id, undone);
+      await page.waitForTimeout(1_500);
+      expect(writes.filter((write) => write === "PUT")).toHaveLength(2);
       expect((await readNote(id)).title).toBe(title);
     }
+  });
+
+  test("a note whose heading is linked never gets the title line: its heading ids stay, and the preview shows", async ({
+    page,
+  }) => {
+    const title = uniqueTitle("Linked Heading");
+    const legacy = `Intro.${BODY}`;
+    const id = await seed(title, legacy);
+    // A GitHub link on the note's first heading, h0 ("Scope"): any node link blocks the line.
+    await serviceRest("node_links", {
+      method: "POST",
+      body: { user_id: await testUserId(), document_id: id, node_id: "h0", node_label: "Scope", repo: "e2e/title-line", number: 1 },
+      prefer: "return=minimal",
+    });
+    await page.goto(`/vault/${id}`);
+    await editableEditor(page);
+    await expect(page.locator("[data-title-line]")).toHaveAttribute("data-title-line", "blocked", { timeout: 20_000 });
+    await expect(page.getByTestId("title-line-preview")).toHaveText(title);
+
+    await setEditorSelection(page, -1);
+    await page.keyboard.type(" Edited.");
+    await expectSaved(id, `${legacy} Edited.`);
+    await expectEditorText(page, `${legacy} Edited.`);
+    await expect(page.getByTestId("title-line-preview")).toHaveText(title);
+    // The link still names the heading it was made on.
+    const links = await serviceRest<{ node_id: string; node_label: string }[]>(
+      `node_links?document_id=eq.${id}&select=node_id,node_label`,
+    );
+    expect(links).toEqual([{ node_id: "h0", node_label: "Scope" }]);
   });
 
   test("a copy that is read-only, in Reading view or waiting for its lock shows the title line and writes nothing", async ({
@@ -195,12 +257,7 @@ export function headingRenameCases(layout: Layout) {
     const title = uniqueTitle("Shown Plan");
     const legacy = `Some prose.${BODY}`;
     const id = await seed(title, legacy);
-    const writes: string[] = [];
-    page.on("request", (req: Request) => {
-      if (["PUT", "PATCH"].includes(req.method()) && new URL(req.url()).pathname === `/api/notes/${id}`) {
-        writes.push(req.method());
-      }
-    });
+    const writes = watchWrites(page, id);
     const preview = page.getByTestId("title-line-preview");
 
     // Another tab of this user holds the lock (taken here through the API): read-only.
@@ -214,6 +271,7 @@ export function headingRenameCases(layout: Layout) {
 
     // The lock free but Reading view chosen: nothing is written either.
     expect((await page.request.delete(`/api/notes/${id}/lock?session=${session}`)).ok()).toBe(true);
+    writes.length = 0;
     await page.evaluate(() => window.localStorage.setItem("doqtri:editor-view", "reading"));
     await page.reload();
     await expect(noteEditor(page)).toHaveAttribute("contenteditable", "false");
@@ -233,17 +291,15 @@ export function headingRenameCases(layout: Layout) {
     await expect(noteEditor(page)).toHaveAttribute("aria-readonly", "true");
     await expect(preview).toHaveText(title);
     await page.waitForTimeout(1_500);
+
+    // Editable now: still nothing until an edit.
+    release();
+    await editableEditor(page);
+    await page.waitForTimeout(1_500);
     await expectEditorText(page, legacy);
     expect(writes).toEqual([]);
     expect(await readNote(id)).toEqual({ title, markdown: legacy });
-
-    // Once it can be edited, the real line goes in, once, and is saved.
-    release();
-    const withTitle = `# ${title}\n\n${legacy}`;
-    await expectEditorText(page, withTitle);
-    await expectSaved(id, withTitle);
-    await expect(preview).toHaveCount(0);
-    expect(writes).toEqual(["PUT"]);
+    await expect(preview).toHaveText(title);
   });
 
   test("the title line keeps its `# `, never merges with the body, and Enter on it moves into the body", async ({
