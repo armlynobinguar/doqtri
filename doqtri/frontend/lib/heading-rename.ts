@@ -1,6 +1,6 @@
 import { normalizeConcept } from "@/lib/mindmap-types";
 import { hasControlCharacters, MAX_TITLE_LENGTH } from "@/lib/title";
-import { firstNonBlankLine, headingLabel } from "@/lib/title-heading";
+import { firstNonBlankLine, headingLabel, isTitleHeading } from "@/lib/title-heading";
 
 /**
  * Renaming a note from its title heading (DOQ-36), the other way round from
@@ -8,11 +8,13 @@ import { firstNonBlankLine, headingLabel } from "@/lib/title-heading";
  * the heading renames the note, so the two stay one thing and the mindmap
  * keeps folding the heading into its root (DOQ-30).
  *
- * The title heading is the note's first non-blank line when that line is a
- * level-1 ATX heading, read the way rewriteTitleHeading() and the mindmap
- * read it (`# [[Target|Alias]]` says Alias). It is the note's title heading
- * only while it says the title, compared as titles are (normalizeConcept):
- * a heading that never said it is the student's own, and is left alone.
+ * The title heading is the note's first non-blank line when that line is its
+ * title line (isTitleHeading, D-120: the rule the editor and the rename route
+ * share): a level-1 heading that says the title, read the way the mindmap
+ * reads it (`# [[Target|Alias]]` says Alias), or is exactly `# <title>`, or
+ * is an empty `# `. A heading that never said the title is the student's
+ * own, and is left alone; since D-120 the editor puts the title line above
+ * it with the note's first edit.
  */
 
 /** What the first non-blank line of a note is, for the rule below. */
@@ -34,16 +36,16 @@ export function readFirstLine(markdown: string): FirstLine {
   return label.length > 0 ? { kind: "heading", label } : { kind: "empty-heading" };
 }
 
-/** Whether `markdown` opens with a heading that says `title`. */
+/** Whether `markdown` opens with its title line (isTitleHeading), after any blank lines. */
 export function opensWithTitle(markdown: string, title: string): boolean {
-  const first = readFirstLine(markdown);
-  return first.kind === "heading" && normalizeConcept(first.label) === normalizeConcept(title);
+  const line = firstNonBlankLine(markdown);
+  return line !== null && isTitleHeading(line.text, title);
 }
 
 export type NoRenameReason =
   /** The heading still says the title. */
   | "unchanged"
-  /** Before the edit the first line was not the title heading: the student's own. */
+  /** Before the edit the first line was not the title line (isTitleHeading): the student's own. */
   | "not-title-heading"
   /** The heading was deleted or emptied, or the note is blank: nothing to rename to yet. */
   | "emptied"
@@ -65,7 +67,8 @@ export type HeadingRenameDecision =
 /**
  * Whether an edit from `before` to `after` renames a note titled `title`,
  * and to what. A rename needs all of:
- *   - `before` opened with the title heading (it said `title`)
+ *   - `before` opened with the title line (isTitleHeading): it said `title`,
+ *     or was exactly `# <title>`, or was an empty `# `
  *   - `after` opens with a level-1 heading saying something else, compared
  *     as titles are; a change of case or spacing alone keeps the fold, and
  *     is not a rename

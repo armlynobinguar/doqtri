@@ -15,6 +15,10 @@ import {
  * keeps folding it into the root (DOQ-30) instead of showing the old title
  * as a lone child. The rewrite is an ordinary save: the open editor adopts
  * it, and its next save goes on without a conflict.
+ *
+ * A note whose first line is not the title heading keeps its text through a
+ * rename; since D-120 the editor shows the new title above it, and writes
+ * that title line with the note's first edit.
  */
 
 /** The side panel, which holds the Mindmap tab; the live mindmap pane beside the editor is apart from it. */
@@ -227,5 +231,38 @@ test.describe("rename keeps the title heading in step (DOQ-35)", () => {
     await rename(page, title, renamed);
     await expect.poll(async () => readNote(id)).toEqual({ title: renamed, markdown });
     await expectEditorText(page, markdown);
+  });
+
+  test("a never-opened note that does not open with its title keeps its text through a rename, and gets the new title line with its first edit", async ({
+    page,
+  }) => {
+    const title = uniqueTitle("Never Opened");
+    const markdown = "Some prose first.\n\n## Scope\n";
+    const id = await seedNote(title, markdown);
+    notes.push(id);
+
+    // Renamed from the explorer without opening it: the server changes the title alone.
+    await page.goto("/vault");
+    const renamed = uniqueTitle("Never Opened Renamed");
+    await rename(page, title, renamed);
+    await expect.poll(async () => readNote(id)).toEqual({ title: renamed, markdown });
+
+    // Opened, it shows the new title above the text and writes nothing...
+    await page.goto(`/vault/${id}`);
+    await editableEditor(page);
+    await expect(page.getByTestId("title-line-preview")).toHaveText(renamed);
+    await page.waitForTimeout(1_000);
+    expect(await readNote(id)).toEqual({ title: renamed, markdown });
+
+    // ...and after its first edit, the new title line goes above it.
+    await setEditorSelection(page, -1);
+    await page.keyboard.type("More.");
+    const expected = `# ${renamed}\n\n${markdown}More.`;
+    await expectEditorText(page, expected, 20_000);
+    await expect.poll(async () => readNote(id), { timeout: 15_000 }).toEqual({ title: renamed, markdown: expected });
+    // The mindmap folds it into the root: Scope rings it, no lone title node.
+    await rightPanel(page).getByRole("tab", { name: "Mindmap" }).click();
+    await expect(sideMindmap(page).getByRole("paragraph").first()).toHaveText(renamed);
+    await expect(topLevelLabels(page)).toHaveText(["Scope"]);
   });
 });

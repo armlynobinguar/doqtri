@@ -374,6 +374,39 @@ describe("PATCH /api/notes/[id] renames the title heading with the title (DOQ-35
     expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
   });
 
+  it("renames a never-opened note that does not open with its title by title alone, for its first edit to add the line (D-120)", async () => {
+    const legacy = "Some paragraph\r\nbody\r\n";
+    adminRows.documents = { id: DOC, workspace_id: WS, user_id: ME, title: "Roadmap", markdown: legacy, version: 3 };
+    const res = await PATCH(rename("Plan 2027"), ctx());
+    expect(res.status).toBe(200);
+    // No text comes back: the note's text is left exactly as it was...
+    expect(await res.json()).toEqual({ id: DOC, title: "Plan 2027", previousTitle: "Roadmap" });
+    expect(renameCalls()).toEqual([
+      { p_document_id: DOC, p_title: "Plan 2027", p_markdown: null, p_base_version: 3, p_session: null },
+    ]);
+    // ...and the next edit to it puts the new title line above it.
+    const { withTitleLine } = await import("@/lib/title-line");
+    expect(withTitleLine(legacy, "Plan 2027")).toBe("# Plan 2027\r\n\r\nSome paragraph\r\nbody\r\n");
+  });
+
+  it("rewrites every title line the editor knows: exactly `# <old title>`, or an empty `# ` (D-120)", async () => {
+    for (const [title, markdown, rewritten] of [
+      ["Week #", "# Week #\n\nBody", "# Plan 2027\n\nBody"],
+      ["C# ##", "# C# ##\r\nBody", "# Plan 2027\r\nBody"],
+      ["See [[A]]", "# See [[A]]\nBody", "# Plan 2027\nBody"],
+      ["[[A|B]]", "# [[A|B]]\nBody", "# Plan 2027\nBody"],
+      ["Roadmap", "# \n\n## Scope\n", "# Plan 2027\n\n## Scope\n"],
+    ]) {
+      session.rpc.mockClear();
+      adminRows.documents = { id: DOC, workspace_id: WS, user_id: ME, title, markdown, version: 3 };
+      const res = await PATCH(rename("Plan 2027"), ctx());
+      expect(res.status, title).toBe(200);
+      expect(renameCalls(), title).toEqual([
+        { p_document_id: DOC, p_title: "Plan 2027", p_markdown: rewritten, p_base_version: 3, p_session: null },
+      ]);
+    }
+  });
+
   it("refuses a title another note has before calling anything", async () => {
     adminLists.documents = [{ title: " plan 2027 " }];
     const res = await PATCH(rename("Plan 2027"), ctx());

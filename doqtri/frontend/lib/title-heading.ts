@@ -12,19 +12,46 @@ const H1_RE = /^#[ \t]+(.*)$/;
 const BLANK_RE = /^[ \t\f\v]*$/;
 
 /**
+ * Whether `line` (one line, without its ending) is the title line of a note
+ * titled `title` (D-120). The one rule the editor, its guard, the heading
+ * renamer and the rename route all use. It is a level-1 ATX heading, `#`
+ * then a space or tab, as title_heading_rewrite() in
+ * 20261109100000_rename_document.sql requires of the line it may replace,
+ * and it either:
+ *   - says the title, read as the mindmap reads a heading (cleanLabel:
+ *     `[[Target|Alias]]` as Alias, closing `#`s dropped) and compared as
+ *     titles are, ignoring case and spacing: `# [[Old]]` is the title line of
+ *     "Old"
+ *   - is exactly `# <title>` as written, for titles that read differently once
+ *     cleaned: `# Week #` (the closing `#` would go), `# See [[A]]`
+ *   - or is empty, `# ` and nothing else: the title line with its title
+ *     deleted, as the editor's guard leaves it
+ * A `#` with no space after it is not one: the database would not rewrite it.
+ * Any other `# ` heading says something else, and is the note's own content.
+ */
+export function isTitleHeading(line: string, title: string): boolean {
+  if (!/^#[ \t]/.test(line)) return false;
+  if (/^#[ \t]+$/.test(line)) return true;
+  const name = title.trim();
+  if (!name) return false;
+  if (line === `# ${name}`) return true;
+  const label = headingLabel(line);
+  return label !== null && normalizeConcept(label) === normalizeConcept(name);
+}
+
+/**
  * The note's text after a rename from `oldTitle` to `newTitle` (DOQ-35), or
  * null when the rename leaves the text alone.
  *
  * A note usually opens with `# <title>`, and the mindmap folds that heading
  * into its root only while it matches the title (DOQ-30). So when the first
- * non-blank line is a level-1 heading whose text is the old title, that line
- * becomes `# <newTitle>`. The text is read as the mindmap reads a heading
- * (cleanLabel: `[[Target]]` as Target, `[[Target|Alias]]` as Alias, closing
- * `#`s dropped) and compared as titles are, ignoring case and spacing. So
- * `# [[Old]]` is the title heading of "Old", and `# [[Old|Alias]]` is that
- * of "Alias", as deriveTitle() and the fold see them. The whole line is
- * replaced by a plain `# <newTitle>`: a wikilink there is not kept. Every
- * other byte stays, the line's own ending (`\r\n` or `\n`) included.
+ * non-blank line is the title line of the old title (isTitleHeading: it says
+ * the old title, is exactly `# <old title>`, or is an empty `# `), that line
+ * becomes `# <newTitle>`. So `# [[Old]]` is the title heading of "Old", and
+ * `# [[Old|Alias]]` is that of "Alias", as deriveTitle() and the fold see
+ * them; `# Week #` is that of "Week #". The whole line is replaced by a plain
+ * `# <newTitle>`: a wikilink there is not kept. Every other byte stays, the
+ * line's own ending (`\r\n` or `\n`) included.
  *
  * Any other first line (another heading, a `##`, prose, or the title
  * heading further down) is the user's own, and null is returned. So is a new
@@ -36,13 +63,10 @@ export function rewriteTitleHeading(
   oldTitle: string,
   newTitle: string,
 ): string | null {
-  const wanted = normalizeConcept(oldTitle);
-  if (!wanted || hasControlCharacters(newTitle)) return null;
+  if (!normalizeConcept(oldTitle) || hasControlCharacters(newTitle)) return null;
 
   const line = firstNonBlankLine(markdown);
-  if (!line) return null;
-  const label = headingLabel(line.text);
-  if (label === null || normalizeConcept(label) !== wanted) return null;
+  if (!line || !isTitleHeading(line.text, oldTitle)) return null;
 
   const heading = titleHeading(newTitle);
   if (heading === line.text) return null;

@@ -130,9 +130,13 @@ test.describe("mindmap studio", () => {
 
   test("a hidden node is listed and can be shown again on its own", async ({ page }) => {
     await page.goto(`/vault/${docId}/mindmap`);
-    // #24252c is the root pill's fill in the default look.
+    // #24252c is the root pill's fill in the default look. The pill is a solid
+    // run of it; a lone pixel of it is no pill: the antialiased edge of a
+    // concept pill (#141519 fill, #3a3d45 stroke) blends to exactly #24252c
+    // here and there, depending on where the layout settles.
     const root: [number, number, number] = [0x24, 0x25, 0x2c];
-    await expect.poll(() => canvasHasColor(page, root, 0), { timeout: 15_000 }).toBe(true);
+    const rootDrawn = async () => (await fillPoint(page, root)) !== null;
+    await expect.poll(rootDrawn, { timeout: 15_000 }).toBe(true);
 
     await page.getByRole("button", { name: "Customize" }).click();
     await page.getByRole("button", { name: "Node", exact: true }).click();
@@ -153,11 +157,11 @@ test.describe("mindmap studio", () => {
     await page.getByRole("button", { name: "Hide node" }).click();
 
     await expect(page.getByRole("heading", { name: "Hidden (1)" })).toBeVisible();
-    await expect.poll(() => canvasHasColor(page, root, 0), { timeout: 5_000 }).toBe(false);
+    await expect.poll(rootDrawn, { timeout: 5_000 }).toBe(false);
 
     await page.getByRole("button", { name: `Show ${title}` }).click();
     await expect(page.getByRole("heading", { name: /^Hidden/ })).toHaveCount(0);
-    await expect.poll(() => canvasHasColor(page, root, 0), { timeout: 5_000 }).toBe(true);
+    await expect.poll(rootDrawn, { timeout: 5_000 }).toBe(true);
   });
 
   test("clicking a node in 3D selects it without a page error", async ({ page }) => {
@@ -216,6 +220,10 @@ test.describe("mindmap studio", () => {
 });
 
 /** A heading-only note that outlines to 1 + 12 + 120 + 1,080 = 1,213 nodes. */
+/**
+ * 1,213 nodes once drawn: the root, 12 areas, 120 parts and 1,080 items. The
+ * title heading folds into the root although areas sit beside it (D-120).
+ */
 function hugeOutline(title: string): string {
   const lines = [`# ${title}`, ""];
   for (let a = 0; a < 12; a++) {
@@ -252,7 +260,7 @@ test.describe("large mindmaps", () => {
     await page.getByRole("button", { name: /^Overview:/ }).click();
     await expect(page.getByText("Building mindmap…")).toBeVisible();
     await expect(page.getByText("Building mindmap…")).toBeHidden({ timeout: 30_000 });
-    await expect(page.getByRole("button", { name: /^Showing \d+ of 1214 nodes/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Showing \d+ of 1213 nodes/ })).toBeVisible();
   });
 
   test("hiding child nodes on zoom out draws less of the fitted map", async ({ page }) => {
@@ -299,7 +307,7 @@ test.describe("large mindmaps", () => {
     }
     console.log(`settled in ${Date.now() - started}ms, worst frame ${worstGap}ms`);
     expect(worstGap).toBeLessThan(500);
-    await expect(page.getByRole("button", { name: /^Showing all 1214 nodes/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Showing all 1213 nodes/ })).toBeVisible();
   });
 });
 

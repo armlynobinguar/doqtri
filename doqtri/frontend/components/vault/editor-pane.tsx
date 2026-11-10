@@ -11,6 +11,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { LiveMindmapPane } from "@/components/vault/live-mindmap-pane";
 import type { MindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
 import type { HeadingNotice } from "@/lib/heading-rename";
+import type { TitleLineWrite } from "@/components/vault/live-editor/title-line-writer";
 import { cn } from "@/lib/utils";
 import type { EditorStats } from "@/lib/text-stats";
 
@@ -80,7 +81,10 @@ export function EditorPane({
   headingNotice = null,
   onDismissHeadingNotice,
   onLeaveTitleLine,
+  onTitleLine,
+  titleLineWrite,
 }: {
+  /** The note's title, which its first line always says (D-120). */
   title: string;
   markdown: string;
   /** Titles offered when a `[[link` is being typed. */
@@ -115,6 +119,10 @@ export function EditorPane({
   onDismissHeadingNotice?: () => void;
   /** The caret moved off the note's title line (DOQ-36). */
   onLeaveTitleLine?: () => void;
+  /** The editor put the note's title line in (D-120); see MarkdownEditor. */
+  onTitleLine?: (markdown: string) => void;
+  /** How a note that lacks its title line gets it after its first edit; see MarkdownEditor. */
+  titleLineWrite?: TitleLineWrite;
 }) {
   const mindmapShown = useSyncExternalStore(subscribeMindmapShown, readMindmapShown, () => true);
   const showMindmap = !compact && mindmapShown;
@@ -133,6 +141,9 @@ export function EditorPane({
       headingNotice={headingNotice}
       onDismissHeadingNotice={onDismissHeadingNotice}
       onLeaveTitleLine={onLeaveTitleLine}
+      title={title}
+      onTitleLine={onTitleLine}
+      titleLineWrite={titleLineWrite}
     />
   );
 

@@ -22,9 +22,27 @@ import {
 
 const ids: string[] = [];
 
-async function openNote(page: Page, markdown: string): Promise<string> {
-  const id = await seedNote(uniqueTitle("Live preview"), markdown);
+/**
+ * Every note opens with its title line (D-120), so each test's text sits
+ * below it: `head` is that line and the blank line after it.
+ */
+let head = "";
+/** A position in the test's own text, below the title line. */
+const offset = (pos: number) => head.length + pos;
+/** The whole note, for the test's own text. */
+const body = (text: string) => head + text;
+
+/** Seeds a note titled after `prefix` whose text is `markdown` under its title line. */
+async function seedWithTitle(prefix: string, markdown: string): Promise<string> {
+  const title = uniqueTitle(prefix);
+  head = `# ${title}\n\n`;
+  const id = await seedNote(title, body(markdown));
   ids.push(id);
+  return id;
+}
+
+async function openNote(page: Page, markdown: string): Promise<string> {
+  const id = await seedWithTitle("Live preview", markdown);
   await page.goto(`/vault/${id}`);
   await editableEditor(page);
   return id;
@@ -52,7 +70,7 @@ test.describe("live preview", () => {
     // Off the line: the hashes are hidden and the line is a sized heading.
     await expect(editorLine(page, "Goals")).toHaveText("Goals");
     await expect(editorLine(page, "Goals")).toHaveClass(/cm-lp-h2/);
-    await expect.poll(() => editorText(page)).toBe("# Title\n\nIntro text.\n## Goals");
+    await expect.poll(() => editorText(page)).toBe(body("# Title\n\nIntro text.\n## Goals"));
   });
 
   test("inline and block syntax hides everywhere but the caret's line", async ({ page }) => {
@@ -256,23 +274,23 @@ test.describe("live preview", () => {
     await page.keyboard.type(typed);
 
     await expect(page.getByText("Saved")).toBeVisible({ timeout: 15_000 });
-    await expect.poll(async () => (await readNote(id)).markdown).toBe(`# Typed\n${typed}`);
-    expect(await editorText(page)).toBe(`# Typed\n${typed}`);
+    await expect.poll(async () => (await readNote(id)).markdown).toBe(body(`# Typed\n${typed}`));
+    expect(await editorText(page)).toBe(body(`# Typed\n${typed}`));
   });
 
   test("the toolbar formats the selection and the shortcuts do too", async ({ page }) => {
     await openNote(page, "word");
     const text = await editorText(page);
-    await setEditorSelection(page, 0, text.length);
+    await setEditorSelection(page, offset(0), text.length);
     await page.getByRole("toolbar", { name: "Formatting" }).getByRole("button", { name: "Bold" }).click();
-    await expect.poll(() => editorText(page)).toBe("**word**");
+    await expect.poll(() => editorText(page)).toBe(body("**word**"));
     await page.keyboard.press("ControlOrMeta+b");
-    await expect.poll(() => editorText(page)).toBe("word");
+    await expect.poll(() => editorText(page)).toBe(body("word"));
     await page.keyboard.press("ControlOrMeta+i");
-    await expect.poll(() => editorText(page)).toBe("*word*");
+    await expect.poll(() => editorText(page)).toBe(body("*word*"));
     await page.keyboard.press("ControlOrMeta+i");
     await page.keyboard.press("ControlOrMeta+k");
-    await expect.poll(() => editorText(page)).toBe("[word](url)");
+    await expect.poll(() => editorText(page)).toBe(body("[word](url)"));
     // ⌘K in the editor inserted a link; it did not open the quick switcher.
     await expect(page.getByRole("dialog")).toHaveCount(0);
   });
@@ -323,8 +341,7 @@ test.describe("live preview", () => {
   });
 
   test("while the lock status loads, the focusable editor takes no edits and sends no save", async ({ page, context }) => {
-    const id = await seedNote(uniqueTitle("Pending lock"), "Body.\n\n- [ ] todo");
-    ids.push(id);
+    const id = await seedWithTitle("Pending lock", "Body.\n\n- [ ] todo");
     // Hold the lock status back, so the editor stays in its pending state:
     // focusable, caret and all, but read-only. Every status request until
     // the release: the dev server's strict mode starts the lock twice.
@@ -361,15 +378,15 @@ test.describe("live preview", () => {
     await page.keyboard.press("Escape");
     await content.locator(".cm-lp-task").click();
     await page.waitForTimeout(800);
-    expect(await editorText(page)).toBe("Body.\n\n- [ ] todo");
+    expect(await editorText(page)).toBe(body("Body.\n\n- [ ] todo"));
     expect(saves).toEqual([]);
 
     // The lock arrives: the caret is still there, and typing works at once.
     release();
     await expect(content).not.toHaveAttribute("aria-readonly", "true");
-    await setEditorSelection(page, 5);
+    await setEditorSelection(page, offset(5));
     await page.keyboard.type(" now");
-    await expect.poll(() => editorText(page)).toBe("Body. now\n\n- [ ] todo");
+    await expect.poll(() => editorText(page)).toBe(body("Body. now\n\n- [ ] todo"));
   });
 
   test("a task's checkbox toggles it once the note has loaded", async ({ page }) => {
@@ -378,11 +395,11 @@ test.describe("live preview", () => {
     const boxes = noteEditor(page).locator(".cm-lp-task");
     await expect(boxes).toHaveCount(2);
     await boxes.first().click();
-    await expect.poll(() => editorText(page)).toBe("- [x] todo\n- [x] done\n\nend");
+    await expect.poll(() => editorText(page)).toBe(body("- [x] todo\n- [x] done\n\nend"));
     await boxes.nth(1).click();
-    await expect.poll(() => editorText(page)).toBe("- [x] todo\n- [ ] done\n\nend");
+    await expect.poll(() => editorText(page)).toBe(body("- [x] todo\n- [ ] done\n\nend"));
     await expect(page.getByText("Saved")).toBeVisible({ timeout: 15_000 });
-    await expect.poll(async () => (await readNote(id)).markdown).toBe("- [x] todo\n- [ ] done\n\nend");
+    await expect.poll(async () => (await readNote(id)).markdown).toBe(body("- [x] todo\n- [ ] done\n\nend"));
   });
 
   test("syntax broken over lines renders without breaking the editor", async ({ page }) => {
@@ -399,10 +416,10 @@ test.describe("live preview", () => {
     // Rendered (caret elsewhere), then each line raw in turn, then typing.
     await setEditorSelection(page, -1);
     await expect(editorLine(page, "end")).toBeVisible();
-    for (let at = 0; at < source.length; at += 7) await setEditorSelection(page, at);
+    for (let at = 0; at < source.length; at += 7) await setEditorSelection(page, offset(at));
     await setEditorSelection(page, -1);
     await page.keyboard.type(" still works");
-    await expect.poll(() => editorText(page)).toBe(`${source} still works`);
+    await expect.poll(() => editorText(page)).toBe(body(`${source} still works`));
     expect(errors).toEqual([]);
   });
 });
@@ -412,7 +429,7 @@ test.describe("following links", () => {
 
   test("a plain click edits a link; ⌘/Ctrl-click opens the note a wikilink names", async ({ page }) => {
     const targetTitle = uniqueTitle("Link target");
-    const target = await seedNote(targetTitle, "# Target\n\nArrived.\n");
+    const target = await seedNote(targetTitle, `# ${targetTitle}\n\nArrived.\n`);
     ids.push(target);
     const source = await openNote(page, `See [[${targetTitle}]] and [[Nowhere at all]].\n\nend`);
     await setEditorSelection(page, -1);

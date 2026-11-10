@@ -51,6 +51,20 @@ describe("rewriteTitleHeading (DOQ-35)", () => {
     expect(rewriteTitleHeading("# Old", "Old", "New")).toBe("# New");
   });
 
+  it("rewrites a title line written exactly as `# <old title>`, for titles that read differently once cleaned (D-120)", () => {
+    for (const old of ["Week #", "C# ##", "See [[A]]", "[[A|B]]"]) {
+      expect(rewriteTitleHeading(`# ${old}\n\nBody`, old, "New"), old).toBe("# New\n\nBody");
+      expect(rewriteTitleHeading(`# ${old}\r\nBody`, ` ${old} `, "New"), old).toBe("# New\r\nBody");
+    }
+  });
+
+  it("rewrites an empty `# ` title line: the title line with its title deleted (D-120)", () => {
+    expect(rewriteTitleHeading("# \n\n## Scope\n", "Old", "New")).toBe("# New\n\n## Scope\n");
+    expect(rewriteTitleHeading("\n#\t \r\nBody", "Old", "New")).toBe("\n# New\r\nBody");
+    // A `#` with no space after it is not a heading the database rewrites.
+    expect(rewriteTitleHeading("#\nBody", "Old", "New")).toBeNull();
+  });
+
   it("leaves a different heading alone", () => {
     expect(rewriteTitleHeading("# Something else\n\nBody", "Old", "New")).toBeNull();
     expect(rewriteTitleHeading("# Old plan\n", "Old", "New")).toBeNull();

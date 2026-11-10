@@ -95,6 +95,16 @@ describe("decideHeadingRename", () => {
     });
   });
 
+  it("renames from a title line written exactly as `# <title>`, or an empty `# ` (D-120)", () => {
+    for (const title of ["Week #", "C# ##", "See [[A]]", "[[A|B]]"]) {
+      expect(decideHeadingRename(note(`# ${title}`), note("# Roadmap"), title), title).toEqual({
+        rename: true,
+        title: "Roadmap",
+      });
+    }
+    expect(decideHeadingRename(note("# "), note("# Roadmap"), "Plan")).toEqual({ rename: true, title: "Roadmap" });
+  });
+
   it("renames back on undo, by the same rule", () => {
     expect(decideHeadingRename(note("# Roadmap"), note("# Plan"), "Roadmap")).toEqual({ rename: true, title: "Plan" });
   });
@@ -114,6 +124,38 @@ describe("decideHeadingRename", () => {
           reason: "not-title-heading",
         });
       }
+    });
+
+    it("text that never had a title line, whatever is typed at its top", () => {
+      // A toolbar Heading 1 on a prose first line.
+      expect(decideHeadingRename("Intro para\n\n## A", "# Intro para\n\n## A", "Plan")).toEqual({
+        rename: false,
+        reason: "not-title-heading",
+      });
+      // One `#` deleted from a `## Scope` first line.
+      expect(decideHeadingRename("## Scope\n\nText.", "# Scope\n\nText.", "Plan")).toEqual({
+        rename: false,
+        reason: "not-title-heading",
+      });
+      // A `#` with no space is not a title line.
+      expect(decideHeadingRename("#\n\nbody", "# Body\n\nbody", "Plan")).toEqual({
+        rename: false,
+        reason: "not-title-heading",
+      });
+    });
+
+    it("a title line after blank lines, deleted, bringing up the # heading below it", () => {
+      expect(decideHeadingRename("\n\n# Old\n\n# Second part", "\n\n\n\n# Second part", "Old")).toEqual({
+        rename: false,
+        reason: "heading-removed",
+      });
+    });
+
+    it("a title line cut and pasted lower: the editor leaves `# ` with an empty title", () => {
+      expect(decideHeadingRename("# Old\n# Other\n", "# \n# Other\n# Old\n", "Old")).toEqual({
+        rename: false,
+        reason: "emptied",
+      });
     });
 
     it("a heading that still says the title", () => {

@@ -59,6 +59,18 @@ export const editorTheme = EditorView.theme({
   ".cm-lp-h4": { fontSize: "1.05em", lineHeight: "1.45", paddingTop: "0.25em" },
   ".cm-lp-h5": { fontSize: "1em", lineHeight: "1.5" },
   ".cm-lp-h6": { fontSize: "0.95em", lineHeight: "1.5", color: "var(--muted-foreground)" },
+  // The title line (title-line.ts, D-120): line 1 reads as the note's title,
+  // with no gap above it as the first line. The title shown above a read-only
+  // copy that has no title line yet looks the same, so nothing moves when the
+  // real one arrives. Source view keeps its one size, and only bolds it.
+  ".cm-line.cm-title-line, .cm-title-preview": {
+    fontSize: "1.75em",
+    lineHeight: "1.3",
+    fontWeight: "700",
+    letterSpacing: "-0.015em",
+    paddingTop: "0",
+  },
+  "&.cm-source-view .cm-line.cm-title-line": { fontSize: "1em", lineHeight: "inherit", letterSpacing: "normal" },
 
   ".cm-lp-syntax": { color: "var(--label)" },
   ".cm-lp-strong": { fontWeight: "700" },
