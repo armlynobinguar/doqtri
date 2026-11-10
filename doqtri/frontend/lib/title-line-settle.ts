@@ -19,7 +19,8 @@ import { isTitleHeading } from "@/lib/title-heading";
  *     new title
  *   - the server wrote that line itself, or the note's title-line safety
  *     allows it (lib/title-line-safety.ts). A read that fails is asked once
- *     more; failing again, nothing is decided and line 1 is left as it is.
+ *     more; failing again, nothing is written and line 1 is let go, as when
+ *     blocked: left guarded, it would say neither title and never rename.
  * The rewrite is an edit of the editor (TitleLineHandle.retitle), saved like
  * any other and undone as one step.
  *
@@ -56,7 +57,7 @@ export type TitleLineSettle = {
 export type TitleLineSettled =
   /** Nothing to do: no editor, line 1 not the title line, or it says the new title. */
   | "none"
-  /** Left for the renamed text on its way, or for a safety answer that could not be read. */
+  /** Left for the renamed text on its way. */
   | "left"
   | "rewritten"
   | "released";
@@ -86,8 +87,9 @@ export async function settleTitleLine(params: TitleLineSettle): Promise<TitleLin
       await params.wait();
       safety = await params.safety();
     }
-    if (safety === "unreadable") return "left";
-    if (safety === "blocked") return release();
+    // Blocked, or still unreadable: nothing is written, and the writer asks
+    // afresh when the note is next loaded.
+    if (safety !== "allowed") return release();
   }
 
   // Asked again after the reads: what happened meanwhile stands.

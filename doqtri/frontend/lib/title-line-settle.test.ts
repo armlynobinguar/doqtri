@@ -98,16 +98,19 @@ describe("settleTitleLine (DOQ-46)", () => {
     expect(t.editor.release).toHaveBeenCalledOnce();
   });
 
-  it("asks a safety read that failed once more, and decides nothing when it fails again", async () => {
+  it("asks a safety read that failed once more, and failing again writes nothing and lets line 1 go", async () => {
     const twice = setup({ safety: ["unreadable", "allowed"] });
     expect(await twice.run()).toBe("rewritten");
     expect(twice.params.wait).toHaveBeenCalledOnce();
     expect(twice.safety).toHaveBeenCalledTimes(2);
 
+    // Left guarded, line 1 would stay styled as the title while saying neither
+    // title, and an edit of it would rename nothing until a reload.
     const failing = setup({ safety: ["unreadable", "unreadable"] });
-    expect(await failing.run()).toBe("left");
+    expect(await failing.run()).toBe("released");
     expect(failing.editor.retitle).not.toHaveBeenCalled();
-    expect(failing.editor.release).not.toHaveBeenCalled();
+    expect(failing.editor.release).toHaveBeenCalledOnce();
+    expect(failing.params.rewritten).not.toHaveBeenCalled();
   });
 
   describe("line 1 typed into while the rename was on its way (review finding 4)", () => {
