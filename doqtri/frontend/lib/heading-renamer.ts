@@ -1,5 +1,6 @@
 import { decideHeadingRename, movesBaseline, type HeadingNotice } from "@/lib/heading-rename";
 import { normalizeConcept } from "@/lib/mindmap-types";
+import { NoResponseError } from "@/lib/no-response";
 import { RenameError, renameNote as defaultRenameNote, type RenamedNote } from "@/lib/rename-note";
 
 /**
@@ -197,9 +198,17 @@ export function createHeadingRenamer(init: {
         },
         (error: unknown) => {
           if (!(error instanceof RenameError)) {
-            // A save that failed first, which the save status already shows.
-            // The baseline stays, so the next settled edit tries again.
+            // A save that failed first, or no answer: said, since nothing
+            // else says the heading did not rename the note (DOQ-46). The
+            // baseline stays, so the next settled edit tries again.
             if (!left) ctx.draft(null);
+            init.onError?.(
+              error instanceof NoResponseError
+                ? `Could not reach doqtri, so the note may not have been renamed to “${decision.title}”.`
+                : error instanceof Error && error.message
+                  ? error.message
+                  : `Could not rename the note to “${decision.title}”.`,
+            );
             return;
           }
           if (error.code === "TITLE_TAKEN") {
@@ -255,6 +264,9 @@ export function createHeadingRenamer(init: {
         latest = title;
       }
       emit();
+      // A draft worked out against the old title is not one now: a rename
+      // from the explorer replaces it with its own title (DOQ-46).
+      typed();
     },
 
     typed,
@@ -292,6 +304,12 @@ export function createHeadingRenamer(init: {
       pending = [];
       notice = null;
       emit();
+      typed();
+    },
+
+    /** Whether `renamed` answers one of this editor's own heading renames, not one from elsewhere. */
+    isOwn(renamed: RenamedNote): boolean {
+      return own.has(renamed);
     },
 
     dismiss() {

@@ -564,6 +564,24 @@ describe("drafts in the vault (DOQ-44)", () => {
     expect(isNotePending(v.overlays.at(-1)!, "a")).toBe(false);
   });
 
+  it("shows a rename from the explorer at once in place of a draft, and keeps other notes' drafts (DOQ-46)", async () => {
+    const v = await mount();
+    const { drafts } = v.drafts();
+    // The title line retyped, its rename not fired yet: the row shows the draft.
+    await act(async () => drafts.set("a", "Alph"));
+    await act(async () => drafts.set("b", "Bet"));
+    const patch = deferred();
+    await act(async () =>
+      v.run({ kind: "rename", id: "a", title: "Alphasdffga", previousTitle: "Alpha" }, patch.action, () => {}),
+    );
+    // Before any answer: the new title, and no draft over it.
+    expect(drafts.get("a")).toBeUndefined();
+    expect(v.frames.at(-1)?.[0]).toBe("Alphasdffga");
+    expect(drafts.get("b")).toBe("Bet");
+    await act(async () => patch.resolve());
+    expect(v.frames.at(-1)?.[0]).toBe("Alphasdffga");
+  });
+
   it("drops a settling draft after the next commit", async () => {
     const v = await mount();
     const { drafts, settle } = v.drafts();

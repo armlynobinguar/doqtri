@@ -12,6 +12,7 @@ import { LiveMindmapPane } from "@/components/vault/live-mindmap-pane";
 import type { MindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
 import type { HeadingNotice } from "@/lib/heading-rename";
 import type { TitleLineWrite } from "@/components/vault/live-editor/title-line-writer";
+import type { TitleLineHandle } from "@/components/vault/live-editor/title-line";
 import { cn } from "@/lib/utils";
 import type { EditorStats } from "@/lib/text-stats";
 
@@ -84,6 +85,7 @@ export function EditorPane({
   onLeaveTitleLine,
   onTitleLine,
   titleLineWrite,
+  titleLineHandleRef,
 }: {
   /** The note's title, shown in the tab and the live mindmap: as it is being typed, too (DOQ-44). */
   title: string;
@@ -129,6 +131,8 @@ export function EditorPane({
   onTitleLine?: (markdown: string) => void;
   /** How a note that lacks its title line gets it after its first edit; see MarkdownEditor. */
   titleLineWrite?: TitleLineWrite;
+  /** The editor's title line guard, while it is mounted (DOQ-46); see MarkdownEditor. */
+  titleLineHandleRef?: { current: TitleLineHandle | null };
 }) {
   const mindmapShown = useSyncExternalStore(subscribeMindmapShown, readMindmapShown, () => true);
   const showMindmap = !compact && mindmapShown;
@@ -150,6 +154,7 @@ export function EditorPane({
       title={lineTitle}
       onTitleLine={onTitleLine}
       titleLineWrite={titleLineWrite}
+      titleLineHandleRef={titleLineHandleRef}
     />
   );
 

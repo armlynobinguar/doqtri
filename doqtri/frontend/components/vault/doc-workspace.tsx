@@ -33,12 +33,13 @@ import {
 import { useMindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
 import type { Doc } from "@/lib/types";
 import type { RenamedNote } from "@/lib/rename-note";
-import { adoptRename } from "@/lib/rename-adopt";
+import { adoptRename, titleLineAfterRename } from "@/lib/rename-adopt";
 import { useRegisterOpenNote } from "@/components/vault/open-note";
 import type { EditorStats } from "@/lib/text-stats";
 import { useHeadingRename, type HeadingCheck } from "@/components/vault/use-heading-rename";
 import { buildBacklinks } from "@/lib/wikilinks";
 import { checkTitleLineSafety } from "@/components/vault/title-line-safety-reads";
+import type { TitleLineHandle } from "@/components/vault/live-editor/title-line";
 
 const SETTLE_MS = 700;
 
@@ -314,6 +315,71 @@ export function DocWorkspace({
    * (rename_document()).
    */
   const noteRenamed = headingRename.noteRenamed;
+  const isOwnRename = headingRename.isOwn;
+
+  /**
+   * Whether the open note may be given its title line now (D-120,
+   * lib/title-line-safety.ts), asked afresh each time: by the editor after an
+   * older note's first edit, and below before line 1 is rewritten.
+   */
+  const checkTitleLine = useCallback(() => checkTitleLineSafety(active.id), [active.id]);
+
+  // The editor's title line guard, while it is mounted (DOQ-46).
+  const titleLineHandleRef = useRef<TitleLineHandle | null>(null);
+  // The title the editor's title line goes by, for the line 1 rewrite below.
+  const lineTitleRef = useRef(headingRename.title);
+  useEffect(() => {
+    lineTitleRef.current = headingRename.title;
+  });
+
+  /**
+   * A rename from the explorer the editor took no text from (DOQ-46): the
+   * server left line 1 alone, because it did not say the old title (a title
+   * being retyped whose own rename had not fired yet, or a line an older
+   * rename left behind), or the editor could not adopt the rewrite. When the
+   * editor's guard holds line 1 as the title line, it becomes `# <new title>`
+   * here and is saved like any edit, once the note's title-line safety allows
+   * it where the server did not write that line itself
+   * (lib/rename-adopt.ts titleLineAfterRename). Otherwise, with no renamed
+   * text coming, the guard lets line 1 go, and the new title shows above it.
+   * A copy with a conflict waiting is left for its reload.
+   */
+  const settleTitleLine = useCallback(
+    async (renamed: RenamedNote) => {
+      const handle = titleLineHandleRef.current;
+      if (!handle || !handle.held() || conflictRef.current) return;
+      if (readOnlyRef.current) {
+        if (renamed.markdown === undefined) handle.release();
+        return;
+      }
+      const before = markdownRef.current;
+      const plan = titleLineAfterRename({ renamed, text: before, held: true });
+      if (plan.kind === "keep") return;
+      if (plan.check && (await checkTitleLine()) !== "allowed") {
+        if (titleLineHandleRef.current === handle) handle.release();
+        return;
+      }
+      // The same line 1, title and editable copy as before the check; else what happened since stands.
+      const now = markdownRef.current;
+      const lineOne = (text: string) => text.split("\n", 1)[0];
+      if (
+        titleLineHandleRef.current !== handle ||
+        readOnlyRef.current ||
+        conflictRef.current ||
+        lineTitleRef.current !== renamed.title ||
+        lineOne(now) !== lineOne(before)
+      ) {
+        return;
+      }
+      const next = titleLineAfterRename({ renamed, text: now, held: handle.held() });
+      if (next.kind === "keep") return;
+      markdownRef.current = next.text;
+      resetHeading(next.text);
+      setMarkdown(next.text);
+    },
+    [checkTitleLine, resetHeading],
+  );
+
   const renameHere = useCallback(
     async (request: (session: string) => Promise<RenamedNote>) => {
       if (!readOnly) {
@@ -324,7 +390,9 @@ export function DocWorkspace({
           throw new Error(`Your edits could not be saved, so the note was not renamed.${reason}`);
         }
       }
-      return saves.run(async () => {
+      // Whether the editor takes the renamed text: adopted here, or reloaded.
+      let tookText = false;
+      const renamed = await saves.run(async () => {
         const renamed = await request(controller.session);
         const adopted = adoptRename({
           renamed,
@@ -337,10 +405,12 @@ export function DocWorkspace({
           // A rewrite this copy was already behind: load what the note is
           // now, unless it holds unsaved text or a conflict the user must see.
           if (renamed.markdown !== undefined && !conflictRef.current && markdownRef.current === saves.saved) {
+            tookText = true;
             void reloadLatest();
           }
           return renamed;
         }
+        tookText = true;
         saver.setVersion(adopted.version);
         saves.markSaved(adopted.saved);
         markdownRef.current = adopted.text;
@@ -350,8 +420,11 @@ export function DocWorkspace({
         // An autosave queued while this ran writes the editor's text as it is
         // now, rebased, rather than the pre-rename text it was queued with.
       }, () => markdownRef.current);
+      // Out of the save queue: the safety reads it may make can take a while.
+      if (!tookText && !isOwnRename(renamed)) void settleTitleLine(renamed);
+      return renamed;
     },
-    [controller, noteRenamed, readOnly, reloadLatest, saveNow, saver, saves, setSaveState],
+    [controller, isOwnRename, noteRenamed, readOnly, reloadLatest, saveNow, saver, saves, setSaveState, settleTitleLine],
   );
   // Registered with the shell, so its rename dialog renames this note here.
   const openHere = useMemo(() => ({ docId: active.id, rename: renameHere }), [active.id, renameHere]);
@@ -405,10 +478,9 @@ export function DocWorkspace({
    * The title line an older note gets after its first edit (D-120,
    * lib/title-line.ts), written by the editor (title-line-writer.ts). It asks
    * afresh, at that moment, whether the note's headings are linked or
-   * anchored (lib/title-line-safety.ts), and writes with the title the page's
+   * anchored (checkTitleLine above), and writes with the title the page's
    * data confirms: not while a rename is still on its way.
    */
-  const checkTitleLine = useCallback(() => checkTitleLineSafety(active.id), [active.id]);
   const titleLineWrite = useMemo(
     () => ({ title: title === active.title ? active.title : null, check: checkTitleLine }),
     [title, active.title, checkTitleLine],
@@ -574,6 +646,7 @@ export function DocWorkspace({
             onLeaveTitleLine={leaveTitleLine}
             onTitleLine={resetHeading}
             titleLineWrite={titleLineWrite}
+            titleLineHandleRef={titleLineHandleRef}
           />
         </div>
         {mobileView === "map" && (
@@ -622,6 +695,7 @@ export function DocWorkspace({
             onLeaveTitleLine={leaveTitleLine}
             onTitleLine={resetHeading}
             titleLineWrite={titleLineWrite}
+            titleLineHandleRef={titleLineHandleRef}
           />
         </ResizablePanel>
 

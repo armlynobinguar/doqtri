@@ -74,6 +74,13 @@ export const titleLineChange = Annotation.define<boolean>();
 /** Tells the editor the note's title, for the title line shown above a note that has none yet. */
 export const setNoteTitle = StateEffect.define<string>();
 
+/**
+ * A rename from outside settled and no renamed text is coming (DOQ-46): a
+ * line 1 that does not say the title is no longer the title line, so the
+ * guard lets it go and the title shows above it (TitlePreview).
+ */
+export const releaseTitleLine = StateEffect.define<null>();
+
 const titleField = StateField.define<string>({
   create: () => "",
   update(title, tr) {
@@ -99,6 +106,11 @@ function hasPrefix(doc: Text): boolean {
  * renamed text lands, and shows the new one meanwhile (see StaleTitle).
  * Without this, line 1 would stop being the title line for a moment, and the
  * new title would show above it as a second line.
+ *
+ * That lasts only while the renamed text is on its way. When the rename
+ * settles without it (releaseTitleLine: the server left line 1 alone and the
+ * workspace may not rewrite it, DOQ-46), a line 1 that does not say the
+ * title stops being the title line.
  */
 type Guard = { held: boolean; stale: boolean };
 
@@ -106,9 +118,17 @@ const guardField = StateField.define<Guard>({
   create: (state) => ({ held: isTitleHeading(state.doc.line(1).text, state.field(titleField)), stale: false }),
   update(guard, tr) {
     let title: string | null = null;
-    for (const effect of tr.effects) if (effect.is(setNoteTitle)) title = effect.value;
+    let release = false;
+    for (const effect of tr.effects) {
+      if (effect.is(setNoteTitle)) title = effect.value;
+      if (effect.is(releaseTitleLine)) release = true;
+    }
     const loaded = tr.annotation(external) || tr.annotation(titleLineChange);
     const line = tr.newDoc.line(1).text;
+    if (release && !loaded) {
+      const held = guard.held && isTitleHeading(line, title ?? tr.state.field(titleField));
+      return { held, stale: false };
+    }
     if (title !== null && !loaded && !tr.docChanged && guard.held && hasPrefix(tr.newDoc)) {
       return { held: true, stale: !isTitleHeading(line, title) };
     }
@@ -126,6 +146,16 @@ const guardField = StateField.define<Guard>({
 export function guarded(state: EditorState): boolean {
   return state.field(guardField, false)?.held ?? false;
 }
+
+/**
+ * The open editor's title line, for the workspace once a rename from
+ * outside has settled (DOQ-46): whether the guard holds line 1, and letting
+ * it go when no renamed text is coming (releaseTitleLine).
+ */
+export type TitleLineHandle = {
+  held(): boolean;
+  release(): void;
+};
 
 /** One change of a transaction, in the coordinates of the text before it, with its inserted lines. */
 type Edit = { from: number; to: number; lines: string[] };
@@ -492,7 +522,7 @@ export function titleLineDecorations(state: EditorState): DecorationSet {
 const decorations = StateField.define<DecorationSet>({
   create: titleLineDecorations,
   update(value, tr) {
-    const titleChanged = tr.effects.some((effect) => effect.is(setNoteTitle));
+    const titleChanged = tr.effects.some((effect) => effect.is(setNoteTitle) || effect.is(releaseTitleLine));
     if (!tr.docChanged && !titleChanged) return value;
     return titleLineDecorations(tr.state);
   },

@@ -1,5 +1,6 @@
 import type { RenamedNote } from "@/lib/rename-note";
-import { rewriteTitleHeading } from "@/lib/title-heading";
+import { hasControlCharacters } from "@/lib/title";
+import { isTitleHeading, rewriteTitleHeading } from "@/lib/title-heading";
 
 /**
  * What an open editor takes from a rename of its note (DOQ-35): the version
@@ -33,4 +34,46 @@ export function adoptRename(params: {
       ? markdown
       : (rewriteTitleHeading(current, renamed.previousTitle, renamed.title) ?? current);
   return { version, saved: markdown, text };
+}
+
+/**
+ * What the open editor does with its line 1 after a rename from elsewhere
+ * (the explorer) that the editor did not take new text from (DOQ-46): the
+ * answer carried none, because the server found line 1 saying something
+ * other than the old title, or adoptRename() took nothing.
+ *
+ * Line 1 is rewritten to `# <new title>` only when the editor's guard holds
+ * it (`held`): it is the note's title line, even while it says something
+ * else, such as a title being retyped whose rename had not fired yet, or an
+ * older rename that left it behind. A line 1 the guard does not hold is the
+ * student's own (`# Introduction`), and is left as it is, as the server
+ * left it.
+ *
+ *   keep      line 1 already says the new title, is not held or not a `# `
+ *             heading, or the new title cannot be a title line
+ *   rewrite   `text` is the editor's text with line 1 as `# <new title>`
+ *             and nothing else changed; `check` says the server did not
+ *             write that line, so the note's title-line safety
+ *             (lib/title-line-safety.ts) must allow it first
+ */
+export type TitleLineAfterRename = { kind: "keep" } | { kind: "rewrite"; text: string; check: boolean };
+
+export function titleLineAfterRename(params: {
+  renamed: RenamedNote;
+  /** The text the editor shows now. */
+  text: string;
+  /** Whether the editor's guard holds line 1 as the title line. */
+  held: boolean;
+}): TitleLineAfterRename {
+  const { renamed, text, held } = params;
+  const title = renamed.title.trim();
+  if (!held || !title || hasControlCharacters(title)) return { kind: "keep" };
+  const newline = text.indexOf("\n");
+  const end = newline === -1 ? text.length : newline;
+  const lineEnd = end > 0 && text[end - 1] === "\r" ? end - 1 : end;
+  const line = text.slice(0, lineEnd);
+  if (!/^#[ \t]/.test(line)) return { kind: "keep" };
+  // An emptied `# ` is a title line too, but says no title: it gets the new one.
+  if (!/^#[ \t]+$/.test(line) && isTitleHeading(line, title)) return { kind: "keep" };
+  return { kind: "rewrite", text: `# ${title}${text.slice(lineEnd)}`, check: renamed.markdown === undefined };
 }

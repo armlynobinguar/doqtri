@@ -14,7 +14,9 @@ import {
 import { external, readOnlyGuard } from "@/components/vault/live-editor/read-only";
 import {
   enterFromTitle,
+  guarded,
   lineMoveKeys,
+  releaseTitleLine,
   setNoteTitle,
   titleLine,
   titleLineChange,
@@ -416,6 +418,74 @@ describe("the title line guard (D-120)", () => {
       const state = make(`# Introduction${BODY}`).update({ effects: setNoteTitle.of("Roadmap") }).state;
       expect(pending(state)).toEqual([]);
       expect(blockWidgets(state)).toBe(1);
+    });
+
+    describe("settling with no renamed text coming (DOQ-46)", () => {
+      /** Whether line 1 is styled as the title. */
+      const styled = (state: EditorState) => {
+        let found = false;
+        titleLineDecorations(state).between(0, 0, (_from, _to, deco) => {
+          if ((deco.spec as { class?: string }).class === "cm-title-line") found = true;
+        });
+        return found;
+      };
+      /** `# Pla`: the title line with one character deleted, its rename not fired yet. */
+      const retyped = () => edit(make(`# Plan${BODY}`), { changes: { from: 5, to: 6 }, userEvent: "delete.backward" }).state;
+
+      it("without a release, the new title stays over the old line however long nothing lands", () => {
+        // What the drifted prod note showed: line 1 kept its old text under the new title.
+        let state = renamed();
+        for (let at = 9; at < 12; at++) state = state.update({ selection: EditorSelection.cursor(at) }).state;
+        expect(pending(state)).toEqual(["2-6:Roadmap"]);
+        expect(guarded(state)).toBe(true);
+      });
+
+      it("a release lets a line 1 that does not say the title go: not styled, not guarded, the title above it", () => {
+        const released = renamed().update({ effects: releaseTitleLine.of(null) }).state;
+        expect(guarded(released)).toBe(false);
+        expect(pending(released)).toEqual([]);
+        expect(blockWidgets(released)).toBe(1);
+        expect(styled(released)).toBe(false);
+        // Its `# ` is ordinary text now.
+        expect(edit(released, { changes: { from: 0, to: 2 }, userEvent: "delete" }).text).toBe(`Plan${BODY}`);
+      });
+
+      it("a release keeps a line 1 that says the title, which shows as it is", () => {
+        const landed = renamed().update({
+          changes: { from: 2, to: 6, insert: "Roadmap" },
+          annotations: [external.of(true), Transaction.addToHistory.of(false)],
+        }).state;
+        const released = landed.update({ effects: releaseTitleLine.of(null) }).state;
+        expect(guarded(released)).toBe(true);
+        expect(styled(released)).toBe(true);
+        expect(pending(released)).toEqual([]);
+        expect(blockWidgets(released)).toBe(0);
+      });
+
+      it("a release lets go of a title being retyped that the rename overtook", () => {
+        const state = retyped();
+        expect(guarded(state)).toBe(true);
+        const renamedAway = state.update({ effects: setNoteTitle.of("Roadmap") }).state;
+        expect(pending(renamedAway)).toEqual(["2-5:Roadmap"]);
+        const released = renamedAway.update({ effects: releaseTitleLine.of(null) }).state;
+        expect(guarded(released)).toBe(false);
+        expect(pending(released)).toEqual([]);
+        expect(blockWidgets(released)).toBe(1);
+      });
+
+      it("line 1 rewritten from outside to the new title is guarded and shows as it is", () => {
+        // The workspace's rewrite of a retyped line 1 (rename-adopt.ts titleLineAfterRename).
+        const renamedAway = retyped().update({ effects: setNoteTitle.of("Roadmap") }).state;
+        const rewritten = renamedAway.update({
+          changes: { from: 2, to: 5, insert: "Roadmap" },
+          annotations: [external.of(true), Transaction.addToHistory.of(false)],
+        }).state;
+        expect(rewritten.doc.toString()).toBe(`# Roadmap${BODY}`);
+        expect(guarded(rewritten)).toBe(true);
+        expect(styled(rewritten)).toBe(true);
+        expect(pending(rewritten)).toEqual([]);
+        expect(blockWidgets(rewritten)).toBe(0);
+      });
     });
   });
 
