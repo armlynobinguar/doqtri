@@ -216,6 +216,10 @@ test.describe("mindmap studio", () => {
 });
 
 /** A heading-only note that outlines to 1 + 12 + 120 + 1,080 = 1,213 nodes. */
+/**
+ * 1,213 nodes once drawn: the root, 12 areas, 120 parts and 1,080 items. The
+ * title heading folds into the root although areas sit beside it (D-120).
+ */
 function hugeOutline(title: string): string {
   const lines = [`# ${title}`, ""];
   for (let a = 0; a < 12; a++) {
@@ -252,7 +256,7 @@ test.describe("large mindmaps", () => {
     await page.getByRole("button", { name: /^Overview:/ }).click();
     await expect(page.getByText("Building mindmap…")).toBeVisible();
     await expect(page.getByText("Building mindmap…")).toBeHidden({ timeout: 30_000 });
-    await expect(page.getByRole("button", { name: /^Showing \d+ of 1214 nodes/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Showing \d+ of 1213 nodes/ })).toBeVisible();
   });
 
   test("hiding child nodes on zoom out draws less of the fitted map", async ({ page }) => {
@@ -299,7 +303,7 @@ test.describe("large mindmaps", () => {
     }
     console.log(`settled in ${Date.now() - started}ms, worst frame ${worstGap}ms`);
     expect(worstGap).toBeLessThan(500);
-    await expect(page.getByRole("button", { name: /^Showing all 1214 nodes/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Showing all 1213 nodes/ })).toBeVisible();
   });
 });
 

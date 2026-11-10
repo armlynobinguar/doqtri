@@ -25,8 +25,8 @@ test.describe("[[ link autocomplete", () => {
     const token = `Qz${Date.now().toString(36)}`;
     target = `${token} Alpha target`;
     sibling = `${token} Beta sibling`;
-    ids.push(await seedNote(target, "# Alpha\n"));
-    ids.push(await seedNote(sibling, "# Beta\n"));
+    ids.push(await seedNote(target, `# ${target}\n`));
+    ids.push(await seedNote(sibling, `# ${sibling}\n`));
   });
 
   test.afterEach(async () => {
@@ -34,7 +34,9 @@ test.describe("[[ link autocomplete", () => {
   });
 
   test("Enter completes the highlighted note and closes the list", async ({ page }) => {
-    const source = await seedNote(uniqueTitle("Linker"), "# Source\n\nsee ");
+    // Each source opens with its title line (D-120), so nothing is added above it.
+    const sourceTitle = uniqueTitle("Linker");
+    const source = await seedNote(sourceTitle, `# ${sourceTitle}\n\nsee `);
     ids.push(source);
     await page.goto(`/vault/${source}`);
     await editableEditor(page);
@@ -59,18 +61,18 @@ test.describe("[[ link autocomplete", () => {
 
     await expect(list).toBeHidden();
     // Enter picked the note rather than starting a new line.
-    await expectEditorText(page, `# Source\n\nsee [[${target}]]`);
+    await expectEditorText(page, `# ${sourceTitle}\n\nsee [[${target}]]`);
 
     // The caret lands past `]]`, so typing continues the sentence.
     await page.keyboard.type(" next");
-    await expectEditorText(page, `# Source\n\nsee [[${target}]] next`);
+    await expectEditorText(page, `# ${sourceTitle}\n\nsee [[${target}]] next`);
   });
 
   test("click picks a note, Esc dismisses, and the active note is not offered", async ({
     page,
   }) => {
     const sourceTitle = uniqueTitle("Linker");
-    const source = await seedNote(sourceTitle, "# Source\n\n");
+    const source = await seedNote(sourceTitle, `# ${sourceTitle}\n\n`);
     ids.push(source);
     await page.goto(`/vault/${source}`);
     await editableEditor(page);
@@ -85,7 +87,7 @@ test.describe("[[ link autocomplete", () => {
     await expect(list.getByRole("option")).toHaveCount(1);
     await list.getByRole("option", { name: sibling }).click();
     await expect(list).toBeHidden();
-    await expectEditorText(page, `# Source\n\n[[${sibling}]]`);
+    await expectEditorText(page, `# ${sourceTitle}\n\n[[${sibling}]]`);
     await expect(noteEditor(page)).toBeFocused();
 
     await page.keyboard.type(" and [[Alp");
@@ -96,11 +98,12 @@ test.describe("[[ link autocomplete", () => {
     await page.keyboard.type("ha");
     await expect(list).toBeHidden();
     await page.keyboard.type("]]");
-    await expectEditorText(page, `# Source\n\n[[${sibling}]] and [[Alpha]]`);
+    await expectEditorText(page, `# ${sourceTitle}\n\n[[${sibling}]] and [[Alpha]]`);
   });
 
   test("completing inside a closed link replaces its target", async ({ page }) => {
-    const source = await seedNote(uniqueTitle("Linker"), "# Source\n\n[[Old]] tail");
+    const sourceTitle = uniqueTitle("Linker");
+    const source = await seedNote(sourceTitle, `# ${sourceTitle}\n\n[[Old]] tail`);
     ids.push(source);
     await page.goto(`/vault/${source}`);
     await editableEditor(page);
@@ -112,6 +115,6 @@ test.describe("[[ link autocomplete", () => {
     const list = page.getByRole("listbox", { name: "Link to note" });
     await expect(list.getByRole("option")).toHaveCount(2);
     await page.keyboard.press("Tab");
-    await expectEditorText(page, `# Source\n\n[[${target}]] tail`);
+    await expectEditorText(page, `# ${sourceTitle}\n\n[[${target}]] tail`);
   });
 });
