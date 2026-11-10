@@ -36,6 +36,11 @@ export type Layout = {
   expectMindmap(page: Page, title: string, sections: string[], old: string): Promise<void>;
   /** The note's backlinks count, as the right panel shows it. */
   expectBacklinks(page: Page, count: number): Promise<void>;
+  /**
+   * A CSS selector for where this layout names the open note `id` outside
+   * the editor: the explorer's row, or the phone's top bar (DOQ-44).
+   */
+  titleOf(id: string): string;
 };
 
 const BODY = "\n\n## Scope\n\nFirst line.";
@@ -131,6 +136,51 @@ export function headingRenameCases(layout: Layout) {
     // A title-only rename: the text is the student's, already saved.
     expect(JSON.parse(renames[0].body)).not.toHaveProperty("markdown");
     await expect(notice(page)).toHaveCount(0);
+  });
+
+  test("the title being typed shows at once, before any PATCH, and holds as the rename lands", async ({ page }) => {
+    const title = uniqueTitle("Live Plan");
+    const id = await seed(title, `# ${title}${BODY}`);
+    await seed(uniqueTitle("Live Linker"), `See [[${title}]].\n`);
+    const renames = watchRenames(page, id);
+    // The rename is held until the typed title has been seen: no network wait.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route(`**/api/notes/${id}`, async (route) => {
+      if (route.request().method() === "PATCH") await held;
+      await route.fallback();
+    });
+    await page.goto(`/vault/${id}`);
+    const where = layout.titleOf(id);
+    await expect(page.locator(where).first()).toHaveText(title);
+
+    const renamed = uniqueTitle("Live Roadmap");
+    await retypeHeading(page, title, renamed);
+    await expect(page.locator(where).first()).toHaveText(renamed, { timeout: 2_000 });
+    // Before the edit settled: nothing asked of the server yet.
+    expect(renames).toHaveLength(0);
+    await layout.expectTitle(page, renamed, title);
+    // A label only: the note's links still go by its confirmed title.
+    await layout.expectBacklinks(page, 1);
+
+    // Every title shown from here on, through the rename and the refresh after it.
+    await page.evaluate((selector) => {
+      const seen: string[] = [];
+      (window as unknown as { __titles: string[] }).__titles = seen;
+      new MutationObserver(() => {
+        const text = document.querySelector(selector)?.textContent;
+        if (text) seen.push(text);
+      }).observe(document.body, { subtree: true, childList: true, characterData: true });
+    }, where);
+    await expect.poll(() => renames.length, { timeout: 15_000 }).toBe(1);
+    release();
+    await expect.poll(async () => (await readNote(id)).title, { timeout: 15_000 }).toBe(renamed);
+    await layout.expectTitle(page, renamed, title);
+    await page.waitForTimeout(1_500);
+    const titles = await page.evaluate(() => (window as unknown as { __titles: string[] }).__titles);
+    expect(titles.filter((text) => text !== renamed)).toEqual([]);
+    expect(renames).toHaveLength(1);
+    await page.unroute(`**/api/notes/${id}`);
   });
 
   test("moving the caret off the heading renames without waiting for the pause", async ({ page }) => {
@@ -443,9 +493,13 @@ export function headingRenameCases(layout: Layout) {
     await page.goto(`/vault/${id}`);
 
     await retypeHeading(page, title, taken);
+    // Shown as typed, then back to the title once the rename is refused (DOQ-44).
+    const where = page.locator(layout.titleOf(id)).first();
+    await expect(where).toHaveText(taken, { timeout: 2_000 });
     const warning = `Another note is already called “${taken}”. The title stays “${title}”. Edit the heading, or rename the note from the explorer.`;
     await expect(notice(page)).toHaveText(warning, { timeout: 15_000 });
     await expect(notice(page)).toHaveCount(1);
+    await expect(where).toHaveText(title);
     // One line at a fixed height, however narrow the page: a longer message
     // ends in an ellipsis, and the whole of it is the line's title.
     await expect(notice(page)).toHaveAttribute("title", warning);
@@ -466,6 +520,7 @@ export function headingRenameCases(layout: Layout) {
     await page.waitForTimeout(1_000);
     expect(renames).toHaveLength(1);
     await expect(notice(page)).toHaveCount(1);
+    await expect(where).toHaveText(title);
 
     // Back to the current title: the warning clears, nothing to rename.
     await retypeHeading(page, taken, title);

@@ -1,6 +1,15 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { isServerReachable, NoResponseError } from "@/lib/no-response";
 
 /*
@@ -198,6 +207,62 @@ export type RunChange = (
   onError: (error: unknown) => void,
 ) => void;
 
+/**
+ * The titles being typed into notes' title lines (DOQ-44): display labels
+ * only. They are kept apart from the overlay, so nothing but the labels sees
+ * them: not the notes' data (graph links, backlinks, the ship panel), not
+ * isTitleTaken, not isNotePending. Each label reads its own note's entry
+ * (useDraftTitle), so a keystroke re-renders the labels of that note and
+ * nothing else. A rename typed this way that lands becomes an ordinary
+ * accepted rename in the overlay (NoteTitleDrafts.landed); its draft goes
+ * once that shows, so no frame shows the old title.
+ */
+export function createDraftStore() {
+  const drafts = new Map<string, string>();
+  // Drafts whose editor is gone, with nothing more on its way: they go at the next prune.
+  const settling = new Set<string>();
+  const listeners = new Set<() => void>();
+  function set(id: string, title: string | null) {
+    settling.delete(id);
+    if ((title ?? undefined) === drafts.get(id)) return;
+    if (title === null) drafts.delete(id);
+    else drafts.set(id, title);
+    for (const listener of listeners) listener();
+  }
+  return {
+    get: (id: string): string | undefined => drafts.get(id),
+    /** The label to show for note `id`, or with null, none. */
+    set,
+    /** Drops note `id`'s draft at the next prune, once what landed shows instead. */
+    settle(id: string) {
+      if (drafts.has(id)) settling.add(id);
+    },
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    /** Without the drafts the notes already show under that title, and those settling. */
+    prune(shown: (id: string) => string | undefined) {
+      for (const [id, title] of drafts) if (settling.has(id) || shown(id) === title) set(id, null);
+    },
+  };
+}
+
+export type DraftStore = ReturnType<typeof createDraftStore>;
+
+/** Drafts and what a heading rename typed in the editor needs from the overlay (DOQ-44). */
+export type NoteTitleDrafts = {
+  drafts: DraftStore;
+  /** A rename made from the title line landed: shown as an accepted rename, and a refresh asked for. */
+  landed(change: { id: string; title: string; previousTitle: string }): void;
+  /** Asks for a refresh through the scheduler, never router.refresh() directly. */
+  refresh(): void;
+  /** Drops note `id`'s draft after the next commit, once whatever landed shows (DraftStore.settle). */
+  settle(id: string): void;
+};
+
 /** How long a refresh may take before another may start regardless. */
 export const REFRESH_WAIT_MS = 10_000;
 
@@ -339,7 +404,7 @@ export function useNoteOverlayState({
   navigating: boolean;
   isNavigating: () => boolean;
   refresh: () => void;
-}): { overlay: NoteOverlay; run: RunChange } {
+}): { overlay: NoteOverlay; run: RunChange; titleDrafts: NoteTitleDrafts } {
   const [raw, setRaw] = useState(EMPTY_OVERLAY);
   const overlay = useMemo(() => settleOverlay(raw, notes, failedImports), [raw, notes, failedImports]);
   // Settled entries leave the state on this same render, so one cannot
@@ -379,6 +444,37 @@ export function useNoteOverlayState({
     },
     [scheduler],
   );
+
+  const [drafts] = useState(createDraftStore);
+  // Bumped by `settle`, so the prune below runs after the commit that shows what landed.
+  const [settles, setSettles] = useState(0);
+  const titleDrafts = useMemo<NoteTitleDrafts>(
+    () => ({
+      drafts,
+      landed(change) {
+        const rename = { kind: "rename" as const, ...change };
+        const token = ++nextToken.current;
+        const now = Date.now();
+        setRaw((prev) => confirmChange(applyChange(prev, rename, token), rename, token, now));
+        scheduler.answered();
+        scheduler.want(true);
+      },
+      refresh() {
+        scheduler.want(true);
+      },
+      settle(id) {
+        drafts.settle(id);
+        setSettles((count) => count + 1);
+      },
+    }),
+    [drafts, scheduler],
+  );
+  // A draft goes once the note shows that title: after this commit, so the
+  // label never falls back to an older one in between.
+  useEffect(() => {
+    const titles = new Map(notes.map((note) => [note.id, note.title]));
+    drafts.prune((id) => overlay.titles.get(id)?.title ?? titles.get(id));
+  }, [drafts, overlay, notes, settles]);
 
   // New server data: the refresh out, if any, is done.
   useEffect(() => {
@@ -423,7 +519,7 @@ export function useNoteOverlayState({
     return () => clearTimeout(timer);
   }, [overlay]);
 
-  return { overlay, run };
+  return { overlay, run, titleDrafts };
 }
 
 const NoteOverlayContext = createContext<NoteOverlay>(EMPTY_OVERLAY);
@@ -444,4 +540,27 @@ export function useOverlaidNotes<T extends { id: string; title: string }>(items:
 /** A note's title, or the one it is being renamed to. */
 export function useNoteTitle(id: string, title: string): string {
   return useNoteOverlay().titles.get(id)?.title ?? title;
+}
+
+const NoteTitleDraftsContext = createContext<NoteTitleDrafts>({
+  drafts: createDraftStore(),
+  landed() {},
+  refresh() {},
+  settle() {},
+});
+
+export const NoteTitleDraftsProvider = NoteTitleDraftsContext.Provider;
+
+export function useNoteTitleDrafts(): NoteTitleDrafts {
+  return useContext(NoteTitleDraftsContext);
+}
+
+/**
+ * The label for note `id`: the title being typed into its title line
+ * (DOQ-44), else `title`. Re-renders only when that note's draft changes.
+ */
+export function useDraftTitle(id: string | undefined, title: string): string {
+  const { drafts } = useNoteTitleDrafts();
+  const get = () => (id === undefined ? undefined : drafts.get(id));
+  return useSyncExternalStore(drafts.subscribe, get, get) ?? title;
 }

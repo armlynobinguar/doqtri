@@ -191,6 +191,8 @@ test.describe("mobile: editing the title heading renames the note", () => {
   }
 
   headingRenameCases({
+    // The top bar names the open note.
+    titleOf: () => "header h1",
     async expectTitle(page, title, old) {
       await expect(page.getByRole("heading", { level: 1, name: title, exact: true })).toBeVisible({ timeout: 15_000 });
       await expect(page.getByRole("heading", { level: 1, name: old, exact: true })).toHaveCount(0);

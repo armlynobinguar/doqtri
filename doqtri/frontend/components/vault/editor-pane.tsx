@@ -67,6 +67,7 @@ function subscribeMindmapShown(listener: () => void) {
 
 export function EditorPane({
   title,
+  lineTitle = title,
   markdown,
   onChange,
   onRegenerate,
@@ -84,8 +85,13 @@ export function EditorPane({
   onTitleLine,
   titleLineWrite,
 }: {
-  /** The note's title, which its first line always says (D-120). */
+  /** The note's title, shown in the tab and the live mindmap: as it is being typed, too (DOQ-44). */
   title: string;
+  /**
+   * The confirmed title, which the editor's title line is guarded by (D-120);
+   * `title` when not given.
+   */
+  lineTitle?: string;
   markdown: string;
   /** Titles offered when a `[[link` is being typed. */
   linkTitles: string[];
@@ -141,7 +147,7 @@ export function EditorPane({
       headingNotice={headingNotice}
       onDismissHeadingNotice={onDismissHeadingNotice}
       onLeaveTitleLine={onLeaveTitleLine}
-      title={title}
+      title={lineTitle}
       onTitleLine={onTitleLine}
       titleLineWrite={titleLineWrite}
     />

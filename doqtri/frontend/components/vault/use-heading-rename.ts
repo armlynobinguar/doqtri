@@ -11,9 +11,11 @@ export type { HeadingCheck } from "@/lib/heading-renamer";
  * its rules are lib/heading-renamer.ts; this keeps one per open note and
  * tells it the page's title.
  *
- * `title` is the title to show: the page's, or the one a rename here set
- * while the page's data has not caught up (router.refresh). This is where
- * DOQ-32's optimistic rename overlay takes over.
+ * `title` is the confirmed title: the page's, or the one a rename here set
+ * while the page's data has not caught up. The title being typed is a label
+ * only, in the vault's draft store (`typed`, DOQ-44); a rename of it that
+ * lands goes through DOQ-32's NoteOverlay. The draft goes when the note
+ * closes, once nothing is on its way.
  */
 export function useHeadingRename({
   docId,
@@ -31,12 +33,17 @@ export function useHeadingRename({
   useEffect(() => {
     renamer.setPageTitle(title);
   }, [renamer, title]);
+  useEffect(() => {
+    renamer.resume();
+    return renamer.leave;
+  }, [renamer]);
   const { notice, overlay } = useSyncExternalStore(renamer.subscribe, renamer.getSnapshot, renamer.getSnapshot);
 
   return {
     notice,
     title: overlay ?? title,
     check: renamer.check,
+    typed: renamer.typed,
     reset: renamer.reset,
     noteRenamed: renamer.noteRenamed,
     dismiss: renamer.dismiss,

@@ -24,14 +24,19 @@ import { createNoteSaver } from "@/lib/note-saver";
 import { useDocLock } from "@/hooks/use-doc-lock";
 import { EditLockBanner } from "@/components/vault/edit-lock-banner";
 import { EDITING_ELSEWHERE, editingMessage } from "@/lib/doc-lock";
-import { useNoteTitle, useOverlaidNotes } from "@/components/vault/note-overlay";
+import {
+  useDraftTitle,
+  useNoteTitle,
+  useNoteTitleDrafts,
+  useOverlaidNotes,
+} from "@/components/vault/note-overlay";
 import { useMindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
 import type { Doc } from "@/lib/types";
 import type { RenamedNote } from "@/lib/rename-note";
 import { adoptRename } from "@/lib/rename-adopt";
 import { useRegisterOpenNote } from "@/components/vault/open-note";
 import type { EditorStats } from "@/lib/text-stats";
-import { useHeadingRename } from "@/components/vault/use-heading-rename";
+import { useHeadingRename, type HeadingCheck } from "@/components/vault/use-heading-rename";
 import { buildBacklinks } from "@/lib/wikilinks";
 import { checkTitleLineSafety } from "@/components/vault/title-line-safety-reads";
 
@@ -80,6 +85,7 @@ export function DocWorkspace({
   // Through the vault's pending renames (DOQ-32), so a rename from the
   // explorer shows here in the same frame; the heading renamer builds on it.
   const pageTitle = useNoteTitle(active.id, active.title);
+  const titleDrafts = useNoteTitleDrafts();
   // One concept map for the note, shown by the right panel and the live
   // mindmap beside the editor alike: a rebuild from either shows in both.
   const concept = useMindmapRebuild({
@@ -101,6 +107,8 @@ export function DocWorkspace({
     conflictRef.current = conflict;
   }, [conflict]);
   const markdownRef = useRef(markdown);
+  // Shows the title line's draft (DOQ-44); set once the heading check is made, below.
+  const typedHeadingRef = useRef<() => void>(() => {});
 
   const { lock, controller } = useDocLock(active.id);
 
@@ -191,6 +199,8 @@ export function DocWorkspace({
       // same editor update (DOQ-36).
       markdownRef.current = next;
       setMarkdown(next);
+      // The title being typed shows everywhere in this same render (DOQ-44).
+      typedHeadingRef.current();
       void controller.noteEdit().then((held) => {
         // Lost the race for a free lock: drop the keystroke for their text.
         const { phase } = controller.getState();
@@ -354,28 +364,42 @@ export function DocWorkspace({
    * mindmap read the title from the layout's server data, as after a rename
    * from the explorer.
    */
-  const checkHeadingNow = headingRename.check;
-  const checkHeading = useCallback(() => {
-    checkHeadingNow({
+  const { check: checkHeadingNow, typed: typedHeadingNow } = headingRename;
+  const headingContext = useMemo<HeadingCheck>(
+    () => ({
       text: () => markdownRef.current,
       canRename: () => !readOnlyRef.current,
       rename: renameHere,
       backlinks: () => buildBacklinks(docs, active.id).length,
-      refresh: () => router.refresh(),
-    });
-  }, [checkHeadingNow, renameHere, docs, active.id, router]);
-  const checkHeadingRef = useRef(checkHeading);
+      refresh: titleDrafts.refresh,
+      // What the title line is being typed as: the note's label wherever its
+      // title shows, before any request, and nothing else (DOQ-44).
+      draft: (next) => titleDrafts.drafts.set(active.id, next),
+      landed: (next, previousTitle) => titleDrafts.landed({ id: active.id, title: next, previousTitle }),
+      settleDraft: () => titleDrafts.settle(active.id),
+    }),
+    [renameHere, docs, active.id, titleDrafts],
+  );
+  const checkHeadingRef = useRef(() => checkHeadingNow(headingContext));
   useEffect(() => {
-    checkHeadingRef.current = checkHeading;
-  }, [checkHeading]);
+    checkHeadingRef.current = () => checkHeadingNow(headingContext);
+    typedHeadingRef.current = () => typedHeadingNow(headingContext);
+  }, [checkHeadingNow, typedHeadingNow, headingContext]);
   // Also once the copy can be edited again, for an edit that settled while
-  // the lock's status was reloading.
+  // the lock's status was reloading; and a copy turned read-only shows no
+  // draft.
   useEffect(() => {
     checkHeadingRef.current();
   }, [settled, readOnly]);
+  useEffect(() => {
+    typedHeadingRef.current();
+  }, [readOnly]);
   // Called from inside an editor update: run once it has finished.
   const leaveTitleLine = useCallback(() => queueMicrotask(() => checkHeadingRef.current()), []);
   const title = headingRename.title;
+  // The tab and the live mindmap's root show a title being typed (DOQ-44);
+  // everything else, the editor's title line included, goes by `title`.
+  const shownTitle = useDraftTitle(active.id, title);
 
   /**
    * The title line an older note gets after its first edit (D-120,
@@ -533,7 +557,8 @@ export function DocWorkspace({
         <div className={cn("min-h-0 flex-1", mobileView !== "note" && "hidden")}>
           <EditorPane
             compact
-            title={title}
+            title={shownTitle}
+            lineTitle={title}
             concept={concept}
             markdown={markdown}
             onChange={handleChange}
@@ -580,7 +605,8 @@ export function DocWorkspace({
       <ResizablePanelGroup orientation="horizontal" className="min-h-0">
         <ResizablePanel id="editor" minSize={320} className="flex min-h-0 flex-col">
           <EditorPane
-            title={title}
+            title={shownTitle}
+            lineTitle={title}
             concept={concept}
             markdown={markdown}
             onChange={handleChange}
