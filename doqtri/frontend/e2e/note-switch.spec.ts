@@ -102,6 +102,23 @@ test.describe("note switching", () => {
     await expectEditorText(page, /bravo body/);
   });
 
+  test("a modifier-click opens the note in a new tab and leaves this one as it is", async ({ page, context }) => {
+    await page.goto(`/vault/${b.id}`);
+    await editableEditor(page);
+    const [tab] = await Promise.all([
+      context.waitForEvent("page"),
+      explorerLink(page, a.id).click({ modifiers: ["ControlOrMeta"] }),
+    ]);
+    try {
+      await tab.waitForURL(`**/vault/${a.id}`);
+      await expectEditorText(tab, /alpha body/);
+      await expect(page).toHaveURL(new RegExp(`/vault/${b.id}$`));
+      await expectEditorText(page, /bravo body/);
+    } finally {
+      await tab.close();
+    }
+  });
+
   test("back and forward between notes stay on the client", async ({ page }) => {
     await page.goto(`/vault/${a.id}`);
     await editableEditor(page);
