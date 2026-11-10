@@ -193,14 +193,121 @@ export function uniqueTitle(prefix: string): string {
   return `${prefix} ${Date.now().toString(36)}`;
 }
 
+/*
+ * The note editor is CodeMirror with a live preview: the text on screen hides
+ * markdown syntax except on the caret's line, so the document cannot be read
+ * off the DOM. These helpers go through the editor view instead, which the
+ * editor exposes on its root element for exactly this (see
+ * components/vault/live-editor/markdown-editor.tsx).
+ */
+
+/** The editable surface of the note editor. */
+export function noteEditor(page: Page): Locator {
+  return page.getByTestId("note-editor").locator(".cm-content");
+}
+
 /**
  * The note's editor once it accepts typing. The editor is read-only until the
  * edit-lock status has loaded (WP-1.6); keys pressed before that are dropped,
  * so every spec that types waits for this first.
  */
 export async function editableEditor(page: Page): Promise<Locator> {
-  const textarea = page.locator("textarea.w-md-editor-text-input");
-  await expect(textarea).toBeVisible();
-  await expect(textarea).not.toHaveAttribute("readonly", /.*/);
-  return textarea;
+  const content = noteEditor(page);
+  await expect(content).toBeVisible();
+  await expect(content).toHaveAttribute("contenteditable", "true");
+  await expect(content).not.toHaveAttribute("aria-readonly", "true");
+  return content;
+}
+
+type ViewHandle = {
+  state: {
+    doc: { toString(): string; length: number };
+  };
+  dispatch(spec: unknown): void;
+  focus(): void;
+  hasFocus: boolean;
+};
+
+/** The element the editor exposes its view on. */
+function editorRoot(page: Page): Locator {
+  return page.getByTestId("note-editor").locator(".cm-editor");
+}
+
+/** The note's markdown, exactly as the editor holds it. */
+export function editorText(page: Page): Promise<string> {
+  return editorRoot(page).evaluate(
+    (el) => (el as unknown as { __doqtriEditor: ViewHandle }).__doqtriEditor.state.doc.toString(),
+  );
+}
+
+/** Waits for the editor's markdown to match: the CodeMirror stand-in for toHaveValue. */
+export async function expectEditorText(page: Page, expected: string | RegExp, timeout?: number) {
+  const poll = expect.poll(() => editorText(page), { timeout });
+  if (typeof expected === "string") await poll.toBe(expected);
+  else await poll.toMatch(expected);
+}
+
+/**
+ * Focuses the editor and puts the caret at `anchor` (or selects to `head`).
+ * Negative positions count back from the end.
+ */
+export async function setEditorSelection(page: Page, anchor: number, head?: number) {
+  await editorRoot(page).evaluate(
+    (el, [a, h]) => {
+      const view = (el as unknown as { __doqtriEditor: ViewHandle }).__doqtriEditor;
+      const length = view.state.doc.length;
+      const at = (pos: number) => (pos < 0 ? length + pos + 1 : pos);
+      view.focus();
+      view.dispatch({ selection: { anchor: at(a), head: at(h) }, scrollIntoView: true });
+    },
+    [anchor, head ?? anchor] as const,
+  );
+}
+
+/** Focuses the editor with the caret just after the first occurrence of `text`. */
+export async function placeCaretAfter(page: Page, text: string) {
+  const at = (await editorText(page)).indexOf(text);
+  if (at < 0) throw new Error(`"${text}" is not in the note`);
+  await setEditorSelection(page, at + text.length);
+}
+
+/**
+ * Replaces the whole note, as one paste: the stand-in for selecting all and
+ * filling a textarea. Goes through the editor's input path, so it counts as
+ * an edit — it takes the lock and is saved like typing.
+ */
+export async function replaceEditorText(page: Page, text: string) {
+  await editableEditor(page);
+  await editorRoot(page).evaluate(
+    (el, t) => {
+      const view = (el as unknown as { __doqtriEditor: ViewHandle }).__doqtriEditor;
+      view.focus();
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: t },
+        selection: { anchor: t.length },
+        userEvent: "input.paste",
+      });
+    },
+    text,
+  );
+}
+
+/** Whether the note editor holds keyboard focus. */
+export function editorHasFocus(page: Page): Promise<boolean> {
+  return editorRoot(page).evaluate((el) => (el as unknown as { __doqtriEditor: ViewHandle }).__doqtriEditor.hasFocus);
+}
+
+/** The main selection, as document positions. */
+export function editorSelection(page: Page): Promise<{ anchor: number; head: number }> {
+  return editorRoot(page).evaluate((el) => {
+    const view = (el as unknown as { __doqtriEditor: { state: { selection: { main: { anchor: number; head: number } } } } })
+      .__doqtriEditor;
+    const { anchor, head } = view.state.selection.main;
+    return { anchor, head };
+  });
+}
+
+/** The editor's rendered line holding `text` (as displayed, syntax hidden or not). */
+export function editorLine(page: Page, text: string | RegExp): Locator {
+  return noteEditor(page).locator(".cm-line").filter({ hasText: text });
 }

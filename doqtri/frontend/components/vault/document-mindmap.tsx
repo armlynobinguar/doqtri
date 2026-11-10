@@ -1,11 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { NavLink, useNavigate } from "@/components/vault/navigation";
-import { useRouter } from "next/navigation";
 import { ArrowLeftIcon, Loader2Icon, NetworkIcon, SparklesIcon } from "lucide-react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { useMindmapRebuild } from "@/hooks/use-mindmap-rebuild";
 import { MindmapStudio } from "@/components/vault/mindmap-studio";
 import { MindmapPromoBanner } from "@/components/promo/mindmap-promo-banner";
 import { graphFromMindmap } from "@/lib/mindmap-graph";
@@ -34,9 +33,8 @@ export function DocumentMindmap({
   stale: boolean;
   savedStyle: SavedStyle;
 }) {
-  const router = useRouter();
   const navigate = useNavigate();
-  const [building, setBuilding] = useState(false);
+  const { building, rebuild } = useMindmapRebuild(docId);
 
   const derived = mindmap === null;
   const tree = useMemo(
@@ -44,33 +42,6 @@ export function DocumentMindmap({
     [mindmap, title, markdown],
   );
   const graph = useMemo(() => graphFromMindmap(tree), [tree]);
-
-  async function rebuild() {
-    setBuilding(true);
-    try {
-      const res = await fetch("/api/mindmap", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: docId }),
-      });
-      const payload: unknown = await res.json().catch(() => null);
-
-      if (!res.ok) {
-        const message =
-          payload && typeof payload === "object" && "error" in payload
-            ? String((payload as { error: unknown }).error)
-            : `Could not build the mindmap (${res.status})`;
-        throw new Error(message);
-      }
-
-      toast.success("Mindmap rebuilt");
-      router.refresh();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Mindmap failed");
-    } finally {
-      setBuilding(false);
-    }
-  }
 
   return (
     <div className="flex h-full min-h-0 flex-col">

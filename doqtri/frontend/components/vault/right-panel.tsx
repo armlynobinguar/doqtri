@@ -35,7 +35,7 @@ export function RightPanel({
   const { rightTab, setRightTab } = useVaultStatus();
 
   return (
-    <div className="bg-sidebar flex h-full min-h-0 flex-col">
+    <div className="bg-sidebar flex h-full min-h-0 flex-col" data-testid="right-panel">
       <div className="border-border flex h-11 shrink-0 items-center border-b px-2">
         <Tabs
           value={rightTab}

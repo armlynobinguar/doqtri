@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import type {
   MindmapForceGraphProps,
@@ -53,6 +53,8 @@ import {
   type MindmapStyle,
   type NodeLook,
 } from "@/lib/mindmap-style";
+import { carryLayout, type PlacedNode } from "@/lib/mindmap-live";
+import { useReducedMotion } from "@/hooks/use-reduced-motion";
 import {
   LARGE_MAP_NODES,
   ZOOM_REVEAL_MIN_NODES,
@@ -119,6 +121,12 @@ export type MindmapCanvasProps = {
   onLockChange?: (id: string | null) => void;
   /** Fired once the first layout has settled and been framed. */
   onSettled?: () => void;
+  /**
+   * Keep every node where it was when `graph` changes, matched by id, and
+   * grow only the new ones out of their parents (the live map beside the
+   * editor; see lib/mindmap-live.ts). Off, a new graph is a new layout.
+   */
+  stableLayout?: boolean;
 };
 
 /**
@@ -170,6 +178,7 @@ export function MindmapCanvas({
   onSettled,
   lockedId = null,
   onLockChange,
+  stableLayout = false,
 }: MindmapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<GraphInstance | undefined>(undefined);
@@ -202,6 +211,24 @@ export function MindmapCanvas({
   const viewRef = useRef<ViewBounds | null>(null);
 
   const large = graph.nodes.length > LARGE_MAP_NODES;
+
+  /*
+   * With a stable layout and reduced motion, nothing animates: new nodes are
+   * placed where they belong and the simulation is not run at all.
+   */
+  const reduceMotion = useReducedMotion();
+  const instant = stableLayout && reduceMotion;
+
+  /** Nodes pinned in place only while a rebuilt map's new nodes settle. */
+  const carriedPinsRef = useRef(new Set<string>());
+  /** Whether the current graph carried positions over from the last one. */
+  const carriedRef = useRef(false);
+  /** The nodes a rebuild added, which must end up on screen. */
+  const freshRef = useRef<string[]>([]);
+  const carryOptionsRef = useRef({ stableLayout, instant, spacing: look.spacing });
+  useEffect(() => {
+    carryOptionsRef.current = { stableLayout, instant, spacing: look.spacing };
+  });
 
   const lookup = useLookup(graph, look);
   const loadedFont = useLoadedFont(look.font);
@@ -397,22 +424,85 @@ export function MindmapCanvas({
           : null,
       );
 
-      framedRef.current = false;
+      // A map that carried its positions over is already framed; moving the
+      // camera to fit each new heading would undo the point of keeping them.
+      if (!carriedRef.current) framedRef.current = false;
       instance.d3ReheatSimulation();
     },
     [layout, spacing, extentOf, places],
   );
 
-  useEffect(() => {
+  /** Hands the nodes pinned for a rebuild back to the layout, once it has stopped. */
+  const releaseCarriedPins = useCallback(() => {
+    if (carriedPinsRef.current.size === 0) return;
+    for (const node of nodesRef.current) {
+      if (!carriedPinsRef.current.has(node.id)) continue;
+      // The simulation owns these objects; see releaseAll.
+      // eslint-disable-next-line react-hooks/immutability
+      node.fx = undefined;
+      node.fy = undefined;
+    }
+    carriedPinsRef.current = new Set();
+  }, []);
+
+  // A layout effect, so carried positions are on the nodes before the graph
+  // reads them or anything paints.
+  useLayoutEffect(() => {
+    const previousNodes = nodesRef.current;
     nodesRef.current = graphData.nodes as GraphNode[];
     nodeIndexRef.current = new Map(nodesRef.current.map((node) => [node.id, node]));
     linksRef.current = graphData.links as PaintLink[];
-    framedRef.current = false;
+
+    const options = carryOptionsRef.current;
+    // Pins from the last rebuild are not the user's; only theirs carry over.
+    const previousPins = carriedPinsRef.current;
+    const byHand = new Set(
+      previousNodes.filter((node) => isPinned(node) && !previousPins.has(node.id)).map((node) => node.id),
+    );
+    const plan = options.stableLayout
+      ? carryLayout(
+          new Map(
+            previousNodes.map((node): [string, PlacedNode] => [
+              node.id,
+              { x: node.x ?? 0, y: node.y ?? 0, ...(byHand.has(node.id) ? { fx: node.fx, fy: node.fy } : {}) },
+            ]),
+          ),
+          nodesRef.current,
+          graph.links,
+          places,
+          { instant: options.instant, ringDistance: RING_DISTANCE * options.spacing },
+        )
+      : null;
+
+    carriedPinsRef.current = new Set();
+    if (plan) {
+      // Fresh copies made for force-graph (see graphData), not read yet:
+      // ours to place. Written through the ref, like releaseAll's.
+      for (const node of nodesRef.current) {
+        const at = plan.get(node.id);
+        if (!at) continue;
+        // eslint-disable-next-line react-hooks/immutability
+        node.x = at.x;
+        node.y = at.y;
+        node.vx = 0;
+        node.vy = 0;
+        if (at.fx !== undefined) {
+          node.fx = at.fx;
+          node.fy = at.fy;
+          if (!byHand.has(node.id)) carriedPinsRef.current.add(node.id);
+        }
+      }
+    }
+    carriedRef.current = plan !== null;
+    freshRef.current = plan ? [...plan].filter(([, at]) => at.fresh).map(([id]) => id) : [];
+    if (!plan) framedRef.current = false;
 
     // Null on the first pass: the graph is behind a dynamic import, so it
     // mounts a tick later than this component and reports in via `onReady`.
     const instance = graphRef.current;
     if (instance) applyForces(instance);
+    // Reads graph.links and places, which change only with graphData.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graphData, applyForces]);
 
   useNodePointer<GraphNode>({
@@ -552,7 +642,7 @@ export function MindmapCanvas({
           // A big map cools faster: it has more to settle, but every tick costs
           // more, and the overlap pass cleans up what the forces leave.
           minZoom={minZoom}
-          cooldownTicks={large ? 120 : 200}
+          cooldownTicks={instant ? 0 : large ? 120 : 200}
           d3AlphaDecay={large ? 0.04 : 0.022}
           d3VelocityDecay={0.35}
           nodeVisibility={(node: GraphNode) => !isHidden(look, node.id)}
@@ -667,13 +757,25 @@ export function MindmapCanvas({
             // The engine has stopped, so nothing will integrate away a residual
             // overlap. Resolve what is left outright, then frame the result.
             settle(() => {
+              releaseCarriedPins();
               if (framedRef.current) {
-                requestRedraw();
+                // A heading added to a framed map may have grown out of view.
+                const instance = graphRef.current;
+                const fresh = freshRef.current;
+                freshRef.current = [];
+                const outside = fresh.some((id) => {
+                  const node = nodeIndexRef.current.get(id);
+                  if (!node || !instance) return false;
+                  const at = instance.graph2ScreenCoords(node.x ?? 0, node.y ?? 0);
+                  return at.x < 20 || at.y < 20 || at.x > size.width - 20 || at.y > size.height - 20;
+                });
+                if (outside) instance?.zoomToFit(instant ? 0 : 400, 40);
+                else requestRedraw();
                 return;
               }
               framedRef.current = true;
               resizedRef.current = false;
-              graphRef.current?.zoomToFit(400, 40);
+              graphRef.current?.zoomToFit(instant ? 0 : 400, 40);
               onSettledRef.current?.();
               // Once framed, stop zooming out far past the whole map — there is
               // nothing out there, and it only shrinks the map to a speck.

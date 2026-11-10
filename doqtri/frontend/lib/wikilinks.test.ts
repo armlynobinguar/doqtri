@@ -7,6 +7,7 @@ import {
   matchIndices,
   parseLinks,
   rankLinkSuggestions,
+  resolveLinkTitle,
 } from "@/lib/wikilinks";
 import type { Doc } from "@/lib/types";
 
@@ -271,5 +272,21 @@ describe("matchIndices", () => {
 
   it("is empty for an empty query", () => {
     expect(matchIndices("Alpha", "")).toEqual([]);
+  });
+});
+
+describe("resolveLinkTitle", () => {
+  const notes = [
+    { id: "a", title: "Product Roadmap" },
+    { id: "b", title: "Other" },
+  ];
+
+  it("finds the note a link names, case and spacing aside", () => {
+    expect(resolveLinkTitle(notes, "product roadmap")?.id).toBe("a");
+    expect(resolveLinkTitle(notes, "  Other ")?.id).toBe("b");
+  });
+
+  it("finds nothing for a ghost link", () => {
+    expect(resolveLinkTitle(notes, "Nowhere")).toBeUndefined();
   });
 });
