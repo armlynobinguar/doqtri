@@ -109,6 +109,9 @@ export function DocWorkspace({
     title: pageTitle,
     initialMarkdown: active.markdown,
   });
+  // Also where the editor reports the title line it put in on open (D-120):
+  // saved like an edit, but the heading it adds says the title, so the next
+  // heading check compares with it rather than with the text before.
   const resetHeading = headingRename.reset;
 
   // The page remounts this per note, so the saver never outlives its row.
@@ -530,6 +533,7 @@ export function DocWorkspace({
             headingNotice={headingRename.notice}
             onDismissHeadingNotice={headingRename.dismiss}
             onLeaveTitleLine={leaveTitleLine}
+            onTitleLine={resetHeading}
           />
         </div>
         {mobileView === "map" && (
@@ -575,6 +579,7 @@ export function DocWorkspace({
             headingNotice={headingRename.notice}
             onDismissHeadingNotice={headingRename.dismiss}
             onLeaveTitleLine={leaveTitleLine}
+            onTitleLine={resetHeading}
           />
         </ResizablePanel>
 

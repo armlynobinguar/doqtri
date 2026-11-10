@@ -80,7 +80,9 @@ export function EditorPane({
   headingNotice = null,
   onDismissHeadingNotice,
   onLeaveTitleLine,
+  onTitleLine,
 }: {
+  /** The note's title, which its first line always says (D-120). */
   title: string;
   markdown: string;
   /** Titles offered when a `[[link` is being typed. */
@@ -115,6 +117,8 @@ export function EditorPane({
   onDismissHeadingNotice?: () => void;
   /** The caret moved off the note's title line (DOQ-36). */
   onLeaveTitleLine?: () => void;
+  /** The editor put the note's title line in (D-120); see MarkdownEditor. */
+  onTitleLine?: (markdown: string) => void;
 }) {
   const mindmapShown = useSyncExternalStore(subscribeMindmapShown, readMindmapShown, () => true);
   const showMindmap = !compact && mindmapShown;
@@ -133,6 +137,8 @@ export function EditorPane({
       headingNotice={headingNotice}
       onDismissHeadingNotice={onDismissHeadingNotice}
       onLeaveTitleLine={onLeaveTitleLine}
+      title={title}
+      onTitleLine={onTitleLine}
     />
   );
 

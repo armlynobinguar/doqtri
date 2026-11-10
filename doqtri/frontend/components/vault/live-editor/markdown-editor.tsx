@@ -20,6 +20,8 @@ import { editorKeymap, findAndReplace, searchKeymap, shortcutKeys } from "@/comp
 import { FormatToolbar, type EditorMode } from "@/components/vault/live-editor/format-toolbar";
 import { headingNotice, headingNoticeDismiss, setHeadingNotice } from "@/components/vault/live-editor/heading-notice";
 import { headingNoticeText, type HeadingNotice } from "@/lib/heading-rename";
+import { setNoteTitle, titleLine as titleLineGuard, titleLineChange } from "@/components/vault/live-editor/title-line";
+import { withTitleLine, type TitleLineCheck } from "@/lib/title-line";
 
 /** The smallest single change that turns `from` into `to`. */
 function diff(from: string, to: string) {
@@ -158,6 +160,17 @@ function caretOnTitleLine(state: EditorState): boolean {
  * (a reload, a regenerate) replaces it. There is no rich-text model to drift
  * from what is saved and hashed.
  *
+ * Given the note's `title`, its first line is the title line (D-120,
+ * title-line.ts): always `# <title>`, kept in place while editing. A note
+ * that does not open with it gets it the first time it can be edited (not
+ * read-only, not waiting for its lock, not in Reading view): `# <title>` goes
+ * above the text as an ordinary edit, so `onChange` saves it, but outside
+ * undo history, so undoing it cannot bring back a note that saves without it
+ * and then gets it again. Text loaded from outside later gets one too when it
+ * opens with no heading at all (lib/title-line.ts, "reload"). Until then a
+ * copy that cannot be edited shows the title line above the text, writing
+ * nothing.
+ *
  * Three views of the same text: Source (the raw markdown everywhere), Live
  * (the default above) and Reading (everything rendered, no caret, links open
  * on a plain click). A note that cannot be edited always reads as Live does
@@ -180,6 +193,8 @@ export default function MarkdownEditor({
   headingNotice: notice = null,
   onDismissHeadingNotice,
   onLeaveTitleLine,
+  title,
+  onTitleLine,
 }: {
   value: string;
   onChange: (markdown: string) => void;
@@ -207,6 +222,13 @@ export default function MarkdownEditor({
   onDismissHeadingNotice?: () => void;
   /** The caret moved off the note's first non-blank line, after an edit or by moving (DOQ-36). */
   onLeaveTitleLine?: () => void;
+  /**
+   * The note's title: turns on the title line (D-120). Whether there is one
+   * is read once, when the editor is made; the title itself may change.
+   */
+  title?: string;
+  /** The editor just put the title line in, with this text; `onChange` has already had it. */
+  onTitleLine?: (markdown: string) => void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -240,8 +262,17 @@ export default function MarkdownEditor({
   const statsRef = useRef(onStats);
   const dismissRef = useRef(onDismissHeadingNotice);
   const leaveTitleRef = useRef(onLeaveTitleLine);
+  const titleRef = useRef(title);
+  const titleLineRef = useRef(onTitleLine);
   /** The text this editor last reported, so its own echo is not re-applied. */
   const reportedRef = useRef(value);
+  /**
+   * Whether the title line has been checked for since the editor could first
+   * be edited, and whether text was loaded from outside before that (then
+   * the page's title may lag behind it, see TitleLineCheck).
+   */
+  const titleCheckedRef = useRef(false);
+  const loadedRef = useRef(false);
   useEffect(() => {
     onChangeRef.current = onChange;
     titlesRef.current = linkTitles;
@@ -249,6 +280,8 @@ export default function MarkdownEditor({
     statsRef.current = onStats;
     dismissRef.current = onDismissHeadingNotice;
     leaveTitleRef.current = onLeaveTitleLine;
+    titleRef.current = title;
+    titleLineRef.current = onTitleLine;
   });
 
   /** Reading is read-only too: nothing in it may change the text. */
@@ -307,6 +340,7 @@ export default function MarkdownEditor({
           }),
           headingNotice(),
           headingNoticeDismiss.of(() => dismissRef.current?.()),
+          titleRef.current === undefined ? [] : titleLineGuard(titleRef.current),
           editorTheme,
           readOnlyGuard,
           EditorView.updateListener.of((update) => {
@@ -364,6 +398,24 @@ export default function MarkdownEditor({
     view?.dispatch({ effects: setHeadingNotice.of(notice) });
   }, [view, notice]);
 
+  /**
+   * Puts the title line in when the note can be edited and has none (D-120):
+   * an edit of this editor's own, saved like typing, kept out of undo history
+   * so it cannot be undone into a note without it.
+   */
+  const addTitleLine = (target: EditorView, check: TitleLineCheck) => {
+    const name = titleRef.current;
+    if (name === undefined || target.state.readOnly) return;
+    const current = target.state.doc.toString();
+    const next = withTitleLine(current, name, check);
+    if (next === null) return;
+    target.dispatch({
+      changes: diff(current, next),
+      annotations: [titleLineChange.of(true), Transaction.addToHistory.of(false)],
+    });
+    titleLineRef.current?.(next);
+  };
+
   // Text from outside: a reload after a conflict, someone else's save, a
   // regenerate. Applied as the smallest change, so the caret stays put when
   // the edit is elsewhere, and kept out of undo history — undoing into text
@@ -373,11 +425,28 @@ export default function MarkdownEditor({
     const current = view.state.doc.toString();
     reportedRef.current = value;
     if (current === value) return;
+    loadedRef.current = true;
     view.dispatch({
       changes: diff(current, value),
       annotations: [external.of(true), Transaction.addToHistory.of(false)],
     });
+    // Text loaded while the copy can be edited gets its title line back if
+    // it came without one (D-120). Before the first check, that check does it.
+    if (titleCheckedRef.current) addTitleLine(view, "reload");
   }, [view, value]);
+
+  useEffect(() => {
+    if (view && title !== undefined) view.dispatch({ effects: setNoteTitle.of(title) });
+  }, [view, title]);
+
+  // The first time the copy can be edited: the note as the page loaded it,
+  // checked against the page's title, unless text came from outside since.
+  const editable = !readOnly && shownMode !== "reading";
+  useEffect(() => {
+    if (!view || !editable || titleCheckedRef.current || titleRef.current === undefined) return;
+    titleCheckedRef.current = true;
+    addTitleLine(view, loadedRef.current ? "reload" : "open");
+  }, [view, editable]);
 
   // Full screen ends on Esc — unless Esc is closing something first: the
   // find panel, the link list, or a menu or popover (focused outside this
