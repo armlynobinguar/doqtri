@@ -30,7 +30,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(64);
+select plan(66);
 
 insert into auth.users (id, email) values
   ('00000000-0000-4000-8000-000000000001', 'owner@example.com'),
@@ -162,6 +162,16 @@ select throws_ok(
   $$ select public.rename_document('30000000-0000-4000-8000-000000000013', 'X',
        E'# X\nbody\n', 1, null) $$,
   '22023', 'markdown may only change the title heading', 'a prose first line is not replaced by a heading');
+-- D-120: a note that never opened with its title line is renamed from the
+-- explorer by title alone, and its text is left for the editor, which puts
+-- `# <new title>` above it the next time the note is opened to be edited.
+select is(
+  public.rename_document('30000000-0000-4000-8000-000000000013', 'Prose Renamed', null, 1, null),
+  1::bigint, 'a note opening with prose is renamed by title alone');
+select results_eq(
+  $$ select * from public._t_doc('30000000-0000-4000-8000-000000000013') $$,
+  $$ values ('Prose Renamed'::text, E'Some paragraph\nbody\n'::text, 1::bigint) $$,
+  'its text and version as they were');
 
 
 -- ---------------------------------------------------------------------------
