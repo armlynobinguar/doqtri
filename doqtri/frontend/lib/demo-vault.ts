@@ -22,6 +22,7 @@ const DEMO_TEMPLATE_IDS = [
   "grant-proposal",
   "sprint-plan",
   "hackathon-project",
+  "freelancer-payments",
   "incident-postmortem",
 ] as const;
 

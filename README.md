@@ -63,7 +63,7 @@
 1. Open **[doqtri.xyz](https://www.doqtri.xyz)** and sign up with email. No browser extension needed:
    a passkey (Face ID, fingerprint or device PIN) creates your Stellar wallet. Prefer Freighter?
    Use **Connect wallet** instead.
-2. Click the template icon in the vault and pick one of 14 starters, such as a roadmap, grant
+2. Click the template icon in the vault and pick one of 15 starters, such as a roadmap, grant
    proposal or sprint plan. Its headings become your mindmap instantly.
 3. Hit **Save & anchor**. The note's hash is written to Stellar testnet, and its public audit page
    at `/d/[docId]` shows the receipt to anyone, logged in or not.
@@ -100,7 +100,7 @@ Every semantic change bumps an on-chain version; every shipped node leaves a rec
 
 **Write and plan**
 - Obsidian-style vault: markdown notes, `[[wikilinks]]`, a global graph and a per-note mindmap
-- **Template gallery:** 14 starter notes (roadmaps, sprints, grant proposals, contract launches,
+- **Template gallery:** 15 starter notes (roadmaps, sprints, grant proposals, contract launches,
   research, postmortems…) with a live preview of each mindmap
 - **Imports that never lose your file:** PDF/DOCX → markdown with live per-step progress,
   retries, and an “import without AI” fallback
