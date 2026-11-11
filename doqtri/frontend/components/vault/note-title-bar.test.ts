@@ -148,6 +148,19 @@ describe("the title bar's field (D-121)", () => {
     expect(f.field().error).toBeNull();
   });
 
+  it("clears the message when the title changes from outside", async () => {
+    const f = await mount();
+    f.onRename.mockImplementation(() => {
+      throw new Error("Another note is already called “Beta”");
+    });
+    await f.fire((x) => x.change("Beta"));
+    await f.fire((x) => x.blur(x.value));
+    expect(f.field().error).not.toBeNull();
+    await f.render({ title: "Gamma" });
+    expect(f.field().error).toBeNull();
+    expect(f.field().value).toBe("Gamma");
+  });
+
   it("renames on Enter, once, and then hands focus on, even when nothing takes it (Reading view)", async () => {
     const f = await mount();
     await f.fire((x) => x.focus());

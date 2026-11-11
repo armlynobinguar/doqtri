@@ -356,6 +356,8 @@ export default function MarkdownEditor({
       if (event.key !== "Escape") return;
       const target = event.target instanceof Element ? event.target : null;
       if (target && target !== document.body && !rootRef.current?.contains(target)) return;
+      // The title bar's own Escape puts the title back (NoteTitleBar).
+      if (target?.closest("[data-note-title]")) return;
       // The link list shows as a tooltip only while it has notes to offer.
       if (searchPanelOpen(view.state) || view.dom.querySelector(".cm-tooltip-autocomplete")) return;
       setFullscreen(false);

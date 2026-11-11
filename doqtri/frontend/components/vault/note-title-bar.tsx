@@ -58,6 +58,8 @@ export function NoteTitleBar({
         type="text"
         aria-label="Note title"
         data-testid="note-title"
+        // Escape here only puts the title back; it does not leave full screen.
+        data-note-title=""
         value={field.value}
         maxLength={MAX_TITLE_LENGTH}
         readOnly={readOnly}
@@ -139,6 +141,8 @@ export function useNoteTitleField({
   if (shown !== title) {
     setShown(title);
     if (value === shown) setValue(title);
+    // A message about the title before is out of date.
+    setError(null);
   }
   // A copy that turned read-only mid-edit drops what was typed.
   if (readOnly && value !== title) setValue(title);
