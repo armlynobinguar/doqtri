@@ -1,11 +1,12 @@
 /**
  * The beta launch promo: users submit screenshots of their mindmaps for a
  * chance at a shared prize pool. Set `active` to false to take down the landing
- * announcement and the mindmap banners and close the portal to new entries.
+ * announcement and the mindmap banners, make /promo a 404 and refuse new
+ * entries; /admin/promo keeps listing the entries. Ended 11 Nov 2026 (DOQ-50).
  */
 export const MINDMAP_PROMO = {
   id: "mindmap-showcase",
-  active: true,
+  active: false,
   prizePool: "$100 USD",
   /** What entrants were asked to map; the AI rating scores relevance against it. */
   brief: "A note on anything Web3, shown as a Doqtri mindmap.",

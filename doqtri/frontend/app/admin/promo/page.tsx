@@ -7,7 +7,7 @@ import {
   type PromoEntry,
 } from "@/components/admin/promo-review-list";
 import { isAdmin } from "@/lib/admin";
-import { MINDMAP_PROMO, PROMO_BUCKET, isPromoStatus } from "@/lib/promo";
+import { MINDMAP_PROMO, PROMO_BUCKET, PROMO_PATH, isPromoStatus } from "@/lib/promo";
 import { parseRating, type StoredRating } from "@/lib/promo-rating";
 import {
   createSupabaseAdminClient,
@@ -113,9 +113,12 @@ export default async function PromoAdminPage() {
             Admin
           </span>
         </Link>
-        <Link href="/promo" className="eyebrow hover:text-foreground transition-colors">
-          View portal
-        </Link>
+        {/* The portal is a 404 once the promo ends. */}
+        {MINDMAP_PROMO.active && (
+          <Link href={PROMO_PATH} className="eyebrow hover:text-foreground transition-colors">
+            View portal
+          </Link>
+        )}
       </header>
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-8">

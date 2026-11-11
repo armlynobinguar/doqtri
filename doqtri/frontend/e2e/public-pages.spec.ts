@@ -2,8 +2,8 @@ import { test, expect } from "@playwright/test";
 
 /**
  * The pages a visitor sees signed out (DOQ-18): the landing with its live
- * stats, the read-only demo, the docs, the promo portal and the signed-out
- * guard in proxy.ts. The audit page has its own spec (audit-page.spec.ts).
+ * stats, the read-only demo, the docs, the ended promo portal and the
+ * signed-out guard in proxy.ts. The audit page has its own spec (audit-page.spec.ts).
  */
 test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -13,7 +13,8 @@ test.describe("public pages, signed out", () => {
     await page.goto("/");
     expect((await stats).ok()).toBeTruthy();
 
-    await expect(page.getByText("How to join →")).toBeVisible();
+    // The promo has ended (DOQ-50): no announcement links to it.
+    await expect(page.locator('a[href="/promo"]')).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Open your vault" }).first()).toBeVisible();
     await expect(page.getByRole("link", { name: "Try the demo" })).toBeVisible();
 
@@ -55,9 +56,13 @@ test.describe("public pages, signed out", () => {
     }
   });
 
-  test("the promo portal asks a visitor to sign in", async ({ page }) => {
+  test("the ended promo portal is a 404 for a visitor", async ({ page }) => {
+    // The root loading.tsx may stream the page before notFound() runs, so the
+    // status is not checked; what the visitor gets is the 404 page.
     await page.goto("/promo");
-    await expect(page.getByText("Sign in to submit your mindmaps.")).toBeVisible();
+    await expect(page).toHaveURL((url) => url.pathname === "/promo");
+    await expect(page.getByText("This page could not be found.")).toBeVisible();
+    await expect(page.getByText("Sign in to submit your mindmaps.")).toHaveCount(0);
   });
 
   test("the vault redirects a signed-out visitor to the landing", async ({ page }) => {

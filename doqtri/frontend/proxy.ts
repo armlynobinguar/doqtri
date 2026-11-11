@@ -49,7 +49,8 @@ export async function proxy(request: NextRequest) {
   // So must the legal pages, which sign-up links to. Each is a 404 until the
   // gate in lib/legal.ts is on.
   const isLegalRoute = pathname === "/privacy" || pathname === "/terms";
-  // The promo portal is linked from the landing; it shows sign-in when needed.
+  // So must the promo portal, which the landing links to while the promo runs;
+  // it shows sign-in when needed, and is a 404 for everyone once it ends.
   const isPromoRoute = pathname === "/promo";
   // The read-only demo vault is for visitors, and signed-in users may open it too.
   const isDemoRoute = pathname === "/demo" || pathname.startsWith("/demo/");
