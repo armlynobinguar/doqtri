@@ -67,15 +67,24 @@ Varial and other Stellar wallets sign in with a signed challenge.
 
 export const DEMO_NOTES: readonly DemoNote[] = [
   WELCOME,
-  ...DEMO_TEMPLATE_IDS.map((id) => {
+  ...DEMO_TEMPLATE_IDS.flatMap((id) => {
     const template = TEMPLATES.find((t) => t.id === id);
     if (!template) throw new Error(`Demo vault: unknown template "${id}"`);
-    return {
-      id: template.id,
-      title: template.title,
-      description: template.description,
-      markdown: templateMarkdown(template),
-    };
+    // A template's linked notes follow it, so its [[links]] resolve in the demo too.
+    return [
+      {
+        id: template.id,
+        title: template.title,
+        description: template.description,
+        markdown: templateMarkdown(template),
+      },
+      ...(template.linkedNotes ?? []).map((note, i) => ({
+        id: `${template.id}-${i + 1}`,
+        title: note.title,
+        description: `Linked note of ${template.title}.`,
+        markdown: `# ${note.title}\n\n${note.body}`,
+      })),
+    ];
   }),
 ];
 

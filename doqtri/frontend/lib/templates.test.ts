@@ -20,4 +20,27 @@ describe("templates", () => {
     expect(map.children).toHaveLength(1);
     expect(countNodes(map)).toBeGreaterThanOrEqual(6);
   });
+
+  it("links every linked note from its main note, and each linked note is a valid note", () => {
+    const withLinked = TEMPLATES.filter((t) => t.linkedNotes?.length);
+    expect(withLinked.map((t) => t.id)).toContain("freelancer-payments");
+    for (const template of withLinked) {
+      const titles = template.linkedNotes!.map((n) => n.title);
+      expect(new Set([template.title, ...titles]).size).toBe(titles.length + 1);
+      for (const note of template.linkedNotes!) {
+        expect(template.body).toContain(`[[${note.title}]]`);
+        expect(note.body).toContain(`[[${template.title}]]`);
+        expect(note.body).not.toMatch(/^# /m);
+        const map = buildMindmap(note.title, `# ${note.title}\n\n${note.body}`);
+        expect(map.children).toHaveLength(1);
+        expect(countNodes(map)).toBeGreaterThanOrEqual(6);
+      }
+    }
+  });
+
+  it("gives the freelancer template five main nodes and five linked notes", () => {
+    const t = TEMPLATES.find((x) => x.id === "freelancer-payments")!;
+    expect(t.linkedNotes).toHaveLength(5);
+    expect(t.body.match(/^## /gm)).toHaveLength(5);
+  });
 });
