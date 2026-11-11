@@ -39,10 +39,13 @@ describe("templates", () => {
     expect(map.children.map((n) => n.label)).toEqual(sections);
     const byLabel = (label: string) => map.children.find((n) => n.label === label);
     expect(byLabel("Milestones")?.children.map((n) => n.label)).toEqual([
-      "M1: Design sign-off",
-      "M2: Beta release",
-      "M3: Go-live",
+      "M1: (design deliverable), (payment %)",
+      "M2: (first working version), (payment %)",
+      "M3: (complete version for client testing), (payment %)",
+      "M4: Launch and handover, (payment %)",
     ]);
+    // Each milestone lists what it delivers as its own branches.
+    expect(byLabel("Milestones")?.children.map((n) => n.children.length)).toEqual([2, 2, 3, 4]);
     expect(byLabel("Change requests")?.children).toEqual([]);
   });
 
