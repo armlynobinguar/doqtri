@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { safeNextPath } from "@/lib/email-auth";
-import { MINDMAP_PROMO, PROMO_PATH } from "@/lib/promo";
+import { ENDED_PROMO_REWRITE, MINDMAP_PROMO, PROMO_PATH } from "@/lib/promo";
 
 /**
  * Next 16 renamed `middleware` to `proxy`; the behavior is unchanged.
@@ -13,13 +13,6 @@ import { MINDMAP_PROMO, PROMO_PATH } from "@/lib/promo";
  */
 /** Signed-out pages; signed-in users are sent on to the vault instead. */
 const PUBLIC_ROUTES = new Set(["/", "/login", "/signup", "/forgot-password"]);
-
-/**
- * Where an ended promo's portal is rewritten to. No route can match it (an
- * underscore folder is private in the app router), so Next answers its 404
- * with a real 404 status, before the root loading.tsx can stream a 200.
- */
-export const ENDED_PROMO_REWRITE = "/_promo-ended";
 
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });

@@ -29,6 +29,14 @@ export const PROMO_IMAGE_TYPES: Record<string, string> = {
 
 export const PROMO_PATH = "/promo";
 
+/**
+ * Where proxy.ts rewrites an ended promo's portal. No route can match it (an
+ * underscore folder is private in the app router), so Next answers its 404
+ * with a real 404 status, before the root loading.tsx can stream a 200. It
+ * lives here because proxy.ts may export only the proxy and its config.
+ */
+export const ENDED_PROMO_REWRITE = "/_promo-ended";
+
 /** Shown before an entry is submitted, whatever the legal pages' gate says: it is true today. */
 export const PROMO_AI_DISCLOSURE =
   "Your screenshots and caption are sent to OpenAI for an AI rating. The rating only orders the review queue; the Doqtri team reviews entries and picks the winners.";

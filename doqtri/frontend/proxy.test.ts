@@ -21,8 +21,8 @@ vi.mock("@/lib/promo", async (original) => {
   return { ...actual, MINDMAP_PROMO: { ...actual.MINDMAP_PROMO } };
 });
 
-const { MINDMAP_PROMO } = await import("@/lib/promo");
-const { ENDED_PROMO_REWRITE, proxy } = await import("./proxy");
+const { ENDED_PROMO_REWRITE, MINDMAP_PROMO } = await import("@/lib/promo");
+const { proxy } = await import("./proxy");
 
 const ORIGIN = "https://doqtri.test";
 const visit = (path: string) => proxy(new NextRequest(`${ORIGIN}${path}`));
