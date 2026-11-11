@@ -146,6 +146,39 @@ describe("the title bar's field (D-121)", () => {
     expect(f.field().error).toBeNull();
   });
 
+  it("renames on Enter, once, and then hands focus on, even when nothing takes it (Reading view)", async () => {
+    const f = await mount();
+    await f.fire((x) => x.focus());
+    await f.fire((x) => x.change("Roadmap"));
+    expect(await f.key("Enter")).toBe(true);
+    expect(f.onRename).toHaveBeenCalledTimes(1);
+    expect(f.onRename).toHaveBeenCalledWith("Roadmap");
+    expect(f.onDone).toHaveBeenCalledTimes(1);
+    // The field still has focus; leaving it later renames nothing more.
+    await f.fire((x) => x.blur());
+    expect(f.onRename).toHaveBeenCalledTimes(1);
+  });
+
+  it("renames on Enter once when handing focus on blurs the field at once", async () => {
+    const f = await mount();
+    f.onDone.mockImplementation(() => f.field().blur());
+    await f.fire((x) => x.focus());
+    await f.fire((x) => x.change("Roadmap"));
+    await f.key("Enter");
+    expect(f.onRename).toHaveBeenCalledTimes(1);
+  });
+
+  it("renames again on the next Enter after more typing", async () => {
+    const f = await mount();
+    await f.fire((x) => x.focus());
+    await f.fire((x) => x.change("Roadmap"));
+    await f.key("Enter");
+    await f.render({ title: "Roadmap" });
+    await f.fire((x) => x.change("Roadmap 2"));
+    await f.fire((x) => x.blur());
+    expect(f.onRename.mock.calls).toEqual([["Roadmap"], ["Roadmap 2"]]);
+  });
+
   it("leaves keys being composed alone", async () => {
     const f = await mount();
     await f.fire((x) => x.focus());

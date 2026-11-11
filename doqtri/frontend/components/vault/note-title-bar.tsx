@@ -123,6 +123,9 @@ export function useNoteTitleField({
   const [shown, setShown] = useState(title);
   const [focused, setFocused] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Enter already renamed: the blur that follows (focus moving to the text)
+  // must not rename again with the title from before that render.
+  const committedRef = useRef(false);
 
   // A new title from outside (a rename from the explorer, or this one landing
   // or refused) replaces the field, unless it is being edited.
@@ -152,6 +155,7 @@ export function useNoteTitleField({
     value,
     error,
     change(next: string) {
+      committedRef.current = false;
       setValue(next);
       setError(null);
     },
@@ -160,13 +164,20 @@ export function useNoteTitleField({
     },
     blur() {
       setFocused(false);
+      if (committedRef.current) {
+        committedRef.current = false;
+        return;
+      }
       if (!readOnly) commit(valueRef.current);
     },
     /** Whether the key was the field's: the caller then prevents its default. */
     keyDown(event: TitleFieldKey): boolean {
       if (event.isComposing) return false;
       if (event.key === "Enter") {
-        // Leaving the field renames (blur), once.
+        // Renames here, whether or not focus can move on (the text is not
+        // focusable in the Reading view), and not again on the blur after.
+        if (!readOnly) commit(valueRef.current);
+        committedRef.current = true;
         if (onDone) onDone();
         else event.blur();
         return true;
