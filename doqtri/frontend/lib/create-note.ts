@@ -1,6 +1,6 @@
 /**
  * Creates a note (Obsidian-style) via the API: blank, or seeded with a template
- * `body` (markdown without the `# Title` line). Returns the new document id.
+ * `body` (the note's whole text: its title is never part of it, D-121). Returns the new document id.
  *
  * `workspaceId` is the workspace the vault is showing (WP-1.7); the server
  * checks the caller may add notes there. Without it the note goes into the

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveTitle, hasControlCharacters, isTitleTaken, uniqueTitle } from "@/lib/title";
+import { deriveTitle, hasControlCharacters, isTitleTaken, renameRefusal, TITLE_ONE_LINE, uniqueTitle } from "@/lib/title";
 
 describe("deriveTitle", () => {
   it("prefers the first h1", () => {
@@ -82,5 +82,21 @@ describe("hasControlCharacters (DOQ-35)", () => {
     for (const title of ["Roadmap 2027", "C# notes", "Café — plan", "Launch 🚀", "[[Linked]]"]) {
       expect(hasControlCharacters(title), title).toBe(false);
     }
+  });
+});
+
+describe("renameRefusal", () => {
+  it("refuses a title that is not one line, before anything else, with the route's wording", () => {
+    for (const title of ["New\n## X", "Tab\there", "Del\u007f"]) {
+      expect(renameRefusal(title, [])).toBe(TITLE_ONE_LINE);
+    }
+  });
+
+  it("refuses a title another note has, ignoring case and spacing", () => {
+    expect(renameRefusal("plan ", ["Plan"])).toBe("Another note is already called “plan ”");
+  });
+
+  it("allows anything else", () => {
+    expect(renameRefusal("Roadmap", ["Plan"])).toBeNull();
   });
 });

@@ -13,8 +13,8 @@ describe("demo vault", () => {
     for (const note of DEMO_NOTES) expect(note.id).toMatch(/^[a-z0-9-]+$/);
   });
 
-  it.each(DEMO_NOTES.map((n) => [n.id, n] as const))("%s has a title line and a real mindmap", (_, note) => {
-    expect(note.markdown.startsWith(`# ${note.title}\n`)).toBe(true);
+  it.each(DEMO_NOTES.map((n) => [n.id, n] as const))("%s has a real mindmap, and no title line (D-121)", (_, note) => {
+    expect(note.markdown).not.toMatch(/^# /m);
     expect(note.description.length).toBeGreaterThan(0);
     const map = buildMindmap(note.title, note.markdown);
     expect(countNodes(map)).toBeGreaterThanOrEqual(6);

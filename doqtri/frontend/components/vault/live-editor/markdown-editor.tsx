@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Compartment, EditorState, Transaction, type Extension } from "@codemirror/state";
 import { drawSelection, dropCursor, EditorView, keymap, placeholder as placeholderText } from "@codemirror/view";
 import { history, historyKeymap, redoDepth, undoDepth } from "@codemirror/commands";
@@ -18,21 +18,6 @@ import { linkFollowing, noteOpener } from "@/components/vault/live-editor/link-f
 import { external, readOnlyGuard } from "@/components/vault/live-editor/read-only";
 import { editorKeymap, findAndReplace, searchKeymap, shortcutKeys } from "@/components/vault/live-editor/editor-actions";
 import { FormatToolbar, type EditorMode } from "@/components/vault/live-editor/format-toolbar";
-import { headingNotice, headingNoticeDismiss, setHeadingNotice } from "@/components/vault/live-editor/heading-notice";
-import { headingNoticeText, type HeadingNotice } from "@/lib/heading-rename";
-import {
-  setNoteTitle,
-  titleLine as titleLineGuard,
-  titleLineChange,
-  titleLineHandle,
-  type TitleLineHandle,
-} from "@/components/vault/live-editor/title-line";
-import {
-  createTitleLineWriter,
-  type TitleLineWrite,
-  type TitleLineWriter,
-  type TitleLineWriterState,
-} from "@/components/vault/live-editor/title-line-writer";
 
 /** The smallest single change that turns `from` into `to`. */
 function diff(from: string, to: string) {
@@ -146,21 +131,6 @@ function statsReporter(emit: (stats: EditorStats) => void, current: () => Editor
     },
   };
 }
-/** The number of the note's first non-blank line, where its title heading would be. */
-function titleLine(state: EditorState): number | null {
-  const { doc } = state;
-  for (let n = 1; n <= doc.lines; n++) {
-    if (!/^[ \t\f\v]*$/.test(doc.line(n).text)) return n;
-  }
-  return null;
-}
-
-/** Whether the caret is on the title line. */
-function caretOnTitleLine(state: EditorState): boolean {
-  const line = titleLine(state);
-  return line !== null && state.doc.lineAt(state.selection.main.head).number === line;
-}
-
 
 /**
  * The note editor: one column of markdown that reads as rendered text, with
@@ -171,15 +141,9 @@ function caretOnTitleLine(state: EditorState): boolean {
  * (a reload, a regenerate) replaces it. There is no rich-text model to drift
  * from what is saved and hashed.
  *
- * Given the note's `title`, its first line is the title line (D-120,
- * title-line.ts): always `# <title>`, kept in place while editing. Opening a
- * note writes nothing. A note that does not open with its title line shows
- * it above the text, display only, and gets the real one after its first
- * edit, when a fresh `titleLineWrite.check()` allows it (title-line-writer.ts):
- * `# <title>` goes in as its own change at the top, outside undo history, so
- * the edit lands where it was made and undoing it leaves the line. Text
- * loaded from outside that lacks the line (a Regenerate) gets it after the
- * next edit, the same way.
+ * The note's title is not part of the text (D-121): `header` is where the
+ * caller shows it, between the toolbar and the text, and every line of the
+ * text, the first included, is the note's own.
  *
  * Three views of the same text: Source (the raw markdown everywhere), Live
  * (the default above) and Reading (everything rendered, no caret, links open
@@ -200,13 +164,7 @@ export default function MarkdownEditor({
   autoHeight = false,
   onOpenNote,
   onStats,
-  headingNotice: notice = null,
-  onDismissHeadingNotice,
-  onLeaveTitleLine,
-  title,
-  onTitleLine,
-  titleLineWrite,
-  titleLineHandleRef,
+  header,
 }: {
   value: string;
   onChange: (markdown: string) => void;
@@ -228,30 +186,11 @@ export default function MarkdownEditor({
   onOpenNote?: (title: string) => void;
   /** Characters, caret position and selection counts, for the status bar. */
   onStats?: (stats: EditorStats) => void;
-  /** The line under the title heading (DOQ-36): a title clash, or a rename's links; null for none. */
-  headingNotice?: HeadingNotice | null;
-  /** The notice's Dismiss button. */
-  onDismissHeadingNotice?: () => void;
-  /** The caret moved off the note's first non-blank line, after an edit or by moving (DOQ-36). */
-  onLeaveTitleLine?: () => void;
   /**
-   * The note's title: turns on the title line (D-120). Whether there is one
-   * is read once, when the editor is made; the title itself may change.
+   * Shown above the text, below the toolbar: the note's title bar. Given a
+   * function that puts the caret at the start of the text and focuses it.
    */
-  title?: string;
-  /** The editor just put the title line in, with this text; `onChange` has already had it. */
-  onTitleLine?: (markdown: string) => void;
-  /**
-   * How a note that lacks its title line gets it after its first edit: the
-   * confirmed title (null while a rename is on its way), and the fresh check
-   * of whether it may (title-line-writer.ts).
-   */
-  titleLineWrite?: TitleLineWrite;
-  /**
-   * Filled in while the editor is mounted: its title line's guard, for the
-   * workspace once a rename from the explorer settles (DOQ-46).
-   */
-  titleLineHandleRef?: { current: TitleLineHandle | null };
+  header?: (focusText: () => void) => ReactNode;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -283,26 +222,13 @@ export default function MarkdownEditor({
   const titlesRef = useRef(linkTitles);
   const openNoteRef = useRef(onOpenNote);
   const statsRef = useRef(onStats);
-  const dismissRef = useRef(onDismissHeadingNotice);
-  const leaveTitleRef = useRef(onLeaveTitleLine);
-  const titleRef = useRef(title);
-  const titleLineRef = useRef(onTitleLine);
   /** The text this editor last reported, so its own echo is not re-applied. */
   const reportedRef = useRef(value);
-  const titleWriteRef = useRef(titleLineWrite);
-  const [titleLineState, setTitleLineState] = useState<TitleLineWriterState>("idle");
-  /** Gives an older note its title line after its first edit; made with the editor. */
-  const titleWriterRef = useRef<TitleLineWriter | null>(null);
   useEffect(() => {
     onChangeRef.current = onChange;
     titlesRef.current = linkTitles;
     openNoteRef.current = onOpenNote;
     statsRef.current = onStats;
-    dismissRef.current = onDismissHeadingNotice;
-    leaveTitleRef.current = onLeaveTitleLine;
-    titleRef.current = title;
-    titleLineRef.current = onTitleLine;
-    titleWriteRef.current = titleLineWrite;
   });
 
   /** Reading is read-only too: nothing in it may change the text. */
@@ -331,13 +257,6 @@ export default function MarkdownEditor({
       }
       if (noteChanged || selectionChanged) stats.update(state, noteChanged);
     };
-    // It reads the workspace's word when an edit asks.
-    const titleWriter = createTitleLineWriter({
-      write: () => (titleRef.current === undefined ? undefined : titleWriteRef.current),
-      onAdded: (markdown) => titleLineRef.current?.(markdown),
-      onState: setTitleLineState,
-    });
-    titleWriterRef.current = titleWriter;
     created = new EditorView({
       parent: host,
       state: EditorState.create({
@@ -366,9 +285,6 @@ export default function MarkdownEditor({
             spellcheck: "false",
             autocorrect: "off",
           }),
-          headingNotice(),
-          headingNoticeDismiss.of(() => dismissRef.current?.()),
-          titleRef.current === undefined ? [] : titleLineGuard(titleRef.current),
           editorTheme,
           readOnlyGuard,
           EditorView.updateListener.of((update) => {
@@ -383,19 +299,6 @@ export default function MarkdownEditor({
             const text = update.state.doc.toString();
             reportedRef.current = text;
             onChangeRef.current(text);
-          }),
-          // The note's first edit brings its title line, when it has none yet.
-          EditorView.updateListener.of((update) => {
-            if (!update.docChanged || update.startState.readOnly) return;
-            if (update.transactions.every((tr) => tr.annotation(external) || tr.annotation(titleLineChange))) return;
-            titleWriter.edited(update.view);
-          }),
-          // Reported after the change above, so the text it acts on is the edited one.
-          EditorView.updateListener.of((update) => {
-            if (!update.selectionSet && !update.docChanged) return;
-            if (update.state.readOnly) return;
-            if (update.transactions.every((tr) => tr.annotation(external))) return;
-            if (caretOnTitleLine(update.startState) && !caretOnTitleLine(update.state)) leaveTitleRef.current?.();
           }),
         ],
       }),
@@ -428,10 +331,6 @@ export default function MarkdownEditor({
     });
   }, [view, lock, preview, views, readOnly, pending, shownMode]);
 
-  useEffect(() => {
-    view?.dispatch({ effects: setHeadingNotice.of(notice) });
-  }, [view, notice]);
-
   // Text from outside: a reload after a conflict, someone else's save, a
   // regenerate. Applied as the smallest change, so the caret stays put when
   // the edit is elsewhere, and kept out of undo history — undoing into text
@@ -445,23 +344,7 @@ export default function MarkdownEditor({
       changes: diff(current, value),
       annotations: [external.of(true), Transaction.addToHistory.of(false)],
     });
-    // Text that lacks the title line gets it after the next edit (D-120).
-    titleWriterRef.current?.reset();
   }, [view, value]);
-
-  useEffect(() => {
-    if (view && title !== undefined) view.dispatch({ effects: setNoteTitle.of(title) });
-  }, [view, title]);
-
-  useEffect(() => {
-    if (!view || !titleLineHandleRef) return;
-    const handle = titleLineHandle(view);
-    titleLineHandleRef.current = handle;
-    return () => {
-      handle.close();
-      if (titleLineHandleRef.current === handle) titleLineHandleRef.current = null;
-    };
-  }, [view, titleLineHandleRef]);
 
   // Full screen ends on Esc — unless Esc is closing something first: the
   // find panel, the link list, or a menu or popover (focused outside this
@@ -473,6 +356,8 @@ export default function MarkdownEditor({
       if (event.key !== "Escape") return;
       const target = event.target instanceof Element ? event.target : null;
       if (target && target !== document.body && !rootRef.current?.contains(target)) return;
+      // The title bar's own Escape puts the title back (NoteTitleBar).
+      if (target?.closest("[data-note-title]")) return;
       // The link list shows as a tooltip only while it has notes to offer.
       if (searchPanelOpen(view.state) || view.dom.querySelector(".cm-tooltip-autocomplete")) return;
       setFullscreen(false);
@@ -540,7 +425,6 @@ export default function MarkdownEditor({
     <div
       ref={rootRef}
       data-view={shownMode}
-      data-title-line={titleLineWrite ? titleLineState : undefined}
       data-fullscreen={fullscreen || undefined}
       tabIndex={-1}
       role={fullscreen ? "dialog" : undefined}
@@ -569,16 +453,12 @@ export default function MarkdownEditor({
           onFullscreenChange={setFullscreen}
         />
       )}
+      {header?.(() => {
+        if (!view) return;
+        view.dispatch({ selection: { anchor: 0 }, scrollIntoView: true });
+        view.focus();
+      })}
       <div ref={hostRef} className={cn(!autoHeight && "min-h-0 flex-1")} data-testid="note-editor" />
-      {/* Always mounted, so a notice appearing in it is announced. */}
-      <div role="status" aria-live="polite" className="sr-only" data-testid="heading-notice-status">
-        {notice ? announcement(notice) : ""}
-      </div>
     </div>
   );
-}
-
-function announcement(notice: HeadingNotice): string {
-  const { message, hint } = headingNoticeText(notice);
-  return hint ? `${message} ${hint}` : message;
 }

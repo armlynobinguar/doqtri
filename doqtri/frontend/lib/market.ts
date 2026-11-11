@@ -3,6 +3,8 @@
  * relay (progress/004). Pure: no network, no Supabase.
  */
 import { TEMPLATE_CATEGORIES, type TemplateCategory } from "@/lib/templates";
+import { cleanLabel } from "@/lib/mindmap";
+import { normalizeConcept } from "@/lib/mindmap-types";
 
 /** Template ids: 16 lowercase base32 characters (80 random bits). */
 export const TEMPLATE_ID_PATTERN = /^[a-z2-7]{16}$/;
@@ -23,16 +25,18 @@ export function isTemplateCategory(value: unknown): value is TemplateCategory {
 }
 
 /**
- * The part of a note that becomes the template: its markdown without the
- * leading `# Title` line, the same shape as the starter templates' bodies.
- * Using a template writes `# <title>` back on top, so a copy reads like the
- * original under whatever title the buyer ends up with.
+ * The part of a note that becomes the template: its markdown, without a
+ * leading `# <title>` line that only repeats the note's title (a note made
+ * before D-121 opens with one), the same shape as the starter templates'
+ * bodies. Any other first heading is the note's own and stays. A copy takes
+ * its title from the template, not from its text.
  */
-export function templateBodyFromNote(markdown: string): string {
+export function templateBodyFromNote(markdown: string, title: string): string {
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
   let start = 0;
   while (start < lines.length && lines[start].trim() === "") start++;
-  if (start < lines.length && /^#\s+\S/.test(lines[start])) {
+  const heading = start < lines.length ? /^#\s+(\S.*)$/.exec(lines[start]) : null;
+  if (heading && normalizeConcept(cleanLabel(heading[1])) === normalizeConcept(title)) {
     start++;
     while (start < lines.length && lines[start].trim() === "") start++;
   }

@@ -15,7 +15,6 @@ import { QuickSwitcher } from "@/components/vault/quick-switcher";
 import { UploadDialog, type RetryTarget } from "@/components/vault/upload-dialog";
 import { DeleteNoteDialog } from "@/components/vault/delete-note-dialog";
 import { RenameNoteDialog } from "@/components/vault/rename-note-dialog";
-import { OpenNoteProvider, useOpenNoteSlot } from "@/components/vault/open-note";
 import { SettingsDialog } from "@/components/vault/settings-dialog";
 import type { AccountPage } from "@/components/vault/account-menu";
 import type { NoteTemplate } from "@/lib/templates";
@@ -34,7 +33,7 @@ import { createBlankNote } from "@/lib/create-note";
 import { deleteNote, DeleteNoteError } from "@/lib/delete-note";
 import { renameNote } from "@/lib/rename-note";
 import { isNoAnswer, NoResponseError, REQUEST_TIMEOUT_MS } from "@/lib/no-response";
-import { isTitleTaken } from "@/lib/title";
+import { renameRefusal } from "@/lib/title";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { anchoredDocIds } from "@/lib/stellar/anchored";
 import type { FailedImport, NoteSummary, VaultIdentity } from "@/lib/types";
@@ -49,11 +48,13 @@ import {
   useNavigationStatus,
 } from "@/components/vault/navigation";
 import {
-  NoteTitleDraftsProvider,
   NoteOverlayProvider,
+  RenameNoteProvider,
   isNotePending,
   overlayNotes,
   useNoteOverlayState,
+  NoteChangePendingError,
+  type RenameNote,
 } from "@/components/vault/note-overlay";
 
 export function VaultShell({
@@ -144,9 +145,7 @@ function VaultShellInner({
   // notes in one group instead of guessing which are on-chain.
   const [anchored, setAnchored] = useState<ReadonlySet<string> | null>(null);
   const [pendingDelete, setPendingDelete] = useState<NoteSummary | null>(null);
-  // `draft` is what the field starts with instead of the title: the title
-  // typed last time, when a refused rename is retried, or the one being typed
-  // into the note's title line, which its row already shows (DOQ-44, DOQ-46).
+  // `draft` is the title typed last time, when a refused rename is retried.
   const [pendingRename, setPendingRename] = useState<{ note: NoteSummary; draft?: string } | null>(null);
 
   // Renames, deletes and dismissals show at once and hold until the server's
@@ -154,7 +153,7 @@ function VaultShellInner({
   // reads the overlaid list, and the pages under `children` read the same
   // overlay from context.
   const refresh = useCallback(() => router.refresh(), [router]);
-  const { overlay, run, titleDrafts } = useNoteOverlayState({
+  const { overlay, run } = useNoteOverlayState({
     notes,
     failedImports,
     location: pathname,
@@ -291,16 +290,22 @@ function VaultShellInner({
     [activeId, navigate, run],
   );
 
-  // A title another note already has is refused here, before any request,
-  // with the route's own rule and wording; the dialog shows the throw beside
-  // the field. Anything the server refuses later comes back as a toast, since
-  // the dialog has closed by then. The note open in the editor is renamed
-  // through it (DOQ-35), since the rename may rewrite its title heading.
-  const openNote = useOpenNoteSlot();
-  const handleRenameNote = useCallback(
-    (note: NoteSummary, title: string) => {
+  // A title another note already has, or one that is not one line, is
+  // refused here, before any request, with the route's own rules and
+  // wording; the dialog and the title bar show the throw beside the field. Anything the server refuses later comes back as a toast, since
+  // the dialog has closed by then. The open note's title bar renames through
+  // this too (D-121), so its rename shows everywhere the same way. Only the
+  // title changes: the note's text, open in an editor or not, is left alone.
+  const handleRenameNote = useCallback<RenameNote>(
+    (note, title) => {
+      // One change per note at a time: the explorer's row waits for it, and so
+      // must the title bar, or two renames could land in either order.
+      if (isNotePending(latest.current.overlay, note.id)) {
+        throw new NoteChangePendingError(`“${note.title}” is still being changed. Try again in a moment.`);
+      }
       const others = shownNotes.filter((other) => other.id !== note.id).map((other) => other.title);
-      if (isTitleTaken(title, others)) throw new Error(`Another note is already called “${title}”`);
+      const refused = renameRefusal(title, others);
+      if (refused) throw new Error(refused);
 
       const retry = {
         action: {
@@ -324,7 +329,7 @@ function VaultShellInner({
       run(
         { kind: "rename", id: note.id, title, previousTitle: note.title },
         async () => {
-          await openNote.rename(note.id, (session) => renameNote(note.id, title, session));
+          await renameNote(note.id, title);
         },
         (error) => {
           if (error instanceof NoResponseError) {
@@ -335,7 +340,7 @@ function VaultShellInner({
         },
       );
     },
-    [openNote, run, shownNotes],
+    [run, shownNotes],
   );
 
   const handleDismissImport = useCallback(
@@ -444,143 +449,140 @@ function VaultShellInner({
       onDeleteNote={setPendingDelete}
       onRenameNote={(note) => {
         setDrawerOpen(false);
-        setPendingRename({ note, draft: titleDrafts.drafts.get(note.id) });
+        setPendingRename({ note });
       }}
     />
   );
 
   return (
     <NoteOverlayProvider value={overlay}>
-      <NoteTitleDraftsProvider value={titleDrafts}>
-        <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
-          <MobileTopBar
-            title={mobileTitle}
-            noteId={activeId}
-            // Desktop shows this in the status bar; one live "Saved" is enough.
-            saveState={isMobile ? saveState : "idle"}
-            creating={creating}
-            canCreate={canCreate}
-            onNewNote={() => void handleNewNote()}
+      <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
+        <MobileTopBar
+          title={mobileTitle}
+          // Desktop shows this in the status bar; one live "Saved" is enough.
+          saveState={isMobile ? saveState : "idle"}
+          creating={creating}
+          canCreate={canCreate}
+          onNewNote={() => void handleNewNote()}
+          accountPage={currentAccountPage}
+        />
+        <LegalUpdateNotice />
+
+        <div className="flex min-h-0 flex-1">
+          <Ribbon
+            // On the vault-wide views the URL is the truth; elsewhere the last
+            // ribbon click is, since those actions only toggle panels.
+            active={routeAction ?? ribbonActive}
+            onAction={handleRibbonAction}
+            isAdmin={isAdmin}
+            referralsLive={referralsLive}
             accountPage={currentAccountPage}
           />
-          <LegalUpdateNotice />
 
-          <div className="flex min-h-0 flex-1">
-            <Ribbon
-              // On the vault-wide views the URL is the truth; elsewhere the last
-              // ribbon click is, since those actions only toggle panels.
-              active={routeAction ?? ribbonActive}
-              onAction={handleRibbonAction}
-              isAdmin={isAdmin}
-              referralsLive={referralsLive}
-              accountPage={currentAccountPage}
-            />
+          <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+            {/*
+              Phones get the explorer in a drawer instead. `max-lg:hidden` covers
+              the server render and hydration, before useIsCompactVault can answer;
+              the main panel keeps its slot either way, so it never remounts.
+            */}
+            {explorerOpen && !isMobile && (
+              <>
+                <ResizablePanel
+                  id="explorer"
+                  defaultSize={210}
+                  minSize={160}
+                  maxSize={420}
+                  className="min-h-0 max-lg:hidden"
+                >
+                  {explorer}
+                </ResizablePanel>
+                <ResizableHandle className="hover:bg-foreground/25 transition-colors max-lg:hidden" />
+              </>
+            )}
 
-            <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-              {/*
-                Phones get the explorer in a drawer instead. `max-lg:hidden` covers
-                the server render and hydration, before useIsCompactVault can answer;
-                the main panel keeps its slot either way, so it never remounts.
-              */}
-              {explorerOpen && !isMobile && (
-                <>
-                  <ResizablePanel
-                    id="explorer"
-                    defaultSize={210}
-                    minSize={160}
-                    maxSize={420}
-                    className="min-h-0 max-lg:hidden"
-                  >
-                    {explorer}
-                  </ResizablePanel>
-                  <ResizableHandle className="hover:bg-foreground/25 transition-colors max-lg:hidden" />
-                </>
-              )}
-
-              <ResizablePanel id="main" className="relative min-h-0">
-                <OpenNoteProvider slot={openNote}>{children}</OpenNoteProvider>
-                <NavigationOverlay />
-              </ResizablePanel>
-            </ResizablePanelGroup>
-          </div>
-
-          <MobileTabBar
-            active={drawerOpen ? "files" : (routeAction ?? (activeId ? "files" : undefined))}
-            onAction={handleRibbonAction}
-          />
-
-          <StatusBar
-            className="max-lg:hidden"
-            noteCount={shownNotes.length}
-            workspaceName={workspace.name}
-            wordCount={wordCount}
-            saveState={saveState}
-          />
-
-          <Sheet open={drawerOpen && isMobile} onOpenChange={setDrawerOpen}>
-            <SheetContent
-              side="left"
-              showCloseButton={false}
-              className="w-[85%] max-w-xs gap-0 border-r-border pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
-              // Picking a note is the drawer's whole job, so any link closes it.
-              onClick={(event) => {
-                if ((event.target as HTMLElement).closest("a")) setDrawerOpen(false);
-              }}
-            >
-              <SheetTitle className="sr-only">Notes</SheetTitle>
-              <div className="min-h-0 flex-1">{explorer}</div>
-            </SheetContent>
-          </Sheet>
-
-          <QuickSwitcher
-            notes={shownNotes}
-            open={switcherOpen}
-            onOpenChange={setSwitcherOpen}
-          />
-          <UploadDialog
-            workspaceId={workspace.id}
-            open={uploadOpen}
-            retry={retryTarget}
-            onOpenChange={(next) => {
-              setUploadOpen(next);
-              if (!next) setRetryTarget(null);
-            }}
-          />
-          <DeleteNoteDialog
-            open={pendingDelete !== null}
-            // After a delete the row is gone; land on the explorer's list.
-            focusAfterConfirm={() => noteRowLink()}
-            title={pendingDelete?.title ?? ""}
-            onOpenChange={(next) => {
-              if (!next) setPendingDelete(null);
-            }}
-            onConfirm={() => {
-              if (pendingDelete) handleDeleteNote(pendingDelete);
-            }}
-          />
-          <RenameNoteDialog
-            key={pendingRename ? `${pendingRename.note.id}:${pendingRename.draft ?? ""}` : "closed"}
-            open={pendingRename !== null}
-            title={pendingRename?.note.title ?? ""}
-            initialValue={pendingRename?.draft}
-            // After a rename the trigger is disabled (the rename is in flight),
-            // which would drop focus to the page; the row's link is next best.
-            focusAfterConfirm={() => noteRowLink(pendingRename?.note.id)}
-            onOpenChange={(next) => {
-              if (!next) setPendingRename(null);
-            }}
-            onConfirm={(title) => {
-              if (pendingRename) handleRenameNote(pendingRename.note, title);
-            }}
-          />
-          <SettingsDialog
-            identity={identity}
-            noteCount={shownNotes.length}
-            open={settingsOpen}
-            onOpenChange={setSettingsOpen}
-          />
+            <ResizablePanel id="main" className="relative min-h-0">
+              <RenameNoteProvider value={handleRenameNote}>{children}</RenameNoteProvider>
+              <NavigationOverlay />
+            </ResizablePanel>
+          </ResizablePanelGroup>
         </div>
-      </NoteTitleDraftsProvider>
+
+        <MobileTabBar
+          active={drawerOpen ? "files" : (routeAction ?? (activeId ? "files" : undefined))}
+          onAction={handleRibbonAction}
+        />
+
+        <StatusBar
+          className="max-lg:hidden"
+          noteCount={shownNotes.length}
+          workspaceName={workspace.name}
+          wordCount={wordCount}
+          saveState={saveState}
+        />
+
+        <Sheet open={drawerOpen && isMobile} onOpenChange={setDrawerOpen}>
+          <SheetContent
+            side="left"
+            showCloseButton={false}
+            className="w-[85%] max-w-xs gap-0 border-r-border pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
+            // Picking a note is the drawer's whole job, so any link closes it.
+            onClick={(event) => {
+              if ((event.target as HTMLElement).closest("a")) setDrawerOpen(false);
+            }}
+          >
+            <SheetTitle className="sr-only">Notes</SheetTitle>
+            <div className="min-h-0 flex-1">{explorer}</div>
+          </SheetContent>
+        </Sheet>
+
+        <QuickSwitcher
+          notes={shownNotes}
+          open={switcherOpen}
+          onOpenChange={setSwitcherOpen}
+        />
+        <UploadDialog
+          workspaceId={workspace.id}
+          open={uploadOpen}
+          retry={retryTarget}
+          onOpenChange={(next) => {
+            setUploadOpen(next);
+            if (!next) setRetryTarget(null);
+          }}
+        />
+        <DeleteNoteDialog
+          open={pendingDelete !== null}
+          // After a delete the row is gone; land on the explorer's list.
+          focusAfterConfirm={() => noteRowLink()}
+          title={pendingDelete?.title ?? ""}
+          onOpenChange={(next) => {
+            if (!next) setPendingDelete(null);
+          }}
+          onConfirm={() => {
+            if (pendingDelete) handleDeleteNote(pendingDelete);
+          }}
+        />
+        <RenameNoteDialog
+          key={pendingRename ? `${pendingRename.note.id}:${pendingRename.draft ?? ""}` : "closed"}
+          open={pendingRename !== null}
+          title={pendingRename?.note.title ?? ""}
+          initialValue={pendingRename?.draft}
+          // After a rename the trigger is disabled (the rename is in flight),
+          // which would drop focus to the page; the row's link is next best.
+          focusAfterConfirm={() => noteRowLink(pendingRename?.note.id)}
+          onOpenChange={(next) => {
+            if (!next) setPendingRename(null);
+          }}
+          onConfirm={(title) => {
+            if (pendingRename) handleRenameNote(pendingRename.note, title);
+          }}
+        />
+        <SettingsDialog
+          identity={identity}
+          noteCount={shownNotes.length}
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+        />
+      </div>
     </NoteOverlayProvider>
   );
 }

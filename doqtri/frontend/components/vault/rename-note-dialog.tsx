@@ -17,9 +17,9 @@ import { MAX_TITLE_LENGTH } from "@/lib/title";
 /**
  * Renames a note. The title is what other notes' [[wikilinks]] resolve
  * against, so the dialog says those links will stop resolving rather than
- * letting the graph quietly lose edges. A note that opens with its title as a
- * `# heading` has that heading renamed too (DOQ-35); that is an edit, so the
- * dialog says an anchored note will show as changed.
+ * letting the graph quietly lose edges. Only the title changes, never the
+ * note's text (D-121), so a rename is not an edit and an anchored note stays
+ * as it was anchored.
  *
  * Mount it with a `key` per note, so each opening starts from that note's
  * current title (or `initialValue`, when a refused rename is retried) instead
@@ -91,10 +91,8 @@ export function RenameNoteDialog({
               <code className="text-foreground font-mono text-[12px]">
                 [[{title}]]
               </code>{" "}
-              keep that link, which becomes unresolved. If this note opens with
-              its title as a heading, the heading is renamed too. That is an
-              edit, so an anchored note shows as changed until it is anchored
-              again.
+              keep that link, which becomes unresolved. The note&apos;s text
+              is not changed.
             </DialogDescription>
           </DialogHeader>
 

@@ -11,17 +11,6 @@ export type SaveQueue = {
   save(text: string): Promise<void>;
   /** Adopts `text` as saved without writing it, for text the server already has. */
   markSaved(text: string): void;
-  /**
-   * Runs `task` after any write in flight, and holds the writes queued
-   * meanwhile until it settles: for another write of the same row (a rename
-   * that rewrites the title heading) that must not race a save.
-   *
-   * A write queued while the task was pending does not write the text it was
-   * given, which predates the task's own write (it would put the old heading
-   * back). When its turn comes it writes `current()`, the editor's text then,
-   * and nothing when that is already saved.
-   */
-  run<T>(task: () => Promise<T>, current: () => string): Promise<T>;
   /** The last text known to be stored. */
   readonly saved: string;
 };
@@ -32,15 +21,10 @@ export function createSaveQueue(
 ): SaveQueue {
   let saved = initial;
   let tail: Promise<unknown> = Promise.resolve();
-  // The run() tasks not yet settled, and the newest one's `current`.
-  let pendingRuns = 0;
-  let pendingCurrent: (() => string) | null = null;
 
   return {
-    save(given) {
-      const redirect = pendingRuns > 0 ? pendingCurrent : null;
+    save(text) {
       const run = async () => {
-        const text = redirect ? redirect() : given;
         if (text === saved) return;
         await write(text);
         saved = text;
@@ -52,17 +36,6 @@ export function createSaveQueue(
     },
     markSaved(text) {
       saved = text;
-    },
-    run(task, current) {
-      pendingRuns += 1;
-      pendingCurrent = current;
-      const settle = () => {
-        pendingRuns -= 1;
-        if (pendingRuns === 0) pendingCurrent = null;
-      };
-      const next = tail.then(task, task).finally(settle);
-      tail = next.catch(() => {});
-      return next;
     },
     get saved() {
       return saved;

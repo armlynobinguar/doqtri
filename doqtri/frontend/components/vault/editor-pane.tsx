@@ -10,9 +10,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { LiveMindmapPane } from "@/components/vault/live-mindmap-pane";
 import type { MindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
-import type { HeadingNotice } from "@/lib/heading-rename";
-import type { TitleLineWrite } from "@/components/vault/live-editor/title-line-writer";
-import type { TitleLineHandle } from "@/components/vault/live-editor/title-line";
+import { NoteTitleBar } from "@/components/vault/note-title-bar";
 import { cn } from "@/lib/utils";
 import type { EditorStats } from "@/lib/text-stats";
 
@@ -68,7 +66,7 @@ function subscribeMindmapShown(listener: () => void) {
 
 export function EditorPane({
   title,
-  lineTitle = title,
+  onRename,
   markdown,
   onChange,
   onRegenerate,
@@ -80,20 +78,14 @@ export function EditorPane({
   onOpenNote,
   onStats,
   banner,
-  headingNotice = null,
-  onDismissHeadingNotice,
-  onLeaveTitleLine,
-  onTitleLine,
-  titleLineWrite,
-  titleLineHandleRef,
 }: {
-  /** The note's title, shown in the tab and the live mindmap: as it is being typed, too (DOQ-44). */
+  /** The note's title: the title bar's, the tab's and the live mindmap root's. */
   title: string;
   /**
-   * The confirmed title, which the editor's title line is guarded by (D-120);
-   * `title` when not given.
+   * Renames the note from its title bar (D-121); throws when the title is
+   * taken. None, and the title bar only shows the title.
    */
-  lineTitle?: string;
+  onRename?: (title: string) => void;
   markdown: string;
   /** Titles offered when a `[[link` is being typed. */
   linkTitles: string[];
@@ -105,13 +97,14 @@ export function EditorPane({
    */
   concept: MindmapRebuild;
   /**
-   * The phone layout: the title and Regenerate live in the surrounding chrome,
-   * and there is no room for the mindmap beside the text — it is the Map view.
+   * The phone layout: there is no tab strip (Regenerate lives in the
+   * surrounding chrome), and no room for the mindmap beside the text — it is
+   * the Map view. The title bar shows all the same.
    */
   compact?: boolean;
   /**
    * Someone else holds the edit lock, or the caller may only read (D-17):
-   * the text cannot be changed and Regenerate is off.
+   * the text and the title cannot be changed and Regenerate is off.
    */
   readOnly?: boolean;
   /** Read-only only while the edit lock's status loads; see MarkdownEditor. */
@@ -122,17 +115,6 @@ export function EditorPane({
   onStats?: (stats: EditorStats) => void;
   /** Shown between the tab strip and the editor, e.g. "<name> is editing". */
   banner?: ReactNode;
-  /** The line under the note's title heading (DOQ-36); see MarkdownEditor. */
-  headingNotice?: HeadingNotice | null;
-  onDismissHeadingNotice?: () => void;
-  /** The caret moved off the note's title line (DOQ-36). */
-  onLeaveTitleLine?: () => void;
-  /** The editor put the note's title line in (D-120); see MarkdownEditor. */
-  onTitleLine?: (markdown: string) => void;
-  /** How a note that lacks its title line gets it after its first edit; see MarkdownEditor. */
-  titleLineWrite?: TitleLineWrite;
-  /** The editor's title line guard, while it is mounted (DOQ-46); see MarkdownEditor. */
-  titleLineHandleRef?: { current: TitleLineHandle | null };
 }) {
   const mindmapShown = useSyncExternalStore(subscribeMindmapShown, readMindmapShown, () => true);
   const showMindmap = !compact && mindmapShown;
@@ -148,13 +130,14 @@ export function EditorPane({
       compact={compact}
       onOpenNote={onOpenNote}
       onStats={onStats}
-      headingNotice={headingNotice}
-      onDismissHeadingNotice={onDismissHeadingNotice}
-      onLeaveTitleLine={onLeaveTitleLine}
-      title={lineTitle}
-      onTitleLine={onTitleLine}
-      titleLineWrite={titleLineWrite}
-      titleLineHandleRef={titleLineHandleRef}
+      header={(focusText) => (
+        <NoteTitleBar
+          title={title}
+          readOnly={readOnly || !onRename}
+          onRename={(next) => onRename?.(next)}
+          onDone={focusText}
+        />
+      )}
     />
   );
 

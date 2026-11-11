@@ -178,14 +178,14 @@ export function mindmapFromHeadings(title: string, markdown: string): DocMindmap
 /**
  * Drops a top heading that only repeats the title.
  *
- * A note's markdown opens with `# <title>`, so the heading tree's root (the
- * title) would otherwise have that heading as its first child, with every
- * section one ring further out. The map folds it into the root instead: its
- * sections ring the root, followed by any `#` headings after it. Those are
- * there in a note whose title line was put above an older opening heading
- * (D-120, lib/title-line.ts), which would otherwise leave the title as a
- * lone node beside them. Only the first heading folds, so a heading that
- * says the title further down is the note's own.
+ * Notes made before D-121 open with `# <title>`, kept as ordinary text, so
+ * the heading tree's root (the title) would otherwise have that heading as
+ * its first child, with every section one ring further out, and the title
+ * twice. The map folds it into the root instead: its sections ring the root,
+ * followed by any `#` headings after it, so a note that had the line put
+ * above an older opening heading (D-120) shows no lone title node beside
+ * them. Only the first heading folds, so a heading that says the title
+ * further down is the note's own.
  *
  * Display only: the heading tree itself keeps the heading, since its
  * positional id (`h0`) is what links and node status are anchored on.

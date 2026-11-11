@@ -24,27 +24,12 @@ import { createNoteSaver } from "@/lib/note-saver";
 import { useDocLock } from "@/hooks/use-doc-lock";
 import { EditLockBanner } from "@/components/vault/edit-lock-banner";
 import { EDITING_ELSEWHERE, editingMessage } from "@/lib/doc-lock";
-import {
-  useDraftTitle,
-  useNoteTitle,
-  useNoteTitleDrafts,
-  useOverlaidNotes,
-} from "@/components/vault/note-overlay";
+import { useNoteTitle, useOverlaidNotes, useRenameNote } from "@/components/vault/note-overlay";
 import { useMindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
 import type { Doc } from "@/lib/types";
-import { SaveBeforeRenameError, type RenamedNote } from "@/lib/rename-note";
-import { adoptRename } from "@/lib/rename-adopt";
-import { settleTitleLine } from "@/lib/title-line-settle";
-import { useRegisterOpenNote } from "@/components/vault/open-note";
 import type { EditorStats } from "@/lib/text-stats";
-import { useHeadingRename, type HeadingCheck } from "@/components/vault/use-heading-rename";
-import { buildBacklinks } from "@/lib/wikilinks";
-import { checkTitleLineSafety, checkTitleLineSafetyOutcome } from "@/components/vault/title-line-safety-reads";
-import type { TitleLineHandle } from "@/components/vault/live-editor/title-line";
 
 const SETTLE_MS = 700;
-/** How long before a title-line safety read that failed is asked again (DOQ-46). */
-const SAFETY_RETRY_MS = 1_500;
 
 /** The phone layout's views, in place of the desktop's side-by-side panes. */
 type MobileView = "note" | "map" | "ship";
@@ -75,7 +60,9 @@ const MOBILE_VIEWS: { id: MobileView; label: string }[] = [
  *
  * Titles (this note's, and every other note's for the graph, backlinks and
  * [[wikilinks]]) are read through the vault's pending renames and deletes,
- * so a rename shows here in the same frame as in the explorer.
+ * so a rename shows here in the same frame as in the explorer. The title is
+ * not in the text (D-121): the title bar above the editor renames the note
+ * through the explorer's own rename, and nothing here writes the text for it.
  */
 export function DocWorkspace({
   docs: serverDocs,
@@ -87,9 +74,9 @@ export function DocWorkspace({
   const router = useRouter();
   const docs = useOverlaidNotes(serverDocs);
   // Through the vault's pending renames (DOQ-32), so a rename from the
-  // explorer shows here in the same frame; the heading renamer builds on it.
-  const pageTitle = useNoteTitle(active.id, active.title);
-  const titleDrafts = useNoteTitleDrafts();
+  // explorer or the title bar shows here in the same frame.
+  const title = useNoteTitle(active.id, active.title);
+  const renameNote = useRenameNote();
   // One concept map for the note, shown by the right panel and the live
   // mindmap beside the editor alike: a rebuild from either shows in both.
   const concept = useMindmapRebuild({
@@ -111,21 +98,8 @@ export function DocWorkspace({
     conflictRef.current = conflict;
   }, [conflict]);
   const markdownRef = useRef(markdown);
-  // Shows the title line's draft (DOQ-44); set once the heading check is made, below.
-  const typedHeadingRef = useRef<() => void>(() => {});
 
   const { lock, controller } = useDocLock(active.id);
-
-  // Editing the title heading renames the note (DOQ-36).
-  const headingRename = useHeadingRename({
-    docId: active.id,
-    title: pageTitle,
-    initialMarkdown: active.markdown,
-  });
-  // Also where the editor reports the title line it added with a first edit
-  // (D-120): saved with that edit, but the heading it adds says the title, so
-  // the next heading check compares with it rather than with the text before.
-  const resetHeading = headingRename.reset;
 
   // The page remounts this per note, so the saver never outlives its row.
   // Its writes hold the lock and send the version the text is based on.
@@ -155,11 +129,10 @@ export function DocWorkspace({
     saver.setVersion(Number(data.version));
     saves.markSaved(data.markdown);
     markdownRef.current = data.markdown;
-    resetHeading(data.markdown);
     setMarkdown(data.markdown);
     setConflict(false);
     setSaveState("saved");
-  }, [active.id, resetHeading, saver, saves, setSaveState]);
+  }, [active.id, saver, saves, setSaveState]);
 
   useEffect(() => {
     controller.setHandlers({
@@ -191,20 +164,12 @@ export function DocWorkspace({
   // Read-only only because the lock's status has not arrived yet (DOQ-17):
   // the editor keeps its caret so typing works the moment it does.
   const lockPending = lock.phase === "loading" && !conflict;
-  const readOnlyRef = useRef(readOnly);
-  useEffect(() => {
-    readOnlyRef.current = readOnly;
-  }, [readOnly]);
 
   /** The editor's onChange: the first edit takes the lock. */
   const handleChange = useCallback(
     (next: string) => {
-      // Now rather than after the render, for a title-line check made in the
-      // same editor update (DOQ-36).
       markdownRef.current = next;
       setMarkdown(next);
-      // The title being typed shows everywhere in this same render (DOQ-44).
-      typedHeadingRef.current();
       void controller.noteEdit().then((held) => {
         // Lost the race for a free lock: drop the keystroke for their text.
         const { phase } = controller.getState();
@@ -302,171 +267,10 @@ export function DocWorkspace({
     return text;
   }, [saves, setSaveState]);
 
-  /**
-   * Renames this note, for the shell's rename dialog (DOQ-35). The rename may
-   * rewrite the note's title heading on the server, so edits not yet saved
-   * are saved first (the server rewrites the text shown here, and nothing
-   * typed is lost), and the request runs in the save queue, so no autosave
-   * races it. The text it wrote then becomes the saved copy at its version,
-   * as for Regenerate, and the next save goes on from there. Anything typed
-   * while it ran is kept, with the same heading change made to it
-   * (lib/rename-adopt.ts), and an autosave queued meanwhile saves that text,
-   * not the pre-rename one it was queued with (SaveQueue.run).
-   *
-   * The request names this editor's edit session, so the server lets the
-   * heading change only when this tab holds the lock, or nobody does
-   * (rename_document()).
-   */
-  const noteRenamed = headingRename.noteRenamed;
-  const isOwnRename = headingRename.isOwn;
-
-  /**
-   * Whether the open note may be given its title line now (D-120,
-   * lib/title-line-safety.ts), asked afresh each time by the editor after an
-   * older note's first edit.
-   */
-  const checkTitleLine = useCallback(() => checkTitleLineSafety(active.id), [active.id]);
-
-  // The editor's title line guard, while it is mounted (DOQ-46).
-  const titleLineHandleRef = useRef<TitleLineHandle | null>(null);
-  // The title the editor's title line goes by, for the line 1 rewrite below.
-  const lineTitleRef = useRef(headingRename.title);
-  useEffect(() => {
-    lineTitleRef.current = headingRename.title;
-  });
-
-  /**
-   * A rename from the explorer whose answer left the editor without text that
-   * says the new title (DOQ-46): line 1 is rewritten to it, or let go as the
-   * title line. The rules are lib/title-line-settle.ts; `lineBefore` is line
-   * 1 when the rename started.
-   */
-  const settleLineOne = useCallback(
-    (renamed: RenamedNote, lineBefore: string) =>
-      settleTitleLine({
-        renamed,
-        lineBefore,
-        editor: titleLineHandleRef.current,
-        readOnly: () => readOnlyRef.current,
-        conflict: () => conflictRef.current,
-        title: () => lineTitleRef.current,
-        safety: () => checkTitleLineSafetyOutcome(active.id),
-        wait: () => new Promise((resolve) => setTimeout(resolve, SAFETY_RETRY_MS)),
-        rewritten: resetHeading,
-      }),
-    [active.id, resetHeading],
-  );
-
+  /** The title bar's rename: the explorer's, for this note (D-121). */
   const renameHere = useCallback(
-    async (request: (session: string) => Promise<RenamedNote>) => {
-      // Line 1 as the rename finds it: what it says later is compared with this (DOQ-46).
-      const lineBefore = markdownRef.current.split("\n", 1)[0];
-      if (!readOnly) {
-        try {
-          await saveNow();
-        } catch (e) {
-          const reason = e instanceof Error ? ` ${e.message}` : "";
-          throw new SaveBeforeRenameError(`Your edits could not be saved, so the note was not renamed.${reason}`);
-        }
-      }
-      // Whether the editor takes text from the answer that says the new title:
-      // adopted with its line 1 changed, or reloaded.
-      let tookText = false;
-      const renamed = await saves.run(async () => {
-        const renamed = await request(controller.session);
-        const current = markdownRef.current;
-        const adopted = adoptRename({
-          renamed,
-          editorVersion: saver.version,
-          saved: saves.saved,
-          current,
-        });
-        noteRenamed(renamed, adopted?.text);
-        if (!adopted) {
-          // A rewrite this copy was already behind: load what the note is
-          // now, unless it holds unsaved text or a conflict the user must see.
-          if (renamed.markdown !== undefined && !conflictRef.current && markdownRef.current === saves.saved) {
-            tookText = true;
-            void reloadLatest();
-          }
-          return renamed;
-        }
-        // Typed into line 1 while the rename was on its way, the text keeps
-        // that line as it was typed: settled below like an answer with none.
-        tookText = adopted.text !== current;
-        saver.setVersion(adopted.version);
-        saves.markSaved(adopted.saved);
-        markdownRef.current = adopted.text;
-        setMarkdown(adopted.text);
-        setSaveState(adopted.text === adopted.saved ? "saved" : "saving");
-        return renamed;
-        // An autosave queued while this ran writes the editor's text as it is
-        // now, rebased, rather than the pre-rename text it was queued with.
-      }, () => markdownRef.current);
-      // Out of the save queue: the safety reads it may make can take a while.
-      if (!tookText && !isOwnRename(renamed)) void settleLineOne(renamed, lineBefore);
-      return renamed;
-    },
-    [controller, isOwnRename, noteRenamed, readOnly, reloadLatest, saveNow, saver, saves, setSaveState, settleLineOne],
-  );
-  // Registered with the shell, so its rename dialog renames this note here.
-  const openHere = useMemo(() => ({ docId: active.id, rename: renameHere }), [active.id, renameHere]);
-  useRegisterOpenNote(openHere);
-
-  /**
-   * Renames the note when its title heading was edited (DOQ-36): when an
-   * edit settles, and when the caret leaves the title line. Never while the
-   * copy is read-only or its lock is loading. The explorer, tab, graph and
-   * mindmap read the title from the layout's server data, as after a rename
-   * from the explorer.
-   */
-  const { check: checkHeadingNow, typed: typedHeadingNow } = headingRename;
-  const headingContext = useMemo<HeadingCheck>(
-    () => ({
-      text: () => markdownRef.current,
-      canRename: () => !readOnlyRef.current,
-      rename: renameHere,
-      backlinks: () => buildBacklinks(docs, active.id).length,
-      refresh: titleDrafts.refresh,
-      // What the title line is being typed as: the note's label wherever its
-      // title shows, before any request, and nothing else (DOQ-44).
-      draft: (next) => titleDrafts.drafts.set(active.id, next),
-      landed: (next, previousTitle) => titleDrafts.landed({ id: active.id, title: next, previousTitle }),
-      settleDraft: () => titleDrafts.settle(active.id),
-    }),
-    [renameHere, docs, active.id, titleDrafts],
-  );
-  const checkHeadingRef = useRef(() => checkHeadingNow(headingContext));
-  useEffect(() => {
-    checkHeadingRef.current = () => checkHeadingNow(headingContext);
-    typedHeadingRef.current = () => typedHeadingNow(headingContext);
-  }, [checkHeadingNow, typedHeadingNow, headingContext]);
-  // Also once the copy can be edited again, for an edit that settled while
-  // the lock's status was reloading; and a copy turned read-only shows no
-  // draft.
-  useEffect(() => {
-    checkHeadingRef.current();
-  }, [settled, readOnly]);
-  useEffect(() => {
-    typedHeadingRef.current();
-  }, [readOnly]);
-  // Called from inside an editor update: run once it has finished.
-  const leaveTitleLine = useCallback(() => queueMicrotask(() => checkHeadingRef.current()), []);
-  const title = headingRename.title;
-  // The tab and the live mindmap's root show a title being typed (DOQ-44);
-  // everything else, the editor's title line included, goes by `title`.
-  const shownTitle = useDraftTitle(active.id, title);
-
-  /**
-   * The title line an older note gets after its first edit (D-120,
-   * lib/title-line.ts), written by the editor (title-line-writer.ts). It asks
-   * afresh, at that moment, whether the note's headings are linked or
-   * anchored (checkTitleLine above), and writes with the title the page's
-   * data confirms: not while a rename is still on its way.
-   */
-  const titleLineWrite = useMemo(
-    () => ({ title: title === active.title ? active.title : null, check: checkTitleLine }),
-    [title, active.title, checkTitleLine],
+    (next: string) => renameNote?.({ id: active.id, title }, next),
+    [renameNote, active.id, title],
   );
 
   /**
@@ -552,12 +356,11 @@ export function DocWorkspace({
     if (Number.isSafeInteger(nextVersion)) saver.setVersion(nextVersion);
     saves.markSaved(next);
     markdownRef.current = next;
-    resetHeading(next);
     setMarkdown(next);
     setSaveState("saved");
     toast.success("Note regenerated");
     router.refresh();
-  }, [active.id, controller, resetHeading, router, saveNow, saver, saves, setSaveState]);
+  }, [active.id, controller, router, saveNow, saver, saves, setSaveState]);
 
   const regenerateDialog = (
     <RegenerateDialog
@@ -612,8 +415,8 @@ export function DocWorkspace({
         <div className={cn("min-h-0 flex-1", mobileView !== "note" && "hidden")}>
           <EditorPane
             compact
-            title={shownTitle}
-            lineTitle={title}
+            title={title}
+            onRename={renameNote ? renameHere : undefined}
             concept={concept}
             markdown={markdown}
             onChange={handleChange}
@@ -624,12 +427,6 @@ export function DocWorkspace({
             onOpenNote={openNote}
             onStats={handleStats}
             banner={lockBanner}
-            headingNotice={headingRename.notice}
-            onDismissHeadingNotice={headingRename.dismiss}
-            onLeaveTitleLine={leaveTitleLine}
-            onTitleLine={resetHeading}
-            titleLineWrite={titleLineWrite}
-            titleLineHandleRef={titleLineHandleRef}
           />
         </div>
         {mobileView === "map" && (
@@ -661,8 +458,8 @@ export function DocWorkspace({
       <ResizablePanelGroup orientation="horizontal" className="min-h-0">
         <ResizablePanel id="editor" minSize={320} className="flex min-h-0 flex-col">
           <EditorPane
-            title={shownTitle}
-            lineTitle={title}
+            title={title}
+            onRename={renameNote ? renameHere : undefined}
             concept={concept}
             markdown={markdown}
             onChange={handleChange}
@@ -673,12 +470,6 @@ export function DocWorkspace({
             onOpenNote={openNote}
             onStats={handleStats}
             banner={lockBanner}
-            headingNotice={headingRename.notice}
-            onDismissHeadingNotice={headingRename.dismiss}
-            onLeaveTitleLine={leaveTitleLine}
-            onTitleLine={resetHeading}
-            titleLineWrite={titleLineWrite}
-            titleLineHandleRef={titleLineHandleRef}
           />
         </ResizablePanel>
 

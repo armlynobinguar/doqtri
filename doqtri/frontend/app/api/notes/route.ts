@@ -11,6 +11,9 @@ import { readActiveWorkspaceCookie, workspaceForCreate } from "@/lib/active-work
  * Create an Obsidian-style note, blank or from a template body. Headings
  * become the mindmap live; [[wikilinks]] feed the graph. No upload / AI required.
  *
+ * The title is the row's `title` and nothing else (D-121): the text starts
+ * with the body, not with a `# <title>` line.
+ *
  * The note goes into the workspace the request names (the one the vault is
  * showing), else the active one, else the personal one; editors and above
  * only (WP-1.7, D-14). See workspaceForCreate().
@@ -62,12 +65,10 @@ export async function POST(request: Request) {
     userId: user.id,
     workspaceId,
     title: requestedTitle,
-    markdown: (title) =>
+    markdown:
       templateBody !== null
-        ? `# ${title}\n\n${templateBody}`
+        ? templateBody
         : [
-            `# ${title}`,
-            "",
             "## Overview",
             "",
             "Write like Obsidian. Headings become the mindmap. Link ideas with [[wikilinks]].",

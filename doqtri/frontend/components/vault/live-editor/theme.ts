@@ -59,18 +59,6 @@ export const editorTheme = EditorView.theme({
   ".cm-lp-h4": { fontSize: "1.05em", lineHeight: "1.45", paddingTop: "0.25em" },
   ".cm-lp-h5": { fontSize: "1em", lineHeight: "1.5" },
   ".cm-lp-h6": { fontSize: "0.95em", lineHeight: "1.5", color: "var(--muted-foreground)" },
-  // The title line (title-line.ts, D-120): line 1 reads as the note's title,
-  // with no gap above it as the first line. The title shown above a read-only
-  // copy that has no title line yet looks the same, so nothing moves when the
-  // real one arrives. Source view keeps its one size, and only bolds it.
-  ".cm-line.cm-title-line, .cm-title-preview": {
-    fontSize: "1.75em",
-    lineHeight: "1.3",
-    fontWeight: "700",
-    letterSpacing: "-0.015em",
-    paddingTop: "0",
-  },
-  "&.cm-source-view .cm-line.cm-title-line": { fontSize: "1em", lineHeight: "inherit", letterSpacing: "normal" },
 
   ".cm-lp-syntax": { color: "var(--label)" },
   ".cm-lp-strong": { fontWeight: "700" },
@@ -269,66 +257,6 @@ export const editorTheme = EditorView.theme({
   "@media (prefers-reduced-motion: reduce)": {
     ".cm-panel.cm-search .cm-button": { transition: "none" },
   },
-  // The line under the title heading (heading-notice.ts, DOQ-36). One line
-  // at a fixed 20px whatever the text size or width: longer messages end in
-  // an ellipsis (the whole one is the box's title and the status region's),
-  // so the text below moves once when it appears and never as it changes or
-  // wraps. The warning tint marks
-  // only the icon and the edge: --warning text is under 4.5:1 on the light
-  // page, so the words use --foreground and --label.
-  ".cm-heading-notice": {
-    display: "flex",
-    alignItems: "center",
-    gap: "6px",
-    boxSizing: "border-box",
-    height: "20px",
-    margin: "0 0 6px",
-    padding: "1px 0 1px 8px",
-    borderLeft: "2px solid var(--label)",
-    fontSize: "12px",
-    lineHeight: "18px",
-    color: "var(--foreground)",
-    cursor: "default",
-    userSelect: "none",
-  },
-  ".cm-heading-notice[data-kind='clash']": { borderLeftColor: "var(--warning)" },
-  ".cm-heading-notice-icon": {
-    display: "flex",
-    flexShrink: "0",
-    height: "18px",
-    alignItems: "center",
-    color: "var(--label)",
-  },
-  ".cm-heading-notice[data-kind='clash'] .cm-heading-notice-icon": { color: "var(--warning)" },
-  ".cm-heading-notice-text": {
-    flex: "1",
-    minWidth: "0",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  },
-  ".cm-heading-notice-hint": { color: "var(--label)" },
-  ".cm-heading-notice-dismiss": {
-    display: "flex",
-    flexShrink: "0",
-    alignItems: "center",
-    justifyContent: "center",
-    width: "18px",
-    height: "18px",
-    marginLeft: "2px",
-    padding: "0",
-    border: "none",
-    borderRadius: "4px",
-    background: "transparent",
-    color: "var(--label)",
-    cursor: "pointer",
-    position: "relative",
-  },
-  // A finger-sized target around the small mark, without a taller line.
-  ".cm-heading-notice-dismiss::before": { content: "''", position: "absolute", inset: "-13px" },
-  ".cm-heading-notice-dismiss:hover": { color: "var(--foreground)", background: "var(--glass-strong)" },
-  ".cm-heading-notice-dismiss:focus-visible": { outline: "1px solid var(--ring)", outlineOffset: "1px" },
-
   // The `[[` list: the vault's floating glass panel.
   ".cm-tooltip.cm-wikilink-suggest": {
     width: "300px",

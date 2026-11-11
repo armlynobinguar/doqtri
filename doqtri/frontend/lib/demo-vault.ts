@@ -1,4 +1,4 @@
-import { TEMPLATES, templateMarkdown } from "@/lib/templates";
+import { TEMPLATES } from "@/lib/templates";
 
 /**
  * The public demo vault at /demo: a fixed, read-only set of notes anyone can
@@ -11,7 +11,7 @@ export type DemoNote = {
   title: string;
   /** One line for the explorer. */
   description: string;
-  /** Full note markdown, including its `# Title` line, as a vault note stores it. */
+  /** The note's text as a vault note stores it: its title is not part of it (D-121). */
   markdown: string;
 };
 
@@ -29,9 +29,7 @@ const WELCOME: DemoNote = {
   id: "welcome",
   title: "Welcome to Doqtri",
   description: "What this demo shows and how a real vault works.",
-  markdown: `# Welcome to Doqtri
-
-This is a read-only demo vault. Open any note on the left: its headings become the mindmap beside it, exactly as they do in your own vault.
+  markdown: `This is a read-only demo vault. Open any note on the left: its headings become the mindmap beside it, exactly as they do in your own vault.
 
 ## Write the plan
 Notes are plain markdown, written in the editor or imported from PDF and DOCX.
@@ -73,7 +71,7 @@ export const DEMO_NOTES: readonly DemoNote[] = [
       id: template.id,
       title: template.title,
       description: template.description,
-      markdown: templateMarkdown(template),
+      markdown: template.body,
     };
   }),
 ];

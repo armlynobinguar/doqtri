@@ -66,3 +66,15 @@ export function isTitleTaken(title: string, taken: string[]): boolean {
   const wanted = normalize(title);
   return taken.some((other) => normalize(other) === wanted);
 }
+
+/**
+ * Why a rename to `title` is refused before any request, in the routes' own
+ * words, or null: a title that is not one line, or one another note has
+ * (`others`, every other note's title). The rename dialog and the title bar
+ * show it next to the field.
+ */
+export function renameRefusal(title: string, others: string[]): string | null {
+  if (hasControlCharacters(title)) return TITLE_ONE_LINE;
+  if (isTitleTaken(title, others)) return `Another note is already called “${title}”`;
+  return null;
+}

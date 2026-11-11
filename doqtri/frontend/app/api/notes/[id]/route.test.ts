@@ -257,15 +257,14 @@ describe("delete while someone else is editing", () => {
 
 /*
  * PATCH writes through rename_document() (20261109100000_rename_document.sql)
- * as the caller. The lock, role, version and unique-title rules are the
- * function's, and backend/tests/rename_document.test.sql covers every branch
- * of them against a real database. These tests stub the function: they
+ * as the caller, with no text (D-121). The lock, role and unique-title rules
+ * are the function's, and backend/tests/rename_document.test.sql covers every
+ * branch of them against a real database. These tests stub the function: they
  * check what the route sends it, and how each of its answers reaches the
  * client.
  */
-describe("PATCH /api/notes/[id] renames the title heading with the title (DOQ-35)", () => {
-  const OLD = "# Roadmap\r\n\r\n## Scope\r\nKeep  this   spacing.\r\n";
-  const NEW = "# Plan 2027\r\n\r\n## Scope\r\nKeep  this   spacing.\r\n";
+describe("PATCH /api/notes/[id] renames the title alone (D-121)", () => {
+  const TEXT = "# Roadmap\r\n\r\n## Scope\r\nKeep  this   spacing.\r\n";
 
   function rename(title: string, extra: Record<string, unknown> = {}) {
     return new Request(`http://localhost/api/notes/${DOC}`, {
@@ -279,139 +278,53 @@ describe("PATCH /api/notes/[id] renames the title heading with the title (DOQ-35
   const renameCalls = () =>
     session.rpc.mock.calls.filter(([fn]) => fn === "rename_document").map(([, args]) => args);
 
-  /**
-   * Answers rename_document() in turn with `answers`; past them, as the real
-   * function does when every check passes. The version bump is faked here:
-   * in the database the documents_before_save trigger makes it, and the
-   * rename e2e (e2e/rename-heading.spec.ts) sees the real one.
-   */
+  /** Answers rename_document() in turn with `answers`; past them, as the real function does when every check passes. */
   function renameAnswers(...answers: RpcResult[]) {
-    session.rpc.mockImplementation(async (fn, args) => {
+    session.rpc.mockImplementation(async (fn) => {
       if (fn !== "rename_document") return { data: null, error: { message: `unexpected ${fn}` } };
-      const answer = answers.shift();
-      if (answer) return answer;
-      const base = Number(args.p_base_version);
-      return { data: args.p_markdown === null ? base : base + 1, error: null };
+      return answers.shift() ?? { data: 3, error: null };
     });
   }
 
   beforeEach(() => {
-    adminRows.documents = { id: DOC, workspace_id: WS, user_id: ME, title: "Roadmap", markdown: OLD, version: 3 };
+    adminRows.documents = { id: DOC, workspace_id: WS, user_id: ME, title: "Roadmap", markdown: TEXT, version: 3 };
     renameAnswers();
   });
 
-  it("sends the title and the rewritten heading in one call, with the version they were read at", async () => {
+  it("sends the title and no text, version or session, and answers the rename", async () => {
     const res = await PATCH(rename("Plan 2027"), ctx());
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({
-      id: DOC,
-      title: "Plan 2027",
-      previousTitle: "Roadmap",
-      markdown: NEW,
-      version: 4,
-      previousVersion: 3,
-    });
+    expect(await res.json()).toEqual({ id: DOC, title: "Plan 2027", previousTitle: "Roadmap" });
     expect(renameCalls()).toEqual([
-      { p_document_id: DOC, p_title: "Plan 2027", p_markdown: NEW, p_base_version: 3, p_session: null },
+      { p_document_id: DOC, p_title: "Plan 2027", p_markdown: null, p_base_version: null, p_session: null },
     ]);
     // The service role writes nothing: the function does, as the caller.
     expect(adminWrites).toEqual([]);
+    // Not an edit: nothing runs as after a save.
+    expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
   });
 
-  it("names the editor's session when the rename comes from the open editor", async () => {
-    await PATCH(rename("Plan 2027", { session: TAB }), ctx());
-    expect(renameCalls()[0]).toMatchObject({ p_session: TAB });
-  });
-
-  it("refuses a session that is not one, calling nothing", async () => {
-    const res = await PATCH(rename("Plan 2027", { session: "tab-1" }), ctx());
-    expect(res.status).toBe(400);
-    expect((await res.json()).code).toBe("BAD_SESSION");
-    expect(renameCalls()).toEqual([]);
-  });
-
-  it("runs the same after-save hook as a PUT, with the same arguments", async () => {
-    // Parity with PUT, not an on-chain write: afterNoteSaved() remaps the
-    // note's links and, only with the qdit integration on, tells qdit. An
-    // anchored note's ledger entry is not touched by a save either; it shows
-    // as changed until it is anchored again.
-    await PATCH(rename("Plan 2027"), ctx());
-    expect(saveHook.afterNoteSaved).toHaveBeenCalledTimes(1);
-    expect(saveHook.afterNoteSaved).toHaveBeenCalledWith({
-      userId: ME,
-      docId: DOC,
-      baseVersion: 3,
-      savedVersion: 4,
-      markdown: NEW,
-      before: { title: "Roadmap", markdown: OLD, version: 3 },
-      title: "Plan 2027",
-    });
-  });
-
-  it("leaves a stored concept map's hash alone, so the map reads as stale", async () => {
-    const { hashMarkdown, isMindmapStale } = await import("@/lib/mindmap-hash");
-    const storedHash = hashMarkdown(OLD);
-    expect(isMindmapStale(OLD, storedHash)).toBe(false);
-
-    const body = await (await PATCH(rename("Plan 2027"), ctx())).json();
-    expect(Object.keys(renameCalls()[0]).sort()).toEqual(
-      ["p_base_version", "p_document_id", "p_markdown", "p_session", "p_title"],
-    );
-    expect(isMindmapStale(body.markdown, storedHash)).toBe(true);
-  });
-
-  it("sends no text when the first line is the user's own heading", async () => {
-    for (const markdown of ["# Something else\n", "Intro\n# Roadmap\n", "No heading at all.\n", "## Roadmap\n"]) {
+  it("leaves a first line that says the old title alone, as any other text", async () => {
+    for (const markdown of [TEXT, "# \n\n## Scope\n", "Intro\n# Roadmap\n", "No heading at all.\n"]) {
       session.rpc.mockClear();
       adminRows.documents = { id: DOC, workspace_id: WS, user_id: ME, title: "Roadmap", markdown, version: 3 };
       const res = await PATCH(rename("Plan 2027"), ctx());
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ id: DOC, title: "Plan 2027", previousTitle: "Roadmap" });
-      expect(renameCalls()).toEqual([
-        { p_document_id: DOC, p_title: "Plan 2027", p_markdown: null, p_base_version: 3, p_session: null },
-      ]);
+      expect(renameCalls()).toEqual([expect.objectContaining({ p_markdown: null })]);
     }
-    expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
   });
 
-  it("renames a never-opened note that does not open with its title by title alone, for its first edit to add the line (D-120)", async () => {
-    const legacy = "Some paragraph\r\nbody\r\n";
-    adminRows.documents = { id: DOC, workspace_id: WS, user_id: ME, title: "Roadmap", markdown: legacy, version: 3 };
-    const res = await PATCH(rename("Plan 2027"), ctx());
+  it("ignores a session or expected title sent by an older client", async () => {
+    const res = await PATCH(rename("Plan 2027", { session: "tab-1", expectedTitle: "Something else" }), ctx());
     expect(res.status).toBe(200);
-    // No text comes back: the note's text is left exactly as it was...
-    expect(await res.json()).toEqual({ id: DOC, title: "Plan 2027", previousTitle: "Roadmap" });
-    expect(renameCalls()).toEqual([
-      { p_document_id: DOC, p_title: "Plan 2027", p_markdown: null, p_base_version: 3, p_session: null },
-    ]);
-    // ...and the next edit to it puts the new title line above it.
-    const { withTitleLine } = await import("@/lib/title-line");
-    expect(withTitleLine(legacy, "Plan 2027")).toBe("# Plan 2027\r\n\r\nSome paragraph\r\nbody\r\n");
-  });
-
-  it("rewrites every title line the editor knows: exactly `# <old title>`, or an empty `# ` (D-120)", async () => {
-    for (const [title, markdown, rewritten] of [
-      ["Week #", "# Week #\n\nBody", "# Plan 2027\n\nBody"],
-      ["C# ##", "# C# ##\r\nBody", "# Plan 2027\r\nBody"],
-      ["See [[A]]", "# See [[A]]\nBody", "# Plan 2027\nBody"],
-      ["[[A|B]]", "# [[A|B]]\nBody", "# Plan 2027\nBody"],
-      ["Roadmap", "# \n\n## Scope\n", "# Plan 2027\n\n## Scope\n"],
-    ]) {
-      session.rpc.mockClear();
-      adminRows.documents = { id: DOC, workspace_id: WS, user_id: ME, title, markdown, version: 3 };
-      const res = await PATCH(rename("Plan 2027"), ctx());
-      expect(res.status, title).toBe(200);
-      expect(renameCalls(), title).toEqual([
-        { p_document_id: DOC, p_title: "Plan 2027", p_markdown: rewritten, p_base_version: 3, p_session: null },
-      ]);
-    }
+    expect(renameCalls()).toEqual([expect.objectContaining({ p_title: "Plan 2027", p_session: null })]);
   });
 
   it("refuses a title another note has before calling anything", async () => {
     adminLists.documents = [{ title: " plan 2027 " }];
     const res = await PATCH(rename("Plan 2027"), ctx());
     expect(res.status).toBe(409);
-    expect((await res.json()).code).toBe("TITLE_TAKEN");
+    expect(await res.json()).toEqual({ error: "Another note is already called “Plan 2027”", code: "TITLE_TAKEN" });
     expect(renameCalls()).toEqual([]);
   });
 
@@ -420,7 +333,6 @@ describe("PATCH /api/notes/[id] renames the title heading with the title (DOQ-35
     const res = await PATCH(rename("Plan 2027"), ctx());
     expect(res.status).toBe(409);
     expect((await res.json()).code).toBe("TITLE_TAKEN");
-    expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
   });
 
   it("answers 423 LOCKED when another member holds the lock", async () => {
@@ -428,21 +340,6 @@ describe("PATCH /api/notes/[id] renames the title heading with the title (DOQ-35
     const res = await PATCH(rename("Plan 2027"), ctx());
     expect(res.status).toBe(423);
     expect(await res.json()).toMatchObject({ code: "LOCKED", error: "Someone else is editing this note. Try again when they are done." });
-    expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
-  });
-
-  it("answers 423 as Regenerate does when the caller is editing the note in another tab", async () => {
-    renameAnswers({
-      data: null,
-      error: { code: "DQLCK", message: "you are editing this note in another tab or window", details: "elsewhere" },
-    });
-    const res = await PATCH(rename("Plan 2027"), ctx());
-    expect(res.status).toBe(423);
-    expect(await res.json()).toEqual({
-      code: "NOT_LOCK_HOLDER",
-      error: "You are editing this note in another tab or window, so it cannot be renamed here.",
-    });
-    expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
   });
 
   it("refuses a viewer before calling anything, and maps the function's own role refusal", async () => {
@@ -457,85 +354,15 @@ describe("PATCH /api/notes/[id] renames the title heading with the title (DOQ-35
     expect((await PATCH(rename("Plan 2027"), ctx())).status).toBe(404);
   });
 
-  it("starts again from the newer text when a save lands between the read and the call", async () => {
-    const saved = "# Roadmap\n\nTyped meanwhile.\n";
-    renameAnswers({ data: null, error: { code: "DQVER", message: "stale", details: "4" } });
-    adminReads.documents = [
-      adminRows.documents,
-      { id: DOC, workspace_id: WS, user_id: ME, title: "Roadmap", markdown: saved, version: 4 },
-    ];
-    const res = await PATCH(rename("Plan 2027"), ctx());
-    expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ markdown: "# Plan 2027\n\nTyped meanwhile.\n", version: 5, previousVersion: 4 });
-    expect(renameCalls().map((args) => [args.p_base_version, args.p_markdown])).toEqual([
-      [3, "# Plan 2027\r\n\r\n## Scope\r\nKeep  this   spacing.\r\n"],
-      [4, "# Plan 2027\n\nTyped meanwhile.\n"],
-    ]);
-    expect(saveHook.afterNoteSaved).toHaveBeenCalledWith(
-      expect.objectContaining({ baseVersion: 4, savedVersion: 5, before: expect.objectContaining({ markdown: saved }) }),
-    );
-  });
-
-  it("answers 409 when saves keep landing", async () => {
-    const stale = { data: null, error: { code: "DQVER", message: "stale", details: "9" } };
-    renameAnswers(stale, stale, stale);
-    const res = await PATCH(rename("Plan 2027"), ctx());
-    expect(res.status).toBe(409);
-    expect((await res.json()).code).toBe("STALE_VERSION");
-    expect(renameCalls()).toHaveLength(3);
-    expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
-  });
-
-  describe("with the title the caller expects (DOQ-36)", () => {
-    it("renames when the note's title is still the expected one", async () => {
-      const res = await PATCH(rename("Plan 2027", { expectedTitle: " Roadmap " }), ctx());
-      expect(res.status).toBe(200);
-      expect((await res.json()).title).toBe("Plan 2027");
-      expect(renameCalls()).toHaveLength(1);
-    });
-
-    it("answers 409 TITLE_CHANGED with the current title, writing nothing, when it was renamed meanwhile", async () => {
-      adminRows.documents = { ...(adminRows.documents as object), title: "Someone Else's Title" };
-      const res = await PATCH(rename("Plan 2027", { expectedTitle: "Roadmap" }), ctx());
-      expect(res.status).toBe(409);
-      expect(await res.json()).toEqual({
-        error: "This note was renamed to “Someone Else's Title” meanwhile, so it was not renamed.",
-        code: "TITLE_CHANGED",
-        title: "Someone Else's Title",
-      });
-      expect(renameCalls()).toEqual([]);
-      expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
-    });
-
-    it("compares exactly: a rename that only changed case still counts", async () => {
-      adminRows.documents = { ...(adminRows.documents as object), title: "roadmap" };
-      const res = await PATCH(rename("Plan 2027", { expectedTitle: "Roadmap" }), ctx());
-      expect(res.status).toBe(409);
-      expect((await res.json()).code).toBe("TITLE_CHANGED");
-    });
-
-    it("checks again when a save makes it read the note again", async () => {
-      renameAnswers({ data: null, error: { code: "DQVER", message: "stale", details: "4" } });
-      adminReads.documents = [
-        adminRows.documents,
-        { id: DOC, workspace_id: WS, user_id: ME, title: "Renamed Elsewhere", markdown: OLD, version: 4 },
-      ];
-      const res = await PATCH(rename("Plan 2027", { expectedTitle: "Roadmap" }), ctx());
-      expect(res.status).toBe(409);
-      expect(await res.json()).toMatchObject({ code: "TITLE_CHANGED", title: "Renamed Elsewhere" });
-      expect(renameCalls()).toHaveLength(1);
-    });
-
-    it("is not checked when it is not sent", async () => {
-      adminRows.documents = { ...(adminRows.documents as object), title: "Someone Else's Title" };
-      const res = await PATCH(rename("Plan 2027"), ctx());
-      expect(res.status).toBe(200);
-    });
-  });
-
   it("calls nothing when the title does not change", async () => {
-    const res = await PATCH(rename("Roadmap"), ctx());
+    const res = await PATCH(rename("  Roadmap "), ctx());
     expect(res.status).toBe(200);
+    expect(renameCalls()).toEqual([]);
+  });
+
+  it("refuses an empty title", async () => {
+    const res = await PATCH(rename("   "), ctx());
+    expect(res.status).toBe(400);
     expect(renameCalls()).toEqual([]);
   });
 
@@ -546,17 +373,6 @@ describe("PATCH /api/notes/[id] renames the title heading with the title (DOQ-35
       expect((await res.json()).code).toBe("BAD_TITLE");
     }
     expect(renameCalls()).toEqual([]);
-  });
-
-  it("renames the title alone if the function refuses the rewritten text", async () => {
-    renameAnswers({ data: null, error: { code: "22023", message: "markdown may only change the title heading" } });
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const res = await PATCH(rename("Plan 2027"), ctx());
-    warn.mockRestore();
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ id: DOC, title: "Plan 2027", previousTitle: "Roadmap" });
-    expect(renameCalls().map((args) => args.p_markdown)).toEqual([NEW, null]);
-    expect(saveHook.afterNoteSaved).not.toHaveBeenCalled();
   });
 
   it("maps the function's own one-line refusal to the same 400", async () => {

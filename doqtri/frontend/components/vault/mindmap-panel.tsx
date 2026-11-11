@@ -8,7 +8,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { mindmapFromHeadings, type ConceptNode } from "@/lib/mindmap-types";
 import { withRootLabel, type MindmapRebuild } from "@/components/vault/use-mindmap-rebuild";
-import { useDraftTitle } from "@/components/vault/note-overlay";
 
 /**
  * The compact mindmap: the document's concept tree, in the right-hand panel.
@@ -25,7 +24,7 @@ import { useDraftTitle } from "@/components/vault/note-overlay";
  */
 export function MindmapPanel({
   docId,
-  title: confirmedTitle,
+  title,
   markdown,
   concept,
 }: {
@@ -34,8 +33,6 @@ export function MindmapPanel({
   markdown: string;
   concept: MindmapRebuild;
 }) {
-  // The root shows a title being typed into the note's title line (DOQ-44).
-  const title = useDraftTitle(docId, confirmedTitle);
   const { mindmap, stale, building, rebuild } = concept;
 
   const fallback = useMemo(
