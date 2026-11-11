@@ -106,11 +106,14 @@ export function useNoteTitleField({
   readOnly,
   onRename,
   onDone,
+  hasFocus = pageHasFocus,
 }: {
   title: string;
   readOnly: boolean;
   onRename: (title: string) => void;
   onDone?: () => void;
+  /** Whether the page has focus, for a blur that is only the window losing it. */
+  hasFocus?: () => boolean;
 }) {
   const [value, setShownValue] = useState(title);
   // Read by blur, which can run before the render a change asked for.
@@ -163,6 +166,9 @@ export function useNoteTitleField({
       setFocused(true);
     },
     blur() {
+      // Another window or tab came to the front: the field is still where the
+      // user left it, half typed perhaps. It renames on the next real blur.
+      if (!hasFocus()) return;
       setFocused(false);
       if (committedRef.current) {
         committedRef.current = false;
@@ -190,4 +196,8 @@ export function useNoteTitleField({
       return false;
     },
   };
+}
+
+function pageHasFocus(): boolean {
+  return typeof document === "undefined" || document.hasFocus();
 }

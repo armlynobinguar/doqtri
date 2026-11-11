@@ -34,7 +34,8 @@ function mountField(initial: Partial<Props> = {}) {
   let field!: Field;
   const onRename = vi.fn<(title: string) => void>();
   const onDone = vi.fn<() => void>();
-  let props: Props = { title: "Alpha", readOnly: false, onRename, onDone, ...initial };
+  const hasFocus = vi.fn(() => true);
+  let props: Props = { title: "Alpha", readOnly: false, onRename, onDone, hasFocus, ...initial };
   function Field(p: Props) {
     field = useNoteTitleField(p);
     return null;
@@ -54,7 +55,7 @@ function mountField(initial: Partial<Props> = {}) {
   };
   const key = (name: string, extra: Partial<TitleFieldKey> = {}) =>
     fire((f) => f.keyDown({ key: name, isComposing: false, blur: () => f.blur(), ...extra }));
-  return { field: () => field, root, render, fire, key, onRename, onDone };
+  return { field: () => field, root, render, fire, key, onRename, onDone, hasFocus };
 }
 
 let mounted: ReturnType<typeof mountField> | null = null;
@@ -177,6 +178,25 @@ describe("the title bar's field (D-121)", () => {
     await f.fire((x) => x.change("Roadmap 2"));
     await f.fire((x) => x.blur());
     expect(f.onRename.mock.calls).toEqual([["Roadmap"], ["Roadmap 2"]]);
+  });
+
+  it("renames nothing when the window, not the field, loses focus, and keeps what was typed", async () => {
+    const f = await mount();
+    await f.fire((x) => x.focus());
+    await f.fire((x) => x.change("Half typ"));
+    // Another window or tab came to the front: the field keeps the focus within the page.
+    f.hasFocus.mockReturnValue(false);
+    await f.fire((x) => x.blur());
+    expect(f.onRename).not.toHaveBeenCalled();
+    expect(f.field().value).toBe("Half typ");
+    // Back, and a title from outside still does not overwrite it.
+    f.hasFocus.mockReturnValue(true);
+    await f.fire((x) => x.focus());
+    await f.render({ title: "Beta" });
+    expect(f.field().value).toBe("Half typ");
+    await f.fire((x) => x.change("Half typed"));
+    await f.fire((x) => x.blur());
+    expect(f.onRename.mock.calls).toEqual([["Half typed"]]);
   });
 
   it("leaves keys being composed alone", async () => {
