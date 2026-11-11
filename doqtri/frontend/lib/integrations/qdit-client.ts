@@ -8,6 +8,7 @@ import {
   type StoredConnection,
 } from "@/lib/integrations/connection-store";
 import { parseTokenKey, type TokenKeyRing } from "@/lib/integrations/token-crypto";
+import { HACKATHON_SLUG_PATTERN } from "@/lib/integrations/qdit-hackathon-send";
 
 /**
  * Typed client for qdit's `/api/v1`, as one doqtri user (WP-2.3; server-only).
@@ -132,6 +133,22 @@ export type QditHackathonSnapshotReceipt = {
   note_count: number;
   received_at: string;
   submission_state: "none" | "submitted_older" | "current";
+};
+
+/**
+ * `open` takes snapshots now; `upcoming` has not opened. `other` is a state
+ * this client does not know (section 3): never offered as sendable.
+ */
+export type QditHackathonState = "open" | "upcoming" | "other";
+
+/** A hackathon qdit lists to every signed-in user (section 8, `GET /hackathons`, D-122). */
+export type QditHackathon = {
+  slug: string;
+  /** Plain text, at most 200 characters. */
+  name: string;
+  opens_at: string;
+  closes_at: string;
+  state: QditHackathonState;
 };
 
 // ---------------------------------------------------------------------------
@@ -292,6 +309,42 @@ function hackathonError(error: unknown): unknown {
 const HACKATHON_BODY_BYTES = 2 * 1024 * 1024;
 const SUBMISSION_STATES: ReadonlySet<unknown> = new Set(["none", "submitted_older", "current"]);
 
+const HACKATHON_NAME_MAX = 200;
+
+/** An RFC 3339 date-time with an offset (section 4); fractional seconds allowed. */
+const RFC3339 = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/;
+
+/** Milliseconds since the epoch for an RFC 3339 time, or null. */
+function rfc3339(value: unknown): number | null {
+  if (typeof value !== "string" || !RFC3339.test(value)) return null;
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? at : null;
+}
+
+/**
+ * One row of `GET /hackathons`, or null when it is not one the contract
+ * describes (no usable slug, name or window). Unknown fields are dropped and
+ * an unknown `state` is kept as `other`.
+ */
+function readHackathon(row: unknown): QditHackathon | null {
+  if (!row || typeof row !== "object") return null;
+  const { slug, name, opens_at, closes_at, state } = row as Record<string, unknown>;
+  if (typeof slug !== "string" || !HACKATHON_SLUG_PATTERN.test(slug)) return null;
+  if (typeof name !== "string" || !name.trim()) return null;
+  const opens = rfc3339(opens_at);
+  const closes = rfc3339(closes_at);
+  if (opens === null || closes === null || closes <= opens) return null;
+  return {
+    slug,
+    // Counted in code points, as the contract counts, so a cut never splits a pair.
+    name: Array.from(name.trim()).slice(0, HACKATHON_NAME_MAX).join(""),
+    // Both passed rfc3339(), so both are strings.
+    opens_at: opens_at as string,
+    closes_at: closes_at as string,
+    state: state === "open" || state === "upcoming" ? state : "other",
+  };
+}
+
 /** A request body already serialized, sent byte for byte. */
 class RawJson {
   constructor(readonly text: string) {}
@@ -401,6 +454,13 @@ export type QditClient = {
    * QditHackathonSnapshotError.
    */
   pushHackathonSnapshot(projectId: string, body: string): Promise<QditHackathonSnapshotReceipt>;
+  /**
+   * The hackathons qdit lists to every signed-in user, open and upcoming, in
+   * qdit's order (section 8, `GET /hackathons`, D-122). Malformed rows are
+   * dropped, and each slug is kept once. A qdit without the endpoint (before
+   * v1.3.0) answers 404: a QditError with kind `not_found`.
+   */
+  listHackathons(): Promise<QditHackathon[]>;
 };
 
 export function createQditClient(userId: string, deps: QditClientDeps): QditClient {
@@ -655,6 +715,20 @@ export function createQditClient(userId: string, deps: QditClientDeps): QditClie
         received_at: receipt.received_at,
         submission_state: receipt.submission_state,
       };
+    },
+
+    async listHackathons() {
+      const rows = await data<unknown>("GET", "/hackathons");
+      if (!Array.isArray(rows)) throw new QditError("bad_response", "qdit sent a hackathon list doqtri could not read.");
+      const seen = new Set<string>();
+      const hackathons: QditHackathon[] = [];
+      for (const row of rows) {
+        const hackathon = readHackathon(row);
+        if (!hackathon || seen.has(hackathon.slug)) continue;
+        seen.add(hackathon.slug);
+        hackathons.push(hackathon);
+      }
+      return hackathons;
     },
   };
   return client;

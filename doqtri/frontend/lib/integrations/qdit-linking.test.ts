@@ -266,6 +266,10 @@ function fakeQdit(state: {
       calls.push(`POST /projects/${projectId}/hackathon-snapshots`);
       throw new Error("linking never sends a hackathon snapshot");
     },
+    async listHackathons() {
+      calls.push("GET /hackathons");
+      throw new Error("linking never lists hackathons");
+    },
   };
   return { client, calls, state };
 }

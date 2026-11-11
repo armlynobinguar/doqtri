@@ -491,3 +491,101 @@ describe("pushHackathonSnapshot", () => {
     await expect(client.pushHackathonSnapshot("p1", BODY)).rejects.toMatchObject({ kind: "timeout" });
   });
 });
+
+describe("listHackathons (D-122)", () => {
+  const OPEN = {
+    slug: "stellar-build-2026",
+    name: "Stellar Build 2026",
+    opens_at: "2026-11-10T01:00:00.000Z",
+    closes_at: "2026-11-21T09:00:00.000Z",
+    state: "open",
+  };
+  const UPCOMING = { ...OPEN, slug: "soroban-sprint", name: "Soroban Sprint", opens_at: "2026-11-14T01:00:00+08:00", state: "upcoming" };
+
+  async function list(answer: Response) {
+    const sent: { url: string; init: RequestInit }[] = [];
+    const fetch = mockFetch((url, init) => {
+      sent.push({ url, init });
+      return answer;
+    });
+    const client = createQditClient(ANA, { config, store: memoryStore({}), fetch, now: () => NOW });
+    return { sent, result: client.listHackathons() };
+  }
+
+  it("gets /hackathons with the user's token and keeps qdit's order, without unknown fields", async () => {
+    const { sent, result } = await list(json(200, { data: [{ ...OPEN, banner: true }, UPCOMING] }));
+    expect(await result).toEqual([OPEN, UPCOMING]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].url).toBe("https://qdit.test/api/v1/hackathons");
+    expect(sent[0].init.method).toBe("GET");
+    expect(sent[0].init.body).toBeUndefined();
+    expect(bearer(sent[0].init)).toBe("Bearer at1");
+  });
+
+  it("keeps an unknown state as other, never as open", async () => {
+    const { result } = await list(json(200, { data: [{ ...OPEN, state: "judging" }, { ...OPEN, slug: "b", state: null }] }));
+    expect((await result).map((h) => h.state)).toEqual(["other", "other"]);
+  });
+
+  it("drops malformed rows and repeated slugs", async () => {
+    const { result } = await list(
+      json(200, {
+        data: [
+          null,
+          "stellar-build-2026",
+          { ...OPEN, slug: "Not_A_Slug" },
+          { ...OPEN, slug: "x".repeat(65) },
+          { ...OPEN, slug: 7 },
+          { ...OPEN, name: "   " },
+          { ...OPEN, name: null },
+          { ...OPEN, opens_at: "soon" },
+          { ...OPEN, closes_at: undefined },
+          // Date.parse reads these, but they are not RFC 3339 (section 4).
+          { ...OPEN, opens_at: "2026-11-10" },
+          { ...OPEN, opens_at: "Tue, 10 Nov 2026 01:00:00 GMT" },
+          { ...OPEN, closes_at: "2026-11-21T09:00:00" },
+          { ...OPEN, closes_at: 1795251600000 },
+          // A window that closes at or before it opens.
+          { ...OPEN, closes_at: OPEN.opens_at },
+          { ...OPEN, closes_at: "2026-11-09T01:00:00.000Z" },
+          OPEN,
+          { ...OPEN, name: "Duplicate" },
+          UPCOMING,
+        ],
+      }),
+    );
+    expect(await result).toEqual([OPEN, UPCOMING]);
+  });
+
+  it("accepts any offset, lowercase separators and fractional seconds", async () => {
+    const row = { ...OPEN, opens_at: "2026-11-10t09:00:00+08:00", closes_at: "2026-11-21T09:00:00.123456z" };
+    expect(await (await list(json(200, { data: [row], next_cursor: null }))).result).toEqual([row]);
+  });
+
+  it("trims the name and cuts it at 200 code points", async () => {
+    const { result } = await list(json(200, { data: [{ ...OPEN, name: `  ${"🏆".repeat(250)}  ` }] }));
+    const [hackathon] = await result;
+    expect(hackathon.name).toBe("🏆".repeat(200));
+  });
+
+  it("refuses a list that is not one", async () => {
+    await expect((await list(json(200, { data: { slug: "a" } }))).result).rejects.toMatchObject({ kind: "bad_response" });
+    await expect((await list(json(200, { data: null }))).result).rejects.toMatchObject({ kind: "bad_response" });
+    await expect((await list(json(200, {}))).result).rejects.toMatchObject({ kind: "bad_response" });
+  });
+
+  it("is an empty list when qdit lists nothing", async () => {
+    expect(await (await list(json(200, { data: [] }))).result).toEqual([]);
+  });
+
+  it("reports a qdit without the endpoint as not_found, and other failures as usual", async () => {
+    const missing = await (
+      await list(json(404, { error: { code: "not_found", message: "Not found", details: null } }, { "X-Request-Id": "req-1" }))
+    ).result.catch((e: unknown) => e);
+    expect(missing).toBeInstanceOf(QditError);
+    expect(missing).toMatchObject({ kind: "not_found", status: 404, code: "not_found", requestId: "req-1" });
+    await expect((await list(json(503, { error: { code: "unavailable", message: "down" } }))).result).rejects.toMatchObject({
+      kind: "unavailable",
+    });
+  });
+});

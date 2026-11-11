@@ -87,11 +87,15 @@ export function HeadingSelect({
   value,
   onChange,
   label = "Heading to link",
+  placeholder,
 }: {
-  nodes: LinkableNode[];
+  /** `disabled` entries are shown but cannot be picked. */
+  nodes: (LinkableNode & { disabled?: boolean })[];
+  /** "" picks nothing, and the trigger shows `placeholder`. */
   value: string;
   onChange: (id: string) => void;
   label?: string;
+  placeholder?: string;
 }) {
   return (
     <Select
@@ -100,11 +104,11 @@ export function HeadingSelect({
       items={Object.fromEntries(nodes.map((n) => [n.id, n.label]))}
     >
       <SelectTrigger aria-label={label} className="h-8 text-[12px] max-lg:h-10 max-lg:text-base">
-        <SelectValue />
+        <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>
         {nodes.map((n) => (
-          <SelectItem key={n.id} value={n.id}>
+          <SelectItem key={n.id} value={n.id} disabled={n.disabled}>
             {n.label}
           </SelectItem>
         ))}

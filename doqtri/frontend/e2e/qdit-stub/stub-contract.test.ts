@@ -174,6 +174,46 @@ describe("the e2e qdit stub, as doqtri's client sees it", () => {
     await expect(client.getMilestone("66666666-6666-4666-8666-666666666666")).rejects.toBeInstanceOf(QditError);
   });
 
+  it("lists hackathons as section 8 says (D-122), and plays a qdit without the list as its JSON 404", async () => {
+    const qdit = "88888888-8888-4888-8888-888888888888";
+    await control("/users", { id: qdit, username: "qd" });
+    await control("/authorize", { as: qdit });
+    const { state } = startOAuthState(USER, config.redirectUri!, parseTokenKey(config.tokenKey));
+    const back = new URL((await fetch(authorizeUrl(config, state), { redirect: "manual" })).headers.get("location")!);
+    const tokens = await exchangeCode(config, back.searchParams.get("code")!, state);
+    const store = memoryStore();
+    await store.saveConnected(USER, { subject: qdit, accountLabel: "qd" }, tokens);
+    const client = createQditClient(USER, { config, store });
+
+    const day = 24 * 60 * 60 * 1000;
+    // One base time, so equal offsets are equal times and the slug breaks the tie.
+    const base = Date.now();
+    const at = (days: number) => new Date(base + days * day).toISOString();
+    const hackathon = (slug: string, opens: number, closes: number, extra: Record<string, unknown> = {}) =>
+      control("/hackathons", { slug, name: slug.toUpperCase(), opens_at: at(opens), closes_at: at(closes), ...extra });
+    await hackathon("soon-b", 3, 10);
+    await hackathon("soon-a", 3, 10);
+    await hackathon("running", -1, 5);
+    await hackathon("over", -10, -1);
+    await hackathon("secret", -1, 5, { hidden: true });
+    await hackathon("test-rehearsal", -1, 5);
+
+    const listed = await client.listHackathons();
+    expect(listed.map((h) => [h.slug, h.state])).toEqual([
+      ["running", "open"],
+      ["soon-a", "upcoming"],
+      ["soon-b", "upcoming"],
+    ]);
+
+    await control("/hackathon-list", { enabled: false });
+    try {
+      // What the doqtri route turns into list_unavailable: qdit's own JSON 404.
+      await expect(client.listHackathons()).rejects.toMatchObject({ kind: "not_found", status: 404, code: "not_found" });
+    } finally {
+      await control("/hackathon-list", { enabled: true });
+    }
+  });
+
   it("a revoked grant fails the refresh, and the client marks the connection needs_reconnect", async () => {
     const qdit = "77777777-7777-4777-8777-777777777777";
     await control("/users", { id: qdit, username: "qc" });

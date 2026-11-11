@@ -16,8 +16,10 @@
  * - doc_url must start with E2E_DOQTRI_ORIGIN + "/". qdit requires https;
  *   the e2e app runs on http://localhost, which qdit's local setup allows.
  *
- * Tests steer it through /__stub/* (users, projects, roles, the next consent
- * answer, revocations, deletions) and read back what doqtri sent.
+ * Tests steer it through /__stub/* (users, projects, roles, hackathons, the
+ * next consent answer, revocations, deletions) and read back what doqtri
+ * sent. It lists hackathons (GET /hackathons, v1.3.0) but does not take
+ * hackathon snapshots.
  *
  * Run with `node e2e/qdit-stub/server.mts`; Node strips the types. It imports
  * only node: built-ins so it needs no build step.
@@ -79,6 +81,8 @@ type Milestone = {
   created_at: string;
   updated_at: string;
 };
+/** A qdit hackathon, with the one column besides the five public fields that the list filters on (section 8). */
+type Hackathon = { slug: string; name: string; opens_at: string; closes_at: string; hidden: boolean };
 type Code = { user: string; redirect_uri: string; challenge: string; scope: string };
 type Token = { user: string; exp: number };
 type AuthorizeAnswer = { as: string } | { deny: true };
@@ -94,6 +98,10 @@ function fresh() {
     /** doc id -> its one doc link (a doc is linked to at most one project) */
     docLinks: new Map<string, DocLink>(),
     milestones: new Map<string, Milestone>(),
+    /** slug -> hackathon. None until a test adds one. */
+    hackathons: new Map<string, Hackathon>(),
+    /** False plays a qdit older than v1.3.0: GET /hackathons is an unknown path (404). */
+    hackathonList: true,
     codes: new Map<string, Code>(),
     access: new Map<string, Token>(),
     refresh: new Map<string, { user: string }>(),
@@ -342,6 +350,24 @@ function api(method: string, path: string, query: URLSearchParams, user: string,
       .filter((p) => roleIn(p.id, user))
       .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
       .map((p) => projectView(p, roleIn(p.id, user)!));
+    return { status: 200, body: { data: list, next_cursor: null } };
+  }
+
+  // GET /hackathons (v1.3.0, D-122): any authenticated user, no project role.
+  if (method === "GET" && path === "/hackathons" && state.hackathonList) {
+    const at = Date.now();
+    const list = [...state.hackathons.values()]
+      .filter((h) => !h.hidden && !h.slug.startsWith("test-") && Date.parse(h.closes_at) > at)
+      .sort((a, b) => Date.parse(a.opens_at) - Date.parse(b.opens_at) || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
+      .slice(0, 50)
+      .map((h) => ({
+        slug: h.slug,
+        name: h.name,
+        opens_at: h.opens_at,
+        closes_at: h.closes_at,
+        state: Date.parse(h.opens_at) <= at ? "open" : "upcoming",
+      }));
+    // No paging yet: next_cursor is always null (section 8).
     return { status: 200, body: { data: list, next_cursor: null } };
   }
 
@@ -598,6 +624,25 @@ function control(method: string, path: string, raw: string): Ok {
   if (method === "GET" && parts[0] === "doc-links" && parts.length === 2) {
     const link = state.docLinks.get(parts[1]);
     return link ? { status: 200, body: link } : { status: 404, body: { error: "no such doc link" } };
+  }
+
+  // POST /hackathons {slug, name, opens_at, closes_at, hidden?}: a hackathon in qdit
+  if (method === "POST" && path === "/hackathons") {
+    const slug = String(body.slug);
+    state.hackathons.set(slug, {
+      slug,
+      name: String(body.name),
+      opens_at: String(body.opens_at),
+      closes_at: String(body.closes_at),
+      hidden: body.hidden === true,
+    });
+    return { status: 204 };
+  }
+
+  // POST /hackathon-list {enabled}: false plays a qdit without GET /hackathons
+  if (method === "POST" && path === "/hackathon-list") {
+    state.hackathonList = body.enabled !== false;
+    return { status: 204 };
   }
 
   if (method === "POST" && path === "/authorize") {
