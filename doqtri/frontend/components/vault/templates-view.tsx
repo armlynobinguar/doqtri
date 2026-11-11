@@ -47,7 +47,7 @@ import { useWallet } from "@/components/vault/wallet-provider";
 import { BuyTemplateDialog } from "@/components/vault/buy-template-dialog";
 import { ReportTemplateDialog } from "@/components/vault/report-template-dialog";
 import { EarningsView } from "@/components/vault/earnings-view";
-import { createBlankNote } from "@/lib/create-note";
+import { createFromTemplate } from "@/lib/template-notes";
 import { useActiveWorkspace } from "@/components/vault/workspace-context";
 
 /** Rough label width at the preview's 11px type, for laying out columns. */
@@ -201,8 +201,8 @@ export function TemplatesView() {
   }
 
   /** A note now exists (from a starter or a community template): open it. */
-  function opened({ id, title }: { id: string; title: string }) {
-    toast.success(`Created “${title}”`);
+  function opened({ id, title, linked = 0 }: { id: string; title: string; linked?: number }) {
+    toast.success(linked ? `Created “${title}” and ${linked} linked notes` : `Created “${title}”`);
     // Navigate first, then refresh, so the explorer lists the new note.
     navigate(`/vault/${id}`);
     router.refresh();
@@ -212,7 +212,7 @@ export function TemplatesView() {
     if (creating || !canCreate) return;
     setCreating(true);
     try {
-      opened(await createBlankNote(template.title, template.body, workspace.id));
+      opened(await createFromTemplate(template, workspace.id));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not create note");
     } finally {
@@ -374,7 +374,10 @@ function StarterGallery({
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-foreground truncate text-[14px] font-semibold">{selected.title}</p>
-            <p className="text-muted-foreground text-[12px]">{nodeCount} mindmap nodes</p>
+            <p className="text-muted-foreground text-[12px]">
+              {nodeCount} mindmap nodes
+              {selected.linkedNotes?.length ? ` · ${selected.linkedNotes.length} linked notes` : ""}
+            </p>
           </div>
           <Button
             size="sm"

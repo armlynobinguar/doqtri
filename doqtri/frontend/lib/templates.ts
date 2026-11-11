@@ -6,12 +6,21 @@
  */
 export type TemplateCategory = "Planning" | "Product" | "Web3" | "Learning" | "Work" | "Personal";
 
+/** A note created alongside a template's main note, linked from it by `[[title]]`. */
+export type LinkedNote = { title: string; body: string };
+
 export type NoteTemplate = {
   id: string;
   title: string;
   category: TemplateCategory;
   description: string;
   body: string;
+  /**
+   * Extra notes "Use template" creates with the main one. The main body links
+   * each by `[[title]]`; the links are rewritten to whatever title the server
+   * gives the copy (it de-duplicates), so they keep pointing at these notes.
+   */
+  linkedNotes?: readonly LinkedNote[];
 };
 
 export const TEMPLATE_CATEGORIES: readonly TemplateCategory[] = [
@@ -256,11 +265,12 @@ export const TEMPLATES: readonly NoteTemplate[] = [
     id: "freelancer-payments",
     title: "Cross-Border Freelancer Payments",
     category: "Web3",
-    description: "Get freelancers paid across borders in seconds: USDC on Stellar, escrow and local cash-out.",
+    description: "Get freelancers paid across borders in seconds: USDC on Stellar, escrow and local cash-out. Comes with 5 linked notes.",
     body: lines(
-      "A hackathon plan for paying freelancers across borders in seconds, not days. Fill in the blanks, cut what you can't demo.",
+      "A hackathon plan for paying freelancers across borders in seconds, not days. Each node links to its own note with the details. Fill in the blanks, cut what you can't demo.",
       "",
       "## 1. The Problem",
+      "Full notes: [[Freelancer Payments 1 · The Problem]]",
       "### Slow payouts",
       "International transfers take 3 to 5 business days, and invoices sit unpaid in between.",
       "### High fees",
@@ -271,6 +281,7 @@ export const TEMPLATES: readonly NoteTemplate[] = [
       "→ Leads to: 2. The Solution",
       "",
       "## 2. The Solution",
+      "Full notes: [[Freelancer Payments 2 · The Solution]]",
       "### Pay in USDC on Stellar",
       "The client pays in stablecoin; it settles in about 5 seconds for a fraction of a cent.",
       "### Milestone escrow",
@@ -281,6 +292,7 @@ export const TEMPLATES: readonly NoteTemplate[] = [
       "→ Leads to: 3. How It Works on Stellar",
       "",
       "## 3. How It Works on Stellar",
+      "Full notes: [[Freelancer Payments 3 · Stellar Architecture]]",
       "### Wallet onboarding",
       "Passkey wallet: sign up with Face ID or fingerprint, no seed phrase.",
       "### Soroban escrow contract",
@@ -293,6 +305,7 @@ export const TEMPLATES: readonly NoteTemplate[] = [
       "→ Leads to: 4. MVP Scope",
       "",
       "## 4. MVP Scope",
+      "Full notes: [[Freelancer Payments 4 · MVP Backlog]]",
       "### Must have",
       "Create a job, fund escrow, approve a milestone, freelancer gets paid.",
       "### Nice to have",
@@ -303,6 +316,7 @@ export const TEMPLATES: readonly NoteTemplate[] = [
       "→ Leads to: 5. Demo & Pitch",
       "",
       "## 5. Demo & Pitch",
+      "Full notes: [[Freelancer Payments 5 · Demo & Pitch]]",
       "### Setup",
       "Two browsers: a client in the US and a freelancer in the Philippines.",
       "### Wow moment",
@@ -315,6 +329,138 @@ export const TEMPLATES: readonly NoteTemplate[] = [
       "Related: [[Hackathon Project]]",
       "",
     ),
+    linkedNotes: [
+      {
+        title: "Freelancer Payments 1 · The Problem",
+        body: lines(
+          "Part of [[Cross-Border Freelancer Payments]]. Next: [[Freelancer Payments 2 · The Solution]]",
+          "",
+          "## Who we're helping",
+          "### Freelancer",
+          "A designer in Manila billing clients in the US every month.",
+          "### Client",
+          "A startup founder paying three to five contractors abroad.",
+          "",
+          "## Pain points",
+          "### Waiting days to get paid",
+          "### Losing money to fees and FX",
+          "### Chasing unpaid invoices",
+          "",
+          "## Evidence to gather",
+          "### Five quick interviews",
+          "Ask: how do you get paid today, how long does it take, and what does it cost?",
+          "### Fee comparison",
+          "Price the same $500 invoice through a bank wire, a payment platform and USDC on Stellar.",
+          "",
+        ),
+      },
+      {
+        title: "Freelancer Payments 2 · The Solution",
+        body: lines(
+          "Part of [[Cross-Border Freelancer Payments]]. Next: [[Freelancer Payments 3 · Stellar Architecture]]",
+          "",
+          "## User flow",
+          "### 1. Client creates a job",
+          "Title, milestones and the amount per milestone in USDC.",
+          "### 2. Client funds escrow",
+          "### 3. Freelancer delivers",
+          "### 4. Client approves the milestone",
+          "### 5. Freelancer cashes out",
+          "",
+          "## Why Stellar",
+          "### Fast settlement",
+          "About 5 seconds per payment.",
+          "### Low fees",
+          "A fraction of a cent per transaction.",
+          "### Assets and anchors built in",
+          "USDC, plus on- and off-ramps to local currency.",
+          "",
+        ),
+      },
+      {
+        title: "Freelancer Payments 3 · Stellar Architecture",
+        body: lines(
+          "Part of [[Cross-Border Freelancer Payments]]. Next: [[Freelancer Payments 4 · MVP Backlog]]",
+          "",
+          "## Wallets",
+          "### Passkey smart wallet",
+          "For clients and freelancers who have never used crypto.",
+          "### Varial",
+          "For users who already have a Stellar wallet.",
+          "",
+          "## Escrow contract (Soroban)",
+          "### create_job(client, freelancer, milestones)",
+          "### fund(job_id)",
+          "### approve_milestone(job_id, index)",
+          "### refund(job_id) after a timeout",
+          "",
+          "## Payments",
+          "### USDC transfers",
+          "### Path payments for other currencies",
+          "",
+          "## Anchors",
+          "### SEP-24 deposit and withdraw",
+          "### SEP-31 cross-border payouts",
+          "",
+          "## Testnet setup",
+          "### Fund accounts with Friendbot",
+          "### Use testnet USDC",
+          "",
+        ),
+      },
+      {
+        title: "Freelancer Payments 4 · MVP Backlog",
+        body: lines(
+          "Part of [[Cross-Border Freelancer Payments]]. Next: [[Freelancer Payments 5 · Demo & Pitch]]",
+          "",
+          "## Day 1",
+          "### Wallet sign-in",
+          "### Create job form",
+          "### Escrow contract on testnet",
+          "",
+          "## Day 2",
+          "### Fund and approve a milestone",
+          "### Freelancer balance and history",
+          "### Cash-out screen with a mock anchor",
+          "",
+          "## Stretch",
+          "### Invoice links",
+          "### Dispute window",
+          "",
+          "## Definition of done",
+          "### Works end to end on testnet",
+          "### The demo runs in under 3 minutes",
+          "",
+        ),
+      },
+      {
+        title: "Freelancer Payments 5 · Demo & Pitch",
+        body: lines(
+          "Part of [[Cross-Border Freelancer Payments]]. Back to the start: [[Freelancer Payments 1 · The Problem]]",
+          "",
+          "## Demo script",
+          "### 0:00 The problem in one line",
+          "Freelancers wait days and lose a slice of every invoice to get paid.",
+          "### 0:30 Client funds a job",
+          "### 1:15 Freelancer delivers, client approves",
+          "### 2:00 Paid in seconds",
+          "Show the balance update and the transaction on Stellar Expert.",
+          "### 2:30 Cash out locally",
+          "",
+          "## Pitch deck",
+          "### Problem",
+          "### Solution",
+          "### Why Stellar",
+          "### Next steps",
+          "",
+          "## Judging checklist",
+          "### A working demo on testnet",
+          "### A clear user and problem",
+          "### Stellar features used well",
+          "",
+        ),
+      },
+    ],
   },
   {
     id: "business-plan",
