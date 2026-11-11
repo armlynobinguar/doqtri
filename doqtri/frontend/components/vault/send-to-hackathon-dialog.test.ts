@@ -2,6 +2,9 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  hackathonChoices,
+  opensOn,
+  pickedHackathon,
   projectChoices,
   SendError,
   SendResult,
@@ -13,8 +16,9 @@ import { canSendToHackathon, type HackathonSendSuccess } from "@/lib/integration
 /*
  * "Send to qdit hackathon" on the global mindmap (WP-4.7, D-117): hidden
  * unless the flag is on and the page handed over a setup (admin or owner,
- * qdit connected), the project picker's order, and the success state's next
- * step. Rendered to static markup (no DOM).
+ * qdit connected), the project picker's order, the hackathon picker's
+ * entries and default (D-122), and the success state's next step. Rendered
+ * to static markup (no DOM).
  */
 
 const SETUP: HackathonSendSetup = {
@@ -99,6 +103,68 @@ describe("projectChoices", () => {
 
   it("offers linked projects while qdit's list is loading or failed", () => {
     expect(projectChoices(SETUP.linkedProjects, null)).toEqual([{ id: "p-linked", label: "Payroll · linked here" }]);
+  });
+});
+
+describe("hackathonChoices (D-122)", () => {
+  const GB = { locale: "en-GB", timeZone: "UTC" };
+  const hackathon = (slug: string, state: string, opens_at = "2026-11-14T01:00:00.000Z") => ({
+    slug,
+    name: slug.toUpperCase(),
+    opens_at,
+    closes_at: "2026-11-21T09:00:00.000Z",
+    state,
+  });
+
+  it("offers open hackathons, and shows upcoming ones with their opening date, disabled, in qdit's order", () => {
+    expect(hackathonChoices([hackathon("a", "open"), hackathon("b", "upcoming"), hackathon("c", "open")], GB)).toEqual([
+      { id: "a", label: "A", disabled: false },
+      { id: "b", label: "B · opens 14 Nov", disabled: true },
+      { id: "c", label: "C", disabled: false },
+    ]);
+  });
+
+  it("leaves out a state doqtri doesn't know", () => {
+    expect(hackathonChoices([hackathon("a", "judging"), hackathon("b", "closed")], GB)).toEqual([]);
+  });
+
+  it("still names an upcoming hackathon whose opening time is unreadable", () => {
+    expect(hackathonChoices([hackathon("b", "upcoming", "soon")], GB)).toEqual([
+      { id: "b", label: "B · not open yet", disabled: true },
+    ]);
+  });
+
+  it("dates in the viewer's locale and timezone", () => {
+    expect(opensOn("2026-11-14T01:00:00.000Z", { locale: "en-US", timeZone: "UTC" })).toBe("Nov 14");
+    // 1:00 UTC on the 14th is still the 13th in Los Angeles.
+    expect(opensOn("2026-11-14T01:00:00.000Z", { locale: "en-GB", timeZone: "America/Los_Angeles" })).toBe("13 Nov");
+    expect(opensOn("not a time")).toBeNull();
+  });
+});
+
+describe("pickedHackathon", () => {
+  const choices = [
+    { id: "soon", disabled: true },
+    { id: "a", disabled: false },
+    { id: "b", disabled: false },
+  ];
+
+  it("preselects the first open hackathon", () => {
+    expect(pickedHackathon(choices, "")).toBe("a");
+  });
+
+  it("keeps the user's pick while it can be picked", () => {
+    expect(pickedHackathon(choices, "b")).toBe("b");
+  });
+
+  it("never picks an upcoming or unknown hackathon", () => {
+    expect(pickedHackathon(choices, "soon")).toBe("a");
+    expect(pickedHackathon(choices, "gone")).toBe("a");
+  });
+
+  it("picks nothing when no hackathon is open, so Send stays disabled", () => {
+    expect(pickedHackathon([{ id: "soon", disabled: true }], "soon")).toBe("");
+    expect(pickedHackathon([], "")).toBe("");
   });
 });
 

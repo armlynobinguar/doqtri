@@ -23,11 +23,13 @@ import {
 
 /**
  * "Send to qdit hackathon" on the global mindmap (WP-4.7, D-117). The
- * workspace admin picks a qdit project and pastes the hackathon's link; the
- * server builds the snapshot of every note in the active workspace and its
- * global mindmap and sends it to that project's entry
+ * workspace admin picks a qdit project and one of the open hackathons qdit
+ * lists (D-122; upcoming ones are shown but cannot be picked); the server
+ * builds the snapshot of every note in the active workspace and its global
+ * mindmap and sends it to that project's entry
  * (POST /api/integrations/qdit/hackathon). Sending is not submitting: the
- * team then submits, or resubmits, in qdit.
+ * team then submits, or resubmits, in qdit. While qdit has no hackathon list
+ * (before QDIT-60), the admin pastes the hackathon's link instead.
  *
  * The page decides who sees the button (the flag, admin or owner here, qdit
  * connected) and hands over `setup`; the route checks all of it again.
@@ -45,6 +47,12 @@ export type HackathonSendSetup = {
 };
 
 type QditProjectOption = { id: string; name: string; can_link: boolean };
+
+/** A hackathon as GET /api/integrations/qdit/hackathons lists it (D-122). */
+export type QditHackathonOption = { slug: string; name: string; opens_at: string; closes_at: string; state: string };
+
+/** Fixed locale and timezone for tests; the dialog uses the viewer's own. */
+type DateOptions = { locale?: string; timeZone?: string };
 
 const API = "/api/integrations/qdit";
 
@@ -92,6 +100,40 @@ export function projectChoices(
   ];
 }
 
+/** A short day and month ("14 Nov", "Nov 14"), or null when `iso` is not a time. */
+export function opensOn(iso: string, { locale, timeZone }: DateOptions = {}): string | null {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return null;
+  try {
+    return new Intl.DateTimeFormat(locale, { day: "numeric", month: "short", timeZone }).format(at);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The hackathon picker's entries, in qdit's order: open hackathons can be
+ * picked; upcoming ones show when they open and are disabled, since qdit
+ * refuses a snapshot before then. A state doqtri doesn't know is left out.
+ */
+export function hackathonChoices(
+  hackathons: QditHackathonOption[],
+  dates: DateOptions = {},
+): { id: string; label: string; disabled: boolean }[] {
+  return hackathons.flatMap((h): { id: string; label: string; disabled: boolean }[] => {
+    if (h.state === "open") return [{ id: h.slug, label: h.name, disabled: false }];
+    if (h.state !== "upcoming") return [];
+    const date = opensOn(h.opens_at, dates);
+    return [{ id: h.slug, label: date ? `${h.name} · opens ${date}` : `${h.name} · not open yet`, disabled: true }];
+  });
+}
+
+/** The hackathon to send to: `current` while it can be picked, else the first open one, else none (""). */
+export function pickedHackathon(choices: { id: string; disabled: boolean }[], current: string): string {
+  const pickable = choices.filter((c) => !c.disabled);
+  return pickable.some((c) => c.id === current) ? current : (pickable[0]?.id ?? "");
+}
+
 export function SendToHackathonDialog({
   open,
   onOpenChange,
@@ -106,6 +148,10 @@ export function SendToHackathonDialog({
   const [qditProjects, setQditProjects] = useState<QditProjectOption[] | null>(null);
   const [projectsState, setProjectsState] = useState<"loading" | "loaded" | "failed">("loading");
   const [projectChoice, setProjectChoice] = useState("");
+  const [hackathons, setHackathons] = useState<QditHackathonOption[]>([]);
+  // `unavailable`: qdit has no hackathon list yet, so the link field is shown.
+  const [hackathonsState, setHackathonsState] = useState<"loading" | "loaded" | "failed" | "unavailable">("loading");
+  const [hackathonChoice, setHackathonChoice] = useState("");
   const [link, setLink] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -113,7 +159,8 @@ export function SendToHackathonDialog({
   const [checkUrl, setCheckUrl] = useState<string | null>(null);
   const [result, setResult] = useState<HackathonSendSuccess | null>(null);
 
-  // qdit's project list, once per opening (the dialog is remounted each time).
+  // qdit's project and hackathon lists, once per opening (the dialog is
+  // remounted each time).
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -128,6 +175,27 @@ export function SendToHackathonDialog({
       .catch(() => {
         if (!cancelled) setProjectsState("failed");
       });
+    void fetch(`${API}/hackathons`)
+      .then(async (res) => {
+        const payload = (await res.json().catch(() => null)) as {
+          hackathons?: QditHackathonOption[] | null;
+          list_unavailable?: boolean;
+        } | null;
+        if (!res.ok || !payload) throw new Error("hackathons");
+        if (cancelled) return;
+        // qdit without GET /hackathons: ask for the link as before. Remove
+        // this fallback (and the link field) once QDIT-60 is in production.
+        if (payload.list_unavailable === true) {
+          setHackathonsState("unavailable");
+          return;
+        }
+        if (!Array.isArray(payload.hackathons)) throw new Error("hackathons");
+        setHackathons(payload.hackathons);
+        setHackathonsState("loaded");
+      })
+      .catch(() => {
+        if (!cancelled) setHackathonsState("failed");
+      });
     return () => {
       cancelled = true;
     };
@@ -135,7 +203,11 @@ export function SendToHackathonDialog({
 
   const choices = projectChoices(setup.linkedProjects, qditProjects);
   const selected = choices.some((c) => c.id === projectChoice) ? projectChoice : (choices[0]?.id ?? "");
-  const slug = parseHackathonInput(link, setup.qditOrigin);
+  const pastingLink = hackathonsState === "unavailable";
+  const hackathonOptions = hackathonChoices(hackathons);
+  const pickedSlug = pickedHackathon(hackathonOptions, hackathonChoice);
+  const slug = pastingLink ? parseHackathonInput(link, setup.qditOrigin) : pickedSlug || null;
+  const canSend = !!selected && (pastingLink ? !!link.trim() : !!pickedSlug);
 
   async function send(event: React.FormEvent) {
     event.preventDefault();
@@ -145,7 +217,7 @@ export function SendToHackathonDialog({
       return;
     }
     if (!slug) {
-      setError(COPY.badLink);
+      setError(pastingLink ? COPY.badLink : COPY.pickHackathon);
       return;
     }
     setBusy(true);
@@ -155,7 +227,12 @@ export function SendToHackathonDialog({
       const res = await fetch(`${API}/hackathon`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hackathon: link.trim(), project_id: selected, workspace_id: setup.workspaceId }),
+        body: JSON.stringify({
+          // The route takes a bare slug or the pasted link.
+          hackathon: pastingLink ? link.trim() : slug,
+          project_id: selected,
+          workspace_id: setup.workspaceId,
+        }),
       });
       const payload = (await res.json().catch(() => null)) as HackathonSendResponse | null;
       if (payload?.ok === true) setResult(payload);
@@ -226,24 +303,51 @@ export function SendToHackathonDialog({
               )}
             </div>
 
-            <div className="grid gap-1.5">
-              <label htmlFor="hackathon-link" className="text-label text-[12px]">
-                Hackathon link
-              </label>
-              <Input
-                id="hackathon-link"
-                autoFocus
-                value={link}
-                disabled={busy}
-                placeholder={setup.qditOrigin ? `${setup.qditOrigin}/hackathons/…` : "hackathon-name"}
-                aria-invalid={error ? true : undefined}
-                onChange={(event) => {
-                  setLink(event.target.value);
-                  setError(null);
-                  setCheckUrl(null);
-                }}
-              />
-            </div>
+            {pastingLink ? (
+              <div className="grid gap-1.5">
+                <label htmlFor="hackathon-link" className="text-label text-[12px]">
+                  Hackathon link
+                </label>
+                <Input
+                  id="hackathon-link"
+                  autoFocus
+                  value={link}
+                  disabled={busy}
+                  placeholder={setup.qditOrigin ? `${setup.qditOrigin}/hackathons/…` : "hackathon-name"}
+                  aria-invalid={error ? true : undefined}
+                  onChange={(event) => {
+                    setLink(event.target.value);
+                    setError(null);
+                    setCheckUrl(null);
+                  }}
+                />
+              </div>
+            ) : (
+              <div className="grid gap-1.5">
+                <span className="text-label text-[12px]">Hackathon</span>
+                {pickedSlug ? (
+                  <HeadingSelect
+                    label="Hackathon"
+                    nodes={hackathonOptions}
+                    value={pickedSlug}
+                    onChange={(next) => {
+                      setHackathonChoice(next);
+                      setError(null);
+                      setCheckUrl(null);
+                    }}
+                  />
+                ) : hackathonsState === "loading" ? (
+                  <p className="text-muted-foreground flex items-center gap-2 text-[12px]">
+                    <Loader2Icon className="size-3.5 animate-spin" />
+                    {COPY.hackathonsLoading}
+                  </p>
+                ) : (
+                  <p className="text-muted-foreground text-[12px]">
+                    {hackathonsState === "failed" ? COPY.hackathonsFailed : COPY.noOpenHackathons}
+                  </p>
+                )}
+              </div>
+            )}
 
             <p className="text-muted-foreground text-[12px] leading-relaxed">{COPY.visibility}</p>
 
@@ -253,7 +357,7 @@ export function SendToHackathonDialog({
               <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={busy || !selected || !link.trim()}>
+              <Button type="submit" disabled={busy || !canSend}>
                 {busy ? (
                   <>
                     <Loader2Icon className="animate-spin" />

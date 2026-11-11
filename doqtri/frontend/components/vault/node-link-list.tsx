@@ -88,7 +88,8 @@ export function HeadingSelect({
   onChange,
   label = "Heading to link",
 }: {
-  nodes: LinkableNode[];
+  /** `disabled` entries are shown but cannot be picked. */
+  nodes: (LinkableNode & { disabled?: boolean })[];
   value: string;
   onChange: (id: string) => void;
   label?: string;
@@ -104,7 +105,7 @@ export function HeadingSelect({
       </SelectTrigger>
       <SelectContent>
         {nodes.map((n) => (
-          <SelectItem key={n.id} value={n.id}>
+          <SelectItem key={n.id} value={n.id} disabled={n.disabled}>
             {n.label}
           </SelectItem>
         ))}

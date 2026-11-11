@@ -111,7 +111,12 @@ export const HACKATHON_SEND_COPY = {
   notFound: "Hackathon or project not found",
   conflict: "Something went wrong sending the snapshot. Press Send to try again.",
   tooLarge: (field: string) => `Too much to send: remove or shorten notes (${field})`,
+  /** Only while qdit has no hackathon list (D-122): the link field's check. */
   badLink: "Paste the hackathon's link from qdit, ending in /hackathons/<name>",
+  pickHackathon: "Pick an open hackathon",
+  hackathonsLoading: "Loading hackathons from qdit…",
+  hackathonsFailed: "qdit's hackathons couldn't be loaded. Close this and try again.",
+  noOpenHackathons: "No open hackathons in qdit right now.",
   forbidden: "Only an admin or owner of this workspace can send it to a hackathon",
   workspaceChanged: "You switched workspace in another tab. Reload this page and try again.",
   pickProject: "Pick a qdit project",
