@@ -84,8 +84,7 @@ export function NoteTitleBar({
         aria-describedby={field.error ? "note-title-error" : undefined}
         className={cn(
           NOTE_TITLE_TEXT,
-          "placeholder:text-label w-full min-w-0 truncate rounded-none border-0 bg-transparent p-0 outline-none",
-          "focus-visible:shadow-[inset_2px_0_0_0_color-mix(in_oklch,var(--ring)_60%,transparent)]",
+          "placeholder:text-label caret-foreground w-full min-w-0 truncate rounded-none border-0 bg-transparent p-0 outline-none",
           readOnly && "cursor-default",
         )}
       />
