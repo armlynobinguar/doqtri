@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { MAX_TITLE_LENGTH } from "@/lib/title";
 import { NoteChangePendingError } from "@/components/vault/note-overlay";
 
 /**
@@ -58,6 +59,7 @@ export function NoteTitleBar({
         aria-label="Note title"
         data-testid="note-title"
         value={field.value}
+        maxLength={MAX_TITLE_LENGTH}
         readOnly={readOnly}
         spellCheck={false}
         autoComplete="off"

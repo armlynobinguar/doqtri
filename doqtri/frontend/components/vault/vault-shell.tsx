@@ -33,7 +33,7 @@ import { createBlankNote } from "@/lib/create-note";
 import { deleteNote, DeleteNoteError } from "@/lib/delete-note";
 import { renameNote } from "@/lib/rename-note";
 import { isNoAnswer, NoResponseError, REQUEST_TIMEOUT_MS } from "@/lib/no-response";
-import { isTitleTaken } from "@/lib/title";
+import { renameRefusal } from "@/lib/title";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { anchoredDocIds } from "@/lib/stellar/anchored";
 import type { FailedImport, NoteSummary, VaultIdentity } from "@/lib/types";
@@ -290,9 +290,9 @@ function VaultShellInner({
     [activeId, navigate, run],
   );
 
-  // A title another note already has is refused here, before any request,
-  // with the route's own rule and wording; the dialog shows the throw beside
-  // the field. Anything the server refuses later comes back as a toast, since
+  // A title another note already has, or one that is not one line, is
+  // refused here, before any request, with the route's own rules and
+  // wording; the dialog and the title bar show the throw beside the field. Anything the server refuses later comes back as a toast, since
   // the dialog has closed by then. The open note's title bar renames through
   // this too (D-121), so its rename shows everywhere the same way. Only the
   // title changes: the note's text, open in an editor or not, is left alone.
@@ -304,7 +304,8 @@ function VaultShellInner({
         throw new NoteChangePendingError(`“${note.title}” is still being changed. Try again in a moment.`);
       }
       const others = shownNotes.filter((other) => other.id !== note.id).map((other) => other.title);
-      if (isTitleTaken(title, others)) throw new Error(`Another note is already called “${title}”`);
+      const refused = renameRefusal(title, others);
+      if (refused) throw new Error(refused);
 
       const retry = {
         action: {
