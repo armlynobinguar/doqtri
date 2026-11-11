@@ -1,25 +1,33 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { GiftIcon } from "lucide-react";
 import { OpenVaultLink } from "@/components/auth/open-vault-link";
 import { DoqtriMark } from "@/components/brand/doqtri-mark";
 import { PromoSubmissionForm } from "@/components/promo/promo-submission-form";
-import { MINDMAP_PROMO, PROMO_AI_DISCLOSURE, PROMO_BUCKET, type PromoSubmission } from "@/lib/promo";
+import { MINDMAP_PROMO, PROMO_AI_DISCLOSURE, PROMO_BUCKET, PROMO_PATH, type PromoSubmission } from "@/lib/promo";
 import {
   createSupabaseAdminClient,
   createSupabaseServerClient,
 } from "@/lib/supabase/server";
 
-export const metadata: Metadata = {
-  title: "Beta launch promo · Doqtri",
-  description: `Doqtri beta is live. Join and share your mindmaps for a chance at the ${MINDMAP_PROMO.prizePool} prize pool.`,
-};
+/** Empty once the promo ends, so the 404 says nothing about it. */
+export function generateMetadata(): Metadata {
+  if (!MINDMAP_PROMO.active) return {};
+  return {
+    title: "Beta launch promo · Doqtri",
+    description: `Doqtri beta is live. Join and share your mindmaps for a chance at the ${MINDMAP_PROMO.prizePool} prize pool.`,
+  };
+}
 
 /**
  * The submission portal for the mindmap showcase promo. Open to everyone so the
- * landing announcement can link here; only signed-in users get the form.
+ * landing announcement can link here; only signed-in users get the form. A 404
+ * once the promo ends.
  */
 export default async function PromoPage() {
+  if (!MINDMAP_PROMO.active) notFound();
+
   const supabase = await createSupabaseServerClient();
   const {
     data: { user },
@@ -120,16 +128,12 @@ export default async function PromoPage() {
         </ol>
 
         <section className="glass mt-10 rounded-3xl p-5 sm:p-7">
-          {!MINDMAP_PROMO.active ? (
-            <p className="text-muted-foreground text-[14px]">
-              This promo has ended. Thanks to everyone who took part.
-            </p>
-          ) : user ? (
+          {user ? (
             <PromoSubmissionForm submission={submission} />
           ) : (
             <div className="flex flex-col items-start gap-4">
               <p className="text-[14px]">Sign in to submit your mindmaps.</p>
-              <OpenVaultLink next="/promo" className="rounded-full" />
+              <OpenVaultLink next={PROMO_PATH} className="rounded-full" />
             </div>
           )}
         </section>

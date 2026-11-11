@@ -44,6 +44,14 @@ vi.mock("@/lib/active-workspace", () => ({
 vi.mock("@/lib/ingest/failed", () => ({ loadFailedImports: async () => [] }));
 vi.mock("@/components/vault/preferences", () => ({ PreferencesSync: () => null }));
 vi.mock("@/components/vault/referral-claim", () => ({ ReferralClaim: () => null }));
+// A copy of the promo's config, so a test can set the flag whatever lib/promo.ts
+// says (DOQ-50); `shipped` keeps the file's own value to restore.
+const promo = vi.hoisted(() => ({ shipped: false }));
+vi.mock("@/lib/promo", async (original) => {
+  const actual = await original<typeof import("@/lib/promo")>();
+  promo.shipped = actual.MINDMAP_PROMO.active;
+  return { ...actual, MINDMAP_PROMO: { ...actual.MINDMAP_PROMO } };
+});
 // The vault's client side is tested in components/legal: here, only what the layout tells it.
 vi.mock("@/components/vault/vault-shell", () => ({
   VaultShell: ({ legalLive }: { legalLive: boolean }) => `legalLive=${legalLive}`,
@@ -113,7 +121,45 @@ describe("the vault layout", () => {
   });
 });
 
+async function setPromoActive(active: boolean) {
+  const { MINDMAP_PROMO } = await import("@/lib/promo");
+  (MINDMAP_PROMO as { active: boolean }).active = active;
+}
+
+describe("the promo flag", () => {
+  afterEach(() => setPromoActive(promo.shipped));
+
+  it("makes the promo page a 404 with nothing in its metadata while off", async () => {
+    await setPromoActive(false);
+    const { default: PromoPage, generateMetadata } = await import("./promo/page");
+    await expect(PromoPage()).rejects.toMatchObject({ digest: "NEXT_HTTP_ERROR_FALLBACK;404" });
+    expect(generateMetadata()).toEqual({});
+  });
+
+  it("opens the promo page while on", async () => {
+    await setPromoActive(true);
+    const { default: PromoPage, generateMetadata } = await import("./promo/page");
+    expect(renderToStaticMarkup(await PromoPage())).toContain("Sign in to submit your mindmaps.");
+    expect(generateMetadata()).toHaveProperty("title");
+  });
+
+  it("drops the landing announcement while off", async () => {
+    await setPromoActive(false);
+    const html = renderToStaticMarkup(await RENDERED_PAGES[0][1]());
+    expect(html).not.toContain('href="/promo"');
+  });
+
+  it("shows the landing announcement while on", async () => {
+    await setPromoActive(true);
+    const html = renderToStaticMarkup(await RENDERED_PAGES[0][1]());
+    expect(html).toContain('href="/promo"');
+  });
+});
+
 describe("the promo page, whatever the gate says", () => {
+  beforeEach(() => setPromoActive(true));
+  afterEach(() => setPromoActive(promo.shipped));
+
   it.each([[undefined], ["Test Operator"]])("discloses the AI rating, with LEGAL_OPERATOR_NAME %s", async (value) => {
     vi.stubEnv("LEGAL_OPERATOR_NAME", value);
     const { default: PromoPage } = await import("./promo/page");

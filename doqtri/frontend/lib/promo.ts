@@ -1,11 +1,12 @@
 /**
  * The beta launch promo: users submit screenshots of their mindmaps for a
  * chance at a shared prize pool. Set `active` to false to take down the landing
- * announcement and the mindmap banners and close the portal to new entries.
+ * announcement and the mindmap banners, make /promo a 404 and refuse new
+ * entries; /admin/promo keeps listing the entries. Ended 11 Nov 2026 (DOQ-50).
  */
 export const MINDMAP_PROMO = {
   id: "mindmap-showcase",
-  active: true,
+  active: false,
   prizePool: "$100 USD",
   /** What entrants were asked to map; the AI rating scores relevance against it. */
   brief: "A note on anything Web3, shown as a Doqtri mindmap.",
@@ -27,6 +28,14 @@ export const PROMO_IMAGE_TYPES: Record<string, string> = {
 };
 
 export const PROMO_PATH = "/promo";
+
+/**
+ * Where proxy.ts rewrites an ended promo's portal. No route can match it (an
+ * underscore folder is private in the app router), so Next answers its 404
+ * with a real 404 status, before the root loading.tsx can stream a 200. It
+ * lives here because proxy.ts may export only the proxy and its config.
+ */
+export const ENDED_PROMO_REWRITE = "/_promo-ended";
 
 /** Shown before an entry is submitted, whatever the legal pages' gate says: it is true today. */
 export const PROMO_AI_DISCLOSURE =

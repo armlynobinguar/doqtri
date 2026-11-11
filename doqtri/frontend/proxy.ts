@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { safeNextPath } from "@/lib/email-auth";
+import { ENDED_PROMO_REWRITE, MINDMAP_PROMO, PROMO_PATH } from "@/lib/promo";
 
 /**
  * Next 16 renamed `middleware` to `proxy`; the behavior is unchanged.
@@ -49,8 +50,18 @@ export async function proxy(request: NextRequest) {
   // So must the legal pages, which sign-up links to. Each is a 404 until the
   // gate in lib/legal.ts is on.
   const isLegalRoute = pathname === "/privacy" || pathname === "/terms";
-  // The promo portal is linked from the landing; it shows sign-in when needed.
-  const isPromoRoute = pathname === "/promo";
+  // So must the promo portal, which the landing links to while the promo runs;
+  // it shows sign-in when needed. Once it ends it is a 404 for everyone,
+  // signed in or not (the page's notFound() is the second guard).
+  const isPromoRoute = pathname === PROMO_PATH;
+  if (isPromoRoute && !MINDMAP_PROMO.active) {
+    const url = request.nextUrl.clone();
+    url.pathname = ENDED_PROMO_REWRITE;
+    const rewrite = NextResponse.rewrite(url, { request });
+    // Keep any refreshed auth cookies.
+    for (const cookie of response.cookies.getAll()) rewrite.cookies.set(cookie);
+    return rewrite;
+  }
   // The read-only demo vault is for visitors, and signed-in users may open it too.
   const isDemoRoute = pathname === "/demo" || pathname.startsWith("/demo/");
   // Emailed links land on /auth/confirm signed out and leave signed in.
@@ -71,7 +82,7 @@ export async function proxy(request: NextRequest) {
   }
 
   // Signed-in users skip marketing and sign-in screens and land in the vault,
-  // or on the page that sent them to sign in (`?next=`, e.g. /promo).
+  // or on the page that sent them to sign in (`?next=`, e.g. /vault/mindmap).
   if (user && isPublicRoute) {
     const next = safeNextPath(request.nextUrl.searchParams.get("next"));
     const target = PUBLIC_ROUTES.has(new URL(next, request.url).pathname) ? "/vault" : next;

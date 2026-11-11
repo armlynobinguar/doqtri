@@ -88,7 +88,9 @@ is applied the AI routes answer `503` rather than run uncounted.
 
 Optional: `DOQTRI_ADMINS` — comma-separated user ids, emails or Stellar wallet
 addresses allowed into `/admin/promo`, the review screen for beta launch promo
-entries (`/promo`). Unset means nobody; everyone else gets a 404.
+entries (`/promo`). Unset means nobody; everyone else gets a 404. The `/promo`
+portal itself is a 404 while `MINDMAP_PROMO.active` in `frontend/lib/promo.ts`
+is false; the review screen keeps working.
 
 Optional: `GITHUB_TOKEN` — a fine-grained, **read-only** token used by
 `/api/github/status` to read the issues and pull requests linked to mindmap

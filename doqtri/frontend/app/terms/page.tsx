@@ -240,8 +240,8 @@ function sections(operator: string): LegalSection[] {
       title: "Promotions",
       body: (
         <p>
-          Promotions such as the one at <Link href="/promo">/promo</Link> follow the rules stated with them. A promo
-          entry is sent to OpenAI for an AI rating, which only orders the review queue. A person makes the decision.
+          Promotions follow the rules stated with them. A promo entry is sent to OpenAI for an AI rating, which only
+          orders the review queue. A person makes the decision.
         </p>
       ),
     },
