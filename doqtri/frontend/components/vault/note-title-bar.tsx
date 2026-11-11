@@ -72,6 +72,7 @@ export function NoteTitleBar({
           const handled = field.keyDown({
             key: event.key,
             isComposing: event.nativeEvent.isComposing,
+            keyCode: event.keyCode,
             blur: () => target.blur(),
           });
           if (handled) event.preventDefault();
@@ -98,6 +99,8 @@ export function NoteTitleBar({
 export type TitleFieldKey = {
   key: string;
   isComposing: boolean;
+  /** 229 while an input method has the key (Safari's last one has isComposing false). */
+  keyCode?: number;
   /** Takes focus out of the field. */
   blur: () => void;
 };
@@ -185,7 +188,7 @@ export function useNoteTitleField({
     },
     /** Whether the key was the field's: the caller then prevents its default. */
     keyDown(event: TitleFieldKey): boolean {
-      if (event.isComposing) return false;
+      if (event.isComposing || event.keyCode === 229) return false;
       if (event.key === "Enter") {
         // Renames here, whether or not focus can move on (the text is not
         // focusable in the Reading view), and not again on the blur after.

@@ -233,6 +233,8 @@ describe("the title bar's field (D-121)", () => {
     await f.fire((x) => x.focus());
     await f.fire((x) => x.change("Kana"));
     expect(await f.key("Enter", { isComposing: true })).toBe(false);
+    // Safari ends a composition with an Enter whose keyCode is 229 and isComposing false.
+    expect(await f.key("Enter", { keyCode: 229 })).toBe(false);
     expect(f.onRename).not.toHaveBeenCalled();
     expect(f.onDone).not.toHaveBeenCalled();
   });
