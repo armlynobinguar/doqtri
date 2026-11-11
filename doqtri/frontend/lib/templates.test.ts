@@ -39,14 +39,26 @@ describe("templates", () => {
     expect(map.children.map((n) => n.label)).toEqual(sections);
     const byLabel = (label: string) => map.children.find((n) => n.label === label);
     expect(byLabel("Milestones")?.children.map((n) => n.label)).toEqual([
-      "M1: (design deliverable), (payment %)",
-      "M2: (first working version), (payment %)",
-      "M3: (complete version for client testing), (payment %)",
-      "M4: Launch and handover, (payment %)",
+      "M1: Clickable prototype, 20%",
+      "M2: Booking works end to end, 30%",
+      "M3: Complete version for client testing, 30%",
+      "M4: Launch and handover, 20%",
     ]);
     // Each milestone lists what it delivers as its own branches.
     expect(byLabel("Milestones")?.children.map((n) => n.children.length)).toEqual([2, 2, 3, 4]);
-    expect(byLabel("Change requests")?.children).toEqual([]);
+    // The worked example shows one agreed change request, already in Scope.
+    expect(byLabel("Change requests")?.children.map((n) => n.label)).toEqual([
+      "CR-1: SMS reminders as well as email, +1 week",
+    ]);
+    expect(byLabel("Scope")?.children.map((n) => n.label)).toContain("In: SMS reminders (CR-1)");
+  });
+
+  it("client-project is a worked example: no placeholders, one linked note per section", () => {
+    const t = TEMPLATES.find((x) => x.id === "client-project")!;
+    expect(t.body).not.toMatch(/\([a-z]/);
+    expect(t.linkedNotes).toHaveLength(6);
+    const milestones = t.body.match(/^### M\d: .*, (\d+)%$/gm)!.map((l) => Number(l.match(/(\d+)%$/)![1]));
+    expect(milestones.reduce((a, b) => a + b, 0)).toBe(100);
   });
 
   it("links every linked note from its main note, and each linked note is a valid note", () => {
