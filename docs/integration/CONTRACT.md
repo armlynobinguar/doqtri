@@ -144,8 +144,9 @@ Rules that follow from the decisions:
   is not locked and may move as qdit allows.
 - An OAuth token may read projects and milestones, including the milestones'
   `milestone_anchors` records (D-32: they mirror public chain data), and the
-  five public fields of listed hackathons through `GET /hackathons` only
-  (D-122, section 8: a `SECURITY DEFINER` function serves them, and the
+  five public fields of listed hackathons through
+  `list_open_hackathons_for_client()`, served as `GET /hackathons` (D-122,
+  section 8: a `SECURITY DEFINER` function serves them, and the
   `hackathons` table's OAuth `SELECT` guard stays closed, so no OAuth app
   reads `hackathons` through PostgREST), create milestones, rename linked
   milestones and write link rows. Nothing else
@@ -1423,7 +1424,8 @@ doqtri only ever sent its own URLs.
 - v1.3.0 (2026-11-11): minor version for one new endpoint (WP-4.7, D-122).
   Every existing request and response stays as it was.
   - Section 2: an OAuth token may also read the five public fields of listed
-    hackathons, through `GET /hackathons` only. The `hackathons` table's
+    hackathons, through `list_open_hackathons_for_client()`, served as
+    `GET /hackathons`. The `hackathons` table's
     OAuth `SELECT` guard stays closed, so no OAuth app reads it through
     PostgREST.
   - Section 5: every app's consent screen adds "See which hackathons are
