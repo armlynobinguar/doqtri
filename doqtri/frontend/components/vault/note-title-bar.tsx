@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { NoteChangePendingError } from "@/components/vault/note-overlay";
 
 /**
  * The note's title, set like a document title above its text (D-121): the
@@ -20,15 +21,17 @@ export const NOTE_TITLE_COLUMN = "mx-auto w-full max-w-[46rem] px-[var(--lp-pad-
  * note's title lives; the note's text neither holds nor follows it.
  *
  * It shows `title`, the note's title through the vault's pending renames, so
- * a rename from the explorer shows here at once, unless the field is being
- * edited: what is typed there is never overwritten. Enter or leaving the
- * field renames through `onRename`, the explorer's own rename, so the row,
- * the tab and the mindmap's root change in the same frame. Escape, a blank
+ * a rename from the explorer shows here at once, unless something else is
+ * typed in the field: that is never overwritten. Enter (focus then moves to
+ * the text) or leaving the field renames through `onRename`, the explorer's
+ * own rename, so the row, the tab and the mindmap's root change in the same
+ * frame; the window losing focus does not count as leaving. Escape, a blank
  * field or the title unchanged puts the title back and renames nothing. A
  * title another note has is refused by `onRename` before any request: its
- * message shows under the field, and the field goes back to the title. Any
- * later refusal is the explorer's toast, and the title comes back with the
- * vault's overlay.
+ * message shows under the field, and the field goes back to the title. While
+ * a rename of the note is still on its way, another one is refused the same
+ * way, but what was typed stays, to try again. Any later refusal is the
+ * explorer's toast, and the title comes back with the vault's overlay.
  *
  * `readOnly` (a conflict, the lock held elsewhere or loading, a viewer)
  * shows the title without letting it be changed.
@@ -124,34 +127,37 @@ export function useNoteTitleField({
   };
   // The title `value` was last set from, to tell an edit from a new title.
   const [shown, setShown] = useState(title);
-  const [focused, setFocused] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Enter already renamed: the blur that follows (focus moving to the text)
   // must not rename again with the title from before that render.
   const committedRef = useRef(false);
 
   // A new title from outside (a rename from the explorer, or this one landing
-  // or refused) replaces the field, unless it is being edited.
+  // or refused) replaces the field, unless something else is typed there.
   if (shown !== title) {
     setShown(title);
-    if (!focused || value === shown) setValue(title);
+    if (value === shown) setValue(title);
   }
   // A copy that turned read-only mid-edit drops what was typed.
   if (readOnly && value !== title) setValue(title);
 
-  const commit = (typed: string) => {
+  /** Renames to `typed`; false when it has to wait for a rename still on its way. */
+  const commit = (typed: string): boolean => {
     const next = typed.trim();
     if (!next || next === title) {
       setValue(title);
-      return;
+      return true;
     }
     try {
       onRename(next);
       setValue(next);
     } catch (e) {
-      setValue(title);
       setError(e instanceof Error ? e.message : "Could not rename note");
+      // Not yet, rather than no: what was typed stays, to try again.
+      if (e instanceof NoteChangePendingError) return false;
+      setValue(title);
     }
+    return true;
   };
 
   return {
@@ -163,13 +169,12 @@ export function useNoteTitleField({
       setError(null);
     },
     focus() {
-      setFocused(true);
+      committedRef.current = false;
     },
     blur() {
       // Another window or tab came to the front: the field is still where the
       // user left it, half typed perhaps. It renames on the next real blur.
       if (!hasFocus()) return;
-      setFocused(false);
       if (committedRef.current) {
         committedRef.current = false;
         return;
@@ -182,7 +187,8 @@ export function useNoteTitleField({
       if (event.key === "Enter") {
         // Renames here, whether or not focus can move on (the text is not
         // focusable in the Reading view), and not again on the blur after.
-        if (!readOnly) commit(valueRef.current);
+        // A rename still on its way keeps the field, and the focus, as typed.
+        if (!readOnly && !commit(valueRef.current)) return true;
         committedRef.current = true;
         if (onDone) onDone();
         else event.blur();

@@ -458,10 +458,20 @@ export function useNoteTitle(id: string, title: string): string {
  * Renames a note the way the explorer's rename dialog does (DOQ-32): the new
  * title shows at once everywhere, and comes back if the server refuses it,
  * with the reason in a toast. Throws, renaming nothing, when another note
- * already has the title. The vault shell provides it; the note's title bar
- * (D-121) renames through it.
+ * already has the title, or with NoteChangePendingError while a rename or
+ * delete of the note is still on its way: one change per note at a time, as
+ * the explorer's row allows, so two renames never race. The vault shell
+ * provides it; the note's title bar (D-121) renames through it.
  */
 export type RenameNote = (note: { id: string; title: string }, title: string) => void;
+
+/** A rename refused because another change to the note has not shown in server data yet. */
+export class NoteChangePendingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NoteChangePendingError";
+  }
+}
 
 const RenameNoteContext = createContext<RenameNote | null>(null);
 

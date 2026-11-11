@@ -2,6 +2,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useNoteTitleField, type TitleFieldKey } from "@/components/vault/note-title-bar";
+import { NoteChangePendingError } from "@/components/vault/note-overlay";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // React DOM reads the window's current event for an update's priority.
@@ -197,6 +198,34 @@ describe("the title bar's field (D-121)", () => {
     await f.fire((x) => x.change("Half typed"));
     await f.fire((x) => x.blur());
     expect(f.onRename.mock.calls).toEqual([["Half typed"]]);
+  });
+
+  it("keeps the typed title, and the focus, when a rename of the note is still on its way", async () => {
+    const f = await mount({ title: "Beta" });
+    f.onRename.mockImplementation(() => {
+      throw new NoteChangePendingError("“Beta” is still being changed. Try again in a moment.");
+    });
+    await f.fire((x) => x.focus());
+    await f.fire((x) => x.change("Gamma"));
+    await f.key("Enter");
+    expect(f.field().error).toBe("“Beta” is still being changed. Try again in a moment.");
+    expect(f.field().value).toBe("Gamma");
+    // Focus stays in the field, to press Enter again.
+    expect(f.onDone).not.toHaveBeenCalled();
+
+    // Leaving the field asks again, and keeps the typed title once more.
+    await f.fire((x) => x.blur());
+    expect(f.onRename).toHaveBeenCalledTimes(2);
+    expect(f.field().value).toBe("Gamma");
+    // The first rename refused meanwhile: the title goes back, the typed one stays.
+    await f.render({ title: "Alpha" });
+    expect(f.field().value).toBe("Gamma");
+
+    f.onRename.mockReset();
+    await f.fire((x) => x.focus());
+    await f.key("Enter");
+    expect(f.onRename).toHaveBeenCalledWith("Gamma");
+    expect(f.onDone).toHaveBeenCalledTimes(1);
   });
 
   it("leaves keys being composed alone", async () => {

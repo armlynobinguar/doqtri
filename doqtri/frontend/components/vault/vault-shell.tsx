@@ -53,6 +53,7 @@ import {
   isNotePending,
   overlayNotes,
   useNoteOverlayState,
+  NoteChangePendingError,
   type RenameNote,
 } from "@/components/vault/note-overlay";
 
@@ -297,6 +298,11 @@ function VaultShellInner({
   // title changes: the note's text, open in an editor or not, is left alone.
   const handleRenameNote = useCallback<RenameNote>(
     (note, title) => {
+      // One change per note at a time: the explorer's row waits for it, and so
+      // must the title bar, or two renames could land in either order.
+      if (isNotePending(latest.current.overlay, note.id)) {
+        throw new NoteChangePendingError(`“${note.title}” is still being changed. Try again in a moment.`);
+      }
       const others = shownNotes.filter((other) => other.id !== note.id).map((other) => other.title);
       if (isTitleTaken(title, others)) throw new Error(`Another note is already called “${title}”`);
 
