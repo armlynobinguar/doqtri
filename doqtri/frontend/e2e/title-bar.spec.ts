@@ -231,6 +231,72 @@ test.describe("the note title bar (D-121)", () => {
     expect((await readNote(id)).title).toBe(title);
   });
 
+  test("a second rename while the first is on its way is refused, keeping what was typed, and goes once it has landed", async ({ page }) => {
+    const title = uniqueTitle("Bar First");
+    const text = "Body.\n";
+    const id = await seed(title, text);
+    const writes = watchWrites(page, id);
+    // Holds the first rename's PATCH until released.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let holding = true;
+    await page.route(
+      (url) => url.pathname === `/api/notes/${id}`,
+      async (route) => {
+        if (route.request().method() === "PATCH" && holding) {
+          holding = false;
+          await held;
+        }
+        await route.fallback();
+      },
+    );
+    await page.goto(`/vault/${id}`);
+    const bar = await editableTitleBar(page);
+
+    const first = uniqueTitle("Bar Second");
+    await bar.fill(first);
+    await bar.press("Enter");
+    await expect(page.getByRole("tab", { name: first, exact: true })).toBeVisible();
+
+    const second = uniqueTitle("Bar Third");
+    await bar.click();
+    await bar.fill(second);
+    await bar.press("Enter");
+    await expect(page.getByRole("alert").filter({ hasText: "still being changed" })).toHaveText(
+      `“${first}” is still being changed. Try again in a moment.`,
+    );
+    await expect(bar).toHaveValue(second);
+    await expect(bar).toBeFocused();
+    expect(renames(writes)).toHaveLength(1);
+
+    release();
+    await expect.poll(async () => (await readNote(id)).title, { timeout: 15_000 }).toBe(first);
+    // Settled once the explorer's row offers its rename again.
+    await expect(page.getByRole("button", { name: `Rename ${first}`, exact: true })).toBeEnabled({ timeout: 15_000 });
+    await expect(bar).toHaveValue(second);
+    await bar.press("Enter");
+    await expect(page.getByRole("tab", { name: second, exact: true })).toBeVisible();
+    await expect.poll(async () => readNote(id), { timeout: 15_000 }).toEqual({ title: second, markdown: text });
+    expect(renames(writes).map((write) => JSON.parse(write.body).title)).toEqual([first, second]);
+  });
+
+  test("Escape in the title bar in full screen puts the title back and stays in full screen", async ({ page }) => {
+    const title = uniqueTitle("Bar Full");
+    const id = await seed(title, "Body.\n");
+    await page.goto(`/vault/${id}`);
+    const bar = await editableTitleBar(page);
+    await page.getByRole("button", { name: "Hide mindmap" }).click();
+    await page.getByRole("toolbar", { name: "Formatting" }).getByRole("button", { name: "Full screen", exact: true }).click();
+    const fullscreen = page.getByRole("dialog", { name: "Full screen editor" });
+    await expect(fullscreen).toBeVisible();
+
+    await bar.fill(uniqueTitle("Bar Never"));
+    await bar.press("Escape");
+    await expect(bar).toHaveValue(title);
+    await expect(fullscreen).toBeVisible();
+    expect((await readNote(id)).title).toBe(title);
+  });
+
   test("a copy that is read-only (the note is being edited in another tab) shows the title but cannot change it", async ({ page }) => {
     const title = uniqueTitle("Bar Locked");
     const id = await seed(title, "Body.\n");
