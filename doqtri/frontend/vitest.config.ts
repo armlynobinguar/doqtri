@@ -22,6 +22,8 @@ export default defineConfig({
       "app/d/**/*.test.ts",
       // The legal pages' gate, with the sitemap and robots.txt beside them.
       "app/*.test.ts",
+      // The proxy's routing decisions, with Supabase mocked.
+      "proxy.test.ts",
       "components/**/*.test.ts",
       "scripts/**/*.test.ts",
       // The e2e qdit stub, checked against doqtri's real client (no network beyond localhost).

@@ -5,9 +5,9 @@ import { test, expect } from "@playwright/test";
  * stats, the read-only demo, the docs, the ended promo portal and the
  * signed-out guard in proxy.ts. The audit page has its own spec (audit-page.spec.ts).
  */
-test.use({ storageState: { cookies: [], origins: [] } });
-
 test.describe("public pages, signed out", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
   test("the landing shows its calls to action and live stats with numbers", async ({ page }) => {
     const stats = page.waitForResponse((res) => new URL(res.url()).pathname === "/api/stats");
     await page.goto("/");
@@ -57,9 +57,9 @@ test.describe("public pages, signed out", () => {
   });
 
   test("the ended promo portal is a 404 for a visitor", async ({ page }) => {
-    // The root loading.tsx may stream the page before notFound() runs, so the
-    // status is not checked; what the visitor gets is the 404 page.
-    await page.goto("/promo");
+    // proxy.ts rewrites it to a path no route matches: a real 404 status.
+    const res = await page.goto("/promo");
+    expect(res?.status()).toBe(404);
     await expect(page).toHaveURL((url) => url.pathname === "/promo");
     await expect(page.getByText("This page could not be found.")).toBeVisible();
     await expect(page.getByText("Sign in to submit your mindmaps.")).toHaveCount(0);
@@ -70,5 +70,17 @@ test.describe("public pages, signed out", () => {
       await page.goto(path);
       await expect(page, `${path} should send a visitor to /`).toHaveURL((url) => url.pathname === "/");
     }
+  });
+});
+
+// The project's storageState: the shared signed-in e2e user.
+test.describe("the ended promo, signed in", () => {
+  test("the portal is a 404 for a signed-in user too", async ({ page }) => {
+    const res = await page.goto("/promo");
+    expect(res?.status()).toBe(404);
+    await expect(page).toHaveURL((url) => url.pathname === "/promo");
+    await expect(page.getByText("This page could not be found.")).toBeVisible();
+    // The portal's header link for signed-in users.
+    await expect(page.getByRole("link", { name: "Open your mindmap" })).toHaveCount(0);
   });
 });

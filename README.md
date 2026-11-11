@@ -43,9 +43,6 @@
   <a href="https://www.doqtri.xyz"><img src="docs/screenshots/landing.png" alt="Doqtri landing page: Planned vs shipped, proven on-chain" width="900" /></a>
 </p>
 
-> **Beta is live.** Write a note on anything Web3, screenshot its mindmap and submit it at
-> [doqtri.xyz/promo](https://www.doqtri.xyz/promo) for a share of the **$100 USD prize pool**.
-
 ---
 
 ## Contents
