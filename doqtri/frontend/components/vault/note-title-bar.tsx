@@ -66,11 +66,12 @@ export function NoteTitleBar({
         enterKeyHint="done"
         onChange={(event) => field.change(event.target.value)}
         onFocus={field.focus}
-        onBlur={field.blur}
+        onBlur={(event) => field.blur(event.currentTarget.value)}
         onKeyDown={(event) => {
           const target = event.currentTarget;
           const handled = field.keyDown({
             key: event.key,
+            value: target.value,
             isComposing: event.nativeEvent.isComposing,
             keyCode: event.keyCode,
             blur: () => target.blur(),
@@ -98,6 +99,8 @@ export function NoteTitleBar({
 /** A key pressed in the field, as much of it as the field reads. */
 export type TitleFieldKey = {
   key: string;
+  /** What the field holds as the key goes down. */
+  value: string;
   isComposing: boolean;
   /** 229 while an input method has the key (Safari's last one has isComposing false). */
   keyCode?: number;
@@ -123,13 +126,7 @@ export function useNoteTitleField({
   /** Whether the page has focus, for a blur that is only the window losing it. */
   hasFocus?: () => boolean;
 }) {
-  const [value, setShownValue] = useState(title);
-  // Read by blur, which can run before the render a change asked for.
-  const valueRef = useRef(value);
-  const setValue = (next: string) => {
-    valueRef.current = next;
-    setShownValue(next);
-  };
+  const [value, setValue] = useState(title);
   // The title `value` was last set from, to tell an edit from a new title.
   const [shown, setShown] = useState(title);
   const [error, setError] = useState<string | null>(null);
@@ -176,7 +173,8 @@ export function useNoteTitleField({
     focus() {
       committedRef.current = false;
     },
-    blur() {
+    /** Leaving the field, holding `typed` (read off the field: a change may not have rendered yet). */
+    blur(typed: string) {
       // Another window or tab came to the front: the field is still where the
       // user left it, half typed perhaps. It renames on the next real blur.
       if (!hasFocus()) return;
@@ -184,7 +182,7 @@ export function useNoteTitleField({
         committedRef.current = false;
         return;
       }
-      if (!readOnly) commit(valueRef.current);
+      if (!readOnly) commit(typed);
     },
     /** Whether the key was the field's: the caller then prevents its default. */
     keyDown(event: TitleFieldKey): boolean {
@@ -193,7 +191,7 @@ export function useNoteTitleField({
         // Renames here, whether or not focus can move on (the text is not
         // focusable in the Reading view), and not again on the blur after.
         // A rename still on its way keeps the field, and the focus, as typed.
-        if (!readOnly && !commit(valueRef.current)) return true;
+        if (!readOnly && !commit(event.value)) return true;
         committedRef.current = true;
         if (onDone) onDone();
         else event.blur();

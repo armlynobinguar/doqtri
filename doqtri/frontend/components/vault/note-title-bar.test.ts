@@ -55,7 +55,7 @@ function mountField(initial: Partial<Props> = {}) {
     return result;
   };
   const key = (name: string, extra: Partial<TitleFieldKey> = {}) =>
-    fire((f) => f.keyDown({ key: name, isComposing: false, blur: () => f.blur(), ...extra }));
+    fire((f) => f.keyDown({ key: name, value: f.value, isComposing: false, blur: () => f.blur(f.value), ...extra }));
   return { field: () => field, root, render, fire, key, onRename, onDone, hasFocus };
 }
 
@@ -98,7 +98,7 @@ describe("the title bar's field (D-121)", () => {
     await f.fire((x) => x.change("Typed"));
     await f.render({ readOnly: true });
     expect(f.field().value).toBe("Alpha");
-    await f.fire((x) => x.blur());
+    await f.fire((x) => x.blur(x.value));
     expect(f.onRename).not.toHaveBeenCalled();
   });
 
@@ -106,7 +106,7 @@ describe("the title bar's field (D-121)", () => {
     const f = await mount();
     await f.fire((x) => x.focus());
     await f.fire((x) => x.change("  Roadmap "));
-    await f.fire((x) => x.blur());
+    await f.fire((x) => x.blur(x.value));
     expect(f.onRename).toHaveBeenCalledTimes(1);
     expect(f.onRename).toHaveBeenCalledWith("Roadmap");
     expect(f.field().value).toBe("Roadmap");
@@ -118,7 +118,7 @@ describe("the title bar's field (D-121)", () => {
     await f.fire((x) => x.change("Never"));
     expect(await f.key("Escape")).toBe(true);
     expect(f.field().value).toBe("Alpha");
-    await f.fire((x) => x.blur());
+    await f.fire((x) => x.blur(x.value));
     expect(f.onRename).not.toHaveBeenCalled();
   });
 
@@ -127,7 +127,7 @@ describe("the title bar's field (D-121)", () => {
     for (const typed of ["   ", " Alpha ", "Alpha"]) {
       await f.fire((x) => x.focus());
       await f.fire((x) => x.change(typed));
-      await f.fire((x) => x.blur());
+      await f.fire((x) => x.blur(x.value));
       expect(f.field().value).toBe("Alpha");
     }
     expect(f.onRename).not.toHaveBeenCalled();
@@ -140,7 +140,7 @@ describe("the title bar's field (D-121)", () => {
     });
     await f.fire((x) => x.focus());
     await f.fire((x) => x.change("Beta"));
-    await f.fire((x) => x.blur());
+    await f.fire((x) => x.blur(x.value));
     expect(f.field().error).toBe("Another note is already called “Beta”");
     expect(f.field().value).toBe("Alpha");
     // Typing again clears it.
@@ -157,13 +157,13 @@ describe("the title bar's field (D-121)", () => {
     expect(f.onRename).toHaveBeenCalledWith("Roadmap");
     expect(f.onDone).toHaveBeenCalledTimes(1);
     // The field still has focus; leaving it later renames nothing more.
-    await f.fire((x) => x.blur());
+    await f.fire((x) => x.blur(x.value));
     expect(f.onRename).toHaveBeenCalledTimes(1);
   });
 
   it("renames on Enter once when handing focus on blurs the field at once", async () => {
     const f = await mount();
-    f.onDone.mockImplementation(() => f.field().blur());
+    f.onDone.mockImplementation(() => f.field().blur(f.field().value));
     await f.fire((x) => x.focus());
     await f.fire((x) => x.change("Roadmap"));
     await f.key("Enter");
@@ -177,7 +177,7 @@ describe("the title bar's field (D-121)", () => {
     await f.key("Enter");
     await f.render({ title: "Roadmap" });
     await f.fire((x) => x.change("Roadmap 2"));
-    await f.fire((x) => x.blur());
+    await f.fire((x) => x.blur(x.value));
     expect(f.onRename.mock.calls).toEqual([["Roadmap"], ["Roadmap 2"]]);
   });
 
@@ -187,7 +187,7 @@ describe("the title bar's field (D-121)", () => {
     await f.fire((x) => x.change("Half typ"));
     // Another window or tab came to the front: the field keeps the focus within the page.
     f.hasFocus.mockReturnValue(false);
-    await f.fire((x) => x.blur());
+    await f.fire((x) => x.blur(x.value));
     expect(f.onRename).not.toHaveBeenCalled();
     expect(f.field().value).toBe("Half typ");
     // Back, and a title from outside still does not overwrite it.
@@ -196,7 +196,7 @@ describe("the title bar's field (D-121)", () => {
     await f.render({ title: "Beta" });
     expect(f.field().value).toBe("Half typ");
     await f.fire((x) => x.change("Half typed"));
-    await f.fire((x) => x.blur());
+    await f.fire((x) => x.blur(x.value));
     expect(f.onRename.mock.calls).toEqual([["Half typed"]]);
   });
 
@@ -214,7 +214,7 @@ describe("the title bar's field (D-121)", () => {
     expect(f.onDone).not.toHaveBeenCalled();
 
     // Leaving the field asks again, and keeps the typed title once more.
-    await f.fire((x) => x.blur());
+    await f.fire((x) => x.blur(x.value));
     expect(f.onRename).toHaveBeenCalledTimes(2);
     expect(f.field().value).toBe("Gamma");
     // The first rename refused meanwhile: the title goes back, the typed one stays.
