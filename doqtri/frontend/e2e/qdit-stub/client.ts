@@ -67,6 +67,12 @@ export const stub = {
   setMilestoneStatus: (milestoneId: string, status: "proposed" | "submitted" | "approved" | "rejected") =>
     control("POST", `/milestones/${milestoneId}/status`, { status }),
 
+  /** A hackathon in qdit; GET /hackathons lists it while it is not hidden, not `test-` and not closed. */
+  hackathon: (h: { slug: string; name: string; opens_at: string; closes_at: string; hidden?: boolean }) =>
+    control("POST", "/hackathons", h),
+  /** false plays a qdit older than v1.3.0, where GET /hackathons is 404; reset() turns it back on. */
+  setHackathonList: (enabled: boolean) => control("POST", "/hackathon-list", { enabled }),
+
   milestone: (id: string) => control<StubMilestone>("GET", `/milestones/${id}`),
   async milestoneOrNull(id: string): Promise<StubMilestone | null> {
     try {

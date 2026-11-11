@@ -540,6 +540,14 @@ describe("listHackathons (D-122)", () => {
           { ...OPEN, name: null },
           { ...OPEN, opens_at: "soon" },
           { ...OPEN, closes_at: undefined },
+          // Date.parse reads these, but they are not RFC 3339 (section 4).
+          { ...OPEN, opens_at: "2026-11-10" },
+          { ...OPEN, opens_at: "Tue, 10 Nov 2026 01:00:00 GMT" },
+          { ...OPEN, closes_at: "2026-11-21T09:00:00" },
+          { ...OPEN, closes_at: 1795251600000 },
+          // A window that closes at or before it opens.
+          { ...OPEN, closes_at: OPEN.opens_at },
+          { ...OPEN, closes_at: "2026-11-09T01:00:00.000Z" },
           OPEN,
           { ...OPEN, name: "Duplicate" },
           UPCOMING,
@@ -547,6 +555,11 @@ describe("listHackathons (D-122)", () => {
       }),
     );
     expect(await result).toEqual([OPEN, UPCOMING]);
+  });
+
+  it("accepts any offset, lowercase separators and fractional seconds", async () => {
+    const row = { ...OPEN, opens_at: "2026-11-10t09:00:00+08:00", closes_at: "2026-11-21T09:00:00.123456z" };
+    expect(await (await list(json(200, { data: [row], next_cursor: null }))).result).toEqual([row]);
   });
 
   it("trims the name and cuts it at 200 code points", async () => {

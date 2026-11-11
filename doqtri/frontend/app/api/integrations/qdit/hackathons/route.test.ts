@@ -112,6 +112,8 @@ describe("the list", () => {
     ["qdit down", new QditError("unavailable", "down", { status: 503 }), 502, "QDIT_UNAVAILABLE"],
     ["a rate limit", new QditError("rate_limited", "slow", { status: 429, retryAfterSeconds: 7 }), 429, "QDIT_RATE_LIMITED"],
     ["an unreadable list", new QditError("bad_response", "bad"), 502, "QDIT_UNAVAILABLE"],
+    // errorFromResponse() on a 404 whose body is not qdit's JSON: kind not_found, code null.
+    ["a 404 that is not qdit's JSON", new QditError("not_found", "qdit answered 404", { status: 404, code: null }), 502, "QDIT_UNAVAILABLE"],
   ])("reports %s as an error, not as a missing list", async (_name, error, status, code) => {
     qdit.listHackathons.mockRejectedValue(error);
     const res = await GET();

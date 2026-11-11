@@ -144,8 +144,11 @@ Rules that follow from the decisions:
   is not locked and may move as qdit allows.
 - An OAuth token may read projects and milestones, including the milestones'
   `milestone_anchors` records (D-32: they mirror public chain data), and the
-  hackathons qdit lists to every signed-in user (`GET /hackathons`, D-122),
-  create milestones, rename linked milestones and write link rows. Nothing else
+  five public fields of listed hackathons through `GET /hackathons` only
+  (D-122, section 8: a `SECURITY DEFINER` function serves them, and the
+  `hackathons` table's OAuth `SELECT` guard stays closed, so no OAuth app
+  reads `hackathons` through PostgREST), create milestones, rename linked
+  milestones and write link rows. Nothing else
   (D-03): no status changes, approvals, rejections, deletes of projects or
   milestones, members or proofs, and no writes to anchors. qdit enforces this
   with RESTRICTIVE RLS on the `client_id` claim, so it holds even if the token
@@ -222,7 +225,10 @@ Rules that follow from the decisions:
   list adds "Send a snapshot of its documents to a hackathon entry for
   projects you administer" (D-117). Other apps' consent screens do not show
   that line, since no other client may send one. Grants given before v1.2.0
-  saw the older wording; qdit does not ask them to consent again.
+  saw the older wording; qdit does not ask them to consent again. From
+  v1.3.0, every app's "can" list adds "See which hackathons are open or
+  coming up in qdit" (`GET /hackathons`, D-122). Grants given before v1.3.0
+  saw the older wording; qdit does not ask them to consent again either.
 - qdit MUST accept a token only when all of these hold:
   - the signature verifies against `<issuer>/.well-known/jwks.json`;
   - `iss` equals the issuer above and `exp` is in the future;
@@ -874,11 +880,10 @@ pick one instead of pasting its link (WP-4.7, D-122). Any authorised client
 may call it, with the same token as every other route (section 5); it names
 no project, so no project role is needed (section 8).
 
-It lists the hackathons qdit shows every signed-in user on its Hackathons
-index and site banner that are still ahead or running:
+It lists the hackathons matching these rules, and no others:
 
-- `hidden` is false, and the slug does not start with `test-` (a
-  rehearsal hackathon);
+- `hidden` is false;
+- the slug does not start with `test-` (a rehearsal hackathon);
 - `closes_at` is still in the future, so open and upcoming ones are listed.
 
 A hidden hackathon is never listed, not even to its own staff. A closed one
@@ -887,13 +892,24 @@ is never listed, even to a project that holds a late pass:
 slug as before, so a client offers a late pass's hackathon by link or slug,
 not from this list.
 
-Order is `opens_at asc, slug asc`. At most 50 hackathons; there is no paging
-and no `next_cursor`, and the endpoint takes no query parameters.
+How qdit serves it. The `hackathons` table keeps its restrictive OAuth
+`SELECT` guard closed: no OAuth app can read `hackathons` through PostgREST,
+with this endpoint or without it. qdit answers this endpoint, still with the
+caller's token (section 5), through a `SECURITY DEFINER` function that
+applies the three rules above itself and returns only the five fields
+below, the way `push_doqtri_hackathon_snapshot()` performs the write for
+`POST /projects/{id}/hackathon-snapshots`. Nothing else about a hackathon
+(staff, entries, grades, late passes, `hidden` itself) reaches a client.
+
+Order is `opens_at asc, slug asc`. At most 50 hackathons, and the endpoint
+takes no query parameters. It does not page yet: `next_cursor` is always
+`null` (section 4), so paging can be added later as an additive change.
 
 ```json
 { "data": [
     { "slug": "stellar-build-2026", "name": "Stellar Build 2026", "opens_at": "2026-11-14T01:00:00.000Z", "closes_at": "2026-11-21T09:00:00.000Z", "state": "upcoming" }
-] }
+  ],
+  "next_cursor": null }
 ```
 
 - `slug`: the hackathon's slug, as `hackathon_slug` takes it
@@ -902,12 +918,12 @@ and no `next_cursor`, and the endpoint takes no query parameters.
   markup.
 - `opens_at`, `closes_at`: the hackathon's window (section 4 timestamps).
 - `state`: from qdit's clock when it answers. `open` while
-  `opens_at <= now < closes_at`, `upcoming` before `opens_at`. A new snapshot
-  is accepted only while a hackathon is `open` (the window above).
+  `opens_at <= now < closes_at`, `upcoming` before `opens_at`. Without a late
+  pass, a new snapshot is accepted only while a hackathon is `open` (the
+  window in `POST /projects/{id}/hackathon-snapshots`).
 
-Clients MUST ignore unknown fields and unknown `state` values (section 3),
-and MUST NOT offer to send a snapshot to a hackathon whose `state` they do
-not know.
+Clients MUST ignore unknown fields and unknown `state` values, and MUST NOT
+offer to send a snapshot to a hackathon whose `state` they do not know.
 
 Errors (section 6): `401 unauthorized`, `429 rate_limited`,
 `500 internal_error` and `503 unavailable`, as on every endpoint. A qdit
@@ -1406,16 +1422,23 @@ doqtri only ever sent its own URLs.
 
 - v1.3.0 (2026-11-11): minor version for one new endpoint (WP-4.7, D-122).
   Every existing request and response stays as it was.
-  - Section 2: an OAuth token may also read the hackathons qdit lists to
-    every signed-in user.
+  - Section 2: an OAuth token may also read the five public fields of listed
+    hackathons, through `GET /hackathons` only. The `hackathons` table's
+    OAuth `SELECT` guard stays closed, so no OAuth app reads it through
+    PostgREST.
+  - Section 5: every app's consent screen adds "See which hackathons are
+    open or coming up in qdit" to the "can" list; earlier grants are not
+    asked to consent again.
   - Section 8: new `GET /hackathons` (any authenticated user, no project
-    role): the hackathons on qdit's Hackathons index and banner that are not
-    hidden, have no `test-` slug and have not closed, in `opens_at asc,
-    slug asc` order, at most 50 with no paging, each with `slug`, `name`,
-    `opens_at`, `closes_at` and `state` (`open` or `upcoming`, from qdit's
-    clock). Hidden and closed hackathons are never listed; a late pass still
-    sends by slug. Clients ignore unknown fields and `state` values, and a
-    qdit without it answers `404 not_found`.
+    role): the hackathons that are not hidden, have no `test-` slug and have
+    not closed, in `opens_at asc, slug asc` order, at most 50, each with
+    `slug`, `name`, `opens_at`, `closes_at` and `state` (`open` or
+    `upcoming`, from qdit's clock). It does not page yet: `next_cursor` is
+    always `null`. qdit serves it through a `SECURITY DEFINER` function that
+    applies those rules and returns only those fields. Hidden and closed
+    hackathons are never listed; a late pass still sends by slug. Clients
+    ignore unknown fields and `state` values, and a qdit without it answers
+    `404 not_found`.
 - v1.2.0 (2026-11-09): minor version for one new endpoint (WP-4.7). Every
   existing request and response stays as it was.
   - Section 2: exception to D-03 (D-117). doqtri's client, and no other, may

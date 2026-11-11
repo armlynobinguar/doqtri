@@ -51,8 +51,25 @@ type QditProjectOption = { id: string; name: string; can_link: boolean };
 /** A hackathon as GET /api/integrations/qdit/hackathons lists it (D-122). */
 export type QditHackathonOption = { slug: string; name: string; opens_at: string; closes_at: string; state: string };
 
-/** Fixed locale and timezone for tests; the dialog uses the viewer's own. */
-type DateOptions = { locale?: string; timeZone?: string };
+/** A fixed locale for tests; the dialog uses the viewer's own. */
+type DateOptions = { locale?: string };
+
+/** Event dates read in the event's own timezone, as qdit's banner and hackathon page do (BANNER_TIMEZONE). */
+export const HACKATHON_TIMEZONE = "Asia/Manila";
+
+/**
+ * Where the hackathon list stands. `unavailable`: qdit has no list yet
+ * (before QDIT-60), so the dialog asks for the hackathon's link instead.
+ */
+export type HackathonsState = "loading" | "loaded" | "failed" | "unavailable";
+
+/** The send form as the dialog holds it. `pickedSlug` comes from pickedHackathon(). */
+export type HackathonSendForm = {
+  projectId: string;
+  hackathonsState: HackathonsState;
+  pickedSlug: string;
+  link: string;
+};
 
 const API = "/api/integrations/qdit";
 
@@ -100,12 +117,15 @@ export function projectChoices(
   ];
 }
 
-/** A short day and month ("14 Nov", "Nov 14"), or null when `iso` is not a time. */
-export function opensOn(iso: string, { locale, timeZone }: DateOptions = {}): string | null {
+/**
+ * A short day and month ("14 Nov", "Nov 14") in the event's timezone
+ * (Asia/Manila), or null when `iso` is not a time.
+ */
+export function opensOn(iso: string, { locale }: DateOptions = {}): string | null {
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return null;
   try {
-    return new Intl.DateTimeFormat(locale, { day: "numeric", month: "short", timeZone }).format(at);
+    return new Intl.DateTimeFormat(locale, { day: "numeric", month: "short", timeZone: HACKATHON_TIMEZONE }).format(at);
   } catch {
     return null;
   }
@@ -134,6 +154,36 @@ export function pickedHackathon(choices: { id: string; disabled: boolean }[], cu
   return pickable.some((c) => c.id === current) ? current : (pickable[0]?.id ?? "");
 }
 
+/**
+ * Whether Send is enabled: a project, and an open hackathon picked from the
+ * list, or, while qdit has no list, something in the link field (the route
+ * checks the link). Never while the list is loading or failed.
+ */
+export function canSend(form: HackathonSendForm): boolean {
+  if (!form.projectId) return false;
+  if (form.hackathonsState === "unavailable") return !!form.link.trim();
+  return form.hackathonsState === "loaded" && !!form.pickedSlug;
+}
+
+/**
+ * The POST /api/integrations/qdit/hackathon body: the picked hackathon's bare
+ * slug, or the pasted link as typed (trimmed) while qdit has no list. The
+ * route reads either with parseHackathonInput().
+ */
+export function sendBody(
+  form: HackathonSendForm,
+  workspaceId: string,
+): { hackathon: string; project_id: string; workspace_id: string } {
+  return {
+    hackathon: form.hackathonsState === "unavailable" ? form.link.trim() : form.pickedSlug,
+    project_id: form.projectId,
+    workspace_id: workspaceId,
+  };
+}
+
+/** Send refusals after which the hackathon list may be stale: reload it. */
+const STALE_HACKATHON_CODES: ReadonlySet<string> = new Set(["HACKATHON_CLOSED", "HACKATHON_NOT_OPEN", "QDIT_NOT_FOUND"]);
+
 export function SendToHackathonDialog({
   open,
   onOpenChange,
@@ -149,8 +199,9 @@ export function SendToHackathonDialog({
   const [projectsState, setProjectsState] = useState<"loading" | "loaded" | "failed">("loading");
   const [projectChoice, setProjectChoice] = useState("");
   const [hackathons, setHackathons] = useState<QditHackathonOption[]>([]);
-  // `unavailable`: qdit has no hackathon list yet, so the link field is shown.
-  const [hackathonsState, setHackathonsState] = useState<"loading" | "loaded" | "failed" | "unavailable">("loading");
+  const [hackathonsState, setHackathonsState] = useState<HackathonsState>("loading");
+  // Bumped after a refusal that says the list is stale, to load it again.
+  const [hackathonsReload, setHackathonsReload] = useState(0);
   const [hackathonChoice, setHackathonChoice] = useState("");
   const [link, setLink] = useState("");
   const [busy, setBusy] = useState(false);
@@ -159,8 +210,7 @@ export function SendToHackathonDialog({
   const [checkUrl, setCheckUrl] = useState<string | null>(null);
   const [result, setResult] = useState<HackathonSendSuccess | null>(null);
 
-  // qdit's project and hackathon lists, once per opening (the dialog is
-  // remounted each time).
+  // qdit's project list, once per opening (the dialog is remounted each time).
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -175,6 +225,16 @@ export function SendToHackathonDialog({
       .catch(() => {
         if (!cancelled) setProjectsState("failed");
       });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  // qdit's hackathon list, once per opening and again after a refusal that
+  // says it is stale. A reload that fails keeps the list already shown.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
     void fetch(`${API}/hackathons`)
       .then(async (res) => {
         const payload = (await res.json().catch(() => null)) as {
@@ -194,20 +254,20 @@ export function SendToHackathonDialog({
         setHackathonsState("loaded");
       })
       .catch(() => {
-        if (!cancelled) setHackathonsState("failed");
+        if (!cancelled) setHackathonsState((state) => (state === "loaded" ? state : "failed"));
       });
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, hackathonsReload]);
 
   const choices = projectChoices(setup.linkedProjects, qditProjects);
   const selected = choices.some((c) => c.id === projectChoice) ? projectChoice : (choices[0]?.id ?? "");
   const pastingLink = hackathonsState === "unavailable";
   const hackathonOptions = hackathonChoices(hackathons);
   const pickedSlug = pickedHackathon(hackathonOptions, hackathonChoice);
+  const form: HackathonSendForm = { projectId: selected, hackathonsState, pickedSlug, link };
   const slug = pastingLink ? parseHackathonInput(link, setup.qditOrigin) : pickedSlug || null;
-  const canSend = !!selected && (pastingLink ? !!link.trim() : !!pickedSlug);
 
   async function send(event: React.FormEvent) {
     event.preventDefault();
@@ -227,18 +287,16 @@ export function SendToHackathonDialog({
       const res = await fetch(`${API}/hackathon`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          // The route takes a bare slug or the pasted link.
-          hackathon: pastingLink ? link.trim() : slug,
-          project_id: selected,
-          workspace_id: setup.workspaceId,
-        }),
+        body: JSON.stringify(sendBody(form, setup.workspaceId)),
       });
       const payload = (await res.json().catch(() => null)) as HackathonSendResponse | null;
       if (payload?.ok === true) setResult(payload);
       else {
         setError(payload?.message ?? COPY.unavailable);
         if (payload?.code === "QDIT_UNCERTAIN") setCheckUrl(payload.qdit_url ?? null);
+        // The hackathon closed, has not opened or is gone: show qdit's list as
+        // it is now. The message stays until the user changes something.
+        if (!pastingLink && payload && STALE_HACKATHON_CODES.has(payload.code)) setHackathonsReload((n) => n + 1);
       }
     } catch {
       // The request may have reached doqtri, and doqtri qdit.
@@ -310,7 +368,6 @@ export function SendToHackathonDialog({
                 </label>
                 <Input
                   id="hackathon-link"
-                  autoFocus
                   value={link}
                   disabled={busy}
                   placeholder={setup.qditOrigin ? `${setup.qditOrigin}/hackathons/…` : "hackathon-name"}
@@ -325,17 +382,22 @@ export function SendToHackathonDialog({
             ) : (
               <div className="grid gap-1.5">
                 <span className="text-label text-[12px]">Hackathon</span>
-                {pickedSlug ? (
-                  <HeadingSelect
-                    label="Hackathon"
-                    nodes={hackathonOptions}
-                    value={pickedSlug}
-                    onChange={(next) => {
-                      setHackathonChoice(next);
-                      setError(null);
-                      setCheckUrl(null);
-                    }}
-                  />
+                {hackathonOptions.length > 0 ? (
+                  <>
+                    {/* Only upcoming ones: nothing picked, and the trigger says so. */}
+                    <HeadingSelect
+                      label="Hackathon"
+                      nodes={hackathonOptions}
+                      value={pickedSlug}
+                      placeholder={COPY.pickHackathon}
+                      onChange={(next) => {
+                        setHackathonChoice(next);
+                        setError(null);
+                        setCheckUrl(null);
+                      }}
+                    />
+                    {pickedSlug ? null : <p className="text-muted-foreground text-[12px]">{COPY.noOpenHackathons}</p>}
+                  </>
                 ) : hackathonsState === "loading" ? (
                   <p className="text-muted-foreground flex items-center gap-2 text-[12px]">
                     <Loader2Icon className="size-3.5 animate-spin" />
@@ -357,7 +419,7 @@ export function SendToHackathonDialog({
               <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={busy || !canSend}>
+              <Button type="submit" disabled={busy || !canSend(form)}>
                 {busy ? (
                   <>
                     <Loader2Icon className="animate-spin" />

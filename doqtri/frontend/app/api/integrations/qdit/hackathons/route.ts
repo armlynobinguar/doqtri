@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { qditHackathonEnabled } from "@/lib/integrations/qdit-config";
 import { createQditClient, QditError, qditServerSetup } from "@/lib/integrations/qdit-client";
-import { fromQditError } from "@/lib/integrations/qdit-linking";
+import { fromQditError, LinkingError } from "@/lib/integrations/qdit-linking";
 import { linkingErrorResponse, noStoreJson } from "@/lib/integrations/qdit-route-context";
 
 /**
@@ -13,9 +13,10 @@ import { linkingErrorResponse, noStoreJson } from "@/lib/integrations/qdit-route
  * takes a snapshot, `upcoming` has not opened, `other` is one doqtri does not
  * know.
  *
- * A qdit without that endpoint (before QDIT-60) answers 404 for the path:
- * then this answers `{ hackathons: null, list_unavailable: true }` and the
- * dialog asks for the hackathon's link instead.
+ * A qdit without that endpoint (before QDIT-60) answers its JSON
+ * `404 not_found` for the path: then this answers `{ hackathons: null,
+ * list_unavailable: true }` and the dialog asks for the hackathon's link
+ * instead. A 404 without qdit's error body is reported as QDIT_UNAVAILABLE.
  */
 export async function GET() {
   if (!qditHackathonEnabled()) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -42,7 +43,12 @@ export async function GET() {
     });
   } catch (error) {
     if (error instanceof QditError && error.kind === "not_found") {
-      return noStoreJson(200, { hackathons: null, list_unavailable: true });
+      // Only qdit's own JSON 404 means "no such path here". A bare 404 (a
+      // proxy, the platform) is an outage like any other.
+      if (error.status === 404 && error.code === "not_found") {
+        return noStoreJson(200, { hackathons: null, list_unavailable: true });
+      }
+      return linkingErrorResponse(new LinkingError(502, "qdit couldn't be reached. Try again.", "QDIT_UNAVAILABLE"));
     }
     return linkingErrorResponse(fromQditError(error));
   }
