@@ -11,7 +11,16 @@ import {
   qditServerSetup,
   type QditHackathonSnapshotReceipt,
 } from "@/lib/integrations/qdit-client";
-import { buildHackathonSnapshot, HackathonSnapshotError } from "@/lib/integrations/qdit-hackathon";
+import { buildHackathonSnapshot, HackathonSnapshotError, withMindmapUrl } from "@/lib/integrations/qdit-hackathon";
+import { loadMindmapStyle } from "@/lib/load-mindmap-style";
+import { MINDMAP_SHARE_COPY, mindmapShareUrl } from "@/lib/mindmap-share";
+import {
+  insertMindmapShare,
+  newShareToken,
+  revokeMindmapShareAsServer,
+  shareStyle,
+} from "@/lib/mindmap-share-server";
+import { SITE_URL } from "@/lib/site-url";
 import {
   HACKATHON_SEND_COPY as COPY,
   hackathonUrl,
@@ -38,7 +47,16 @@ import { isUuid, readBody } from "@/lib/integrations/qdit-route-context";
  * One snapshot, so one snapshot_id, per request (one press of Send). Nothing
  * here retries; the client's own 401 refresh resends the same bytes.
  *
- * Answers `{ ok: true, note_count, submission_state, qdit_url, warnings }`,
+ * Each press also makes one public read-only link to the global mindmap as
+ * sent (WP-4.7, DOQ-53): the share row (graph and the sender's `global`
+ * style, under a new token) is stored first, then `mindmap_url` goes into the
+ * snapshot before it is serialized, so the bytes qdit hashes, and any resend
+ * of them, carry that one link. A push that fails revokes the link again, so
+ * no link qdit never got stays live. Where no link can be made (the site is
+ * not https, or the row could not be stored) the snapshot goes without one,
+ * as before, and a warning says so.
+ *
+ * Answers `{ ok: true, note_count, submission_state, qdit_url, mindmap_url, warnings }`,
  * or `{ ok: false, code, message }` with a sentence for the dialog. Never
  * logs note content.
  */
@@ -48,6 +66,18 @@ const reply = (status: number, body: HackathonSendResponse, headers: Record<stri
 
 const refuse = (status: number, code: HackathonSendCode, message: string, headers?: Record<string, string>) =>
   reply(status, { ok: false, code, message }, headers);
+
+/** Whether qdit refused only the `mindmap_url` field as unknown: a qdit before contract v1.4.0. */
+function refusedOnlyTheLinkField(error: unknown): boolean {
+  return (
+    error instanceof QditHackathonSnapshotError &&
+    error.refusal === "invalid_snapshot" &&
+    error.status === 400 &&
+    error.fields.length === 1 &&
+    error.fields[0] === "mindmap_url" &&
+    error.fieldProblems.mindmap_url === "unknown field"
+  );
+}
 
 /** The answer for a failed push; `qditUrl` is the hackathon's page in qdit. */
 function pushFailure(error: unknown, qditUrl: string | null): NextResponse {
@@ -171,13 +201,68 @@ export async function POST(request: Request) {
     return refuse(500, "FAILED", COPY.failed);
   }
 
+  // The public link. Its row is written before the link goes into the body,
+  // so qdit can never hold a link that leads nowhere.
+  let sendBody = built.body;
+  let mindmapUrl: string | null = null;
+  let shareId: string | null = null;
+  const warnings = [...built.warnings];
+  const token = newShareToken();
+  const url = mindmapShareUrl(SITE_URL, token);
+  if (url) {
+    try {
+      const saved = await loadMindmapStyle(supabase, user.id, "global");
+      const sourceClient = createSupabaseAdminClient();
+      const linked = withMindmapUrl(built.snapshot, url);
+      shareId = await insertMindmapShare(sourceClient, {
+        token,
+        workspaceId: workspace.id,
+        createdBy: user.id,
+        snapshotId: built.snapshot.snapshot_id,
+        graph: built.snapshot.global_mindmap,
+        style: shareStyle(saved.style, built.snapshot.global_mindmap),
+      });
+      sendBody = linked.body;
+      mindmapUrl = url;
+    } catch (error) {
+      // Sent without a link rather than not at all: the images in qdit are
+      // still the entry's required proof (QDIT-66).
+      console.error(
+        `[qdit-hackathon] no mindmap link: ${error instanceof HackathonSnapshotError ? error.field : (error as Error).message}`,
+      );
+      warnings.push(MINDMAP_SHARE_COPY.noLink);
+    }
+  } else {
+    warnings.push(MINDMAP_SHARE_COPY.noLink);
+  }
+
+  const client = createQditClient(user.id, { config: setup.config, store: setup.store });
   let receipt: QditHackathonSnapshotReceipt;
   try {
-    receipt = await createQditClient(user.id, { config: setup.config, store: setup.store }).pushHackathonSnapshot(
-      projectId,
-      built.body,
-    );
+    try {
+      receipt = await client.pushHackathonSnapshot(projectId, sendBody);
+    } catch (error) {
+      // A qdit older than contract v1.4.0 refuses the field itself, with
+      // exactly 400 {"mindmap_url": "unknown field"}. A 400 stores nothing,
+      // so the same snapshot goes again without it (the contract's MAY,
+      // section 8): the bytes the builder made first, same snapshot_id.
+      if (!shareId || !refusedOnlyTheLinkField(error)) throw error;
+      console.warn("[qdit-hackathon] qdit does not take mindmap_url yet; sending without it");
+      const revoked = await revokeMindmapShareAsServer(createSupabaseAdminClient(), shareId);
+      if (!revoked) console.error("[qdit-hackathon] the unsent mindmap link could not be revoked");
+      shareId = null;
+      mindmapUrl = null;
+      warnings.push(MINDMAP_SHARE_COPY.noLink);
+      receipt = await client.pushHackathonSnapshot(projectId, built.body);
+    }
   } catch (error) {
+    // Every failure revokes, no answer (QDIT_UNCERTAIN) included: no failed
+    // push may leave a live link (DOQ-53). If qdit did keep that snapshot,
+    // its link is now a 404 and the entry still has its images; the dialog
+    // already says to check the entry, and a new press sends a new link.
+    if (shareId && !(await revokeMindmapShareAsServer(createSupabaseAdminClient(), shareId))) {
+      console.error("[qdit-hackathon] the failed push's mindmap link could not be revoked");
+    }
     return pushFailure(error, hackathonUrl(origin, slug));
   }
 
@@ -186,6 +271,7 @@ export async function POST(request: Request) {
     note_count: receipt.note_count,
     submission_state: receipt.submission_state,
     qdit_url: hackathonUrl(origin, slug),
-    warnings: built.warnings,
+    mindmap_url: mindmapUrl,
+    warnings,
   });
 }

@@ -87,6 +87,8 @@ export type HackathonSendSuccess = {
   submission_state: HackathonSubmissionState;
   /** The hackathon's page in qdit, where the team submits. */
   qdit_url: string | null;
+  /** The public read-only mindmap link sent with this snapshot (DOQ-53), or null when none was made. */
+  mindmap_url: string | null;
   /** What was left out or shortened to fit, in plain words. */
   warnings: string[];
 };

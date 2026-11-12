@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { ExternalLinkIcon, Loader2Icon, TrophyIcon } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { CheckIcon, CopyIcon, ExternalLinkIcon, LinkIcon, Loader2Icon, TriangleAlertIcon, TrophyIcon } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -20,6 +21,11 @@ import {
   type HackathonSendResponse,
   type HackathonSendSuccess,
 } from "@/lib/integrations/qdit-hackathon-send";
+import {
+  MINDMAP_SHARE_COPY as SHARE_COPY,
+  type MindmapShareListItem,
+  type MindmapShareListResponse,
+} from "@/lib/mindmap-share";
 
 /**
  * "Send to qdit hackathon" on the global mindmap (WP-4.7, D-117). The
@@ -33,6 +39,11 @@ import {
  *
  * The page decides who sees the button (the flag, admin or owner here, qdit
  * connected) and hands over `setup`; the route checks all of it again.
+ *
+ * Each send also makes a public read-only link to the mindmap (DOQ-53): the
+ * dialog says so before Send (anyone with the link sees the node labels),
+ * shows the new link with Copy afterwards, and lists the workspace's earlier
+ * live links, each with Revoke.
  */
 
 export type LinkedQditProject = { id: string; name: string };
@@ -209,6 +220,8 @@ export function SendToHackathonDialog({
   // After no answer from qdit: where to check whether the snapshot landed.
   const [checkUrl, setCheckUrl] = useState<string | null>(null);
   const [result, setResult] = useState<HackathonSendSuccess | null>(null);
+  // Bumped after a send, so the list of earlier links picks up the new one.
+  const [sharesReload, setSharesReload] = useState(0);
 
   // qdit's project list, once per opening (the dialog is remounted each time).
   useEffect(() => {
@@ -290,8 +303,10 @@ export function SendToHackathonDialog({
         body: JSON.stringify(sendBody(form, setup.workspaceId)),
       });
       const payload = (await res.json().catch(() => null)) as HackathonSendResponse | null;
-      if (payload?.ok === true) setResult(payload);
-      else {
+      if (payload?.ok === true) {
+        setResult(payload);
+        setSharesReload((n) => n + 1);
+      } else {
         setError(payload?.message ?? COPY.unavailable);
         if (payload?.code === "QDIT_UNCERTAIN") setCheckUrl(payload.qdit_url ?? null);
         // The hackathon closed, has not opened or is gone: show qdit's list as
@@ -324,6 +339,7 @@ export function SendToHackathonDialog({
               </DialogTitle>
             </DialogHeader>
             <SendResult result={result} />
+            <MindmapShareList open={open} reload={sharesReload} exclude={result.mindmap_url} />
             <DialogFooter>
               <Button type="button" onClick={() => onOpenChange(false)}>
                 Done
@@ -413,6 +429,10 @@ export function SendToHackathonDialog({
 
             <p className="text-muted-foreground text-[12px] leading-relaxed">{COPY.visibility}</p>
 
+            <MindmapShareWarning />
+
+            <MindmapShareList open={open} reload={sharesReload} exclude={null} />
+
             {error ? <SendError message={error} checkUrl={checkUrl} /> : null}
 
             <DialogFooter>
@@ -460,6 +480,7 @@ export function SendResult({ result }: { result: HackathonSendSuccess }) {
           next
         )}
       </p>
+      {result.mindmap_url ? <ShareLink url={result.mindmap_url} label="Live mindmap link, sent with this snapshot" /> : null}
       {result.warnings.length > 0 ? (
         <ul className="text-muted-foreground grid list-disc gap-1 pl-4 text-[12px]">
           {result.warnings.map((warning) => (
@@ -492,4 +513,174 @@ export function SendError({ message, checkUrl }: { message: string; checkUrl: st
       ) : null}
     </p>
   );
+}
+
+/** Shown before Send: the link Send makes is readable by anyone who has it (DOQ-53). */
+export function MindmapShareWarning() {
+  return (
+    <p
+      data-testid="mindmap-share-warning"
+      className="border-border bg-[var(--glass)] text-foreground flex gap-2 rounded-lg border px-3 py-2 text-[12px] leading-relaxed"
+    >
+      <TriangleAlertIcon className="text-muted-foreground mt-0.5 size-3.5 shrink-0" strokeWidth={1.75} />
+      <span>{SHARE_COPY.warning}</span>
+    </p>
+  );
+}
+
+/** A mindmap link, selectable, with Copy and Open. */
+export function ShareLink({ url, label }: { url: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      toast.success(SHARE_COPY.copied);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error(SHARE_COPY.copyFailed);
+    }
+  }
+  return (
+    <div className="grid gap-1.5">
+      <span className="text-label text-[12px]">{label}</span>
+      <div className="flex items-center gap-1.5">
+        <Input readOnly value={url} aria-label={label} className="h-8 font-mono text-[11.5px]" onFocus={(e) => e.target.select()} />
+        <Button type="button" size="sm" variant="outline" className="h-8 shrink-0 max-lg:h-10" onClick={copy}>
+          {copied ? <CheckIcon /> : <CopyIcon />}
+          Copy
+        </Button>
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Open the mindmap link"
+          className="text-muted-foreground hover:text-foreground flex size-8 shrink-0 items-center justify-center rounded-md max-lg:size-10"
+        >
+          <ExternalLinkIcon className="size-3.5" />
+        </a>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * This workspace's live mindmap links from earlier sends, newest first, each
+ * with Copy and Revoke (GET /api/mindmap-shares,
+ * POST /api/mindmap-shares/{id}/revoke). `exclude` leaves out the link the
+ * success state already shows. Says nothing while there are none.
+ */
+export function MindmapShareList({ open, reload, exclude }: { open: boolean; reload: number; exclude: string | null }) {
+  const [shares, setShares] = useState<MindmapShareListItem[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [revoking, setRevoking] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    let cancelled = false;
+    void fetch("/api/mindmap-shares")
+      .then(async (res) => {
+        const payload = (await res.json().catch(() => null)) as MindmapShareListResponse | null;
+        if (!res.ok || payload?.ok !== true) throw new Error("shares");
+        if (!cancelled) {
+          setShares(payload.shares);
+          setFailed(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    return load();
+  }, [open, reload, load]);
+
+  async function revoke(id: string) {
+    setRevoking(id);
+    try {
+      const res = await fetch(`/api/mindmap-shares/${id}/revoke`, { method: "POST" });
+      const payload = (await res.json().catch(() => null)) as { ok?: boolean; message?: string } | null;
+      if (res.ok && payload?.ok) {
+        setShares((list) => (list ? list.filter((share) => share.id !== id) : list));
+        toast.success(SHARE_COPY.revoked);
+      } else if (res.status === 404) {
+        // Already revoked (another tab, or a failed push): drop it here too.
+        setShares((list) => (list ? list.filter((share) => share.id !== id) : list));
+        toast.error(payload?.message ?? SHARE_COPY.notFound);
+      } else {
+        toast.error(payload?.message ?? SHARE_COPY.revokeFailed);
+      }
+    } catch {
+      toast.error(SHARE_COPY.revokeFailed);
+    } finally {
+      setRevoking(null);
+    }
+  }
+
+  const listed = (shares ?? []).filter((share) => exclude === null || share.url !== exclude);
+  if (failed) return <p className="text-muted-foreground text-[12px]">{SHARE_COPY.listFailed}</p>;
+  if (listed.length === 0) return null;
+
+  return (
+    <div className="grid gap-1.5">
+      <span className="text-label text-[12px]">Earlier mindmap links ({listed.length})</span>
+      <ul className="border-border grid max-h-[180px] gap-0 overflow-y-auto rounded-lg border">
+        {listed.map((share) => (
+          <li
+            key={share.id}
+            className="border-border flex items-center gap-2 border-b px-2.5 py-1.5 text-[12px] last:border-b-0"
+          >
+            <LinkIcon className="text-muted-foreground size-3.5 shrink-0" strokeWidth={1.5} />
+            <span className="min-w-0 flex-1">
+              <span className="text-foreground block truncate font-mono text-[11px]">{share.url ?? "No link on this deployment"}</span>
+              <span className="text-label block text-[11px]">{sharedOn(share.created_at)}</span>
+            </span>
+            {share.url ? <CopyButton url={share.url} /> : null}
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="text-destructive hover:text-destructive h-7 shrink-0 text-[12px] max-lg:h-9"
+              disabled={revoking !== null}
+              onClick={() => void revoke(share.id)}
+            >
+              {revoking === share.id ? <Loader2Icon className="animate-spin" /> : null}
+              Revoke
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function CopyButton({ url }: { url: string }) {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      aria-label="Copy this link"
+      className="h-7 shrink-0 px-2 max-lg:h-9"
+      onClick={() =>
+        void navigator.clipboard.writeText(url).then(
+          () => toast.success(SHARE_COPY.copied),
+          () => toast.error(SHARE_COPY.copyFailed),
+        )
+      }
+    >
+      <CopyIcon />
+    </Button>
+  );
+}
+
+/** When a link was made, as "12 Nov 2026, 14:05" in the viewer's locale. */
+function sharedOn(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "";
+  return `Sent ${at.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}`;
 }
