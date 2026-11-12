@@ -130,6 +130,44 @@ describe("serializeGlobalMindmap", () => {
     const notes = docs.map((d) => note(d.id, { title: d.title }));
     expect(() => validateHackathonSnapshot(snapshot({ notes, global_mindmap: global }))).not.toThrow();
   });
+
+  describe("hidden nodes (DOQ-54)", () => {
+    const all = serializeGlobalMindmap(docs);
+
+    it("leaves out each hidden node and every link touching it, and nothing else", () => {
+      const hidden = new Set(["concept:escrow", `doc:${C}`]);
+      const { nodes, links } = serializeGlobalMindmap(docs, hidden);
+      expect(nodes.map((n) => n.id)).toEqual(all.nodes.map((n) => n.id).filter((id) => !hidden.has(id)));
+      expect(links).toEqual(all.links.filter((l) => !hidden.has(l.source) && !hidden.has(l.target)));
+      expect(links.length).toBeLessThan(all.links.length);
+      // Unhidden nodes are unchanged, doc_ids included.
+      const byId = Object.fromEntries(all.nodes.map((n) => [n.id, n]));
+      for (const node of nodes) expect(node).toEqual(byId[node.id]);
+    });
+
+    it("matches hidden ids before they are shortened, as the style keys them", () => {
+      const long = "x".repeat(200);
+      const shown = serializeGlobalMindmap([doc(A, "Plan", long)]);
+      const concept = shown.nodes.find((n) => n.kind === "concept")!;
+      expect(concept.id).toMatch(/^c:/);
+      const hidden = serializeGlobalMindmap([doc(A, "Plan", long)], new Set([`concept:${long}`]));
+      expect(hidden.nodes.map((n) => n.id)).toEqual([`doc:${A}`]);
+      expect(hidden.links).toEqual([]);
+    });
+
+    it("is stable, and still passes every contract check and count", () => {
+      const hidden = new Set(["concept:budget"]);
+      const once = JSON.stringify(serializeGlobalMindmap(docs, hidden));
+      expect(JSON.stringify(serializeGlobalMindmap([...docs].reverse(), hidden))).toBe(once);
+      const notes = docs.map((d) => note(d.id, { title: d.title }));
+      expect(() => validateHackathonSnapshot(snapshot({ notes, global_mindmap: serializeGlobalMindmap(docs, hidden) }))).not.toThrow();
+    });
+
+    it("hides nothing for an empty set or an id that is not on the map", () => {
+      expect(serializeGlobalMindmap(docs, new Set())).toEqual(all);
+      expect(serializeGlobalMindmap(docs, new Set(["concept:nowhere"]))).toEqual(all);
+    });
+  });
 });
 
 describe("validateHackathonSnapshot", () => {
@@ -424,6 +462,20 @@ describe("buildHackathonSnapshot", () => {
     // Every note reaches the shared Escrow concept, so it is a hub of all three.
     const escrow = built.global_mindmap.nodes.find((n) => n.id === "concept:escrow")!;
     expect(escrow).toMatchObject({ kind: "hub", doc_ids: [A, B, C] });
+  });
+
+  it("leaves the sender's hidden nodes out of global_mindmap, and so out of the body (DOQ-54)", async () => {
+    const supabase = fakeSupabase({ documents: [row(A, "Payroll", { mindmap: stored })], ingests: [] });
+    const args = { supabase, sourceClient: supabase, workspaceId: WS, hackathonSlug: "h" };
+    const shown = await buildHackathonSnapshot(args);
+    expect(shown.snapshot.global_mindmap.nodes.map((n) => n.id)).toContain("concept:escrow");
+    const hidden = await buildHackathonSnapshot({ ...args, hiddenNodeIds: new Set(["concept:escrow"]) });
+    expect(hidden.snapshot.global_mindmap.nodes.map((n) => n.id)).not.toContain("concept:escrow");
+    expect(hidden.snapshot.global_mindmap.links.some((l) => l.source === "concept:escrow" || l.target === "concept:escrow")).toBe(false);
+    expect(hidden.body).toBe(JSON.stringify(hidden.snapshot));
+    expect(hidden.body).not.toContain("concept:escrow");
+    // The note itself is unchanged: hiding is a mindmap setting.
+    expect(hidden.snapshot.notes).toEqual(shown.snapshot.notes);
   });
 
   it("makes a new snapshot_id each time", async () => {
