@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { buildGlobalMindmapWithReach } from "@/lib/global-mindmap";
 import { docFromRow, VAULT_DOC_COLUMNS, type VaultDocRow } from "@/lib/load-docs";
+import { isMindmapShareUrl } from "@/lib/mindmap-share";
 import type { Doc } from "@/lib/types";
 
 /**
@@ -87,6 +88,13 @@ export type HackathonSnapshot = {
   generated_at: string;
   notes: HackathonNote[];
   global_mindmap: HackathonGlobalMindmap;
+  /**
+   * Optional (contract v1.4.0, QDIT-66): the public read-only copy of
+   * `global_mindmap` at doqtri's `/m/<token>` (WP-4.7, DOQ-53,
+   * lib/mindmap-share.ts). doqtri leaves it out when no link was made for
+   * this send; qdit reads null the same way.
+   */
+  mindmap_url?: string | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -169,7 +177,7 @@ function wireLabel(label: string): string {
  * first 16 hex digits of the SHA-256 of the original id. Stable across
  * snapshots, and no original id starts with `c:`.
  */
-function wireNodeId(id: string): string {
+export function wireNodeId(id: string): string {
   if (codePoints(id) <= HACKATHON_LIMITS.nodeIdChars) return id;
   return `c:${createHash("sha256").update(id, "utf8").digest("hex").slice(0, 16)}`;
 }
@@ -213,13 +221,18 @@ export function serializeGlobalMindmap(docs: Doc[]): HackathonGlobalMindmap {
 // Validation
 // ---------------------------------------------------------------------------
 
-function exactKeys(value: unknown, keys: readonly string[], field: string): Record<string, unknown> {
+function exactKeys(
+  value: unknown,
+  keys: readonly string[],
+  field: string,
+  optional: readonly string[] = [],
+): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new HackathonSnapshotError(field, "invalid", "must be an object");
   }
   const record = value as Record<string, unknown>;
   for (const key of Object.keys(record)) {
-    if (!keys.includes(key)) {
+    if (!keys.includes(key) && !optional.includes(key)) {
       throw new HackathonSnapshotError(field ? `${field}.${key}` : key, "unknown_field", "is not a contract field");
     }
   }
@@ -283,6 +296,7 @@ export function validateHackathonSnapshot(snapshot: HackathonSnapshot): string {
     snapshot,
     ["hackathon_slug", "snapshot_id", "workspace_id", "generated_at", "notes", "global_mindmap"],
     "",
+    ["mindmap_url"],
   );
 
   if (typeof top.hackathon_slug !== "string" || !HACKATHON_SLUG.test(top.hackathon_slug)) {
@@ -291,6 +305,13 @@ export function validateHackathonSnapshot(snapshot: HackathonSnapshot): string {
   uuid(top.snapshot_id, "snapshot_id");
   uuid(top.workspace_id, "workspace_id");
   timestamp(top.generated_at, "generated_at");
+  // qdit also checks the host against its DOQTRI_ORIGIN, which doqtri cannot
+  // know; everything else about the link is checked here.
+  // null and left out both mean no link (contract v1.4.0); doqtri leaves it
+  // out, which a qdit before v1.4.0 also takes.
+  if ("mindmap_url" in top && top.mindmap_url !== null && !isMindmapShareUrl(top.mindmap_url)) {
+    throw new HackathonSnapshotError("mindmap_url", "invalid", "must be https://<doqtri origin>/m/<token>");
+  }
 
   const notes = count(top.notes, HACKATHON_LIMITS.notes, "notes");
   const docIds = new Set<string>();
@@ -385,6 +406,21 @@ export function validateHackathonSnapshot(snapshot: HackathonSnapshot): string {
     });
   }
   return body;
+}
+
+/**
+ * `snapshot` with `mindmap_url` added, checked and serialized again: the
+ * bytes to send once the send route has stored the link (WP-4.7, DOQ-53).
+ * The link goes in before the body is hashed and sent, so a retry of these
+ * bytes carries the same link. Throws HackathonSnapshotError like
+ * validateHackathonSnapshot(), e.g. when the link makes the body too large.
+ */
+export function withMindmapUrl(
+  snapshot: HackathonSnapshot,
+  mindmapUrl: string,
+): { snapshot: HackathonSnapshot; body: string } {
+  const next: HackathonSnapshot = { ...snapshot, mindmap_url: mindmapUrl };
+  return { snapshot: next, body: validateHackathonSnapshot(next) };
 }
 
 // ---------------------------------------------------------------------------

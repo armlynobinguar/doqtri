@@ -43,6 +43,9 @@ import {
 } from "@/lib/mindmap-graph";
 
 type Node3D = NodeObject<MapNode> & { fz?: number };
+
+/** How far from a searched-for node the camera stops, in graph units. */
+const FOCUS_DISTANCE = 120;
 type Link3D = { source: Node3D | string; target: Node3D | string };
 type Instance = ForceGraphMethods<Node3D, Link3D>;
 
@@ -495,6 +498,19 @@ export default function MindmapCanvas3D({
         fgRef.current?.d3ReheatSimulation();
       },
       viewSize: () => size,
+      focusNode: (id) => {
+        const fg = fgRef.current;
+        const node = graphData.nodes.find((candidate) => candidate.id === id);
+        if (!fg || !node) return;
+        const x = node.x ?? 0;
+        const y = node.y ?? 0;
+        const z = node.z ?? 0;
+        // Out from the centre along the node's own direction, so the camera
+        // lands in front of it facing it.
+        const r = Math.hypot(x, y, z);
+        const at = r > 0 ? { x: x * (1 + FOCUS_DISTANCE / r), y: y * (1 + FOCUS_DISTANCE / r), z: z * (1 + FOCUS_DISTANCE / r) } : { x, y, z: FOCUS_DISTANCE };
+        fg.cameraPosition(at, { x, y, z }, 800);
+      },
       snapshot: async (request) => {
         const fg = fgRef.current;
         if (!fg) throw new Error("The 3D view is still loading");

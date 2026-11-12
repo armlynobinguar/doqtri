@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { safeNextPath } from "@/lib/email-auth";
 import { ENDED_PROMO_REWRITE, MINDMAP_PROMO, PROMO_PATH } from "@/lib/promo";
+import { SHARE_NOT_FOUND_REWRITE, SHARE_PATH_PREFIX, shareTokenFromPath } from "@/lib/mindmap-share";
 
 /**
  * Next 16 renamed `middleware` to `proxy`; the behavior is unchanged.
@@ -61,6 +62,28 @@ export async function proxy(request: NextRequest) {
     // Keep any refreshed auth cookies.
     for (const cookie of response.cookies.getAll()) rewrite.cookies.set(cookie);
     return rewrite;
+  }
+  // A shared mindmap link (WP-4.7, DOQ-53) opens for anyone with it, signed
+  // in or not. A malformed, unknown or revoked token is rewritten to a path no
+  // route matches, so it gets a real 404 status before the root loading.tsx
+  // streams a 200 (as for the promo above); a failed check counts as unknown.
+  // Never indexed, whatever the answer.
+  if (pathname.startsWith(SHARE_PATH_PREFIX)) {
+    const token = shareTokenFromPath(pathname);
+    let live = false;
+    if (token) {
+      const { data, error } = await supabase.rpc("mindmap_share_live", { p_token: token });
+      live = !error && data === true;
+    }
+    let shared = response;
+    if (!live) {
+      const url = request.nextUrl.clone();
+      url.pathname = SHARE_NOT_FOUND_REWRITE;
+      shared = NextResponse.rewrite(url, { request });
+      for (const cookie of response.cookies.getAll()) shared.cookies.set(cookie);
+    }
+    shared.headers.set("X-Robots-Tag", "noindex, nofollow");
+    return shared;
   }
   // The read-only demo vault is for visitors, and signed-in users may open it too.
   const isDemoRoute = pathname === "/demo" || pathname.startsWith("/demo/");

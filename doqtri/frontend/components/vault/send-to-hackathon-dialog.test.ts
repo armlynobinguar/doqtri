@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canSend,
   hackathonChoices,
+  MindmapShareWarning,
   opensOn,
   pickedHackathon,
   projectChoices,
@@ -42,6 +43,7 @@ const result = (over: Partial<HackathonSendSuccess> = {}) =>
         note_count: 12,
         submission_state: "none",
         qdit_url: "https://qdit.test/hackathons/stellar-build-2026",
+        mindmap_url: null,
         warnings: [],
         ...over,
       },
@@ -243,6 +245,30 @@ describe("SendResult", () => {
     const html = result({ qdit_url: null, warnings: ["A warning"] });
     expect(html).toContain("<li>A warning</li>");
     expect(html).not.toContain("href=");
+  });
+});
+
+describe("the mindmap link (DOQ-53)", () => {
+  const LINK = "https://doqtri.test/m/AbCdEfGhIjKlMnOpQrStUvWxYz012345";
+
+  it("warns before Send that anyone with the link sees the node labels, never the notes' text", () => {
+    const html = renderToStaticMarkup(createElement(MindmapShareWarning));
+    expect(html).toContain("Anyone with the link can see its node labels");
+    expect(html).toContain("never the text of your notes");
+    expect(html).toContain("Revoke it here at any time");
+  });
+
+  it("shows the sent link with Copy after a send", () => {
+    const html = result({ mindmap_url: LINK });
+    expect(html).toContain(`value="${LINK}"`);
+    expect(html).toContain("Copy");
+    expect(html).toContain(`href="${LINK}"`);
+  });
+
+  it("shows no link when none was made", () => {
+    const html = result({ mindmap_url: null });
+    expect(html).not.toContain("/m/");
+    expect(html).not.toContain("Copy");
   });
 });
 

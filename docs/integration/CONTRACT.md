@@ -1,6 +1,6 @@
 # doqtri x qdit integration contract
 
-Status: v1.3.0, WP-2.0 (history in section 13, Changelog). This file is
+Status: v1.4.0, WP-2.0 (history in section 13, Changelog). This file is
 byte-identical in both repos (`qdit/docs/integration/CONTRACT.md`,
 `doqtri/docs/integration/CONTRACT.md`).
 Change it in both repos in the same phase, through the masterplan's decision
@@ -41,7 +41,7 @@ sides of one pair MUST agree on them:
 | doqtri's OAuth client id | `QDIT_OAUTH_CLIENT_ID` | `DOQTRI_OAUTH_CLIENT_ID` | the client qdit registered for doqtri in this environment (D-61) |
 | doqtri's client secret | `QDIT_CLIENT_SECRET` | (held by qdit's OAuth server) | sent with `client_secret_basic` (D-67) |
 | Webhook secret | `QDIT_WEBHOOK_SECRET` | per row in `integration_webhooks` | section 9 |
-| doqtri origin | `NEXT_PUBLIC_SITE_URL` (else the Vercel production URL) | `DOQTRI_ORIGIN`, and `integration_settings.doqtri_origin` in its database (D-77) | the origin every `doc_url` starts with (D-45, D-72) |
+| doqtri origin | `NEXT_PUBLIC_SITE_URL` (else the Vercel production URL) | `DOQTRI_ORIGIN`, and `integration_settings.doqtri_origin` in its database (D-77) | the origin every `doc_url` starts with (D-45, D-72), and every hackathon `mindmap_url` (section 8) |
 | `DoqtriRegistry` (D-84) | `NEXT_PUBLIC_CONTRACT_ID`, `NEXT_PUBLIC_NETWORK_PASSPHRASE` | `DOQTRI_REGISTRY_CONTRACT_ID`, `DOQTRI_REGISTRY_NETWORK` (WP-3.2) | the registry address on that network (table above); the registry qdit checks plan versions against (section 12) |
 
 - `DOQTRI_OAUTH_CLIENT_ID` (D-61). qdit counts a write as doqtri's (for
@@ -209,7 +209,10 @@ Rules that follow from the decisions:
 - Timestamps are RFC 3339 / ISO 8601 strings. Servers send UTC with a `Z` or
   `+00:00` offset; clients MUST accept any offset and fractional seconds.
   Dates without time (`due_date`) are `YYYY-MM-DD`.
-- Optional fields are present with `null`, never omitted.
+- Optional fields are present with `null`, never omitted. One request field
+  is the exception: `mindmap_url` of `POST /projects/{id}/hackathon-snapshots`
+  (v1.4.0) may also be left out, because clients older than it never send
+  it (section 8).
 - Every success body is `{"data": ...}`. Lists add `"next_cursor"`.
 - Every response carries `X-Request-Id`; quote it when reporting a problem.
 
@@ -715,7 +718,8 @@ role) and by the hackathon's staff (admin and judge), and by nobody else
       { "id": "concept:escrow contract", "label": "Escrow contract", "kind": "concept", "depth": 1, "doc_ids": ["c2d1e0f9-8a7b-4c6d-9e5f-4a3b2c1d0e9f"] }
     ],
     "links": [ { "source": "doc:c2d1e0f9-8a7b-4c6d-9e5f-4a3b2c1d0e9f", "target": "concept:escrow contract" } ]
-  }
+  },
+  "mindmap_url": "https://www.doqtri.xyz/m/q3Zt8LwX1bVf0nYc5HkR2a"
 }
 ```
 
@@ -755,11 +759,33 @@ length is the length in UTF-8.
     notes that reach the node, each a `doc_id` in `notes`.
   - `links`: at most 20,000 of `{source, target}`, each naming an `id` in
     `nodes`.
+- `mindmap_url` (v1.4.0, optional): the address of doqtri's public page for
+  this global mindmap, or `null`, or left out; `null` and left out both mean
+  no link. A string MUST be exactly the doqtri origin (section 1, qdit's
+  `DOQTRI_ORIGIN`; `https://www.doqtri.xyz` in production), then `/m/`, then
+  a token of 22 to 64 characters, each one of `A-Z`, `a-z`, `0-9`, `_` and
+  `-`, and nothing after the token. The comparison is byte for byte, so each
+  of these is refused:
+  - `http://www.doqtri.xyz/m/<token>` (not `https`);
+  - `https://www.doqtri.xyz.example.com/m/<token>`, `https://doqtri.xyz/m/<token>`
+    (another host), `https://WWW.DOQTRI.XYZ/m/<token>` (not written as the
+    origin is), `https://www.doqtri.xyz:443/m/<token>` (a port the origin
+    does not have);
+  - `https://www.doqtri.xyz/d/<token>` (another path);
+  - a token under 22 or over 64 characters, or with any other character;
+  - anything after the token: `/`, `?…` or `#…`;
+  - the empty string, and any value that is not a string or `null`.
 
-Every field is present (optional ones as `null`, section 4), and any other
-field is `400 invalid_request`, as on every endpoint, except inside
-`mindmap` (above). `details.fields` names a nested field by its path, for
-example `notes[3].markdown` or `global_mindmap.links[12].target`.
+  The token is doqtri's and opaque to qdit: qdit never opens the page or
+  reads what it shows; what the page shows and who may open it are
+  doqtri's to decide (DOQ-53).
+
+Every field is present (optional ones as `null`, section 4), except that
+`mindmap_url` may be left out (above), and any other field is
+`400 invalid_request`, as on every endpoint, except inside `mindmap`
+(above). `details.fields` names a nested field by its path, for example
+`notes[3].markdown` or `global_mindmap.links[12].target`, and a refused link
+as `mindmap_url`.
 
 Body size (D-118). The whole body is at most 2,097,152 bytes (2 MiB,
 section 4), and the per-field limits can add up to more than that. doqtri
@@ -793,8 +819,8 @@ Idempotency. The key is `(project, snapshot_id)`. qdit stores each snapshot
 once and gives it its own `id`, and keeps the SHA-256 of the raw body bytes
 with it. A second request with the same key and the same body bytes is a
 replay: `200` with the `id`, `note_count` and `received_at` of the first
-answer, and no new snapshot. The same key with any other body is
-`409 snapshot_conflict`. The same `snapshot_id` in another project is a
+answer, and no new snapshot. The same key with any other body, one that differs only in
+`mindmap_url` or in whether it is sent included, is `409 snapshot_conflict`. The same `snapshot_id` in another project is a
 different key: it is unrelated, stored on its own, and neither request
 learns anything about the other. When requests with the same key arrive at
 the same time, exactly one stores the snapshot; each other one is then a
@@ -840,6 +866,31 @@ the new submission version the project's newest snapshot for that hackathon,
 newest meaning the latest `received_at`. A later push changes no existing
 submission until the team resubmits.
 
+Mindmap link (v1.4.0). qdit stores `mindmap_url` with the snapshot. When the
+team opens qdit's submit dialog, its Mindmap link field is filled from the
+newest snapshot's `mindmap_url` (the same "newest" as above) when that
+snapshot has one; the team may replace it with another link that meets the
+rule above, or clear it, since the field is optional. The
+submission version keeps the link the team submitted, so the link outlives
+the snapshot's retention (below). qdit shows it to the team and to the
+hackathon's staff as a link that opens in a new tab, and lists it in the
+staff export; it adds nothing to eligibility or grading. A snapshot without a link is
+stored and frozen as before.
+
+`push_doqtri_hackathon_snapshot()` repeats the link rule in the database
+against `integration_settings.doqtri_origin` (section 1, D-95) when that is
+set, so a link off that origin is refused even if `DOQTRI_ORIGIN` has
+drifted; through `/api/v1` that is the same `400 invalid_request` on
+`mindmap_url`. While `doqtri_origin` is unset the database checks only the
+shape (`https`, a host, `/m/`, the token), and the API's check still applies.
+
+A qdit older than v1.4.0 refuses any body that has `mindmap_url`, `null`
+included, with `400 invalid_request` and `"mindmap_url": "unknown field"` in
+`details.fields` (the unknown-field rule above). qdit therefore ships
+v1.4.0 before doqtri sends the field. A doqtri that gets exactly that answer
+MAY send the same snapshot again without `mindmap_url`: a `400` stores
+nothing, so the same `snapshot_id` is free to use.
+
 Chain check. After answering, qdit computes for each note the SHA-256 of
 `markdown` as section 12 defines `content_hash` (lowercase hex of the
 markdown's UTF-8 bytes exactly as saved), and compares it with
@@ -860,7 +911,8 @@ days are the bound.
 Errors (section 6), by the check order above:
 
 - `400 invalid_request`: any size, shape or limit problem above, with
-  `details.fields` (`body` for a body over 2 MiB, D-118).
+  `details.fields` (`body` for a body over 2 MiB, D-118; `mindmap_url` for
+  a link that breaks its rule).
 - `403 forbidden`: the token is not doqtri's client (D-61), or the caller is
   below admin on a project they can see.
 - `404 not_found`: an unknown project or one the caller cannot see
@@ -1420,6 +1472,30 @@ project's id, the link ids, or who made the link.
 Every change here is additive within v1 (section 3), except that v1.0.2
 narrows what `doc_url` accepts (D-45). Section 3 allows that because
 doqtri only ever sent its own URLs.
+
+- v1.4.0 (2026-11-12): minor version for one new optional request field
+  (WP-4.7, QDIT-66, DOQ-53). Every existing request and response stays as it
+  was: a body without the field is handled exactly as in v1.3.0.
+  - Section 1: the doqtri origin row also bounds `mindmap_url`.
+  - Section 4: `mindmap_url` is the one request field that may be left out
+    as well as sent as `null`.
+  - Section 8: `POST /projects/{id}/hackathon-snapshots` takes an optional
+    top-level `mindmap_url`, doqtri's public page for the global mindmap:
+    exactly the doqtri origin, `/m/` and a token of 22 to 64 characters of
+    `A-Z a-z 0-9 _ -`, nothing after it, compared byte for byte; anything
+    else is `400 invalid_request` with `mindmap_url` in `details.fields`.
+    The database repeats the rule against
+    `integration_settings.doqtri_origin` when that is set (D-95).
+    Idempotency is unchanged: the hash is still over the raw body bytes, so
+    the same `snapshot_id` with another link, or with the link added or
+    dropped, is `409 snapshot_conflict`. qdit prefills the submit dialog's
+    Mindmap link from the newest snapshot, keeps the submitted link on the
+    submission version, and shows it to the team, the hackathon's staff and
+    in the staff export; eligibility and grading are unchanged. A qdit
+    older than v1.4.0 answers a body with the field
+    `400 invalid_request` (`"mindmap_url": "unknown field"`), so qdit ships
+    first; doqtri MAY then resend without the field under the same
+    `snapshot_id`.
 
 - v1.3.0 (2026-11-11): minor version for one new endpoint (WP-4.7, D-122).
   Every existing request and response stays as it was.

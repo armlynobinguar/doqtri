@@ -68,6 +68,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261107140000_referral_testimonials.sql     # applied 2026-11-10 as `referral_testimonials` (WP-4.6, DOQ-28)
 20261109100000_rename_document.sql        # applied 2026-11-10 as `rename_document` (WP-1.7, DOQ-35)
 20261110100000_documents_created_at.sql   # NOT yet applied (WP-4.7, DOQ-39): apply before deploying (loadVaultDocs selects created_at) and before any hackathon opens
+20261112100000_mindmap_shares.sql         # NOT yet applied (WP-4.7, DOQ-53): apply before deploying; until then a send goes without a mindmap link and /m/<token> is a 404
 ```
 
 Files marked "NOT recorded" were added without updating this list, so whether they are
@@ -157,6 +158,18 @@ Two supporting tables:
   after the last change; edits the server has not confirmed yet are parked in
   localStorage and resent on the next visit. `updated_at` is set by a trigger
   and acts as the row's version. The demo vault's styles stay in the browser.
+
+- `public.mindmap_shares` — public read-only mindmap links (WP-4.7, DOQ-53).
+  Each "Send to qdit hackathon" stores the global mindmap exactly as sent and
+  the sender's `global` style under a new random token (192 bits, base64url),
+  and the snapshot carries `mindmap_url` (`<site>/m/<token>`). Only the send
+  route writes rows (service role, after its admin check); workspace admins
+  and owners read their workspace's rows and revoke them (`revoked_at` only,
+  one-way, stamped by a trigger). Anon has no table access: `/m/<token>` reads
+  through `mindmap_share(token)` (labels, kinds, depths, links and style,
+  never `doc_ids`) and proxy.ts through `mindmap_share_live(token)`, both
+  security definer and answering nothing for a revoked link. A push that
+  fails revokes its link.
 
 - `public.workspaces` / `public.workspace_members` — team workspaces and who
   is in them, as viewer, editor, admin or owner. Every account has one

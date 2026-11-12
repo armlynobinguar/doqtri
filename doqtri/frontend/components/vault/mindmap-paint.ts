@@ -70,6 +70,11 @@ function sizeOf(painter: Painter, node: PaintNode) {
   return { font: base.font * scale, padX: base.padX * scale, padY: base.padY * scale };
 }
 
+/** A node's label height in graph units: its kind's base size times the text scale and its own. */
+export function labelFontUnits(painter: Painter, node: PaintNode): number {
+  return sizeOf(painter, node).font;
+}
+
 const extentCache = new Map<string, Extent>();
 let measureContext: CanvasRenderingContext2D | null | undefined;
 

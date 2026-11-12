@@ -16,6 +16,7 @@ import {
   Minimize2Icon,
   PaletteIcon,
   RotateCcwIcon,
+  SearchIcon,
   SquareCheckIcon,
   SquareIcon,
   Undo2Icon,
@@ -61,6 +62,7 @@ import {
   type MapNodeKind,
   type MindmapGraph,
 } from "@/lib/mindmap-graph";
+import { searchNodes } from "@/lib/mindmap-search";
 import { cn } from "@/lib/utils";
 
 const MindmapCanvas3D = dynamic(() => import("@/components/vault/mindmap-canvas-3d"), {
@@ -110,14 +112,16 @@ function subscribeFullscreen(callback: () => void) {
  * Clicking a node still opens what it stands for. Only while the Node tab is
  * open does a click pick the node to style instead.
  */
+type StudioCanvasProps = Omit<MindmapCanvasProps, "look" | "editing" | "selectedId" | "onSelect" | "handleRef">;
+
+type SetStyle = (next: MindmapStyle | ((current: MindmapStyle) => MindmapStyle)) => void;
+
 export function MindmapStudio({
   scope,
   savedStyle,
-  title,
-  graph,
   defaultLayout,
-  ...canvasProps
-}: Omit<MindmapCanvasProps, "look" | "editing" | "selectedId" | "onSelect" | "handleRef"> & {
+  ...props
+}: StudioCanvasProps & {
   /** Which map this is, for remembering its style. */
   scope: string;
   /** The signed-in user's stored style for this map; without it the style stays in this browser. */
@@ -128,6 +132,42 @@ export function MindmapStudio({
 }) {
   const fallback = useMemo(() => defaultStyleFor(defaultLayout), [defaultLayout]);
   const [style, setStoredStyle] = useMindmapStyle(scope, fallback, savedStyle);
+  return <StudioView {...props} style={style} setStoredStyle={setStoredStyle} fallback={fallback} readOnly={false} />;
+}
+
+/**
+ * The studio for a map nobody may change: the shared mindmap page
+ * (/m/<token>, WP-4.7, DOQ-53). It draws `style` as given and keeps any
+ * change (2D or 3D, hide on zoom out) in this page only: nothing is saved,
+ * not even in the browser. There is no Customize panel, no node styling and
+ * no snapshot export; a search box finds a node by its label and flies to it.
+ * Pass no `onNodeClick`, so nothing opens anything.
+ */
+export function ReadOnlyMindmapStudio({
+  style: initial,
+  ...props
+}: StudioCanvasProps & { style: MindmapStyle; title: string; graph: MindmapGraph }) {
+  const [style, setStyle] = useState(initial);
+  return <StudioView {...props} style={style} setStoredStyle={setStyle} fallback={initial} readOnly />;
+}
+
+function StudioView({
+  style,
+  setStoredStyle,
+  fallback,
+  readOnly,
+  title,
+  graph,
+  ...canvasProps
+}: StudioCanvasProps & {
+  style: MindmapStyle;
+  setStoredStyle: SetStyle;
+  /** What Reset goes back to. */
+  fallback: MindmapStyle;
+  readOnly: boolean;
+  title: string;
+  graph: MindmapGraph;
+}) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("theme");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -235,6 +275,8 @@ export function MindmapStudio({
   // A locked highlight, if any. Looked up on the drawn nodes, so switching to
   // an overview that leaves the node out simply drops the lock.
   const [lockedId, setLockedId] = useState<string | null>(null);
+  // While the node search is open, a phone's toolbar shows only it.
+  const [searching, setSearching] = useState(false);
   const locked = style.focus && lockedId ? (shown.nodes.find((node) => node.id === lockedId) ?? null) : null;
   const caption = style.caption.text.trim() || title;
   const light = isLight(style.palette.background);
@@ -344,86 +386,105 @@ export function MindmapStudio({
         </button>
       ) : (
         <div className="absolute top-2 right-2 z-20 flex items-center gap-1">
-          {locked && (
-            <ToolButton label={`Unlock the highlight on ${locked.label}`} active onClick={() => setLockedId(null)}>
-              <LockIcon className="text-accent size-3.5" />
-              <span className="max-w-[140px] truncate text-[11px] font-semibold max-sm:max-w-[72px]">{locked.label}</span>
-              <XIcon className="size-3 opacity-70" />
-            </ToolButton>
-          )}
-          {isLarge && (
-            <ToolButton
-              label={
-                scale === "overview"
-                  ? `Showing ${shown.nodes.length} of ${total} nodes — click to render all`
-                  : `Showing all ${total} nodes — click for the overview`
-              }
-              active={scale === "overview"}
-              onClick={() => {
-                setSelectedId(null);
-                setScale(scale === "overview" ? "all" : "overview");
+          {readOnly && shown.nodes.length > 0 && (
+            <NodeSearch
+              nodes={shown.nodes}
+              open={searching}
+              onOpenChange={setSearching}
+              onPick={(node) => {
+                handleRef.current?.focusNode(node.id);
+                // The lock lights the node's branch, which also reveals it
+                // when the map hides deeper levels on zoom out.
+                if (style.focus) setLockedId(node.id);
               }}
-            >
-              <LayersIcon className="size-3.5" />
-              <span className="text-[11px] font-semibold max-sm:hidden">
-                {scale === "overview"
-                  ? `Overview · ${shown.nodes.length.toLocaleString()} of ${total.toLocaleString()}`
-                  : `All ${total.toLocaleString()}`}
-              </span>
-            </ToolButton>
+            />
           )}
-          {/* Only big maps hide anything, so smaller ones do not offer it. */}
-          {shown.nodes.length >= ZOOM_REVEAL_MIN_NODES && (
+          <div className={cn("contents", searching && "max-sm:hidden")}>
+            {locked && (
+              <ToolButton label={`Unlock the highlight on ${locked.label}`} active onClick={() => setLockedId(null)}>
+                <LockIcon className="text-accent size-3.5" />
+                <span className="max-w-[140px] truncate text-[11px] font-semibold max-sm:max-w-[72px]">{locked.label}</span>
+                <XIcon className="size-3 opacity-70" />
+              </ToolButton>
+            )}
+            {isLarge && (
+              <ToolButton
+                label={
+                  scale === "overview"
+                    ? `Showing ${shown.nodes.length} of ${total} nodes — click to render all`
+                    : `Showing all ${total} nodes — click for the overview`
+                }
+                active={scale === "overview"}
+                onClick={() => {
+                  setSelectedId(null);
+                  setScale(scale === "overview" ? "all" : "overview");
+                }}
+              >
+                <LayersIcon className="size-3.5" />
+                <span className="text-[11px] font-semibold max-sm:hidden">
+                  {scale === "overview"
+                    ? `Overview · ${shown.nodes.length.toLocaleString()} of ${total.toLocaleString()}`
+                    : `All ${total.toLocaleString()}`}
+                </span>
+              </ToolButton>
+            )}
+            {/* Only big maps hide anything, so smaller ones do not offer it. */}
+            {shown.nodes.length >= ZOOM_REVEAL_MIN_NODES && (
+              <ToolButton
+                label="Hide child nodes on zoom out"
+                active={style.hideOnZoomOut}
+                onClick={() => update((s) => ({ ...s, hideOnZoomOut: !s.hideOnZoomOut }))}
+              >
+                {style.hideOnZoomOut ? <SquareCheckIcon className="size-3.5" /> : <SquareIcon className="size-3.5" />}
+                <span className="text-[11px] font-semibold max-sm:hidden">Hide on zoom out</span>
+              </ToolButton>
+            )}
             <ToolButton
-              label="Hide child nodes on zoom out"
-              active={style.hideOnZoomOut}
-              onClick={() => update((s) => ({ ...s, hideOnZoomOut: !s.hideOnZoomOut }))}
+              label={style.view === "3d" ? "Switch to 2D" : "Switch to 3D"}
+              active={style.view === "3d"}
+              onClick={() => update((s) => ({ ...s, view: s.view === "3d" ? "2d" : "3d" }))}
             >
-              {style.hideOnZoomOut ? <SquareCheckIcon className="size-3.5" /> : <SquareIcon className="size-3.5" />}
-              <span className="text-[11px] font-semibold max-sm:hidden">Hide on zoom out</span>
+              <BoxIcon className="size-3.5" />
+              <span className="text-[11px] font-semibold">{style.view === "3d" ? "3D" : "2D"}</span>
             </ToolButton>
-          )}
-          <ToolButton
-            label={style.view === "3d" ? "Switch to 2D" : "Switch to 3D"}
-            active={style.view === "3d"}
-            onClick={() => update((s) => ({ ...s, view: s.view === "3d" ? "2d" : "3d" }))}
-          >
-            <BoxIcon className="size-3.5" />
-            <span className="text-[11px] font-semibold">{style.view === "3d" ? "3D" : "2D"}</span>
-          </ToolButton>
-          <ToolButton
-            label="Snapshot"
-            active={shotOpen}
-            onClick={() => {
-              // Both panels sit in the same corner; one at a time.
-              setOpen(false);
-              setShotOpen((v) => !v);
-            }}
-          >
-            <CameraIcon className="size-3.5" />
-          </ToolButton>
-          <ToolButton label="Zen mode — hide everything but the map" onClick={toggleZen}>
-            <Maximize2Icon className="size-3.5" />
-          </ToolButton>
-          <ToolButton label="Release every node back into the layout" onClick={() => handleRef.current?.releaseAll()}>
-            <RotateCcwIcon className="size-3.5" />
-          </ToolButton>
-          <ToolButton
-            label="Customize"
-            active={open}
-            onClick={() => {
-              setShotOpen(false);
-              setOpen((v) => !v);
-            }}
-            accent
-          >
-            <PaletteIcon className="size-3.5" />
-            <span className="text-[11px] font-semibold max-sm:hidden">Customize</span>
-          </ToolButton>
+            {!readOnly && (
+              <ToolButton
+                label="Snapshot"
+                active={shotOpen}
+                onClick={() => {
+                  // Both panels sit in the same corner; one at a time.
+                  setOpen(false);
+                  setShotOpen((v) => !v);
+                }}
+              >
+                <CameraIcon className="size-3.5" />
+              </ToolButton>
+            )}
+            <ToolButton label="Zen mode — hide everything but the map" onClick={toggleZen}>
+              <Maximize2Icon className="size-3.5" />
+            </ToolButton>
+            <ToolButton label="Release every node back into the layout" onClick={() => handleRef.current?.releaseAll()}>
+              <RotateCcwIcon className="size-3.5" />
+            </ToolButton>
+            {!readOnly && (
+              <ToolButton
+                label="Customize"
+                active={open}
+                onClick={() => {
+                  setShotOpen(false);
+                  setOpen((v) => !v);
+                }}
+                accent
+              >
+                <PaletteIcon className="size-3.5" />
+                <span className="text-[11px] font-semibold max-sm:hidden">Customize</span>
+              </ToolButton>
+            )}
+          </div>
         </div>
       )}
 
-      {shotOpen && !zen && (
+      {shotOpen && !zen && !readOnly && (
         <SnapshotPanel
           style={style}
           title={caption}
@@ -438,7 +499,7 @@ export function MindmapStudio({
         />
       )}
 
-      {open && !zen && (
+      {open && !zen && !readOnly && (
         <StudioPanel
           style={style}
           update={update}
@@ -682,6 +743,139 @@ function ToolButton({
     </button>
   );
 }
+
+/**
+ * Find a node by its label, then fly to it. A button until pressed, so the
+ * toolbar stays short on phones; Enter takes the first match, the arrows move
+ * through them and Escape closes.
+ */
+function NodeSearch({
+  nodes,
+  open,
+  onOpenChange: setOpen,
+  onPick,
+}: {
+  nodes: MapNode[];
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onPick: (node: MapNode) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(0);
+  const [listOpen, setListOpen] = useState(false);
+  const results = useMemo(() => searchNodes(nodes, query), [nodes, query]);
+
+  if (!open) {
+    return (
+      <ToolButton label={`Search ${nodes.length.toLocaleString()} nodes`} onClick={() => setOpen(true)}>
+        <SearchIcon className="size-3.5" />
+        <span className="text-[11px] font-semibold max-sm:hidden">Search</span>
+      </ToolButton>
+    );
+  }
+
+  function pick(node: MapNode) {
+    setQuery(node.label);
+    setListOpen(false);
+    onPick(node);
+  }
+
+  return (
+    <div className="relative">
+      <div className="glass-float text-foreground flex h-7 items-center gap-1.5 rounded-full pr-1 pl-2.5 backdrop-blur pointer-coarse:h-9">
+        <SearchIcon className="text-muted-foreground size-3.5 shrink-0" />
+        <input
+          // Opened by a press, so typing can start at once.
+          autoFocus
+          type="text"
+          inputMode="search"
+          enterKeyHint="search"
+          role="combobox"
+          aria-expanded={listOpen && results.length > 0}
+          aria-controls="mindmap-node-search"
+          aria-label={`Search ${nodes.length.toLocaleString()} nodes`}
+          placeholder="Find a node"
+          value={query}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setActive(0);
+            setListOpen(true);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              if (listOpen && query) setListOpen(false);
+              else {
+                setQuery("");
+                setOpen(false);
+              }
+            } else if (event.key === "ArrowDown" && results.length > 0) {
+              event.preventDefault();
+              setListOpen(true);
+              setActive((i) => (i + 1) % results.length);
+            } else if (event.key === "ArrowUp" && results.length > 0) {
+              event.preventDefault();
+              setActive((i) => (i - 1 + results.length) % results.length);
+            } else if (event.key === "Enter" && results.length > 0) {
+              event.preventDefault();
+              pick(results[Math.min(active, results.length - 1)]);
+            }
+          }}
+          // 16px on touch screens, so iOS does not zoom the page into the field.
+          className="placeholder:text-label w-[min(55vw,200px)] bg-transparent text-[12px] outline-none pointer-coarse:text-[16px]"
+        />
+        <button
+          type="button"
+          aria-label="Close search"
+          onClick={() => {
+            setQuery("");
+            setOpen(false);
+          }}
+          className="text-muted-foreground hover:text-foreground flex size-5 items-center justify-center rounded-full pointer-coarse:size-7"
+        >
+          <XIcon className="size-3" />
+        </button>
+      </div>
+      {listOpen && query.trim() && (
+        <ul
+          id="mindmap-node-search"
+          role="listbox"
+          className="glass-float absolute top-full right-0 z-30 mt-1 w-[min(80vw,280px)] overflow-hidden rounded-xl py-1 backdrop-blur"
+        >
+          {results.length === 0 ? (
+            <li className="text-label px-3 py-2 text-[12px]">No node matches</li>
+          ) : (
+            results.map((node, i) => (
+              <li key={node.id} role="option" aria-selected={i === active}>
+                <button
+                  type="button"
+                  onMouseEnter={() => setActive(i)}
+                  onClick={() => pick(node)}
+                  className={cn(
+                    "flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-[12px] pointer-coarse:py-2.5",
+                    i === active ? "bg-[var(--glass-strong)] text-foreground" : "text-muted-foreground",
+                  )}
+                >
+                  <span className="truncate">{node.label}</span>
+                  <span className="text-label shrink-0 text-[10.5px]">{KIND_LABEL[node.kind]}</span>
+                </button>
+              </li>
+            ))
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+const KIND_LABEL: Record<MapNodeKind, string> = {
+  root: "Root",
+  theme: "Theme",
+  concept: "Concept",
+  detail: "Detail",
+  document: "Note",
+  hub: "Shared",
+};
 
 /* ------------------------------------------------------------------------ */
 /* Controls                                                                  */
