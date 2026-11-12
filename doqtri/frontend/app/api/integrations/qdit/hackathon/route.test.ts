@@ -44,6 +44,7 @@ let connection: { status: string } | null = { status: "connected" };
 
 /** The sender's stored `global` style, read by the route with the session client. */
 let savedStyle: Record<string, unknown> | null = null;
+let styleError: { message: string } | null = null;
 const sessionClient = {
   auth: { getUser: async () => ({ data: { user } }) },
   kind: "session",
@@ -52,7 +53,10 @@ const sessionClient = {
     const query = {
       select: () => query,
       eq: () => query,
-      maybeSingle: async () => ({ data: savedStyle ? { style: savedStyle, updated_at: "t" } : null, error: null }),
+      maybeSingle: async () =>
+        styleError
+          ? { data: null, error: styleError }
+          : { data: savedStyle ? { style: savedStyle, updated_at: "t" } : null, error: null },
     };
     return query;
   },
@@ -144,6 +148,7 @@ beforeEach(() => {
   connection = { status: "connected" };
   SITE.url = "https://doqtri.test/";
   savedStyle = null;
+  styleError = null;
   shareInserts = [];
   shareUpdates = [];
   insertError = null;
@@ -414,7 +419,7 @@ describe("a send", () => {
       expect(await res.json()).toEqual({
         ok: false,
         code: "QDIT_UNCERTAIN",
-        message: "qdit may have received this. Check your entry in qdit before sending again.",
+        message: `qdit may have received this. Check your entry in qdit before sending again. ${MINDMAP_SHARE_COPY.keptAfterNoAnswer}`,
         qdit_url: `https://qdit.test/hackathons/${SLUG}`,
       });
       expect(qdit.pushHackathonSnapshot).toHaveBeenCalledTimes(1);
@@ -435,6 +440,7 @@ describe("the mindmap link (DOQ-53)", () => {
       workspace_id: WS,
       created_by: ME,
       snapshot_id: SNAPSHOT.snapshot_id,
+      hackathon_slug: SLUG,
       graph: SNAPSHOT.global_mindmap,
       style: null,
     });
@@ -467,7 +473,6 @@ describe("the mindmap link (DOQ-53)", () => {
   });
 
   it.each([
-    ["timeout", new QditError("timeout", "no answer")],
     ["server error", new QditError("server", "boom", { status: 500 })],
     ["refusal", refusal("conflict", "hackathon_closed")],
     ["lost connection", new QditNotConnectedError("needs_reconnect")],
@@ -479,6 +484,29 @@ describe("the mindmap link (DOQ-53)", () => {
     expect(shareInserts).toHaveLength(1);
     expect(shareUpdates).toEqual([{ patch: { revoked_at: expect.any(String) }, id: SHARE_ID }]);
     quiet.forEach((spy) => spy.mockRestore());
+  });
+
+  it.each(["timeout", "network"] as const)(
+    "keeps the link live after a %s, since qdit may have stored it (DOQ-54)",
+    async (kind) => {
+      const log = vi.spyOn(console, "error").mockImplementation(() => {});
+      qdit.pushHackathonSnapshot.mockRejectedValue(new QditError(kind, "no answer"));
+      const res = await send();
+      expect(res.status).toBe(502);
+      expect((await res.json()).code).toBe("QDIT_UNCERTAIN");
+      expect(shareInserts).toHaveLength(1);
+      expect(shareUpdates).toEqual([]);
+      log.mockRestore();
+    },
+  );
+
+  it("says nothing about a kept link after no answer when none was made", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    SITE.url = "http://localhost:3000";
+    qdit.pushHackathonSnapshot.mockRejectedValue(new QditError("timeout", "no answer"));
+    const res = await send();
+    expect((await res.json()).message).toBe(COPY.uncertain);
+    log.mockRestore();
   });
 
   it("sends without a link, and says so, when the link cannot be stored", async () => {
@@ -529,6 +557,31 @@ describe("the mindmap link (DOQ-53)", () => {
     expect(qdit.pushHackathonSnapshot).toHaveBeenCalledTimes(1);
     expect(shareUpdates).toHaveLength(1);
     warn.mockRestore();
+  });
+
+  it("hands the builder the nodes the sender hid in their global style, read before building (DOQ-54)", async () => {
+    savedStyle = {
+      overrides: { "concept:secret": { hidden: true }, "concept:launch": { color: "#ff0000" }, "doc:x": { hidden: false } },
+    };
+    await send();
+    expect(build).toHaveBeenCalledTimes(1);
+    expect([...(build.mock.calls[0][0].hiddenNodeIds as Set<string>)]).toEqual(["concept:secret"]);
+  });
+
+  it("hides nothing for a sender who never styled the map", async () => {
+    await send();
+    expect([...(build.mock.calls[0][0].hiddenNodeIds as Set<string>)]).toEqual([]);
+  });
+
+  it("refuses the send, before building, when the style cannot be read: what they hid is never sent", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    styleError = { message: "timeout" };
+    const res = await send();
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ ok: false, code: "FAILED", message: COPY.failed });
+    expect(build).not.toHaveBeenCalled();
+    expect(qdit.pushHackathonSnapshot).not.toHaveBeenCalled();
+    log.mockRestore();
   });
 
   it("stores no link when the snapshot is refused before sending", async () => {

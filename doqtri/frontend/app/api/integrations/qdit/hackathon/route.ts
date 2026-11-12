@@ -15,6 +15,7 @@ import { buildHackathonSnapshot, HackathonSnapshotError, withMindmapUrl } from "
 import { loadMindmapStyle } from "@/lib/load-mindmap-style";
 import { MINDMAP_SHARE_COPY, mindmapShareUrl } from "@/lib/mindmap-share";
 import {
+  hiddenNodeIds,
   insertMindmapShare,
   newShareToken,
   revokeMindmapShareAsServer,
@@ -51,10 +52,19 @@ import { isUuid, readBody } from "@/lib/integrations/qdit-route-context";
  * sent (WP-4.7, DOQ-53): the share row (graph and the sender's `global`
  * style, under a new token) is stored first, then `mindmap_url` goes into the
  * snapshot before it is serialized, so the bytes qdit hashes, and any resend
- * of them, carry that one link. A push that fails revokes the link again, so
- * no link qdit never got stays live. Where no link can be made (the site is
+ * of them, carry that one link. A push qdit definitely refused revokes the
+ * link again, so no link qdit never got stays live; a push that got no
+ * answer (QDIT_UNCERTAIN) keeps it, since qdit may have stored it (DOQ-54),
+ * and the dialog lists it with Revoke. Where no link can be made (the site is
  * not https, or the row could not be stored) the snapshot goes without one,
  * as before, and a warning says so.
+ *
+ * The link names its hackathon, so it expires 24 hours after that
+ * hackathon's grades are released (DOQ-54, the `hackathon.released`
+ * webhook). Nodes the sender hid in their `global` style are left out of the
+ * snapshot, and so of the stored link, with their links (DOQ-54): the style
+ * is read before the snapshot is built, and a send whose style cannot be
+ * read is refused rather than sending what they hid.
  *
  * Answers `{ ok: true, note_count, submission_state, qdit_url, mindmap_url, warnings }`,
  * or `{ ok: false, code, message }` with a sentence for the dialog. Never
@@ -79,8 +89,17 @@ function refusedOnlyTheLinkField(error: unknown): boolean {
   );
 }
 
-/** The answer for a failed push; `qditUrl` is the hackathon's page in qdit. */
-function pushFailure(error: unknown, qditUrl: string | null): NextResponse {
+/** No answer from qdit (QDIT_UNCERTAIN): it may have stored the snapshot. */
+function noAnswer(error: unknown): boolean {
+  return error instanceof QditError && (error.kind === "network" || error.kind === "timeout");
+}
+
+/**
+ * The answer for a failed push; `qditUrl` is the hackathon's page in qdit.
+ * `linkKept`: no answer left this press's mindmap link live, and the message
+ * says where to revoke it.
+ */
+function pushFailure(error: unknown, qditUrl: string | null, linkKept = false): NextResponse {
   if (error instanceof QditHackathonSnapshotError) {
     switch (error.refusal) {
       case "hackathon_closed":
@@ -120,11 +139,12 @@ function pushFailure(error: unknown, qditUrl: string | null): NextResponse {
         error.retryAfterSeconds !== null ? { "Retry-After": String(error.retryAfterSeconds) } : undefined,
       );
     }
-    if (error.kind === "network" || error.kind === "timeout") {
+    if (noAnswer(error)) {
       // No answer: qdit may have stored it. Nothing retries here, and a new
       // press sends a new snapshot_id, so the user checks qdit first.
       console.error(`[qdit-hackathon] push got no answer: kind=${error.kind}`);
-      return reply(502, { ok: false, code: "QDIT_UNCERTAIN", message: COPY.uncertain, qdit_url: qditUrl });
+      const message = linkKept ? `${COPY.uncertain} ${MINDMAP_SHARE_COPY.keptAfterNoAnswer}` : COPY.uncertain;
+      return reply(502, { ok: false, code: "QDIT_UNCERTAIN", message, qdit_url: qditUrl });
     }
     // Kind, status and request id only: qdit's text is not logged.
     console.error(
@@ -182,6 +202,14 @@ export async function POST(request: Request) {
     return refuse(409, "QDIT_NOT_CONNECTED", new QditNotConnectedError(connection?.status ?? "none").message);
   }
 
+  // The sender's global style: what they hid is left out (DOQ-54), and the
+  // link shows the map in their look.
+  const saved = await loadMindmapStyle(supabase, user.id, "global");
+  if (!saved.loaded) {
+    console.error("[qdit-hackathon] the sender's global mindmap style could not be read");
+    return refuse(500, "FAILED", COPY.failed);
+  }
+
   let built: Awaited<ReturnType<typeof buildHackathonSnapshot>>;
   try {
     built = await buildHackathonSnapshot({
@@ -189,6 +217,7 @@ export async function POST(request: Request) {
       sourceClient: createSupabaseAdminClient(),
       workspaceId: workspace.id,
       hackathonSlug: slug,
+      hiddenNodeIds: hiddenNodeIds(saved.style),
     });
   } catch (error) {
     if (error instanceof HackathonSnapshotError) {
@@ -211,7 +240,6 @@ export async function POST(request: Request) {
   const url = mindmapShareUrl(SITE_URL, token);
   if (url) {
     try {
-      const saved = await loadMindmapStyle(supabase, user.id, "global");
       const sourceClient = createSupabaseAdminClient();
       const linked = withMindmapUrl(built.snapshot, url);
       shareId = await insertMindmapShare(sourceClient, {
@@ -219,6 +247,7 @@ export async function POST(request: Request) {
         workspaceId: workspace.id,
         createdBy: user.id,
         snapshotId: built.snapshot.snapshot_id,
+        hackathonSlug: slug,
         graph: built.snapshot.global_mindmap,
         style: shareStyle(saved.style, built.snapshot.global_mindmap),
       });
@@ -256,14 +285,14 @@ export async function POST(request: Request) {
       receipt = await client.pushHackathonSnapshot(projectId, built.body);
     }
   } catch (error) {
-    // Every failure revokes, no answer (QDIT_UNCERTAIN) included: no failed
-    // push may leave a live link (DOQ-53). If qdit did keep that snapshot,
-    // its link is now a 404 and the entry still has its images; the dialog
-    // already says to check the entry, and a new press sends a new link.
-    if (shareId && !(await revokeMindmapShareAsServer(createSupabaseAdminClient(), shareId))) {
+    // A definite refusal revokes, so no link qdit never got stays live
+    // (DOQ-53). No answer (QDIT_UNCERTAIN) keeps it (DOQ-54): qdit may have
+    // stored the snapshot, and with it the link. The dialog lists it with
+    // Revoke, and it expires with the hackathon either way.
+    if (shareId && !noAnswer(error) && !(await revokeMindmapShareAsServer(createSupabaseAdminClient(), shareId))) {
       console.error("[qdit-hackathon] the failed push's mindmap link could not be revoked");
     }
-    return pushFailure(error, hackathonUrl(origin, slug));
+    return pushFailure(error, hackathonUrl(origin, slug), shareId !== null && noAnswer(error));
   }
 
   return reply(200, {

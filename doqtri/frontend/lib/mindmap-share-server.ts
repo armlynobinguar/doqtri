@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { defaultStyleFor, parseStyle, type MindmapStyle, type NodeOverride } from "@/lib/mindmap-style";
+import { defaultStyleFor, isHidden, parseStyle, type MindmapStyle, type NodeOverride } from "@/lib/mindmap-style";
 import { wireNodeId, type HackathonGlobalMindmap } from "@/lib/integrations/qdit-hackathon";
 import { parseSharedGraph, SHARE_TOKEN_PATTERN } from "@/lib/mindmap-share";
 import type { MindmapGraph } from "@/lib/mindmap-graph";
@@ -42,11 +42,26 @@ export function shareStyle(raw: unknown, graph: HackathonGlobalMindmap): Mindmap
   return { ...style, overrides };
 }
 
+/**
+ * The global mindmap node ids the sender hid in their stored `global` studio
+ * style (an override with `hidden: true`, isHidden() in lib/mindmap-style.ts),
+ * parsed as shareStyle() parses it. Ids are the global mindmap's own, before
+ * wireNodeId, which is how the style keys them. Empty for no style.
+ * The snapshot builder leaves these nodes and their links out (DOQ-54).
+ */
+export function hiddenNodeIds(raw: unknown): Set<string> {
+  if (raw === null || raw === undefined) return new Set();
+  const style = parseStyle(raw, defaultStyleFor("free"));
+  return new Set(Object.keys(style.overrides).filter((id) => isHidden(style, id)));
+}
+
 export type NewMindmapShare = {
   token: string;
   workspaceId: string;
   createdBy: string;
   snapshotId: string;
+  /** The hackathon it is sent to (DOQ-54): its links expire with that hackathon's release. */
+  hackathonSlug: string;
   graph: HackathonGlobalMindmap;
   style: MindmapStyle | null;
 };
@@ -65,6 +80,7 @@ export async function insertMindmapShare(admin: SupabaseClient, share: NewMindma
       workspace_id: share.workspaceId,
       created_by: share.createdBy,
       snapshot_id: share.snapshotId,
+      hackathon_slug: share.hackathonSlug,
       graph: share.graph,
       style: share.style,
     })

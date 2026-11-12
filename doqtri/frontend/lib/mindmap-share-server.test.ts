@@ -16,7 +16,9 @@ vi.mock("@supabase/supabase-js", async (importOriginal) => ({
   },
 }));
 
-const { loadMindmapShare, newShareToken, opaqueIds, shareStyle } = await import("@/lib/mindmap-share-server");
+const { hiddenNodeIds, insertMindmapShare, loadMindmapShare, newShareToken, opaqueIds, shareStyle } = await import(
+  "@/lib/mindmap-share-server"
+);
 const { SHARE_TOKEN_PATTERN } = await import("@/lib/mindmap-share");
 
 const TOKEN = "AbCdEfGhIjKlMnOpQrStUvWxYz012345";
@@ -154,5 +156,51 @@ describe("loadMindmapShare", () => {
   it("throws when the read fails, rather than calling the link unknown", async () => {
     rpc.mockResolvedValue({ data: null, error: { message: "timeout" } });
     await expect(loadMindmapShare(TOKEN)).rejects.toThrow(/timeout/);
+  });
+});
+
+describe("hiddenNodeIds (DOQ-54)", () => {
+  it("is the ids the stored global style hides, and only those", () => {
+    const raw = {
+      overrides: {
+        "concept:secret": { hidden: true },
+        "doc:x": { hidden: false, color: "#ff0000" },
+        "concept:loud": { color: "#00ff00" },
+        "concept:odd": { hidden: "yes" },
+      },
+    };
+    expect([...hiddenNodeIds(raw)]).toEqual(["concept:secret"]);
+  });
+
+  it("is empty for no style, or one that does not parse", () => {
+    expect(hiddenNodeIds(null).size).toBe(0);
+    expect(hiddenNodeIds(undefined).size).toBe(0);
+    expect(hiddenNodeIds("nonsense").size).toBe(0);
+    expect(hiddenNodeIds({ overrides: [] }).size).toBe(0);
+  });
+});
+
+describe("insertMindmapShare", () => {
+  it("stores the hackathon the link is sent to (DOQ-54)", async () => {
+    const inserted: unknown[] = [];
+    const admin = {
+      from: () => ({
+        insert: (row: unknown) => {
+          inserted.push(row);
+          return { select: () => ({ single: async () => ({ data: { id: "id-1" }, error: null }) }) };
+        },
+      }),
+    };
+    const graph: HackathonGlobalMindmap = { nodes: [], links: [] };
+    await insertMindmapShare(admin as never, {
+      token: TOKEN,
+      workspaceId: "w",
+      createdBy: "u",
+      snapshotId: "s",
+      hackathonSlug: "spring-2026",
+      graph,
+      style: null,
+    });
+    expect(inserted).toEqual([expect.objectContaining({ hackathon_slug: "spring-2026", snapshot_id: "s" })]);
   });
 });

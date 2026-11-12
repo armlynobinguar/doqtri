@@ -14,7 +14,9 @@ import { SITE_URL } from "@/lib/site-url";
  * GET /api/mindmap-shares (WP-4.7, DOQ-53): the active workspace's live
  * mindmap links, newest first, for the Send to qdit hackathon dialog to list
  * with Revoke. Admins and owners only (D-10); the session client reads them,
- * so RLS on mindmap_shares decides too. Revoked links are left out.
+ * so RLS on mindmap_shares decides too. Revoked and expired links are left
+ * out; each listed one says when it expires, or null until its hackathon's
+ * grades are released (DOQ-54).
  *
  * Not behind the hackathon flag: a link made while it was on must stay
  * revocable after it is switched off.
@@ -44,9 +46,10 @@ export async function GET() {
 
   const { data, error } = await supabase
     .from("mindmap_shares")
-    .select("id, token, created_at")
+    .select("id, token, created_at, expires_at")
     .eq("workspace_id", workspace.id)
     .is("revoked_at", null)
+    .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
     .order("created_at", { ascending: false })
     .limit(LIST_LIMIT);
   if (error) {
@@ -54,8 +57,12 @@ export async function GET() {
     return reply(500, { ok: false, code: "FAILED", message: COPY.listFailed });
   }
 
-  const shares: MindmapShareListItem[] = ((data ?? []) as { id: string; token: string; created_at: string }[]).map(
-    (row) => ({ id: row.id, url: mindmapShareUrl(SITE_URL, row.token), created_at: row.created_at }),
-  );
+  type Row = { id: string; token: string; created_at: string; expires_at: string | null };
+  const shares: MindmapShareListItem[] = ((data ?? []) as Row[]).map((row) => ({
+    id: row.id,
+    url: mindmapShareUrl(SITE_URL, row.token),
+    created_at: row.created_at,
+    expires_at: row.expires_at ?? null,
+  }));
   return reply(200, { ok: true, shares });
 }

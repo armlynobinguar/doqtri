@@ -16,7 +16,7 @@ const TOKEN = "AbCdEfGhIjKlMnOpQrStUvWxYz012345";
 
 let user: { id: string } | null = { id: ME };
 let role: WorkspaceRole = "admin";
-let rows: { id: string; token: string; created_at: string }[] = [];
+let rows: { id: string; token: string; created_at: string; expires_at: string | null }[] = [];
 let updated: { id: string }[] = [];
 const calls: [string, ...unknown[]][] = [];
 
@@ -25,6 +25,7 @@ function query() {
     select: (...a: unknown[]) => (calls.push(["select", ...a]), q),
     eq: (...a: unknown[]) => (calls.push(["eq", ...a]), q),
     is: (...a: unknown[]) => (calls.push(["is", ...a]), q),
+    or: (...a: unknown[]) => (calls.push(["or", ...a]), q),
     order: (...a: unknown[]) => (calls.push(["order", ...a]), q),
     limit: async (...a: unknown[]) => (calls.push(["limit", ...a]), { data: rows, error: null }),
     update: (...a: unknown[]) => {
@@ -68,25 +69,39 @@ const revoke = (id: string) =>
 beforeEach(() => {
   user = { id: ME };
   role = "admin";
-  rows = [{ id: ID, token: TOKEN, created_at: "2026-11-12T09:00:00Z" }];
+  rows = [{ id: ID, token: TOKEN, created_at: "2026-11-12T09:00:00Z", expires_at: null }];
   updated = [{ id: ID }];
   calls.length = 0;
 });
 
 describe("GET /api/mindmap-shares", () => {
-  it("lists the active workspace's live links, newest first, as links", async () => {
+  it("lists the active workspace's live links, newest first, as links, each with its expiry (DOQ-54)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-20T10:00:00.000Z"));
+    rows.push({ id: "40000000-0000-4000-8000-000000000002", token: `${TOKEN}b`, created_at: "2026-11-11T09:00:00Z", expires_at: "2026-11-21T08:00:00+00:00" });
     const res = await GET();
+    vi.useRealTimers();
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(await res.json()).toEqual({
       ok: true,
-      shares: [{ id: ID, url: `https://doqtri.test/m/${TOKEN}`, created_at: "2026-11-12T09:00:00Z" }],
+      shares: [
+        { id: ID, url: `https://doqtri.test/m/${TOKEN}`, created_at: "2026-11-12T09:00:00Z", expires_at: null },
+        {
+          id: "40000000-0000-4000-8000-000000000002",
+          url: `https://doqtri.test/m/${TOKEN}b`,
+          created_at: "2026-11-11T09:00:00Z",
+          expires_at: "2026-11-21T08:00:00+00:00",
+        },
+      ],
     });
     expect(calls).toEqual([
       ["from", "mindmap_shares"],
-      ["select", "id, token, created_at"],
+      ["select", "id, token, created_at, expires_at"],
       ["eq", "workspace_id", WS],
       ["is", "revoked_at", null],
+      // Expired links are left out like revoked ones.
+      ["or", "expires_at.is.null,expires_at.gt.2026-11-20T10:00:00.000Z"],
       ["order", "created_at", { ascending: false }],
       ["limit", 50],
     ]);
