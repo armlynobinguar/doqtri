@@ -21,6 +21,7 @@ import {
   fittedBoost,
   isLit,
   labelBoost,
+  labelFontUnits,
   nodeOffscreen,
   nodeReveal,
   paintBackdrop,
@@ -76,6 +77,12 @@ const ForceGraph2D = dynamic(
 /** How far out the view may zoom, as a share of the zoom that fits the whole map. */
 const MIN_ZOOM_OF_FIT = 0.5;
 
+/** How large a searched-for node's label is drawn once the view lands on it, in CSS pixels. */
+const FOCUS_LABEL_PX = 18;
+
+/** How long the view takes to move onto a searched-for node. */
+const FOCUS_MS = 600;
+
 /** How long each frame may spend clearing overlaps once a layout stops. */
 const SETTLE_SLICE_MS = 12;
 
@@ -97,6 +104,11 @@ export type MindmapCanvasHandle = {
   snapshot: (request: SnapshotRequest) => Promise<Blob>;
   /** The on-screen size, in CSS pixels, for "match the view" exports. */
   viewSize: () => { width: number; height: number };
+  /**
+   * Moves the view onto a node and zooms in until its label is comfortably
+   * readable (search on the shared mindmap page, DOQ-53). Never zooms out.
+   */
+  focusNode: (id: string) => void;
 };
 
 export type MindmapCanvasProps = {
@@ -568,6 +580,17 @@ export function MindmapCanvas({
     () => ({
       releaseAll,
       viewSize: () => size,
+      focusNode: (id) => {
+        const instance = graphRef.current;
+        const node = nodeIndexRef.current.get(id);
+        if (!instance || !node) return;
+        // 18 CSS pixels of label, or enough for the zoom reveal to show the
+        // node's level in full (revealAlpha), whichever is more.
+        const wantPx = Math.max(FOCUS_LABEL_PX, 8 + Math.max(0, node.depth - 2) * 3);
+        const zoom = Math.max(instance.zoom(), wantPx / labelFontUnits(painterRef.current, node));
+        instance.centerAt(node.x ?? 0, node.y ?? 0, FOCUS_MS);
+        instance.zoom(zoom, FOCUS_MS);
+      },
       snapshot: async (request) => {
         const instance = graphRef.current;
         const center = instance?.centerAt() as unknown as { x: number; y: number } | undefined;

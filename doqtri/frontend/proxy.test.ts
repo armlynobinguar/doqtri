@@ -8,11 +8,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * rather than a 200 streamed behind the root loading.tsx.
  */
 
-const state = vi.hoisted(() => ({ user: null as { id: string } | null }));
+const state = vi.hoisted(() => ({
+  user: null as { id: string } | null,
+  /** mindmap_share_live()'s answer by token, or an error for every token. */
+  liveTokens: new Set<string>(),
+  rpcError: null as { message: string } | null,
+  rpcCalls: [] as [string, unknown][],
+}));
 
 vi.mock("@supabase/ssr", () => ({
   createServerClient: () => ({
     auth: { getUser: async () => ({ data: { user: state.user } }) },
+    rpc: async (name: string, args: { p_token: string }) => {
+      state.rpcCalls.push([name, args]);
+      if (state.rpcError) return { data: null, error: state.rpcError };
+      return { data: state.liveTokens.has(args.p_token), error: null };
+    },
   }),
 }));
 // A copy of the promo's config, so the flag can be set whatever lib/promo.ts says.
@@ -22,6 +33,7 @@ vi.mock("@/lib/promo", async (original) => {
 });
 
 const { ENDED_PROMO_REWRITE, MINDMAP_PROMO } = await import("@/lib/promo");
+const { SHARE_NOT_FOUND_REWRITE } = await import("@/lib/mindmap-share");
 const { proxy } = await import("./proxy");
 
 const ORIGIN = "https://doqtri.test";
@@ -64,5 +76,43 @@ describe.each(VISITORS)("a visitor %s at /promo", (_label, user) => {
 describe("the rewrite target", () => {
   it("is a private (underscore) path, which the app router never routes", () => {
     expect(ENDED_PROMO_REWRITE).toMatch(/^\/_[a-z-]+$/);
+  });
+});
+
+describe.each(VISITORS)("a visitor %s at /m/<token> (WP-4.7, DOQ-53)", (_label, user) => {
+  const LIVE = "AbCdEfGhIjKlMnOpQrStUvWxYz012345";
+
+  beforeEach(() => {
+    state.user = user;
+    state.liveTokens = new Set([LIVE]);
+    state.rpcError = null;
+    state.rpcCalls = [];
+  });
+
+  it("reaches the page for a live link, never redirected to sign in, and not indexed", async () => {
+    const res = await visit(`/m/${LIVE}`);
+    expect(isRewrite(res)).toBe(false);
+    expect(getRedirectUrl(res)).toBeNull();
+    expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    expect(state.rpcCalls).toEqual([["mindmap_share_live", { p_token: LIVE }]]);
+  });
+
+  it("is rewritten to a 404 path for an unknown or revoked token", async () => {
+    const res = await visit("/m/UnknownLinkToken_0123456789ab");
+    expect(isRewrite(res)).toBe(true);
+    expect(getRewrittenUrl(res)).toBe(`${ORIGIN}${SHARE_NOT_FOUND_REWRITE}`);
+    expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+  });
+
+  it.each(["/m/short", `/m/${LIVE}/extra`, `/m/${LIVE}%3F`, "/m/has%20spaces-in-it_0123456789"])("is rewritten without asking for %s", async (path) => {
+    const res = await visit(path);
+    expect(getRewrittenUrl(res)).toBe(`${ORIGIN}${SHARE_NOT_FOUND_REWRITE}`);
+    expect(state.rpcCalls).toEqual([]);
+  });
+
+  it("treats a failed check as unknown: a 404, never the page", async () => {
+    state.rpcError = { message: "down" };
+    const res = await visit(`/m/${LIVE}`);
+    expect(getRewrittenUrl(res)).toBe(`${ORIGIN}${SHARE_NOT_FOUND_REWRITE}`);
   });
 });

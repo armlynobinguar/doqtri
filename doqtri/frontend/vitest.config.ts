@@ -20,6 +20,8 @@ export default defineConfig({
       "lib/**/*.test.ts",
       "app/api/**/*.test.ts",
       "app/d/**/*.test.ts",
+      // The shared mindmap page (/m/<token>), with its loader mocked.
+      "app/m/**/*.test.ts",
       // The legal pages' gate, with the sitemap and robots.txt beside them.
       "app/*.test.ts",
       // The proxy's routing decisions, with Supabase mocked.
