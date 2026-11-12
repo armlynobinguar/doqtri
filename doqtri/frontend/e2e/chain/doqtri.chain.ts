@@ -115,6 +115,8 @@ test("Save & anchor registers v1, then v2, and an up-to-date note offers nothing
   });
   await page.goto(`/vault/${anchoredId}`);
   await saveAndAnchor(page, /Saved & registered as v1/, "first anchor");
+  // The first anchor moves the note into "On-chain" without a reload.
+  await expect(page.getByRole("region", { name: "On-chain notes" })).toContainText(anchoredTitle);
 
   await editableEditor(page);
   await setEditorSelection(page, -1);
@@ -122,12 +124,12 @@ test("Save & anchor registers v1, then v2, and an up-to-date note offers nothing
   await saveAndAnchor(page, /Saved & updated to v2/, "second anchor");
 
   // The chain already holds this text: the button turns itself off, so no
-  // second transaction can be sent for the same version.
+  // second transaction can be sent for the same version. The panel shows v2
+  // from the write itself, without a reload.
   await expect(page.getByRole("button", { name: "Save & anchor" })).toBeDisabled();
+  await expect(page.getByText("v2", { exact: true }).first()).toBeVisible();
 
-  // Anchored notes leave the explorer's delete action behind. The explorer
-  // reads the ledger when its note list loads, so reload to see this one move.
-  await page.reload();
+  // Anchored notes leave the explorer's delete action behind.
   await expect(page.getByRole("region", { name: "On-chain notes" })).toContainText(anchoredTitle);
   await expect(page.getByRole("img", { name: `${anchoredTitle} is anchored on Stellar and cannot be deleted` })).toBeVisible();
   await expect(page.getByRole("button", { name: `Delete ${anchoredTitle}` })).toHaveCount(0);

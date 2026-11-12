@@ -35,7 +35,7 @@ import { renameNote } from "@/lib/rename-note";
 import { isNoAnswer, NoResponseError, REQUEST_TIMEOUT_MS } from "@/lib/no-response";
 import { renameRefusal } from "@/lib/title";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { anchoredDocIds } from "@/lib/stellar/anchored";
+import { anchoredDocIds, onAnchored } from "@/lib/stellar/anchored";
 import type { FailedImport, NoteSummary, VaultIdentity } from "@/lib/types";
 import type { WorkspaceChoice } from "@/lib/workspace-scope";
 import { ActiveWorkspaceProvider, useActiveWorkspace } from "@/components/vault/workspace-context";
@@ -235,6 +235,9 @@ function VaultShellInner({
   // only the ledger knows. One batched read covers the whole vault; the string
   // key keeps it from re-running when the layout hands back an equal list.
   const noteIdKey = notes.map((note) => note.id).join(",");
+  // Notes a confirmed write anchored in this tab. A batched read that started
+  // before the write lands without them, so they are added back to it.
+  const anchoredHere = useRef(new Set<string>());
   useEffect(() => {
     const ids = noteIdKey ? noteIdKey.split(",") : [];
     let cancelled = false;
@@ -242,6 +245,7 @@ function VaultShellInner({
       try {
         // An empty vault resolves to an empty set without touching the RPC.
         const found = await anchoredDocIds(ids);
+        for (const id of anchoredHere.current) if (ids.includes(id)) found.add(id);
         if (!cancelled) setAnchored(found);
       } catch {
         // Ledger unreachable: leave the rows deletable rather than locking the
@@ -253,6 +257,41 @@ function VaultShellInner({
       cancelled = true;
     };
   }, [noteIdKey]);
+
+  // Anchoring a note leaves the note list as it was, so the read above never
+  // re-runs for it. A confirmed write moves the row into "On-chain" at once; a
+  // pending one (DOQ-5) is re-read from the ledger until it lands.
+  useEffect(() => {
+    let disposed = false;
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const add = (docId: string) => {
+      if (disposed) return;
+      anchoredHere.current.add(docId);
+      // Null means the ledger could not be read: one known row would make every
+      // other note look off-chain, so the list stays whole.
+      setAnchored((prev) => (prev == null || prev.has(docId) ? prev : new Set(prev).add(docId)));
+    };
+    const recheck = (docId: string, delays: number[]) => {
+      const [delay, ...rest] = delays;
+      if (disposed || delay === undefined) return;
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        anchoredDocIds([docId])
+          .then((found) => (found.has(docId) ? add(docId) : recheck(docId, rest)))
+          .catch(() => recheck(docId, rest));
+      }, delay);
+      timers.add(timer);
+    };
+    const unsubscribe = onAnchored(({ docId, pending }) => {
+      if (pending) recheck(docId, [5_000, 15_000, 45_000]);
+      else add(docId);
+    });
+    return () => {
+      disposed = true;
+      unsubscribe();
+      for (const timer of timers) clearTimeout(timer);
+    };
+  }, []);
 
   const handleDeleteNote = useCallback(
     (note: NoteSummary) => {
