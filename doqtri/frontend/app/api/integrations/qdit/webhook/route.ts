@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { approvalRecorder, supabaseApprovalStore } from "@/lib/integrations/qdit-approvals";
 import { qditWebhookSecret } from "@/lib/integrations/qdit-config";
+import { supabaseHackathonReleaseStore } from "@/lib/integrations/qdit-hackathon-release";
 import {
   handleQditWebhook,
   MAX_WEBHOOK_BODY_BYTES,
@@ -16,7 +17,9 @@ import {
  * event makes doqtri read the milestone's record on chain and record it
  * (lib/integrations/qdit-status-sync.ts); nothing is signed here (D-04).
  * An approval also has its transaction looked up in RPC's event window and
- * kept for the public receipts (WP-3.1).
+ * kept for the public receipts (WP-3.1). `hackathon.released` makes that
+ * hackathon's mindmap links expire 24 hours after its grades were released
+ * (WP-4.7, DOQ-54).
  *
  * Off (404) unless NEXT_PUBLIC_QDIT_INTEGRATION=1, so the live app has no
  * such endpoint; 503 while QDIT_WEBHOOK_SECRET is missing, so qdit keeps
@@ -45,6 +48,7 @@ export async function POST(request: Request) {
     store: supabaseStatusStore(admin),
     readChain: readChainOverRpc,
     recordApproval: approvalRecorder(supabaseApprovalStore(admin)),
+    releases: supabaseHackathonReleaseStore(admin),
   });
   return reply(result.status, result.body);
 }
