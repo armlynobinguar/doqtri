@@ -69,3 +69,29 @@ export async function anchoredDocIds(docIds: string[]): Promise<Set<string>> {
   }
   return anchored;
 }
+
+/**
+ * The explorer reads the ledger once per change to the note list, and
+ * anchoring an existing note does not change that list. So every write that
+ * anchors a document's text (register, update, anchor) says so here, and the vault shell moves the note
+ * into "On-chain" without a reload.
+ *
+ * `pending` is a write the relay took but no ledger has yet (DOQ-5): the
+ * listener re-reads the ledger for it rather than trusting it landed.
+ */
+const ANCHORED_EVENT = "doqtri:anchored";
+
+export type AnchoredDetail = { docId: string; pending: boolean };
+
+export function announceAnchored(docId: string, pending: boolean): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent<AnchoredDetail>(ANCHORED_EVENT, { detail: { docId, pending } }),
+  );
+}
+
+export function onAnchored(listener: (detail: AnchoredDetail) => void): () => void {
+  const handle = (event: Event) => listener((event as CustomEvent<AnchoredDetail>).detail);
+  window.addEventListener(ANCHORED_EVENT, handle);
+  return () => window.removeEventListener(ANCHORED_EVENT, handle);
+}

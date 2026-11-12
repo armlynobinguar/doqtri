@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AnchorIcon,
   CircleCheckIcon,
@@ -21,6 +21,7 @@ import {
   DoqtriRegistry,
   type ChainDocument,
   type ChainNode,
+  type WriteReceipt,
 } from "@/lib/stellar/contract-client";
 import { REGISTRY_EDITORS } from "@/lib/stellar/config";
 import { sha256Hex } from "@/lib/stellar/hash";
@@ -70,6 +71,24 @@ const REGISTRATION_PENDING =
  */
 async function readFirstAnchor(docId: string): Promise<PendingChainWrite[]> {
   return pendingVersions(await readPendingWrites(docId).catch(() => []));
+}
+
+/**
+ * The panel reads the ledger through the browser's public RPC and Horizon,
+ * which can trail the ledger a write was just confirmed on (the relay may
+ * use another RPC). These are the waits before reading again.
+ */
+const CATCH_UP_DELAYS_MS = [1_000, 2_000, 4_000];
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** What a confirmed write left on the ledger, to wait for before trusting a read. */
+type Expected = { contentHash: string; version: number };
+
+/** The read has this write, or a later one (a teammate's, on a team note). */
+function caughtUp(doc: ChainDocument | null, expected: Expected): boolean {
+  if (doc == null) return false;
+  return doc.version > expected.version || (doc.version === expected.version && doc.contentHash === expected.contentHash);
 }
 
 async function copy(text: string, what: string) {
@@ -197,24 +216,88 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
     rootNode.tool === DONE_TOOL &&
     rootNode.artifactRef === doneRef(chainVersion);
 
-  const refreshChain = useCallback(async () => {
-    const doc = await DoqtriRegistry.getDocument(docId);
-    setChainDoc(doc);
-    if (!doc) {
-      setHistory(null);
-      setRootNode(null);
-      setFirstAnchor(await readFirstAnchor(docId));
-      return;
-    }
-    setFirstAnchor([]);
-    setRootNode(await DoqtriRegistry.getNode(docId, DONE_NODE).catch(() => null));
-    try {
-      setHistory(await getDocumentHistory(docId));
-    } catch {
-      // History is supplementary; the badge still works from get_document.
-      setHistory(null);
-    }
+  // Reads that finish after the panel unmounted or moved to another note are
+  // dropped, and their retries stop.
+  const docIdRef = useRef(docId);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    docIdRef.current = docId;
   }, [docId]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  /**
+   * Re-reads the note's ledger state. With `expected` (a confirmed write the
+   * panel already shows), a read that has not caught up with it is retried,
+   * and never replaces what the receipt showed.
+   */
+  const refreshChain = useCallback(
+    async (expected?: Expected) => {
+      const current = () => mountedRef.current && docIdRef.current === docId;
+      let doc = await DoqtriRegistry.getDocument(docId);
+      for (const delay of expected ? CATCH_UP_DELAYS_MS : []) {
+        if (caughtUp(doc, expected!)) break;
+        await sleep(delay);
+        if (!current()) return;
+        doc = await DoqtriRegistry.getDocument(docId);
+      }
+      if (!current()) return;
+      // Still behind: keep the receipt's state; reopening the note reads again.
+      if (expected && !caughtUp(doc, expected)) return;
+      setChainDoc(doc);
+      if (!doc) {
+        setHistory(null);
+        setRootNode(null);
+        setFirstAnchor(await readFirstAnchor(docId));
+        return;
+      }
+      setFirstAnchor([]);
+      const root = await DoqtriRegistry.getNode(docId, DONE_NODE).catch(() => null);
+      if (!current()) return;
+      setRootNode(root);
+      // Horizon and the write index can trail the RPC too, so after a write a
+      // history short of the ledger's version is read again before it is left
+      // as it is. Other refreshes read it once: a short history can be final.
+      for (const [attempt, delay] of [0, ...(expected ? CATCH_UP_DELAYS_MS : [])].entries()) {
+        if (delay) await sleep(delay);
+        if (!current()) return;
+        let loaded: DocumentHistory | null;
+        try {
+          loaded = await getDocumentHistory(docId);
+        } catch {
+          // History is supplementary; the badge still works from get_document.
+          if (attempt === 0 && current()) setHistory(null);
+          continue;
+        }
+        if (!current()) return;
+        setHistory(loaded);
+        if (loaded == null || (!loaded.incomplete && loaded.versions.length >= doc.version)) return;
+      }
+    },
+    [docId],
+  );
+
+  /**
+   * Shows a confirmed text write at once, from its receipt, instead of after
+   * the ledger reads; returns what the follow-up read should wait for. A
+   * pending write (DOQ-5) is not on any ledger yet, so it shows nothing.
+   */
+  function showConfirmed(result: WriteReceipt, version: number, contentHash: string): Expected | null {
+    if (result.pending) return null;
+    setChainDoc((prev) => ({
+      version,
+      contentHash,
+      nodeCount: prev?.nodeCount ?? 0,
+      updatedAt: Math.floor(Date.now() / 1000),
+      owner: prev?.owner,
+    }));
+    setFirstAnchor([]);
+    return { contentHash, version };
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -350,7 +433,9 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
           ? `Saved & registered as v${result.version ?? 1}`
           : `Saved & updated to v${result.version ?? "?"}`,
       );
-      await refreshChain();
+      const expected = showConfirmed(result, result.version ?? (chainVersion ?? 0) + 1, contentHash);
+      if (expected) void refreshChain(expected);
+      else await refreshChain();
       void wallet.refreshBalance();
     } catch (e) {
       reportError(e, "Save & anchor failed");
@@ -428,9 +513,21 @@ export function ShipPanel({ docId, title, markdown, onSave }: Props) {
         target,
       );
       reportWorkspaceAssignment(anchored);
-      setReceipt({ ...anchored, kind: "done", version: anchored.version ?? version, contentHash });
+      const doneVersion = anchored.version ?? version;
+      setReceipt({ ...anchored, kind: "done", version: doneVersion, contentHash });
       announceWrite(anchored, `Mindmap marked done and anchored as v${version}`);
-      await refreshChain();
+      const expected = showConfirmed(anchored, doneVersion, contentHash);
+      if (expected) {
+        setRootNode({
+          status: "Verified",
+          tool: DONE_TOOL,
+          artifactRef: doneRef(doneVersion),
+          updatedAt: Math.floor(Date.now() / 1000),
+        });
+        void refreshChain(expected);
+      } else {
+        await refreshChain();
+      }
       void wallet.refreshBalance();
     } catch (e) {
       reportError(e, "Mark done failed");

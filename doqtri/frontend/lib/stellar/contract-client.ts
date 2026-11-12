@@ -36,6 +36,7 @@ import { Address, authorizeEntry, rpc, scValToNative, StrKey, type contract, typ
 import { parseChainWorkspace, type ChainWorkspace } from "@/lib/stellar/workspace-chain";
 import { assertBalanceCovers, getAccountBalance, type AccountBalance } from "@/lib/stellar/horizon";
 import { DoqtriError, mapWalletError, workspaceContractError } from "@/lib/stellar/errors";
+import { announceAnchored } from "@/lib/stellar/anchored";
 
 export type ChainDocument = {
   version: number;
@@ -437,7 +438,9 @@ export const DoqtriRegistry = {
         throw e;
       }
       preflight(balance, tx);
-      return await send(source, tx, true);
+      const receipt = await send(source, tx, true);
+      announceAnchored(docId, receipt.pending === true);
+      return receipt;
     } catch (e) {
       if (e instanceof DoqtriError && e.code === "ALREADY_EXISTS") {
         return DoqtriRegistry.updateDocument(source, docId, contentHashHex);
@@ -477,6 +480,7 @@ export const DoqtriRegistry = {
     } catch (e) {
       mapInvokeError(e);
     }
+    announceAnchored(docId, receipt.pending === true);
     return editor ? withWorkspace(source, docId, target!, receipt) : receipt;
   },
 
@@ -518,6 +522,7 @@ export const DoqtriRegistry = {
     } catch (e) {
       mapInvokeError(e);
     }
+    announceAnchored(docId, receipt.pending === true);
     return editor ? withWorkspace(source, docId, target!, receipt) : receipt;
   },
 
