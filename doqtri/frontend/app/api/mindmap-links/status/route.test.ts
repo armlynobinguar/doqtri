@@ -92,37 +92,54 @@ describe("POST /api/mindmap-links/status", () => {
     for (const status of Object.values(body.links)) expect(Object.keys(status).sort()).toEqual(["expires_at", "live"]);
   });
 
-  it("answers an empty batch with no links", async () => {
-    const res = await ask({ tokens: [] });
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ links: {} });
-    expect(calls.map(([name]) => name)).toEqual(["consume_rate_limit"]);
+  it("answers a repeated token once", async () => {
+    const body = (await (await ask({ tokens: [LIVE, LIVE, UNKNOWN] })).json()) as { links: Record<string, object> };
+    expect(Object.keys(body.links)).toEqual([LIVE, UNKNOWN]);
+  });
+
+  it("matches the contract's example answer shape (v1.5.0, section 8)", async () => {
+    const res = await ask({ tokens: [EXPIRING, REVOKED] });
+    expect(res.headers.get("cache-control")).toBe("private, max-age=60");
+    expect(await res.json()).toEqual({
+      links: {
+        [EXPIRING]: { live: true, expires_at: "2026-11-21T08:00:00.000Z" },
+        [REVOKED]: { live: false, expires_at: null },
+      },
+    });
   });
 
   it.each([
     ["not JSON", "{tokens:"],
     ["not an object", JSON.stringify([LIVE])],
     ["no tokens", JSON.stringify({})],
+    ["an empty token list", JSON.stringify({ tokens: [] })],
     ["tokens not a list", JSON.stringify({ tokens: LIVE })],
     ["over 500 tokens", JSON.stringify({ tokens: Array(501).fill(LIVE) })],
     ["a malformed token", JSON.stringify({ tokens: [LIVE, "short"] })],
     ["a whole link instead of a token", JSON.stringify({ tokens: [`https://doqtri.test/m/${LIVE}`] })],
-  ])("refuses %s with 400, without reading any link", async (_name, body) => {
+  ])("refuses %s with 400 and section 6's error body, without reading any link", async (_name, body) => {
     const res = await ask(body);
     expect(res.status).toBe(400);
     expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toEqual({
+      error: { code: "invalid_request", message: expect.any(String), details: { fields: expect.any(Object) } },
+    });
     expect(calls.map(([name]) => name)).not.toContain("mindmap_share_statuses");
   });
 
-  it("refuses a body over 64 KiB with 413", async () => {
+  it("refuses a body over 64 KiB with 400 invalid_request (section 6)", async () => {
     const res = await ask({ tokens: [LIVE], pad: "x".repeat(70 * 1024) });
-    expect(res.status).toBe(413);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: { code: "invalid_request", details: { fields: { body: expect.any(String) } } } });
   });
 
-  it("counts each caller by a hash of its address, never the address, per minute", async () => {
+  it("counts each caller by a hash of its address, never the address, per minute, generously for shared addresses", async () => {
     await ask({ tokens: [LIVE] });
     const [, args] = calls[0];
     expect(args).toMatchObject({ p_scope: "mindmap-link-status", p_window_seconds: 60 });
+    // qdit calls from Vercel's shared addresses: one address may carry all of it.
+    expect(args.p_client_limit as number).toBeGreaterThanOrEqual(600);
+    expect(args.p_global_limit as number).toBeGreaterThanOrEqual(args.p_client_limit as number);
     expect(args.p_client).toMatch(/^[0-9a-f]{32}$/);
     expect(JSON.stringify(args)).not.toContain("203.0.113.9");
     calls.length = 0;
@@ -135,6 +152,7 @@ describe("POST /api/mindmap-links/status", () => {
     const res = await ask({ tokens: [LIVE] });
     expect(res.status).toBe(429);
     expect(res.headers.get("retry-after")).toBe("17");
+    expect(await res.json()).toEqual({ error: { code: "rate_limited", message: expect.any(String), details: null } });
     expect(calls.map(([name]) => name)).toEqual(["consume_rate_limit"]);
   });
 
@@ -150,7 +168,7 @@ describe("POST /api/mindmap-links/status", () => {
     statusError = { message: "down" };
     const res = await ask({ tokens: [LIVE] });
     expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ error: expect.any(String) });
+    expect(await res.json()).toEqual({ error: { code: "unavailable", message: expect.any(String), details: null } });
     log.mockRestore();
   });
 });

@@ -249,6 +249,12 @@ alter table public.qdit_webhook_events
 -- changes nothing, a newer one can only bring the expiry forward, and a link
 -- whose expiry is already earlier keeps it. Answers the outcome, the
 -- hackathon's expiry and how many links changed.
+--
+-- A hackathon doqtri sent no link for is answered the same way, with 0 links
+-- (contract v1.5.0 section 9, step 6: 2xx and nothing to do); qdit sends one
+-- event per already-released hackathon when it ships v1.5.0, so expect a
+-- burst of those. The release is still kept, so a link sent before DOQ-54
+-- that the operator backfills to that hackathon later gets its expiry.
 create function public.record_qdit_hackathon_release(
   p_id             uuid,
   p_hackathon_slug text,

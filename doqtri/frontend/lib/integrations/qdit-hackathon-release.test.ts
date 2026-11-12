@@ -192,6 +192,34 @@ describe("handleQditWebhook: hackathon.released", () => {
   });
 });
 
+describe("the contract's worked example (v1.5.0, section 9)", () => {
+  it("verifies and records the 194-byte hackathon.released body signed at 1795339805", async () => {
+    const raw =
+      '{"id":"5c1e9a7b-2d4f-4e8a-b6c3-9f0d1a2b3c4e","event":"hackathon.released","hackathon_slug":"stellar-build-2026","released_at":"2026-11-22T09:30:00.000Z","occurred_at":"2026-11-22T09:30:00.000Z"}';
+    expect(bytes(raw).byteLength).toBe(194);
+    const releases = memoryReleases({ a: { hackathon: "stellar-build-2026", expiresAt: null } });
+    const result = await handleQditWebhook({
+      rawBody: bytes(raw),
+      timestamp: "1795339805",
+      signature: "sha256=e9a1a9f192815ca44ae84f20bc7a66576142473510eb372846b6aa64222bfbfb",
+      secret: SECRET,
+      nowMs: 1795339805_000,
+      store: milestoneStore,
+      readChain: async () => {
+        throw new Error("no chain read for a release");
+      },
+      releases,
+    });
+    expect(result).toEqual({ status: 200, body: { ok: true } });
+    expect(releases.links.a.expiresAt).toBe(Date.parse("2026-11-23T09:30:00.000Z"));
+  });
+
+  it("answers 2xx for a hackathon doqtri sent no link for (step 6)", async () => {
+    const releases = memoryReleases({});
+    expect((await deliver(body({ hackathon_slug: "test-never-sent" }), releases)).status).toBe(200);
+  });
+});
+
 describe("supabaseHackathonReleaseStore", () => {
   const event = parseHackathonReleased(RELEASE)!;
 

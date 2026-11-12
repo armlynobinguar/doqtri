@@ -23,7 +23,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(79);
+select plan(80);
 
 insert into auth.users (id, email) values
   ('00000000-0000-4000-8000-000000000001', 'owner@example.com'),
@@ -243,6 +243,12 @@ select is((select count(*)::int from public.mindmap_share('LinkTokenC_0123456789
 reset role;
 
 set local role service_role;
+select is(
+  (select row(outcome, links_updated)::text
+     from public.record_qdit_hackathon_release('60000000-0000-4000-8000-000000000005', 'test-never-sent',
+                                              now() - interval '30 days', now())),
+  row('applied', 0)::text,
+  'a hackathon doqtri sent no link for is answered, with nothing to change (contract step 6)');
 select throws_ok($$ select * from public.record_qdit_hackathon_release(gen_random_uuid(), 'Bad Slug', now(), now()) $$,
   '22023', null, 'a malformed hackathon_slug is refused');
 select throws_ok($$ select * from public.record_qdit_hackathon_release(gen_random_uuid(), 'spring', null, now()) $$,

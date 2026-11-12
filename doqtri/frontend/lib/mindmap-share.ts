@@ -186,14 +186,16 @@ export const MAX_STATUS_TOKENS = 500;
 export const MAX_STATUS_BODY_BYTES = 64 * 1024;
 
 /**
- * The tokens a status request asks about: `{"tokens": [...]}`, 0 to 500
- * strings of the /m/ shape (SHARE_TOKEN_PATTERN). Null for anything else,
- * which the route refuses with 400. Other top-level keys are ignored, so a
- * later minor contract version can add one.
+ * The tokens a status request asks about: `{"tokens": [...]}`, 1 to 500
+ * strings of the /m/ shape (SHARE_TOKEN_PATTERN), repeats allowed (contract
+ * v1.5.0, section 8). Null for anything else, which the route refuses with
+ * 400. Other top-level keys are ignored: the contract lets doqtri refuse
+ * them, and ignoring them lets a later minor version add one.
  */
 export function parseStatusRequest(body: unknown): string[] | null {
   const value = record(body);
-  if (!value || !Array.isArray(value.tokens) || value.tokens.length > MAX_STATUS_TOKENS) return null;
+  if (!value || !Array.isArray(value.tokens)) return null;
+  if (value.tokens.length < 1 || value.tokens.length > MAX_STATUS_TOKENS) return null;
   const tokens: string[] = [];
   for (const token of value.tokens) {
     if (typeof token !== "string" || !SHARE_TOKEN_PATTERN.test(token)) return null;

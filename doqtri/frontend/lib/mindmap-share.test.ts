@@ -178,8 +178,7 @@ describe("parseSharedGraph", () => {
 describe("parseStatusRequest (DOQ-54)", () => {
   const T = "AbCdEfGhIjKlMnOpQrStUvWxYz012345";
 
-  it("takes 0 to 500 tokens of the /m/ shape", () => {
-    expect(parseStatusRequest({ tokens: [] })).toEqual([]);
+  it("takes 1 to 500 tokens of the /m/ shape", () => {
     expect(parseStatusRequest({ tokens: [T, T] })).toEqual([T, T]);
     expect(parseStatusRequest({ tokens: Array(MAX_STATUS_TOKENS).fill(T) })).toHaveLength(500);
     expect(parseStatusRequest({ tokens: [T], later_field: true })).toEqual([T]);
@@ -189,6 +188,7 @@ describe("parseStatusRequest (DOQ-54)", () => {
     ["not an object", [T]],
     ["null", null],
     ["no tokens", {}],
+    ["an empty list", { tokens: [] }],
     ["tokens not an array", { tokens: T }],
     ["501 tokens", { tokens: Array(501).fill(T) }],
     ["a short token", { tokens: [T, "short"] }],
