@@ -308,7 +308,11 @@ export function SendToHackathonDialog({
         setSharesReload((n) => n + 1);
       } else {
         setError(payload?.message ?? COPY.unavailable);
-        if (payload?.code === "QDIT_UNCERTAIN") setCheckUrl(payload.qdit_url ?? null);
+        if (payload?.code === "QDIT_UNCERTAIN") {
+          setCheckUrl(payload.qdit_url ?? null);
+          // qdit may have it, so its link stayed live (DOQ-54): list it, with Revoke.
+          setSharesReload((n) => n + 1);
+        }
         // The hackathon closed, has not opened or is gone: show qdit's list as
         // it is now. The message stays until the user changes something.
         if (!pastingLink && payload && STALE_HACKATHON_CODES.has(payload.code)) setHackathonsReload((n) => n + 1);
@@ -480,7 +484,12 @@ export function SendResult({ result }: { result: HackathonSendSuccess }) {
           next
         )}
       </p>
-      {result.mindmap_url ? <ShareLink url={result.mindmap_url} label="Live mindmap link, sent with this snapshot" /> : null}
+      {result.mindmap_url ? (
+        <div className="grid gap-1">
+          <ShareLink url={result.mindmap_url} label="Live mindmap link, sent with this snapshot" />
+          <span className="text-muted-foreground text-[11px]">{SHARE_COPY.expiresUnknown}</span>
+        </div>
+      ) : null}
       {result.warnings.length > 0 ? (
         <ul className="text-muted-foreground grid list-disc gap-1 pl-4 text-[12px]">
           {result.warnings.map((warning) => (
@@ -637,7 +646,9 @@ export function MindmapShareList({ open, reload, exclude }: { open: boolean; rel
             <LinkIcon className="text-muted-foreground size-3.5 shrink-0" strokeWidth={1.5} />
             <span className="min-w-0 flex-1">
               <span className="text-foreground block truncate font-mono text-[11px]">{share.url ?? "No link on this deployment"}</span>
-              <span className="text-label block text-[11px]">{sharedOn(share.created_at)}</span>
+              <span className="text-label block text-[11px]">
+                {sharedOn(share.created_at)} · {expiresOn(share.expires_at)}
+              </span>
             </span>
             {share.url ? <CopyButton url={share.url} /> : null}
             <Button
@@ -676,6 +687,16 @@ function CopyButton({ url }: { url: string }) {
       <CopyIcon />
     </Button>
   );
+}
+
+/**
+ * When a link stops working (DOQ-54): the time once its hackathon's grades
+ * are released (24 hours after), until then that rule in words.
+ */
+export function expiresOn(iso: string | null): string {
+  const at = iso ? new Date(iso) : null;
+  if (!at || Number.isNaN(at.getTime())) return SHARE_COPY.expiresUnknown;
+  return `Expires ${at.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}`;
 }
 
 /** When a link was made, as "12 Nov 2026, 14:05" in the viewer's locale. */

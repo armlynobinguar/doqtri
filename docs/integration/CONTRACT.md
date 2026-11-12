@@ -1,6 +1,6 @@
 # doqtri x qdit integration contract
 
-Status: v1.4.0, WP-2.0 (history in section 13, Changelog). This file is
+Status: v1.5.0, WP-2.0 (history in section 13, Changelog). This file is
 byte-identical in both repos (`qdit/docs/integration/CONTRACT.md`,
 `doqtri/docs/integration/CONTRACT.md`).
 Change it in both repos in the same phase, through the masterplan's decision
@@ -12,8 +12,9 @@ Keywords MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 ## 1. Shape of the integration
 
 - The two apps keep separate databases and logins (D-01). They talk only over
-  HTTPS (qdit `/api/v1`, one webhook) and through the two public Soroban
-  contracts. Neither side ever reads the other's database.
+  HTTPS (qdit `/api/v1`, one webhook, and doqtri's public mindmap link status
+  endpoint, section 8) and through the two public Soroban contracts. Neither
+  side ever reads the other's database.
 - qdit is the OAuth 2.1 provider; doqtri is a confidential client (D-02). Each
   doqtri user connects their own qdit account, and qdit's own project roles
   apply to that user (D-20).
@@ -26,6 +27,7 @@ Keywords MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 | qdit API | `https://qdit.app/api/v1` |
 | qdit OAuth server | qdit's Supabase Auth URL, `https://<qdit-project-ref>.supabase.co/auth/v1` |
 | doqtri webhook | `https://www.doqtri.xyz/api/integrations/qdit/webhook` |
+| doqtri mindmap link status (v1.5.0) | `https://www.doqtri.xyz/api/mindmap-links/status` |
 | doqtri origin (doc URLs) | `https://www.doqtri.xyz` |
 | qdit origin (public pages) | `https://qdit.app` |
 | `DoqtriRegistry` (doqtri's chain, D-84) | testnet `CCCIDUCFQMTMAGESMPTB3MFW4TURS62ORSZNICFOE6MNQZO3MI7F6QRJ`; mainnet: not deployed yet, set by the operator |
@@ -41,7 +43,7 @@ sides of one pair MUST agree on them:
 | doqtri's OAuth client id | `QDIT_OAUTH_CLIENT_ID` | `DOQTRI_OAUTH_CLIENT_ID` | the client qdit registered for doqtri in this environment (D-61) |
 | doqtri's client secret | `QDIT_CLIENT_SECRET` | (held by qdit's OAuth server) | sent with `client_secret_basic` (D-67) |
 | Webhook secret | `QDIT_WEBHOOK_SECRET` | per row in `integration_webhooks` | section 9 |
-| doqtri origin | `NEXT_PUBLIC_SITE_URL` (else the Vercel production URL) | `DOQTRI_ORIGIN`, and `integration_settings.doqtri_origin` in its database (D-77) | the origin every `doc_url` starts with (D-45, D-72), and every hackathon `mindmap_url` (section 8) |
+| doqtri origin | `NEXT_PUBLIC_SITE_URL` (else the Vercel production URL) | `DOQTRI_ORIGIN`, and `integration_settings.doqtri_origin` in its database (D-77) | the origin every `doc_url` starts with (D-45, D-72), and every hackathon `mindmap_url` (section 8); qdit calls the mindmap link status endpoint on it (section 8) |
 | `DoqtriRegistry` (D-84) | `NEXT_PUBLIC_CONTRACT_ID`, `NEXT_PUBLIC_NETWORK_PASSPHRASE` | `DOQTRI_REGISTRY_CONTRACT_ID`, `DOQTRI_REGISTRY_NETWORK` (WP-3.2) | the registry address on that network (table above); the registry qdit checks plan versions against (section 12) |
 
 - `DOQTRI_OAUTH_CLIENT_ID` (D-61). qdit counts a write as doqtri's (for
@@ -126,6 +128,8 @@ sides of one pair MUST agree on them:
 | OAuth grant | qdit (user can revoke in qdit settings; section 5, D-59) | doqtri: access and refresh tokens, encrypted, server-only, in `integration_connections` |
 | Webhook secret | qdit, encrypted in `integration_webhooks` | doqtri: same value in `QDIT_WEBHOOK_SECRET` |
 | Notes and global mindmap sent in a hackathon snapshot (D-117) | doqtri | qdit: an insert-only copy in `hackathon_doqtri_snapshots`, for review of that project's hackathon entry, readable by the project's members and the hackathon's staff only, deleted 90 days after the hackathon closes; never sent back or synced |
+| Public mindmap links (`/m/<token>`): whether one is live, and when it expires (v1.5.0) | doqtri | qdit: the link itself (section 8), and each answer of the status endpoint in memory for at most 60 seconds; nothing stored |
+| When a hackathon's grades were released (`released_at`, D-116) | qdit | doqtri: the expiry it derives for that hackathon's mindmap links, from the `hackathon.released` event (section 9) |
 
 Rules that follow from the decisions:
 
@@ -491,7 +495,8 @@ they can see and `404 not_found` on one they cannot.
 
 These are the only method and path pairs in v1. Any other method on one of
 these paths, `HEAD` and `OPTIONS` included, is `404 not_found` (D-27,
-section 6).
+section 6). The one endpoint doqtri serves for qdit,
+`POST /api/mindmap-links/status` (v1.5.0), is at the end of this section.
 
 Doc links are app-only (D-60). `link_project_doc()` and
 `unlink_project_doc()`, the database functions the two `/projects/{id}/docs`
@@ -759,6 +764,14 @@ length is the length in UTF-8.
     notes that reach the node, each a `doc_id` in `notes`.
   - `links`: at most 20,000 of `{source, target}`, each naming an `id` in
     `nodes`.
+  - Hidden nodes (v1.5.0, DOQ-54). doqtri leaves out of `nodes` every node
+    the sending user has hidden in their doqtri mindmap style, and leaves out
+    of `links` every link whose `source` or `target` is such a node, so
+    qdit's label list, its counts and its grader never see them. doqtri
+    builds the page behind `mindmap_url` from the same graph. `notes` is not
+    affected: it holds the notes the sender chose. qdit does not and cannot
+    check this; a snapshot sent before doqtri shipped it keeps its hidden
+    nodes, and qdit keeps every snapshot as stored.
 - `mindmap_url` (v1.4.0, optional): the address of doqtri's public page for
   this global mindmap, or `null`, or left out; `null` and left out both mean
   no link. A string MUST be exactly the doqtri origin (section 1, qdit's
@@ -840,7 +853,8 @@ Window. A hackathon is open from its `opens_at` to its `closes_at`. Before
 granted in qdit by a hackathon admin, one per project, with an `until` time:
 while the current time is at or before `until`, `closes_at` does not apply to
 that project. A project may push before it has an entry in the hackathon
-(`submission_state` is then `none`).
+(`submission_state` is then `none`). Once the hackathon's grades are
+released, every new snapshot is `409 hackathon_closed`, late pass or not.
 
 Response `201` (`200` on a replay):
 
@@ -876,6 +890,29 @@ the snapshot's retention (below). qdit shows it to the team and to the
 hackathon's staff as a link that opens in a new tab, and lists it in the
 staff export; it adds nothing to eligibility or grading. A snapshot without a link is
 stored and frozen as before.
+
+Link status (v1.5.0). A link stops working when its sender revokes it in
+doqtri, and 24 hours after the hackathon's grades are released (section 9,
+`hackathon.released`). Before qdit prefills, shows or exports a stored link
+it asks doqtri's status endpoint (end of this section), with one request for
+all the links on a page or in an export:
+
+- the submit dialog's Mindmap link field starts from the newest snapshot's
+  link unless that link is dead; then from the current submission version's
+  link unless that one is dead; otherwise it starts empty;
+- a link the team types or pastes is checked when they submit or run the
+  check: a dead one is a field error ("This link was revoked or has
+  expired") and nothing is submitted;
+- the team's entry and the staff's submission page show **Open mindmap**
+  unless the link is dead, and otherwise say "Mindmap link revoked or
+  expired", with no link;
+- the staff export adds a Mindmap link status column after Mindmap link:
+  `Live`, `Revoked or expired` or `Unknown` (empty when there is no link).
+
+Dead means `live: false`. A link whose status qdit could not learn is
+unknown and is treated as live, so a doqtri that is down, slow or older than
+v1.5.0 leaves qdit as it was in v1.4.0. qdit stores no status, and the status
+changes nothing in eligibility or grading.
 
 `push_doqtri_hackathon_snapshot()` repeats the link rule in the database
 against `integration_settings.doqtri_origin` (section 1, D-95) when that is
@@ -984,9 +1021,86 @@ older than v1.3.0 answers `404 not_found` for this path (section 6, an
 unknown path); a client that must work with one falls back to asking for the
 hackathon's link.
 
+### doqtri: POST /api/mindmap-links/status (v1.5.0)
+
+Served by doqtri on the doqtri origin (section 1), not by qdit and not under
+`/api/v1`: `POST https://www.doqtri.xyz/api/mindmap-links/status` in
+production. It tells qdit which public mindmap links (`mindmap_url`,
+`<doqtri origin>/m/<token>`, above) still open (WP-4.7, DOQ-54, QDIT-67). It
+is public: no token, no cookie and no signature. Only qdit's server calls
+it, never a browser, so doqtri sends no CORS headers for it.
+
+```
+POST /api/mindmap-links/status
+Content-Type: application/json; charset=utf-8
+```
+
+```json
+{ "tokens": ["q3Zt8LwX1bVf0nYc5HkR2a", "Zx9_kL2mN4pQ6rS8tU0vW1"] }
+```
+
+- `tokens`: 1 to 500 strings, each a token as the `mindmap_url` rule above
+  defines it (22 to 64 characters of `A-Z a-z 0-9 _ -`): the part of the
+  link after `/m/`. A token may appear more than once; it is answered once.
+- The body is at most 65,536 bytes (64 KiB, section 4).
+
+doqtri answers `400` with section 6's error body (`invalid_request`) when
+the body is not JSON, is not an object with `tokens`, or `tokens` is not an
+array of 1 to 500 such tokens. It MAY also answer `400` for any other
+top-level field; qdit sends none. A `400` answers no token.
+
+Response `200`:
+
+```json
+{ "links": {
+    "q3Zt8LwX1bVf0nYc5HkR2a": { "live": true, "expires_at": "2026-11-23T09:30:00.000Z" },
+    "Zx9_kL2mN4pQ6rS8tU0vW1": { "live": false, "expires_at": null }
+  } }
+```
+
+- `links` holds one key for each distinct token of the request, and no
+  other. It is not wrapped in `{"data": ...}`: section 4's envelope is
+  qdit's.
+- `live`: `true` exactly when `/m/<token>` would show its page at that
+  moment: doqtri issued the token, it is not revoked, and its expiry, if it
+  has one, is still ahead. A token doqtri never issued, a revoked one and an
+  expired one are all `live: false`, and the answer never tells them apart.
+- `expires_at`: for a live link, when it stops working (`released_at` plus
+  24 hours, section 9), or `null` while it has no expiry. Always `null` when
+  `live` is `false`.
+- Nothing else about a link is in the answer: no graph data, title,
+  workspace, hackathon or sender. qdit ignores unknown fields (section 3).
+
+Caching. doqtri sends `Cache-Control: private, max-age=<n>` with `n` from 0
+to 60, or `no-store`. qdit keeps each answer (`live` true or false) for at
+most 60 seconds, for less when `max-age` is smaller, and not at all on
+`no-store`, `no-cache` or `max-age=0`. A revoke or an expiry therefore
+reaches qdit's pages within 60 seconds. qdit never caches an unknown
+status.
+
+Rate limits. doqtri limits the endpoint as it sees fit and answers `429`,
+with `Retry-After`, over its limit. One request carries up to 500 tokens, so
+a limit counts requests, not tokens. qdit sends one request per page view or
+export for the tokens it holds no fresh answer for (more than one only past
+500 tokens, then in parallel).
+
+How qdit calls it:
+
+- From its server only, and the whole check gives up after 2 seconds. It
+  sends only tokens of links that pass the `mindmap_url` rule against
+  `DOQTRI_ORIGIN`, and never logs a token: a token opens the page.
+- Anything other than a `200` with the shape above (a timeout, a network
+  error, `400`, `404`, `429`, a `5xx`) leaves every token of that request
+  unknown, and so does a token missing from `links` or an entry whose `live`
+  is not a boolean. qdit does not retry within the same page view.
+- Unknown is treated as live (Link status, above). A doqtri older than
+  v1.5.0 answers `404` for this path, so qdit then shows links as in v1.4.0.
+
 ## 9. Webhook
 
-qdit sends one event type in v1, to the URL in `integration_webhooks`:
+qdit sends two event types in v1, `milestone.status_changed` and (v1.5.0)
+`hackathon.released`, to the URL in `integration_webhooks`, with the same
+headers, signing, retries and idempotency:
 
 ```
 POST /api/integrations/qdit/webhook
@@ -998,6 +1112,8 @@ X-Qdit-Signature: sha256=2af3710d7ffbe0732e23e5d7e81b6e3350569bb189fd133681af78a
 ```json
 {"id":"7d0f8a52-3c1e-4b6a-9f21-5e8c0d4b2a10","event":"milestone.status_changed","project_id":"3f6c2a1e-8b4d-4c7e-9a10-2d5b7e9f1c34","milestone_id":"b81e4f07-6a2c-4d93-8e5f-0c7a9b3d2e61","status":"approved","occurred_at":"2026-10-24T11:59:58.412Z"}
 ```
+
+### milestone.status_changed
 
 Body fields: `id` (event uuid, the idempotency key), `event`, `project_id`,
 `milestone_id`, `status` (`milestone_status`), `occurred_at`. Ids only: no
@@ -1017,6 +1133,41 @@ When one transaction both records an anchor and changes the status, qdit MAY
 emit two events; doqtri handles each the same way (re-read the chain), so a
 second one costs one extra read.
 
+### hackathon.released (v1.5.0)
+
+```json
+{"id":"5c1e9a7b-2d4f-4e8a-b6c3-9f0d1a2b3c4e","event":"hackathon.released","hackathon_slug":"stellar-build-2026","released_at":"2026-11-22T09:30:00.000Z","occurred_at":"2026-11-22T09:30:00.000Z"}
+```
+
+Body fields: `id` (event uuid, the idempotency key), `event`,
+`hackathon_slug` (the slug doqtri sent as `hackathon_slug` in its
+snapshots, section 8), `released_at` (when the hackathon's grades were
+released, D-116), `occurred_at`. Nothing else: no name, entries, scores or
+finalists.
+
+When qdit emits: once per hackathon, when Release grades sets its
+`released_at` (`release_hackathon_grades()`, D-116). Release happens once and
+cannot be undone, so a second release attempt emits nothing, and
+`released_at` never changes afterwards. A hackathon whose grades were
+released before qdit shipped v1.5.0 gets its one event when qdit ships it,
+with its original `released_at`. qdit sends it for every hackathon, hidden
+and `test-` ones included, whether or not doqtri sent it a snapshot. A
+hackathon's slug cannot change once a snapshot was sent to it.
+
+Both timestamps are UTC with milliseconds (section 4), the same bytes on
+every retry. `occurred_at` is when qdit wrote the event: just after
+`released_at`, or, for a hackathon released before v1.5.0, when qdit shipped
+it. qdit refuses every new snapshot for a hackathon once its grades
+are released (section 8, the window), so no link is sent for it after the
+event.
+
+What doqtri does with it (DOQ-54): every mindmap link sent with a snapshot
+for that `hackathon_slug` stops working at `released_at` plus 24 hours. A
+replay or another event for the same hackathon never moves an expiry
+later. A `hackathon_slug` with no links is answered `2xx` and ignored.
+
+### Signing, handling and delivery (both events)
+
 Signing:
 
 1. `timestamp` = Unix time in whole seconds, as a decimal string, sent in
@@ -1029,7 +1180,7 @@ Signing:
    one is valid.
 
 Worked example (secret `whsec_example_do_not_use`, timestamp `1792843200` =
-2026-10-24T12:00:00Z, the 247-byte body above):
+2026-10-24T12:00:00Z, the 247-byte `milestone.status_changed` body above):
 
 `signed_payload` is `1792843200.` followed by the body bytes, unchanged, and
 the signature is
@@ -1038,6 +1189,15 @@ Reproduce with:
 
 ```sh
 printf '%s' '1792843200.{"id":"7d0f8a52-3c1e-4b6a-9f21-5e8c0d4b2a10","event":"milestone.status_changed","project_id":"3f6c2a1e-8b4d-4c7e-9a10-2d5b7e9f1c34","milestone_id":"b81e4f07-6a2c-4d93-8e5f-0c7a9b3d2e61","status":"approved","occurred_at":"2026-10-24T11:59:58.412Z"}' \
+  | openssl dgst -sha256 -hmac 'whsec_example_do_not_use'
+```
+
+The same for the 194-byte `hackathon.released` body above, timestamp
+`1795339805` = 2026-11-22T09:30:05Z: the signature is
+`e9a1a9f192815ca44ae84f20bc7a66576142473510eb372846b6aa64222bfbfb`.
+
+```sh
+printf '%s' '1795339805.{"id":"5c1e9a7b-2d4f-4e8a-b6c3-9f0d1a2b3c4e","event":"hackathon.released","hackathon_slug":"stellar-build-2026","released_at":"2026-11-22T09:30:00.000Z","occurred_at":"2026-11-22T09:30:00.000Z"}' \
   | openssl dgst -sha256 -hmac 'whsec_example_do_not_use'
 ```
 
@@ -1050,10 +1210,14 @@ doqtri MUST, in this order:
    no match.
 4. Parse; refuse with `400` if the body is not valid JSON.
 5. If `id` was already processed, answer `200` and do nothing.
-6. Answer `2xx` and ignore an unknown `event` or an unlinked milestone.
-7. Otherwise record `id`, then re-read `milestone_proof.get_milestone_status`
-   for the milestone and update its suggestion. Never sign or change chain
-   state from the webhook alone (D-04, D-05).
+6. Answer `2xx` and ignore an unknown `event`, an unlinked milestone, or a
+   `hackathon_slug` it sent no mindmap link for.
+7. For `milestone.status_changed`: record `id`, then re-read
+   `milestone_proof.get_milestone_status` for the milestone and update its
+   suggestion. Never sign or change chain state from the webhook alone
+   (D-04, D-05).
+8. For `hackathon.released`: record `id`, then set the expiry of that
+   hackathon's mindmap links (above).
 
 doqtri SHOULD answer within 10 seconds and keep processed ids for at least
 7 days.
@@ -1072,7 +1236,11 @@ Delivery and retries (qdit):
   then outbox insertion order) is still undelivered: the later event waits
   until the earlier one is delivered or dead. Its own 8 attempts and backoff
   start when it is released, so waiting never uses them up. Events for
-  different milestones do not wait on each other.
+  different milestones do not wait on each other. A `hackathon.released`
+  event waits for no other event, and none waits for it.
+- A `hackathon.released` event that goes dead is not sent again by itself;
+  the links of that hackathon then keep no expiry until an operator re-queues
+  it (qdit's hackathon runbook).
 - Because a dead event releases the next one, and because a delivered event
   can still be processed late on doqtri's side, consumers can see gaps and
   stale `status` values. Consumers MUST NOT rely on order or on `status` in
@@ -1472,6 +1640,40 @@ project's id, the link ids, or who made the link.
 Every change here is additive within v1 (section 3), except that v1.0.2
 narrows what `doc_url` accepts (D-45). Section 3 allows that because
 doqtri only ever sent its own URLs.
+
+- v1.5.0 (2026-11-12): minor version for one new doqtri endpoint and one new
+  webhook event type (WP-4.7, QDIT-67, DOQ-54). Every existing request,
+  response and event stays as it was.
+  - Section 1: the integration also uses doqtri's public
+    `POST /api/mindmap-links/status`, on the doqtri origin.
+  - Section 2: doqtri owns whether a mindmap link is live and when it
+    expires; qdit keeps answers in memory for at most 60 seconds. qdit owns
+    `released_at`; doqtri derives link expiry from it.
+  - Section 8: the snapshot's `global_mindmap` leaves out nodes hidden in
+    the sender's doqtri style and every link touching one; snapshots sent
+    before keep theirs. New "Link status": before it prefills, shows or
+    exports a mindmap link, qdit asks doqtri whether it is live, with one
+    request per page or export; a dead link is not prefilled, is refused
+    with a field error when typed, is shown as "Mindmap link revoked or
+    expired", and is `Revoked or expired` in the export's new Mindmap link
+    status column; unknown (no answer within 2 seconds, or any error)
+    counts as live. New doqtri endpoint `POST /api/mindmap-links/status`:
+    public, `{"tokens": [...]}` of 1 to 500 tokens, answer
+    `{"links": {"<token>": {"live": bool, "expires_at": string|null}}}`,
+    `live: false` alike for unknown, revoked and expired tokens,
+    `Cache-Control` of at most 60 seconds, `400` for a malformed body,
+    `429` over doqtri's rate limit.
+  - Section 9: new event `hackathon.released`
+    (`{id, event, hackathon_slug, released_at, occurred_at}`), sent once per
+    hackathon when its grades are released (and once, at upgrade, for a
+    hackathon released before), with the same signing, retries and
+    idempotency as `milestone.status_changed` and outside its per-milestone
+    order. doqtri expires that hackathon's mindmap links 24 hours after
+    `released_at`, never later on a replay. A doqtri older than DOQ-54
+    ignores the event (section 3), and a qdit older than v1.5.0 never calls
+    the status endpoint, so either side may ship first without breaking the
+    other. doqtri ships first all the same: an event it ignored is not sent
+    again, so that hackathon's links would not expire.
 
 - v1.4.0 (2026-11-12): minor version for one new optional request field
   (WP-4.7, QDIT-66, DOQ-53). Every existing request and response stays as it

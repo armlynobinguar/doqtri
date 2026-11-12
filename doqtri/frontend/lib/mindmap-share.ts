@@ -142,6 +142,11 @@ export type MindmapShareListItem = {
   /** The public link, or null when this deployment cannot make one (not https). */
   url: string | null;
   created_at: string;
+  /**
+   * When the link stops working (DOQ-54): 24 hours after its hackathon's
+   * grades are released. Null until qdit says they are.
+   */
+  expires_at: string | null;
 };
 
 export type MindmapShareListResponse =
@@ -151,7 +156,11 @@ export type MindmapShareListResponse =
 export const MINDMAP_SHARE_COPY = {
   /** Before Send, in the dialog. */
   warning:
-    "Send also makes a read-only link to this mindmap. Anyone with the link can see its node labels (note titles, headings and concepts), but never the text of your notes. Revoke it here at any time.",
+    "Send also makes a read-only link to this mindmap. Anyone with the link can see its node labels (note titles, headings and concepts), but never the text of your notes or nodes you hid. It stops working 24 hours after the hackathon's grades are released. Revoke it here at any time.",
+  /** After no answer from qdit, which may have the snapshot: its link stays live (DOQ-54). */
+  keptAfterNoAnswer: "This send's mindmap link stays live; it is listed below. Revoke it if qdit doesn't have this snapshot.",
+  /** An earlier link whose hackathon has not released its grades yet (DOQ-54). */
+  expiresUnknown: "Expires 24 h after grades are released",
   /** When the share could not be stored and the snapshot went without a link. */
   noLink: "No live mindmap link was made this time: qdit only has the images for this send.",
   copied: "Link copied",
@@ -162,3 +171,35 @@ export const MINDMAP_SHARE_COPY = {
   forbidden: "Only an admin or owner of this workspace can manage its mindmap links",
   notFound: "That link is already revoked, or isn't this workspace's",
 } as const;
+
+// ---------------------------------------------------------------------------
+// Link status (POST /api/mindmap-links/status, contract v1.5.0, DOQ-54)
+// ---------------------------------------------------------------------------
+
+/** The status endpoint's path. Public: no session, no qdit token. */
+export const MINDMAP_LINK_STATUS_PATH = "/api/mindmap-links/status";
+
+/** Most tokens one status request may ask about. */
+export const MAX_STATUS_TOKENS = 500;
+
+/** Largest status request body: 500 tokens of 64 characters fit with room to spare (contract section 4). */
+export const MAX_STATUS_BODY_BYTES = 64 * 1024;
+
+/**
+ * The tokens a status request asks about: `{"tokens": [...]}`, 1 to 500
+ * strings of the /m/ shape (SHARE_TOKEN_PATTERN), repeats allowed (contract
+ * v1.5.0, section 8). Null for anything else, which the route refuses with
+ * 400. Other top-level keys are ignored: the contract lets doqtri refuse
+ * them, and ignoring them lets a later minor version add one.
+ */
+export function parseStatusRequest(body: unknown): string[] | null {
+  const value = record(body);
+  if (!value || !Array.isArray(value.tokens)) return null;
+  if (value.tokens.length < 1 || value.tokens.length > MAX_STATUS_TOKENS) return null;
+  const tokens: string[] = [];
+  for (const token of value.tokens) {
+    if (typeof token !== "string" || !SHARE_TOKEN_PATTERN.test(token)) return null;
+    tokens.push(token);
+  }
+  return tokens;
+}

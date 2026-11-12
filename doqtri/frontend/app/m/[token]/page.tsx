@@ -7,8 +7,10 @@ import { loadMindmapShare } from "@/lib/mindmap-share-server";
 /*
  * A shared mindmap link (WP-4.7, DOQ-53): the global mindmap one press of
  * "Send to qdit hackathon" sent, frozen, for anyone with the link, signed in
- * or not. proxy.ts has already turned a malformed, unknown or revoked token
- * into a real 404; the notFound() below covers a link revoked in between.
+ * or not. proxy.ts has already turned a malformed, unknown, revoked or
+ * expired token (24 hours after its hackathon's grades are released, DOQ-54)
+ * into a real 404; the notFound() below covers a link revoked or expiring in
+ * between.
  *
  * Read on every request (a revoke is a 404 at once), through the anon
  * mindmap_share() RPC: labels, kinds, depths, links and the sender's style

@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canSend,
+  expiresOn,
   hackathonChoices,
   MindmapShareWarning,
   opensOn,
@@ -269,6 +270,31 @@ describe("the mindmap link (DOQ-53)", () => {
     const html = result({ mindmap_url: null });
     expect(html).not.toContain("/m/");
     expect(html).not.toContain("Copy");
+    expect(html).not.toContain("Expires");
+  });
+
+  it("says before Send that the link expires after grades are released, and leaves hidden nodes out (DOQ-54)", () => {
+    const html = renderToStaticMarkup(createElement(MindmapShareWarning));
+    expect(html).toContain("24 hours after the hackathon&#x27;s grades are released");
+    expect(html).toContain("nodes you hid");
+  });
+
+  it("says when the sent link expires", () => {
+    expect(result({ mindmap_url: LINK })).toContain("Expires 24 h after grades are released");
+  });
+});
+
+describe("expiresOn (DOQ-54)", () => {
+  it("says the rule until the hackathon's grades are released", () => {
+    expect(expiresOn(null)).toBe("Expires 24 h after grades are released");
+    expect(expiresOn("not a time")).toBe("Expires 24 h after grades are released");
+  });
+
+  it("gives the time once it is known", () => {
+    const text = expiresOn("2026-11-21T08:00:00.000Z");
+    expect(text).toMatch(/^Expires /);
+    expect(text).toContain("2026");
+    expect(text).not.toContain("grades");
   });
 });
 

@@ -195,12 +195,21 @@ const byString = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
  * it) are sorted. Only the contract's fields are sent: `href` and `summary`
  * stay behind. Ids over 128 code points are shortened (wireNodeId) and labels
  * over 300 cut (wireLabel), so the result always passes those two checks.
+ *
+ * `hidden` (WP-4.7, DOQ-54): the ids, as the global mindmap names them
+ * (before wireNodeId), of nodes the sender hid in their `global` studio
+ * style (hiddenNodeIds in lib/mindmap-style.ts). Each is left out, with every
+ * link that touches it, before anything else, so the snapshot qdit gets (its
+ * label list, counts and AI grader), the stored share and the shared page all
+ * lack it. A hidden node's neighbours stay, as on the canvas. `doc_ids` and
+ * `notes` are unchanged: hiding is a mindmap setting, not a note's.
  */
-export function serializeGlobalMindmap(docs: Doc[]): HackathonGlobalMindmap {
+export function serializeGlobalMindmap(docs: Doc[], hidden: ReadonlySet<string> = new Set()): HackathonGlobalMindmap {
   const ordered = [...docs].sort((a, b) => byString(a.id, b.id));
   const { graph, reachedBy } = buildGlobalMindmapWithReach(ordered);
 
   const nodes: HackathonMindmapNode[] = graph.nodes
+    .filter((node) => !hidden.has(node.id))
     .map((node) => ({
       id: wireNodeId(node.id),
       label: wireLabel(node.label),
@@ -211,6 +220,7 @@ export function serializeGlobalMindmap(docs: Doc[]): HackathonGlobalMindmap {
     .sort((a, b) => byString(a.id, b.id));
 
   const links: HackathonMindmapLink[] = graph.links
+    .filter((link) => !hidden.has(link.source) && !hidden.has(link.target))
     .map((link) => ({ source: wireNodeId(link.source), target: wireNodeId(link.target) }))
     .sort((a, b) => byString(a.source, b.source) || byString(a.target, b.target));
 
@@ -467,6 +477,11 @@ export async function buildHackathonSnapshot(params: {
   workspaceId: string;
   hackathonSlug: string;
   sourceClient: SupabaseClient;
+  /**
+   * Global mindmap node ids the sender hid in their `global` style
+   * (hiddenNodeIds()): left out of `global_mindmap` with their links (DOQ-54).
+   */
+  hiddenNodeIds?: ReadonlySet<string>;
   now?: () => Date;
 }): Promise<{ snapshot: HackathonSnapshot; body: string; warnings: string[] }> {
   const { supabase, workspaceId, hackathonSlug } = params;
@@ -534,7 +549,7 @@ export async function buildHackathonSnapshot(params: {
     workspace_id: workspaceId,
     generated_at: (params.now?.() ?? new Date()).toISOString(),
     notes,
-    global_mindmap: serializeGlobalMindmap(docs),
+    global_mindmap: serializeGlobalMindmap(docs, params.hiddenNodeIds),
   };
   return { snapshot, body: validateHackathonSnapshot(snapshot), warnings };
 }

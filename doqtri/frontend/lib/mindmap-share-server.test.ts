@@ -16,7 +16,9 @@ vi.mock("@supabase/supabase-js", async (importOriginal) => ({
   },
 }));
 
-const { loadMindmapShare, newShareToken, opaqueIds, shareStyle } = await import("@/lib/mindmap-share-server");
+const { hiddenNodeIds, insertMindmapShare, loadMindmapLinkStatuses, loadMindmapShare, newShareToken, opaqueIds, shareStyle } = await import(
+  "@/lib/mindmap-share-server"
+);
 const { SHARE_TOKEN_PATTERN } = await import("@/lib/mindmap-share");
 
 const TOKEN = "AbCdEfGhIjKlMnOpQrStUvWxYz012345";
@@ -154,5 +156,99 @@ describe("loadMindmapShare", () => {
   it("throws when the read fails, rather than calling the link unknown", async () => {
     rpc.mockResolvedValue({ data: null, error: { message: "timeout" } });
     await expect(loadMindmapShare(TOKEN)).rejects.toThrow(/timeout/);
+  });
+});
+
+describe("hiddenNodeIds (DOQ-54)", () => {
+  it("is the ids the stored global style hides, and only those", () => {
+    const raw = {
+      overrides: {
+        "concept:secret": { hidden: true },
+        "doc:x": { hidden: false, color: "#ff0000" },
+        "concept:loud": { color: "#00ff00" },
+        "concept:odd": { hidden: "yes" },
+      },
+    };
+    expect([...hiddenNodeIds(raw)]).toEqual(["concept:secret"]);
+  });
+
+  it("is empty for no style, or one that does not parse", () => {
+    expect(hiddenNodeIds(null).size).toBe(0);
+    expect(hiddenNodeIds(undefined).size).toBe(0);
+    expect(hiddenNodeIds("nonsense").size).toBe(0);
+    expect(hiddenNodeIds({ overrides: [] }).size).toBe(0);
+  });
+});
+
+describe("insertMindmapShare", () => {
+  it("stores the hackathon the link is sent to (DOQ-54)", async () => {
+    const inserted: unknown[] = [];
+    const admin = {
+      from: () => ({
+        insert: (row: unknown) => {
+          inserted.push(row);
+          return { select: () => ({ single: async () => ({ data: { id: "id-1" }, error: null }) }) };
+        },
+      }),
+    };
+    const graph: HackathonGlobalMindmap = { nodes: [], links: [] };
+    await insertMindmapShare(admin as never, {
+      token: TOKEN,
+      workspaceId: "w",
+      createdBy: "u",
+      snapshotId: "s",
+      hackathonSlug: "spring-2026",
+      graph,
+      style: null,
+    });
+    expect(inserted).toEqual([expect.objectContaining({ hackathon_slug: "spring-2026", snapshot_id: "s" })]);
+  });
+});
+
+describe("loadMindmapLinkStatuses (DOQ-54)", () => {
+  const LIVE = TOKEN;
+  const EXPIRING = "Expiring_0123456789abcdefgh";
+  const DEAD = "DeadLinkToken_0123456789abc";
+  const UNKNOWN = "UnknownToken_0123456789abcd";
+
+  it("answers every token asked about; unknown reads exactly like revoked or expired", async () => {
+    const adminRpc = vi.fn(async () => ({
+      data: [
+        { token: LIVE, live: true, expires_at: null },
+        { token: EXPIRING, live: true, expires_at: "2026-11-21T08:00:00+00:00" },
+        { token: DEAD, live: false, expires_at: null },
+      ],
+      error: null,
+    }));
+    const links = await loadMindmapLinkStatuses({ rpc: adminRpc } as never, [LIVE, EXPIRING, DEAD, UNKNOWN, LIVE]);
+    expect(adminRpc).toHaveBeenCalledWith("mindmap_share_statuses", { p_tokens: [LIVE, EXPIRING, DEAD, UNKNOWN] });
+    expect(links).toEqual({
+      [LIVE]: { live: true, expires_at: null },
+      [EXPIRING]: { live: true, expires_at: "2026-11-21T08:00:00.000Z" },
+      [DEAD]: { live: false, expires_at: null },
+      [UNKNOWN]: { live: false, expires_at: null },
+    });
+  });
+
+  it("never passes on an expiry for a link that is not live, nor a row it did not ask about", async () => {
+    const adminRpc = vi.fn(async () => ({
+      data: [
+        { token: DEAD, live: false, expires_at: "2026-11-01T00:00:00Z" },
+        { token: "NotAskedToken_0123456789abc", live: true, expires_at: null },
+      ],
+      error: null,
+    }));
+    expect(await loadMindmapLinkStatuses({ rpc: adminRpc } as never, [DEAD])).toEqual({ [DEAD]: { live: false, expires_at: null } });
+  });
+
+  it("asks nothing for an empty batch", async () => {
+    const adminRpc = vi.fn();
+    expect(await loadMindmapLinkStatuses({ rpc: adminRpc } as never, [])).toEqual({});
+    expect(adminRpc).not.toHaveBeenCalled();
+  });
+
+  it("throws when the read fails, so the route can say it does not know", async () => {
+    const adminRpc = vi.fn(async () => ({ data: null, error: { message: "down" } }));
+    await expect(loadMindmapLinkStatuses({ rpc: adminRpc } as never, [LIVE])).rejects.toThrow("down");
   });
 });

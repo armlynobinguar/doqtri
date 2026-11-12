@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { defaultStyleFor, parseStyle, type MindmapStyle, type NodeOverride } from "@/lib/mindmap-style";
+import { defaultStyleFor, isHidden, parseStyle, type MindmapStyle, type NodeOverride } from "@/lib/mindmap-style";
 import { wireNodeId, type HackathonGlobalMindmap } from "@/lib/integrations/qdit-hackathon";
 import { parseSharedGraph, SHARE_TOKEN_PATTERN } from "@/lib/mindmap-share";
 import type { MindmapGraph } from "@/lib/mindmap-graph";
@@ -42,11 +42,26 @@ export function shareStyle(raw: unknown, graph: HackathonGlobalMindmap): Mindmap
   return { ...style, overrides };
 }
 
+/**
+ * The global mindmap node ids the sender hid in their stored `global` studio
+ * style (an override with `hidden: true`, isHidden() in lib/mindmap-style.ts),
+ * parsed as shareStyle() parses it. Ids are the global mindmap's own, before
+ * wireNodeId, which is how the style keys them. Empty for no style.
+ * The snapshot builder leaves these nodes and their links out (DOQ-54).
+ */
+export function hiddenNodeIds(raw: unknown): Set<string> {
+  if (raw === null || raw === undefined) return new Set();
+  const style = parseStyle(raw, defaultStyleFor("free"));
+  return new Set(Object.keys(style.overrides).filter((id) => isHidden(style, id)));
+}
+
 export type NewMindmapShare = {
   token: string;
   workspaceId: string;
   createdBy: string;
   snapshotId: string;
+  /** The hackathon it is sent to (DOQ-54): its links expire with that hackathon's release. */
+  hackathonSlug: string;
   graph: HackathonGlobalMindmap;
   style: MindmapStyle | null;
 };
@@ -65,6 +80,7 @@ export async function insertMindmapShare(admin: SupabaseClient, share: NewMindma
       workspace_id: share.workspaceId,
       created_by: share.createdBy,
       snapshot_id: share.snapshotId,
+      hackathon_slug: share.hackathonSlug,
       graph: share.graph,
       style: share.style,
     })
@@ -143,4 +159,39 @@ export function opaqueIds(graph: MindmapGraph, style: unknown): { graph: Mindmap
     }
   }
   return { graph: opaque, style: { ...raw, overrides } };
+}
+
+// ---------------------------------------------------------------------------
+// Link status (POST /api/mindmap-links/status, DOQ-54)
+// ---------------------------------------------------------------------------
+
+/** One link's answer: live or not, and when a live link expires (null until known). */
+export type MindmapLinkStatus = { live: boolean; expires_at: string | null };
+
+/**
+ * Whether each of `tokens` is a live link, through mindmap_share_statuses()
+ * as the service role (`admin` MUST be it: the RPC is not granted to anyone
+ * else, so the route's rate limit cannot be skipped). Every token asked about
+ * is in the answer: one doqtri has no row for, or a malformed one, reads
+ * `{ live: false, expires_at: null }`, like a revoked or expired one, so the
+ * answer never tells them apart. Throws when the read fails.
+ */
+export async function loadMindmapLinkStatuses(
+  admin: SupabaseClient,
+  tokens: readonly string[],
+): Promise<Record<string, MindmapLinkStatus>> {
+  const links: Record<string, MindmapLinkStatus> = {};
+  for (const token of tokens) links[token] = { live: false, expires_at: null };
+  const asked = [...new Set(tokens)].filter((token) => SHARE_TOKEN_PATTERN.test(token));
+  if (asked.length === 0) return links;
+
+  const { data, error } = await admin.rpc("mindmap_share_statuses", { p_tokens: asked });
+  if (error) throw new Error(`Failed to read the links' status: ${error.message}`);
+  for (const row of (data ?? []) as { token: string; live: boolean; expires_at: string | null }[]) {
+    if (!(row.token in links)) continue;
+    const live = row.live === true;
+    const at = live && row.expires_at ? new Date(row.expires_at) : null;
+    links[row.token] = { live, expires_at: at && !Number.isNaN(at.getTime()) ? at.toISOString() : null };
+  }
+  return links;
 }

@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { getRedirectUrl, getRewrittenUrl, isRewrite } from "next/experimental/testing/server";
+import { getRedirectUrl, getRewrittenUrl, isRewrite, unstable_doesMiddlewareMatch } from "next/experimental/testing/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -34,7 +34,7 @@ vi.mock("@/lib/promo", async (original) => {
 
 const { ENDED_PROMO_REWRITE, MINDMAP_PROMO } = await import("@/lib/promo");
 const { SHARE_NOT_FOUND_REWRITE } = await import("@/lib/mindmap-share");
-const { proxy } = await import("./proxy");
+const { proxy, config } = await import("./proxy");
 
 const ORIGIN = "https://doqtri.test";
 const visit = (path: string) => proxy(new NextRequest(`${ORIGIN}${path}`));
@@ -114,5 +114,25 @@ describe.each(VISITORS)("a visitor %s at /m/<token> (WP-4.7, DOQ-53)", (_label, 
     state.rpcError = { message: "down" };
     const res = await visit(`/m/${LIVE}`);
     expect(getRewrittenUrl(res)).toBe(`${ORIGIN}${SHARE_NOT_FOUND_REWRITE}`);
+  });
+});
+
+describe("the public link status endpoint (WP-4.7, DOQ-54)", () => {
+  it("is never run through the proxy, so a signed-out caller is never redirected", () => {
+    expect(unstable_doesMiddlewareMatch({ config, url: "/api/mindmap-links/status" })).toBe(false);
+  });
+
+  it("while the shared page still is", () => {
+    expect(unstable_doesMiddlewareMatch({ config, url: "/m/AbCdEfGhIjKlMnOpQrStUvWxYz012345" })).toBe(true);
+  });
+
+  it("answers an expired link at /m/<token> with the 404 rewrite, as mindmap_share_live() says it is not live", async () => {
+    state.user = null;
+    state.liveTokens = new Set();
+    state.rpcError = null;
+    state.rpcCalls = [];
+    const res = await visit("/m/ExpiredLinkToken_0123456789");
+    expect(getRewrittenUrl(res)).toBe(`${ORIGIN}${SHARE_NOT_FOUND_REWRITE}`);
+    expect(state.rpcCalls).toEqual([["mindmap_share_live", { p_token: "ExpiredLinkToken_0123456789" }]]);
   });
 });

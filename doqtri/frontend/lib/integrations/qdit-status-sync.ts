@@ -12,6 +12,12 @@ import {
 import type { RecordApproval } from "@/lib/integrations/qdit-approvals";
 import { QditError, type QditClient, type QditMilestoneStatus } from "@/lib/integrations/qdit-client";
 import { QDIT_MILESTONE_STATE_COLUMNS, type QditMilestoneStateRow } from "@/lib/integrations/qdit-status";
+import {
+  parseHackathonReleased,
+  QDIT_HACKATHON_RELEASED_EVENT,
+  type HackathonReleasedEvent,
+  type HackathonReleaseStore,
+} from "@/lib/integrations/qdit-hackathon-release";
 
 /**
  * Keeping doqtri's picture of linked qdit milestones current (WP-2.8;
@@ -30,6 +36,12 @@ import { QDIT_MILESTONE_STATE_COLUMNS, type QditMilestoneStateRow } from "@/lib/
  *                       milestone of the note read from the chain again, and
  *                       from qdit's API as the user, so a missed, late or
  *                       duplicated webhook is put right.
+ *
+ * The same webhook also carries `hackathon.released` (contract v1.5.0,
+ * WP-4.7, DOQ-54): the same signature check, then the event is recorded by
+ * id in the same idempotency store and the hackathon's mindmap links get
+ * their expiry (lib/integrations/qdit-hackathon-release.ts). Any other event
+ * type is still acknowledged and dropped.
  *
  * Neither signs anything or touches the chain beyond reading it (D-04, D-05):
  * an editor signs in the browser, with their own wallet (D-14).
@@ -110,6 +122,8 @@ export type WebhookEvent = {
 
 export type ParsedWebhook =
   | { kind: "event"; event: WebhookEvent }
+  /** `hackathon.released` (DOQ-54). */
+  | { kind: "released"; event: HackathonReleasedEvent }
   /** Another event type: acknowledged and dropped (section 3). */
   | { kind: "unknown"; event: string | null }
   | { kind: "invalid"; reason: string };
@@ -125,6 +139,12 @@ export function parseWebhookEvent(rawBody: Uint8Array): ParsedWebhook {
     return { kind: "invalid", reason: "The body is not a JSON object." };
   }
   const b = body as Record<string, unknown>;
+  if (b.event === QDIT_HACKATHON_RELEASED_EVENT) {
+    const released = parseHackathonReleased(b);
+    return released
+      ? { kind: "released", event: released }
+      : { kind: "invalid", reason: "The event is missing a field, or a field is malformed." };
+  }
   if (b.event !== QDIT_WEBHOOK_EVENT) return { kind: "unknown", event: typeof b.event === "string" ? b.event : null };
 
   const id = typeof b.id === "string" && UUID.test(b.id) ? b.id.toLowerCase() : null;
@@ -358,6 +378,11 @@ export async function handleQditWebhook(params: {
   readChain: ReadChain;
   /** WP-3.1: called when the read shows the milestone Approved. */
   recordApproval?: RecordApproval;
+  /**
+   * DOQ-54: where `hackathon.released` is recorded. Without it the event is
+   * acknowledged and dropped like any unknown one.
+   */
+  releases?: HackathonReleaseStore;
 }): Promise<WebhookResult> {
   const { rawBody, store } = params;
   if (rawBody.byteLength > MAX_WEBHOOK_BODY_BYTES) return { status: 413, body: { error: "Body too large" } };
@@ -379,6 +404,16 @@ export async function handleQditWebhook(params: {
   const parsed = parseWebhookEvent(rawBody);
   if (parsed.kind === "invalid") return { status: 400, body: { error: parsed.reason } };
   if (parsed.kind === "unknown") return { status: 200, body: { ok: true, ignored: "unknown_event" } };
+  if (parsed.kind === "released") {
+    if (!params.releases) return { status: 200, body: { ok: true, ignored: "unknown_event" } };
+    try {
+      const result = await params.releases.record(parsed.event);
+      return { status: 200, body: result.outcome === "duplicate" ? { ok: true, duplicate: true } : { ok: true } };
+    } catch (error) {
+      console.error(`[qdit-webhook] ${error instanceof Error ? error.message : String(error)}`);
+      return { status: 503, body: { error: "Could not process the event. Retry later." } };
+    }
+  }
   const { event } = parsed;
 
   try {

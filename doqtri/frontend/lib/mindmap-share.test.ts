@@ -3,8 +3,10 @@ import { buildGlobalMindmap } from "@/lib/global-mindmap";
 import { serializeGlobalMindmap } from "@/lib/integrations/qdit-hackathon";
 import {
   isMindmapShareUrl,
+  MAX_STATUS_TOKENS,
   mindmapShareUrl,
   parseSharedGraph,
+  parseStatusRequest,
   SHARE_NOT_FOUND_REWRITE,
   SHARE_TOKEN_PATTERN,
   shareTokenFromPath,
@@ -170,5 +172,30 @@ describe("parseSharedGraph", () => {
         .nodes.map((node) => node.label)
         .sort(),
     );
+  });
+});
+
+describe("parseStatusRequest (DOQ-54)", () => {
+  const T = "AbCdEfGhIjKlMnOpQrStUvWxYz012345";
+
+  it("takes 1 to 500 tokens of the /m/ shape", () => {
+    expect(parseStatusRequest({ tokens: [T, T] })).toEqual([T, T]);
+    expect(parseStatusRequest({ tokens: Array(MAX_STATUS_TOKENS).fill(T) })).toHaveLength(500);
+    expect(parseStatusRequest({ tokens: [T], later_field: true })).toEqual([T]);
+  });
+
+  it.each([
+    ["not an object", [T]],
+    ["null", null],
+    ["no tokens", {}],
+    ["an empty list", { tokens: [] }],
+    ["tokens not an array", { tokens: T }],
+    ["501 tokens", { tokens: Array(501).fill(T) }],
+    ["a short token", { tokens: [T, "short"] }],
+    ["a token with a slash", { tokens: [`${T}/x`] }],
+    ["a whole link", { tokens: [`https://doqtri.test/m/${T}`] }],
+    ["a number", { tokens: [12] }],
+  ])("refuses %s", (_name, body) => {
+    expect(parseStatusRequest(body)).toBeNull();
   });
 });

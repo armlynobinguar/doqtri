@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /*
@@ -34,6 +35,17 @@ vi.mock("@/lib/integrations/qdit-status-sync", async (importOriginal) => ({
   }),
 }));
 
+const releases: unknown[] = [];
+vi.mock("@/lib/integrations/qdit-hackathon-release", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/integrations/qdit-hackathon-release")>()),
+  supabaseHackathonReleaseStore: () => ({
+    record: async (event: unknown) => {
+      releases.push(event);
+      return { outcome: "applied", expiresAt: "2026-11-21T12:00:00+00:00", linksUpdated: 1 };
+    },
+  }),
+}));
+
 const { POST } = await import("./route");
 
 const post = (body = BODY, headers: Record<string, string> = { "X-Qdit-Timestamp": TIMESTAMP, "X-Qdit-Signature": SIGNATURE }) =>
@@ -47,6 +59,7 @@ const post = (body = BODY, headers: Record<string, string> = { "X-Qdit-Timestamp
 
 beforeEach(() => {
   recorded.length = 0;
+  releases.length = 0;
   vi.useFakeTimers();
   vi.setSystemTime(Number(TIMESTAMP) * 1000 + 2_000);
   vi.stubEnv("NEXT_PUBLIC_QDIT_INTEGRATION", "1");
@@ -80,6 +93,17 @@ describe("POST /api/integrations/qdit/webhook", () => {
         eventId: "7d0f8a52-3c1e-4b6a-9f21-5e8c0d4b2a10",
       }),
     ]);
+  });
+
+  it("records a signed hackathon.released through the release store (DOQ-54)", async () => {
+    const body =
+      '{"id":"9a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d","event":"hackathon.released","hackathon_slug":"stellar-build-2026","released_at":"2026-11-20T12:00:00.000Z","occurred_at":"2026-11-20T12:00:00.250Z"}';
+    const signature = `sha256=${createHmac("sha256", SECRET).update(`${TIMESTAMP}.${body}`).digest("hex")}`;
+    const res = await post(body, { "X-Qdit-Timestamp": TIMESTAMP, "X-Qdit-Signature": signature });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(releases).toEqual([expect.objectContaining({ hackathonSlug: "stellar-build-2026", releasedAt: "2026-11-20T12:00:00.000Z" })]);
+    expect(recorded).toEqual([]);
   });
 
   it("signs over the raw bytes: the same JSON re-spaced does not verify", async () => {
