@@ -171,3 +171,33 @@ export const MINDMAP_SHARE_COPY = {
   forbidden: "Only an admin or owner of this workspace can manage its mindmap links",
   notFound: "That link is already revoked, or isn't this workspace's",
 } as const;
+
+// ---------------------------------------------------------------------------
+// Link status (POST /api/mindmap-links/status, contract v1.5.0, DOQ-54)
+// ---------------------------------------------------------------------------
+
+/** The status endpoint's path. Public: no session, no qdit token. */
+export const MINDMAP_LINK_STATUS_PATH = "/api/mindmap-links/status";
+
+/** Most tokens one status request may ask about. */
+export const MAX_STATUS_TOKENS = 500;
+
+/** Largest status request body: 500 tokens of 64 characters fit with room to spare (contract section 4). */
+export const MAX_STATUS_BODY_BYTES = 64 * 1024;
+
+/**
+ * The tokens a status request asks about: `{"tokens": [...]}`, 0 to 500
+ * strings of the /m/ shape (SHARE_TOKEN_PATTERN). Null for anything else,
+ * which the route refuses with 400. Other top-level keys are ignored, so a
+ * later minor contract version can add one.
+ */
+export function parseStatusRequest(body: unknown): string[] | null {
+  const value = record(body);
+  if (!value || !Array.isArray(value.tokens) || value.tokens.length > MAX_STATUS_TOKENS) return null;
+  const tokens: string[] = [];
+  for (const token of value.tokens) {
+    if (typeof token !== "string" || !SHARE_TOKEN_PATTERN.test(token)) return null;
+    tokens.push(token);
+  }
+  return tokens;
+}

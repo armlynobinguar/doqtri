@@ -119,7 +119,11 @@ export const config = {
   // Everything except static assets, the generated link-preview image and
   // robots.txt / sitemap.xml (crawlers fetch them signed out), and the API
   // routes, which verify the session themselves and must be able to return 401
-  // rather than a redirect.
+  // rather than a redirect. The public mindmap link status endpoint
+  // (POST /api/mindmap-links/status, WP-4.7, DOQ-54) is one of those: it takes
+  // no session, so the proxy must never redirect it, and proxy.test.ts pins
+  // that the matcher leaves it alone. An expired link is a 404 at /m/<token>
+  // through mindmap_share_live() above, like a revoked one.
   matcher: [
     "/((?!_next/static|_next/image|api/|favicon.ico|opengraph-image|robots.txt|sitemap.xml|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],
