@@ -69,6 +69,7 @@ prompts/      The two AI prompts, mirrored from lib/openai.ts
 20261109100000_rename_document.sql        # applied 2026-11-10 as `rename_document` (WP-1.7, DOQ-35)
 20261110100000_documents_created_at.sql   # NOT yet applied (WP-4.7, DOQ-39): apply before deploying (loadVaultDocs selects created_at) and before any hackathon opens
 20261112100000_mindmap_shares.sql         # NOT yet applied (WP-4.7, DOQ-53): apply before deploying; until then a send goes without a mindmap link and /m/<token> is a 404
+20261112200000_mindmap_share_expiry.sql   # NOT yet applied (WP-4.7, DOQ-54): apply before deploying (the send route writes hackathon_slug, the status endpoint and webhook call its functions); then run the backfill (see the file's end)
 ```
 
 Files marked "NOT recorded" were added without updating this list, so whether they are
@@ -168,8 +169,17 @@ Two supporting tables:
   one-way, stamped by a trigger). Anon has no table access: `/m/<token>` reads
   through `mindmap_share(token)` (labels, kinds, depths, links and style,
   never `doc_ids`) and proxy.ts through `mindmap_share_live(token)`, both
-  security definer and answering nothing for a revoked link. A push that
-  fails revokes its link.
+  security definer and answering nothing for a revoked link. A push qdit
+  refused revokes its link; one that got no answer keeps it (DOQ-54).
+  DOQ-54 adds `hackathon_slug` and `expires_at`: a link expires 24 hours after
+  its hackathon's grades are released, which qdit reports with the
+  `hackathon.released` webhook (`record_qdit_hackathon_release`, kept per
+  hackathon in `qdit_hackathon_releases`). An expired link reads as revoked
+  everywhere, and the expiry only ever moves earlier. qdit asks whether links
+  are live through `POST /api/mindmap-links/status` (`mindmap_share_statuses`,
+  rate-limited by `consume_rate_limit` over `rate_limit_hits`). Links sent
+  before DOQ-54 have no hackathon until `backfill_mindmap_share_hackathons` is
+  run with qdit's snapshot ids.
 
 - `public.workspaces` / `public.workspace_members` — team workspaces and who
   is in them, as viewer, editor, admin or owner. Every account has one
