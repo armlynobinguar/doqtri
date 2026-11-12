@@ -314,7 +314,7 @@ export function QditLinks({
       }
     >
       {connection !== "loading" && !connected ? (
-        <div className="grid gap-1.5">
+        <div className="grid grid-cols-1 gap-1.5">
           <p className="text-muted-foreground text-[11px] leading-snug">
             {connection === "needs_reconnect"
               ? "Your qdit connection has expired or was revoked. Reconnect to link headings to milestones."
@@ -528,7 +528,7 @@ export function QditLinks({
       ) : null}
 
       {project && canEdit && unlinked.length > 0 ? (
-        <div className="grid gap-1.5">
+        <div className="grid grid-cols-1 gap-1.5">
           <HeadingSelect nodes={unlinked} value={selectedNode} onChange={setNodeChoice} />
           <Button
             type="button"

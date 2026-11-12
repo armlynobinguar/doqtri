@@ -336,7 +336,7 @@ export function GitHubLinks({
       </LinkList>
 
       {unlinked.length > 0 ? (
-        <div className="grid gap-1.5">
+        <div className="grid grid-cols-1 gap-1.5">
           <HeadingSelect nodes={unlinked} value={selectedNode} onChange={setLinkNode} />
           <div className="flex gap-1.5">
             <input

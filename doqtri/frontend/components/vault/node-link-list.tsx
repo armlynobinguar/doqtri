@@ -27,9 +27,9 @@ export function LinkSection({
   testId?: string;
 }) {
   return (
-    <section className="border-border grid gap-2 border-t pt-3" data-testid={testId}>
-      <div className="flex items-center justify-between">
-        <span className="text-foreground flex items-center gap-1.5 font-medium">
+    <section className="border-border grid grid-cols-1 gap-2 border-t pt-3" data-testid={testId}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-foreground flex min-w-0 items-center gap-1.5 font-medium">
           {icon}
           {title}
         </span>
@@ -43,7 +43,7 @@ export function LinkSection({
 /** The cards, or `empty` when there are none. */
 export function LinkList({ empty, children, count }: { empty: ReactNode; children: ReactNode; count: number }) {
   if (count === 0) return <p className="text-muted-foreground text-[11px] leading-snug">{empty}</p>;
-  return <ul className="grid gap-1.5">{children}</ul>;
+  return <ul className="grid grid-cols-1 gap-1.5">{children}</ul>;
 }
 
 /** One linked heading: its label, an unlink button when allowed, and the provider's details below. */
@@ -60,9 +60,9 @@ export function LinkItemShell({
   children: ReactNode;
 }) {
   return (
-    <li className="glass grid gap-1 rounded-xl px-2.5 py-2">
+    <li className="glass grid min-w-0 grid-cols-1 gap-1 rounded-xl px-2.5 py-2">
       <div className="flex items-start justify-between gap-2">
-        <span className="text-foreground truncate text-[12px]" title={label}>
+        <span className="text-foreground min-w-0 truncate text-[12px]" title={label}>
           {label}
         </span>
         {onRemove ? (

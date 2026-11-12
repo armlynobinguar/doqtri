@@ -89,7 +89,7 @@ export function QditMilestoneCard({
   const state = shownCardState({ connection, key, fetched });
 
   return (
-    <div ref={ref}>
+    <div ref={ref} className="min-w-0">
       <QditMilestoneCardView
         state={state}
         showTitle={showTitle}
@@ -116,7 +116,7 @@ export function QditMilestoneCardView({
   const outLink =
     state.state === "not_connected" || state.state === "error" ? safeHttpUrl(fallbackUrl ?? null) : null;
   return (
-    <div data-testid="qdit-milestone-card" data-state={state.state} className="grid gap-1 text-[11px] leading-snug">
+    <div data-testid="qdit-milestone-card" data-state={state.state} className="grid min-w-0 grid-cols-1 gap-1 text-[11px] leading-snug">
       {state.state === "loading" ? (
         <p className="text-muted-foreground inline-flex items-center gap-1.5" aria-busy="true">
           <Loader2Icon className="size-3 animate-spin" />
