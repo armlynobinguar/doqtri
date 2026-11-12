@@ -51,6 +51,62 @@ test.describe("derived views", () => {
       .toBeGreaterThan(2);
   });
 
+  test("the graph centers on the open note", async ({ page }) => {
+    // The open note is the only node with a ring in full white (#f4f5f7, also
+    // its label colour). Whether any of it is drawn at the canvas's centre.
+    const ringAtCenter = (canvas: ReturnType<typeof page.locator>) =>
+      canvas.evaluate((el: HTMLCanvasElement) => {
+        const ctx = el.getContext("2d");
+        if (!ctx) return false;
+        const scale = el.width / el.getBoundingClientRect().width;
+        const radius = Math.round(10 * scale);
+        const cx = Math.round(el.width / 2);
+        const cy = Math.round(el.height / 2);
+        const { data, width } = ctx.getImageData(cx - radius, cy - radius, radius * 2, radius * 2);
+        for (let i = 0; i < data.length; i += 4) {
+          const near = (v: number, t: number) => Math.abs(v - t) < 16;
+          if (near(data[i], 0xf4) && near(data[i + 1], 0xf5) && near(data[i + 2], 0xf7)) {
+            const p = i / 4;
+            const dx = (p % width) - radius;
+            const dy = Math.floor(p / width) - radius;
+            if (Math.hypot(dx, dy) <= radius) return true;
+          }
+        }
+        return false;
+      });
+
+    // A star around its own hub: its outer notes sit well off the layout's
+    // origin, where the camera rests if nothing moves it.
+    const starTitle = uniqueTitle("Star");
+    const rimTitles = Array.from({ length: 6 }, (_, i) => `${starTitle} rim ${i}`);
+    const starIds = [
+      await seedNote(
+        starTitle,
+        `# ${starTitle}\n\n${rimTitles.map((t) => `[[${t}]]`).join(" ")}\n`,
+      ),
+    ];
+    for (const title of rimTitles) {
+      starIds.push(await seedNote(title, `# ${title}\n\nRim note.\n`));
+    }
+
+    try {
+      // A first open, then a second note with the layout already cached.
+      for (const id of [starIds[1], starIds[4]]) {
+        await page.goto(`/vault/${id}`);
+        const canvas = page.locator("canvas").first();
+        await expect(canvas).toBeVisible();
+        await expect
+          .poll(() => ringAtCenter(canvas), {
+            timeout: 20_000,
+            message: "the open note's ring never reached the canvas centre",
+          })
+          .toBe(true);
+      }
+    } finally {
+      for (const id of starIds) await deleteNote(id);
+    }
+  });
+
   test("the ribbon opens the full-pane graph", async ({ page }) => {
     await page.goto(`/vault/${hubId}`);
     await page.getByRole("button", { name: "Graph view" }).click();

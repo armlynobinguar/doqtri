@@ -23,6 +23,18 @@ const ForceGraph2D = dynamic(() => import("@/components/vault/force-graph-2d"), 
   ssr: false,
 }) as unknown as React.ComponentType<ForceGraphBridgeProps<SimNode>>;
 
+/**
+ * Simulation coordinates by node id. force-graph lays nodes out from random
+ * starting points, and the panel remounts with every note it is opened beside
+ * (the workspace is keyed by note id), so a per-mount cache would hand each
+ * note a fresh, different layout. Kept at module scope, the layout survives
+ * navigation and only new notes need placing.
+ */
+const positions = new Map<string, { x: number; y: number }>();
+
+/** How long the camera takes to glide onto the open note. */
+const CENTER_MS = 400;
+
 const NODE_RADIUS = 3.5;
 const LABEL_ZOOM_THRESHOLD = 1.1;
 /**
@@ -90,13 +102,14 @@ export function GraphPanel({
   const graphRef = useRef<GraphInstance<SimNode> | undefined>(undefined);
   const nodesRef = useRef<SimNode[]>([]);
   const [size, setSize] = useState({ width: 0, height: 0 });
-
-  // force-graph mutates node objects with simulation coordinates. Rebuilding
-  // the graph on every edit would otherwise reset the layout, so positions are
-  // cached by node id and seeded back in. The Map itself never changes identity
-  // (it is only filled in), so it lives in state rather than a ref: the graph
-  // memo reads it during render, which refs must not be.
-  const [positions] = useState(() => new Map<string, { x: number; y: number }>());
+  // The open note the camera last settled on, so a re-layout after an edit
+  // does not yank the view back while the user is panning around.
+  const centeredRef = useRef<string | undefined>(undefined);
+  // Whether the simulation has settled once since mount.
+  const settledRef = useRef(false);
+  // Set once the user pans or zooms; the camera then stays where they put it
+  // until another note opens.
+  const userMovedRef = useRef(false);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -110,21 +123,70 @@ export function GraphPanel({
     return () => observer.disconnect();
   }, []);
 
-  const graphData = useMemo(() => {
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) return;
+    const markMoved = () => {
+      userMovedRef.current = true;
+    };
+    element.addEventListener("pointerdown", markMoved, { capture: true });
+    element.addEventListener("wheel", markMoved, { capture: true, passive: true });
+    return () => {
+      element.removeEventListener("pointerdown", markMoved, { capture: true });
+      element.removeEventListener("wheel", markMoved, { capture: true });
+    };
+  }, []);
+
+  // force-graph mutates node objects with simulation coordinates. Rebuilding
+  // the graph on every edit would otherwise reset the layout, so positions are
+  // seeded back in from the module cache. When every node already has one
+  // (`frozen`), the simulation is not rerun at all: force-graph reheats to
+  // alpha 1 on every data change, which would drift the whole layout on each
+  // navigation and keystroke.
+  const { graphData, frozen } = useMemo(() => {
     const { nodes, edges } = buildGraph(docs);
 
     return {
-      nodes: nodes.map((node) => {
-        const cached = positions.get(node.id);
-        return cached ? { ...node, x: cached.x, y: cached.y } : { ...node };
-      }),
-      links: edges.map((edge) => ({ source: edge.source, target: edge.target })),
+      graphData: {
+        nodes: nodes.map((node) => {
+          const cached = positions.get(node.id);
+          return cached ? { ...node, x: cached.x, y: cached.y } : { ...node };
+        }),
+        links: edges.map((edge) => ({ source: edge.source, target: edge.target })),
+      },
+      frozen: nodes.every((node) => positions.has(node.id)),
     };
-  }, [docs, positions]);
+  }, [docs]);
 
   useEffect(() => {
     nodesRef.current = graphData.nodes;
   }, [graphData]);
+
+  // The layout is written to the cache when the simulation stops. Leaving the
+  // note before then would drop it, so flush on the way out too.
+  useEffect(() => () => rememberPositions(nodesRef.current), []);
+
+  /**
+   * Moves the camera onto the open note. `force` re-centers even when the
+   * camera already settled on it (the layout has since moved the node).
+   */
+  function centerOnActive(durationMs: number, force = false) {
+    const instance = graphRef.current;
+    if (!instance || !activeId || userMovedRef.current) return;
+    if (!force && centeredRef.current === activeId) return;
+    const node = nodesRef.current.find((n) => String(n.id) === activeId);
+    if (typeof node?.x !== "number" || typeof node.y !== "number") return;
+    instance.centerAt(node.x, node.y, durationMs);
+    centeredRef.current = activeId;
+  }
+
+  // Another note opened without a remount (or the graph came back from the
+  // mindmap tab): glide over to it.
+  useEffect(() => {
+    userMovedRef.current = false;
+    centerOnActive(CENTER_MS);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId]);
 
   useNodePointer<SimNode>({
     containerRef,
@@ -142,11 +204,22 @@ export function GraphPanel({
     },
   });
 
+  /**
+   * Caches the nodes' coordinates and forgets every other id, so deleted
+   * notes, resolved ghosts and another workspace's notes do not linger.
+   */
   function rememberPositions(nodes: SimNode[]) {
+    if (nodes.length === 0) return;
+    const ids = new Set<string>();
     for (const node of nodes) {
+      const id = String(node.id);
+      ids.add(id);
       if (typeof node.x === "number" && typeof node.y === "number") {
-        positions.set(String(node.id), { x: node.x, y: node.y });
+        positions.set(id, { x: node.x, y: node.y });
       }
+    }
+    for (const id of positions.keys()) {
+      if (!ids.has(id)) positions.delete(id);
     }
   }
 
@@ -160,12 +233,15 @@ export function GraphPanel({
         size.width > 0 && (
           <ForceGraph2D
             instanceRef={graphRef}
+            // A cached layout already knows where the note sits: start there,
+            // with no glide, instead of on the graph's origin.
+            onReady={() => centerOnActive(0)}
             width={size.width}
             height={size.height}
             graphData={graphData}
             backgroundColor={GRAPH_COLORS.background}
             nodeRelSize={NODE_RADIUS}
-            cooldownTicks={80}
+            cooldownTicks={frozen ? 0 : 80}
             d3AlphaDecay={0.035}
             d3VelocityDecay={0.35}
             linkColor={() => GRAPH_COLORS.link}
@@ -173,7 +249,16 @@ export function GraphPanel({
             // Hover, click and drag come from useNodePointer, by geometry.
             enablePointerInteraction={false}
             enableNodeDrag={false}
-            onEngineStop={() => rememberPositions(graphData.nodes)}
+            onEngineStop={() => {
+              rememberPositions(graphData.nodes);
+              // The layout has settled, so the note's final spot is known.
+              // Follow it on the first settle, or if the note had no spot to
+              // center on until now. Later settles come from edits and leave
+              // the camera alone; any pan or zoom by the user wins outright.
+              const firstSettle = !settledRef.current;
+              settledRef.current = true;
+              centerOnActive(CENTER_MS, firstSettle);
+            }}
             nodeCanvasObject={(
               node: SimNode,
               ctx: CanvasRenderingContext2D,
