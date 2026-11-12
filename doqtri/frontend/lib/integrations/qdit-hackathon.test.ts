@@ -8,6 +8,7 @@ import {
   HACKATHON_LIMITS,
   serializeGlobalMindmap,
   validateHackathonSnapshot,
+  withMindmapUrl,
   type HackathonNote,
   type HackathonSnapshot,
 } from "./qdit-hackathon";
@@ -240,6 +241,69 @@ describe("validateHackathonSnapshot", () => {
     const deep = snapshot();
     deep.global_mindmap.nodes[0].depth = -1;
     expect(refusal(() => validateHackathonSnapshot(deep)).field).toBe("global_mindmap.nodes[0].depth");
+  });
+});
+
+describe("mindmap_url (WP-4.7, DOQ-53, QDIT-66)", () => {
+  const URL_OK = "https://www.doqtri.xyz/m/AbCdEfGhIjKlMnOpQrStUvWxYz012345";
+
+  it("is optional: a snapshot without it is valid, as before", () => {
+    const value = snapshot();
+    expect("mindmap_url" in value).toBe(false);
+    expect(() => validateHackathonSnapshot(value)).not.toThrow();
+  });
+
+  it("is a top-level key when present, sent as is", () => {
+    const value = snapshot({ mindmap_url: URL_OK });
+    expect(JSON.parse(validateHackathonSnapshot(value)).mindmap_url).toBe(URL_OK);
+  });
+
+  it.each([
+    ["http", "http://www.doqtri.xyz/m/AbCdEfGhIjKlMnOpQrStUvWxYz012345"],
+    ["a query", `${URL_OK}?x=1`],
+    ["a fragment", `${URL_OK}#top`],
+    ["a trailing slash", `${URL_OK}/`],
+    ["a short token", "https://www.doqtri.xyz/m/short"],
+    ["another path", "https://www.doqtri.xyz/d/AbCdEfGhIjKlMnOpQrStUvWxYz012345"],
+    ["empty", ""],
+    ["a number", 42],
+  ])("refuses %s", (_name, value) => {
+    const error = refusal(() => validateHackathonSnapshot(snapshot({ mindmap_url: value as string })));
+    expect(error.field).toBe("mindmap_url");
+    expect(error.problem).toBe("invalid");
+  });
+
+  it("takes null as no link, as the contract does", () => {
+    expect(() => validateHackathonSnapshot(snapshot({ mindmap_url: null }))).not.toThrow();
+  });
+
+  it("refuses the port and case forms qdit refuses byte for byte", () => {
+    for (const value of [
+      "https://www.doqtri.xyz:443/m/AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+      "https://WWW.DOQTRI.XYZ/m/AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+    ]) {
+      expect(refusal(() => validateHackathonSnapshot(snapshot({ mindmap_url: value }))).field).toBe("mindmap_url");
+    }
+  });
+
+  it("still refuses any other unknown top-level key", () => {
+    const value = { ...snapshot(), mindmap: URL_OK } as unknown as HackathonSnapshot;
+    expect(refusal(() => validateHackathonSnapshot(value))).toMatchObject({ field: "mindmap", problem: "unknown_field" });
+  });
+
+  it("withMindmapUrl adds it and serializes once more, leaving the input as it was", () => {
+    const base = snapshot();
+    const { snapshot: linked, body } = withMindmapUrl(base, URL_OK);
+    expect(linked).toEqual({ ...base, mindmap_url: URL_OK });
+    expect(body).toBe(JSON.stringify(linked));
+    expect(JSON.parse(body).snapshot_id).toBe(base.snapshot_id);
+    expect("mindmap_url" in base).toBe(false);
+  });
+
+  it("withMindmapUrl refuses a bad link", () => {
+    expect(refusal(() => withMindmapUrl(snapshot(), "http://x.test/m/AbCdEfGhIjKlMnOpQrStUvWxYz012345")).field).toBe(
+      "mindmap_url",
+    );
   });
 });
 
