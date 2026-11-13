@@ -68,14 +68,14 @@ jobs:
         working-directory: market
 
       - name: Upload WASM artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: doqtri-registry-wasm
           path: target/wasm32v1-none/release/doqtri_registry.wasm
           if-no-files-found: error
 
       - name: Upload market WASM artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: doqtri-market-wasm
           path: target/wasm32v1-none/release/doqtri_market.wasm
@@ -120,7 +120,7 @@ jobs:
         run: stellar contract build
 
       - name: Upload WASM artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: doqtri-fee-forwarder-wasm
           path: fee-forwarder/target/wasm32v1-none/release/doqtri_fee_forwarder.wasm
@@ -225,7 +225,7 @@ jobs:
 
       - name: Upload traces
         if: failure() && steps.secrets.outputs.ready == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-traces
           path: doqtri/frontend/test-results/
