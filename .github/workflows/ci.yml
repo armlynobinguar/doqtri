@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -90,7 +90,7 @@ jobs:
         working-directory: fee-forwarder
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -140,7 +140,7 @@ jobs:
       OPENAI_MODEL: gpt-4o
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup Node
         uses: actions/setup-node@v5
@@ -200,7 +200,7 @@ jobs:
 
       - name: Checkout
         if: steps.secrets.outputs.ready == 'true'
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup Node
         if: steps.secrets.outputs.ready == 'true'
